@@ -1,0 +1,23 @@
+[package]
+name = "agentwebui_backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actix-web = "4.11.0"
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "f4bc37889e030207a284fed67406a5529d94375a" }
+async-trait = "0.1.89"
+chrono = { version = "0.4.42", features = ["serde", "clock"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio-rustls"] }
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["sync"] }
+url = { version = "2.5.7", features = ["serde"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
+utoipa = { version = "5.4.0", features = ["actix_extras", "chrono", "uuid", "url"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web"] }
+
+[dev-dependencies]
+actix-http = "3.12.0"
+tempfile = "3.23.0"
