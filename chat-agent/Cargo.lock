@@ -20,7 +20,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=f4bc37889e030207a284fed67406a5529d94375a#f4bc37889e030207a284fed67406a5529d94375a"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=55c472cb1f1450cc82cdc028e5450e2398d7418e#55c472cb1f1450cc82cdc028e5450e2398d7418e"
 dependencies = [
  "anyhow",
  "async-stream",

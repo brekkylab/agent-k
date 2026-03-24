@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 actix-cors = "0.7"
 actix-web = "4.11.0"
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "f4bc37889e030207a284fed67406a5529d94375a" }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "55c472cb1f1450cc82cdc028e5450e2398d7418e" }
 async-trait = "0.1.89"
 chat-agent = { path = "../chat-agent" }
 chrono = { version = "0.4.42", features = ["serde", "clock"] }
