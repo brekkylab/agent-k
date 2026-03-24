@@ -70,6 +70,7 @@ impl SqliteRepository {
                 id TEXT PRIMARY KEY,
                 agent_id TEXT NOT NULL,
                 provider_profile_id TEXT NOT NULL,
+                title TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(agent_id) REFERENCES agents(id) ON DELETE RESTRICT,
@@ -198,6 +199,7 @@ impl SqliteRepository {
             row.get::<String, _>("provider_profile_id"),
             "sessions.provider_profile_id",
         )?;
+        let title = row.get::<Option<String>, _>("title");
         let created_at =
             Self::parse_timestamp(row.get::<String, _>("created_at"), "sessions.created_at")?;
         let updated_at =
@@ -207,6 +209,7 @@ impl SqliteRepository {
             id,
             agent_id,
             provider_profile_id,
+            title,
             messages: vec![],
             created_at,
             updated_at,
@@ -250,7 +253,7 @@ impl SqliteRepository {
     async fn load_session_by_id(&self, id: Uuid) -> RepositoryResult<Option<Session>> {
         let row = sqlx::query(
             r#"
-            SELECT id, agent_id, provider_profile_id, created_at, updated_at
+            SELECT id, agent_id, provider_profile_id, title, created_at, updated_at
             FROM sessions
             WHERE id = ?;
             "#,
@@ -549,19 +552,21 @@ impl Repository for SqliteRepository {
         &self,
         agent_id: Uuid,
         provider_profile_id: Uuid,
+        title: Option<String>,
     ) -> RepositoryResult<Session> {
         let now = Self::now_string();
         let id = Uuid::new_v4();
 
         sqlx::query(
             r#"
-            INSERT INTO sessions (id, agent_id, provider_profile_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO sessions (id, agent_id, provider_profile_id, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?);
             "#,
         )
         .bind(id.to_string())
         .bind(agent_id.to_string())
         .bind(provider_profile_id.to_string())
+        .bind(title)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -572,11 +577,15 @@ impl Repository for SqliteRepository {
             .ok_or_else(|| RepositoryError::InvalidData("created session not found".to_string()))
     }
 
-    async fn list_sessions(&self, agent_id: Option<Uuid>) -> RepositoryResult<Vec<Session>> {
+    async fn list_sessions(
+        &self,
+        agent_id: Option<Uuid>,
+        include_messages: bool,
+    ) -> RepositoryResult<Vec<Session>> {
         let rows = if let Some(agent_id) = agent_id {
             sqlx::query(
                 r#"
-                SELECT id, agent_id, provider_profile_id, created_at, updated_at
+                SELECT id, agent_id, provider_profile_id, title, created_at, updated_at
                 FROM sessions
                 WHERE agent_id = ?
                 ORDER BY created_at ASC, id ASC;
@@ -588,7 +597,7 @@ impl Repository for SqliteRepository {
         } else {
             sqlx::query(
                 r#"
-                SELECT id, agent_id, provider_profile_id, created_at, updated_at
+                SELECT id, agent_id, provider_profile_id, title, created_at, updated_at
                 FROM sessions
                 ORDER BY created_at ASC, id ASC;
                 "#,
@@ -600,7 +609,9 @@ impl Repository for SqliteRepository {
         let mut sessions = Vec::with_capacity(rows.len());
         for row in rows {
             let mut session = Self::row_to_session_without_messages(&row)?;
-            session.messages = self.load_session_messages(session.id).await?;
+            if include_messages {
+                session.messages = self.load_session_messages(session.id).await?;
+            }
             sessions.push(session);
         }
 
@@ -620,6 +631,24 @@ impl Repository for SqliteRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn update_session_title(&self, id: Uuid, title: String) -> RepositoryResult<bool> {
+        let now = Self::now_string();
+        let result = sqlx::query(
+            r#"
+            UPDATE sessions
+            SET title = ?, updated_at = ?
+            WHERE id = ?;
+            "#,
+        )
+        .bind(title)
+        .bind(now)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn add_session_message(
         &self,
         session_id: Uuid,
@@ -628,16 +657,17 @@ impl Repository for SqliteRepository {
     ) -> RepositoryResult<Option<Session>> {
         let mut tx = self.pool.begin().await?;
 
-        let exists = sqlx::query("SELECT 1 FROM sessions WHERE id = ?;")
-            .bind(session_id.to_string())
-            .fetch_optional(tx.as_mut())
-            .await?
-            .is_some();
+        let session_row = sqlx::query(
+            "SELECT title FROM sessions WHERE id = ?;",
+        )
+        .bind(session_id.to_string())
+        .fetch_optional(tx.as_mut())
+        .await?;
 
-        if !exists {
+        let Some(session_row) = session_row else {
             tx.rollback().await?;
             return Ok(None);
-        }
+        };
 
         let now = Self::now_string();
         sqlx::query(
@@ -649,22 +679,28 @@ impl Repository for SqliteRepository {
         .bind(Uuid::new_v4().to_string())
         .bind(session_id.to_string())
         .bind(Self::message_role_to_string(&role))
-        .bind(content)
+        .bind(&content)
         .bind(&now)
         .execute(tx.as_mut())
         .await?;
 
-        sqlx::query(
-            r#"
-            UPDATE sessions
-            SET updated_at = ?
-            WHERE id = ?;
-            "#,
-        )
-        .bind(now)
-        .bind(session_id.to_string())
-        .execute(tx.as_mut())
-        .await?;
+        // Auto-set title from first user message if title is None
+        let current_title = session_row.get::<Option<String>, _>("title");
+        if matches!(role, MessageRole::User) && current_title.is_none() {
+            let auto_title: String = content.chars().take(30).collect();
+            sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?;")
+                .bind(&auto_title)
+                .bind(&now)
+                .bind(session_id.to_string())
+                .execute(tx.as_mut())
+                .await?;
+        } else {
+            sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?;")
+                .bind(&now)
+                .bind(session_id.to_string())
+                .execute(tx.as_mut())
+                .await?;
+        }
 
         tx.commit().await?;
         self.load_session_by_id(session_id).await
@@ -714,7 +750,7 @@ mod tests {
             .expect("provider profile should be created");
 
         let session = repository
-            .create_session(agent.id, provider_profile.id)
+            .create_session(agent.id, provider_profile.id, None)
             .await
             .expect("session should be created");
 
@@ -737,10 +773,11 @@ mod tests {
         assert_eq!(agents.len(), 1);
 
         let sessions = restarted_repository
-            .list_sessions(None)
+            .list_sessions(None, true)
             .await
             .expect("sessions should be loaded");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].messages.len(), 1);
+        assert_eq!(sessions[0].title.as_deref(), Some("hello"));
     }
 }

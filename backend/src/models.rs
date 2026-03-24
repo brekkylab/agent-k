@@ -63,6 +63,7 @@ pub struct Session {
     pub id: Uuid,
     pub agent_id: Uuid,
     pub provider_profile_id: Uuid,
+    pub title: Option<String>,
     pub messages: Vec<SessionMessage>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -103,11 +104,19 @@ pub struct UpdateProviderProfileRequest {
 pub struct CreateSessionRequest {
     pub agent_id: Uuid,
     pub provider_profile_id: Option<Uuid>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ListSessionsQuery {
     pub agent_id: Option<Uuid>,
+    pub include_messages: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateSessionRequest {
+    pub title: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

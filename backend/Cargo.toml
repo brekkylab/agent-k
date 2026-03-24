@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+actix-cors = "0.7"
 actix-web = "4.11.0"
 ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "f4bc37889e030207a284fed67406a5529d94375a" }
 async-trait = "0.1.89"

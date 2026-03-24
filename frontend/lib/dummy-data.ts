@@ -1,4 +1,4 @@
-import type { Document, Knowledge, ChatSession } from "./types";
+import type { Document, Knowledge } from "./types";
 
 export const DUMMY_DOCUMENTS: Document[] = [
   { id: "doc-1", name: "시장분석.pdf", size: 2457600, uploadedAt: new Date("2026-03-15") },
@@ -13,5 +13,3 @@ export const DUMMY_KNOWLEDGES: Knowledge[] = [
   { id: "kn-2", name: "기술 문서", description: "API 및 아키텍처 관련 자료", documentIds: ["doc-3", "doc-1"] },
   { id: "kn-3", name: "법률 검토", description: "계약서 및 규정 관련 문서", documentIds: ["doc-5"] },
 ];
-
-export const DUMMY_SESSIONS: ChatSession[] = [];

@@ -36,7 +36,11 @@ Thumbs.db
 *.swo
 *~
 
+# Backend data (SQLite DB — may contain API keys)
+backend/data/
+
 # Claude Code / OMC / Plugin state
 .omc/
 .superpowers/
 .playwright-mcp/
+docs/superpowers/

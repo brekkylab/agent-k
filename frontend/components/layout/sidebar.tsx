@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { MessageSquare, FileText, BookOpen } from "lucide-react";
+import { MessageSquare, FileText, BookOpen, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "./theme-toggle";
 import { SessionDropdown } from "@/components/chat/session-dropdown";
-import { useAppStore } from "@/lib/store";
 
 const NAV_ITEMS = [
   { href: "/chat", label: "Chat", icon: MessageSquare, hasDropdown: true },
@@ -39,14 +39,6 @@ export function Sidebar() {
               {item.href === "/chat" ? (
                 <Link
                   href="/chat"
-                  onClick={() => {
-                    const state = useAppStore.getState();
-                    if (state.sessions.length > 0) {
-                      state.setActiveSession(state.sessions[0].id);
-                    } else {
-                      state.createSession();
-                    }
-                  }}
                   className={linkClasses}
                 >
                   <item.icon className="h-4 w-4" />
@@ -70,7 +62,12 @@ export function Sidebar() {
           <Avatar className="h-7 w-7">
             <AvatarFallback className="text-xs">U</AvatarFallback>
           </Avatar>
-          <span className="text-sm text-muted-foreground">Test User</span>
+          <span className="flex-1 text-sm text-muted-foreground">Test User</span>
+          <Link href="/settings">
+            <Button variant="ghost" size="icon" className="h-7 w-7">
+              <Settings className="h-4 w-4" />
+            </Button>
+          </Link>
         </div>
       </div>
     </aside>

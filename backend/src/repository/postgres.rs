@@ -90,11 +90,16 @@ impl Repository for PostgresRepository {
         &self,
         _agent_id: Uuid,
         _provider_profile_id: Uuid,
+        _title: Option<String>,
     ) -> RepositoryResult<Session> {
         todo!("postgres implementation")
     }
 
-    async fn list_sessions(&self, _agent_id: Option<Uuid>) -> RepositoryResult<Vec<Session>> {
+    async fn list_sessions(
+        &self,
+        _agent_id: Option<Uuid>,
+        _include_messages: bool,
+    ) -> RepositoryResult<Vec<Session>> {
         todo!("postgres implementation")
     }
 
@@ -103,6 +108,10 @@ impl Repository for PostgresRepository {
     }
 
     async fn delete_session(&self, _id: Uuid) -> RepositoryResult<bool> {
+        todo!("postgres implementation")
+    }
+
+    async fn update_session_title(&self, _id: Uuid, _title: String) -> RepositoryResult<bool> {
         todo!("postgres implementation")
     }
 

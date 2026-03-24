@@ -15,7 +15,7 @@ use crate::models::{
     AddSessionMessageRequest, AddSessionMessageResponse, Agent, AgentResponse, CreateAgentRequest,
     CreateProviderProfileRequest, CreateSessionRequest, ErrorResponse, ListSessionsQuery,
     MessageRole, ProviderProfile, ProviderProfileResponse, Session, SessionMessage,
-    UpdateAgentRequest, UpdateProviderProfileRequest,
+    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest,
 };
 use crate::repository::RepositoryError;
 use crate::state::AppState;
@@ -42,6 +42,7 @@ struct HealthResponse {
         create_session,
         list_sessions,
         get_session,
+        update_session,
         delete_session,
         add_message
     ),
@@ -59,6 +60,7 @@ struct HealthResponse {
             SessionMessage,
             MessageRole,
             CreateSessionRequest,
+            UpdateSessionRequest,
             AddSessionMessageRequest,
             AddSessionMessageResponse,
             crate::agent::spec::AgentSpec,
@@ -110,6 +112,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(
             web::resource("/sessions/{id}")
                 .route(web::get().to(get_session))
+                .route(web::put().to(update_session))
                 .route(web::delete().to(delete_session)),
         )
         .service(web::resource("/sessions/{id}/messages").route(web::post().to(add_message)));
@@ -411,6 +414,7 @@ async fn create_session(
     let CreateSessionRequest {
         agent_id,
         provider_profile_id,
+        title,
     } = payload.into_inner();
 
     match state.repository.get_agent(agent_id).await {
@@ -427,7 +431,7 @@ async fn create_session(
 
     match state
         .repository
-        .create_session(agent_id, resolved_provider_profile_id)
+        .create_session(agent_id, resolved_provider_profile_id, title)
         .await
     {
         Ok(session) => HttpResponse::Created().json(session),
@@ -446,9 +450,16 @@ async fn list_sessions(
     state: web::Data<AppState>,
     query: web::Query<ListSessionsQuery>,
 ) -> HttpResponse {
-    let ListSessionsQuery { agent_id } = query.into_inner();
+    let ListSessionsQuery {
+        agent_id,
+        include_messages,
+    } = query.into_inner();
 
-    match state.repository.list_sessions(agent_id).await {
+    match state
+        .repository
+        .list_sessions(agent_id, include_messages.unwrap_or(false))
+        .await
+    {
         Ok(sessions) => HttpResponse::Ok().json(sessions),
         Err(error) => repository_error_response(error),
     }
@@ -470,6 +481,36 @@ async fn get_session(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpR
     match state.repository.get_session(id).await {
         Ok(Some(session)) => HttpResponse::Ok().json(session),
         Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
+        Err(error) => repository_error_response(error),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/sessions/{id}",
+    tag = "sessions",
+    params(("id" = Uuid, Path, description = "Session ID")),
+    request_body = UpdateSessionRequest,
+    responses(
+        (status = 200, description = "Updated session", body = Session),
+        (status = 404, description = "Session not found", body = ErrorResponse)
+    )
+)]
+async fn update_session(
+    state: web::Data<AppState>,
+    path: web::Path<Uuid>,
+    payload: web::Json<UpdateSessionRequest>,
+) -> HttpResponse {
+    let id = path.into_inner();
+    let UpdateSessionRequest { title } = payload.into_inner();
+
+    match state.repository.update_session_title(id, title).await {
+        Ok(true) => match state.repository.get_session(id).await {
+            Ok(Some(session)) => HttpResponse::Ok().json(session),
+            Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
+            Err(error) => repository_error_response(error),
+        },
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "session not found"),
         Err(error) => repository_error_response(error),
     }
 }

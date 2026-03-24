@@ -13,26 +13,28 @@ interface KnowledgePanelProps {
 
 export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
   const knowledges = useAppStore((s) => s.knowledges);
-  const sessions = useAppStore((s) => s.sessions);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
+  const getSessionLocalData = useAppStore((s) => s.getSessionLocalData);
   const updateSessionKnowledge = useAppStore((s) => s.updateSessionKnowledge);
   const addSessionDocument = useAppStore((s) => s.addSessionDocument);
   const removeSessionDocument = useAppStore((s) => s.removeSessionDocument);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId);
-  const selectedKnowledgeIds = activeSession?.knowledgeIds ?? [];
-  const sessionDocs = activeSession?.sessionDocuments ?? [];
+  const localData = activeSessionId
+    ? getSessionLocalData(activeSessionId)
+    : { knowledgeIds: [], sessionDocuments: [] };
+
+  const selectedKnowledgeIds = localData.knowledgeIds;
+  const sessionDocs = localData.sessionDocuments;
   const allSelected =
     knowledges.length > 0 &&
     knowledges.every((k) => selectedKnowledgeIds.includes(k.id));
 
   const toggleKnowledge = (knowledgeId: string) => {
     if (!activeSessionId) return;
-    const current = selectedKnowledgeIds;
-    const updated = current.includes(knowledgeId)
-      ? current.filter((id) => id !== knowledgeId)
-      : [...current, knowledgeId];
+    const updated = selectedKnowledgeIds.includes(knowledgeId)
+      ? selectedKnowledgeIds.filter((id) => id !== knowledgeId)
+      : [...selectedKnowledgeIds, knowledgeId];
     updateSessionKnowledge(activeSessionId, updated);
   };
 
@@ -43,7 +45,7 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
     } else {
       updateSessionKnowledge(
         activeSessionId,
-        knowledges.map((k) => k.id)
+        knowledges.map((k) => k.id),
       );
     }
   };
@@ -130,7 +132,10 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
                   <span className="truncate">{doc.name}</span>
                   <button
                     className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-destructive/10 hover:text-destructive transition-all"
-                    onClick={() => activeSessionId && removeSessionDocument(activeSessionId, i)}
+                    onClick={() =>
+                      activeSessionId &&
+                      removeSessionDocument(activeSessionId, i)
+                    }
                     title="문서 제거"
                   >
                     <Trash2 className="h-3 w-3" />

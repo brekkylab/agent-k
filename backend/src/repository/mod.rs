@@ -73,10 +73,20 @@ pub trait Repository: Send + Sync {
         &self,
         agent_id: Uuid,
         provider_profile_id: Uuid,
+        title: Option<String>,
     ) -> RepositoryResult<Session>;
-    async fn list_sessions(&self, agent_id: Option<Uuid>) -> RepositoryResult<Vec<Session>>;
+    async fn list_sessions(
+        &self,
+        agent_id: Option<Uuid>,
+        include_messages: bool,
+    ) -> RepositoryResult<Vec<Session>>;
     async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<Session>>;
     async fn delete_session(&self, id: Uuid) -> RepositoryResult<bool>;
+    async fn update_session_title(
+        &self,
+        id: Uuid,
+        title: String,
+    ) -> RepositoryResult<bool>;
     async fn add_session_message(
         &self,
         session_id: Uuid,

@@ -1,34 +1,62 @@
 import { create } from "zustand";
-import type { Document, Knowledge, ChatSession, ChatMessage, SessionDocument } from "./types";
-import { DUMMY_DOCUMENTS, DUMMY_KNOWLEDGES, DUMMY_SESSIONS } from "./dummy-data";
+import type { Document, Knowledge, SessionDocument } from "./types";
+import { DUMMY_DOCUMENTS, DUMMY_KNOWLEDGES } from "./dummy-data";
+
+// ============================================================
+// Zustand State Boundary (Phase 5 완료)
+// ============================================================
+// Backend (API)       | Zustand (UI state)
+// --------------------|---------------------------
+// Provider Profiles   | —
+// Agents              | —
+// Sessions list       | —
+// Session messages    | —
+// —                   | activeSessionId
+// —                   | documents[] (mockup)
+// —                   | knowledges[] (mockup)
+// —                   | sessionLocalData (Knowledge/Document associations per session)
+// ============================================================
+
+interface SessionLocalData {
+  knowledgeIds: string[];
+  sessionDocuments: SessionDocument[];
+}
 
 interface AppState {
-  // Documents
+  // Documents (mockup)
   documents: Document[];
   addDocument: (doc: Document) => void;
   removeDocument: (id: string) => void;
 
-  // Knowledge
+  // Knowledge (mockup)
   knowledges: Knowledge[];
   addKnowledge: (kn: Knowledge) => void;
   updateKnowledge: (id: string, updates: Partial<Knowledge>) => void;
   removeKnowledge: (id: string) => void;
   toggleDocumentInKnowledge: (knowledgeId: string, documentId: string) => void;
 
-  // Chat Sessions
-  sessions: ChatSession[];
+  // Active session (UI state)
   activeSessionId: string | null;
-  createSession: () => string;
   setActiveSession: (id: string | null) => void;
-  removeSession: (id: string) => void;
-  addMessage: (sessionId: string, message: ChatMessage) => void;
+  sessionListVersion: number;
+  bumpSessionListVersion: () => void;
+
+  // Per-session local data (Knowledge/Document associations — not in Backend)
+  sessionLocalData: Record<string, SessionLocalData>;
+  getSessionLocalData: (sessionId: string) => SessionLocalData;
   updateSessionKnowledge: (sessionId: string, knowledgeIds: string[]) => void;
   addSessionDocument: (sessionId: string, doc: SessionDocument) => void;
   removeSessionDocument: (sessionId: string, index: number) => void;
+  removeSessionLocalData: (sessionId: string) => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
-  // Documents
+const DEFAULT_SESSION_LOCAL: SessionLocalData = {
+  knowledgeIds: [],
+  sessionDocuments: [],
+};
+
+export const useAppStore = create<AppState>((set, get) => ({
+  // Documents (mockup)
   documents: DUMMY_DOCUMENTS,
   addDocument: (doc) =>
     set((s) => ({ documents: [...s.documents, doc] })),
@@ -41,7 +69,7 @@ export const useAppStore = create<AppState>((set) => ({
       })),
     })),
 
-  // Knowledge
+  // Knowledge (mockup)
   knowledges: DUMMY_KNOWLEDGES,
   addKnowledge: (kn) =>
     set((s) => ({ knowledges: [...s.knowledges, kn] })),
@@ -69,69 +97,56 @@ export const useAppStore = create<AppState>((set) => ({
       }),
     })),
 
-  // Chat Sessions
-  sessions: DUMMY_SESSIONS,
+  // Active session
   activeSessionId: null,
-  createSession: () => {
-    const id = `session-${Date.now()}`;
-    const session: ChatSession = {
-      id,
-      title: "새 채팅",
-      messages: [],
-      knowledgeIds: [],
-      sessionDocuments: [],
-    };
-    set((s) => ({ sessions: [...s.sessions, session], activeSessionId: id }));
-    return id;
-  },
   setActiveSession: (id) => set({ activeSessionId: id }),
-  removeSession: (id) =>
-    set((s) => {
-      const filtered = s.sessions.filter((sess) => sess.id !== id);
-      const newActiveId =
-        s.activeSessionId === id
-          ? filtered.length > 0
-            ? filtered[0].id
-            : null
-          : s.activeSessionId;
-      return { sessions: filtered, activeSessionId: newActiveId };
-    }),
-  addMessage: (sessionId, message) =>
-    set((s) => ({
-      sessions: s.sessions.map((sess) => {
-        if (sess.id !== sessionId) return sess;
-        const updated = { ...sess, messages: [...sess.messages, message] };
-        if (message.role === "user" && sess.messages.length === 0) {
-          updated.title =
-            message.content.slice(0, 30) +
-            (message.content.length > 30 ? "..." : "");
-        }
-        return updated;
-      }),
-    })),
+  sessionListVersion: 0,
+  bumpSessionListVersion: () => set((s) => ({ sessionListVersion: s.sessionListVersion + 1 })),
+
+  // Per-session local data
+  sessionLocalData: {},
+  getSessionLocalData: (sessionId) => {
+    return get().sessionLocalData[sessionId] ?? DEFAULT_SESSION_LOCAL;
+  },
   updateSessionKnowledge: (sessionId, knowledgeIds) =>
     set((s) => ({
-      sessions: s.sessions.map((sess) =>
-        sess.id === sessionId ? { ...sess, knowledgeIds } : sess
-      ),
+      sessionLocalData: {
+        ...s.sessionLocalData,
+        [sessionId]: {
+          ...(s.sessionLocalData[sessionId] ?? DEFAULT_SESSION_LOCAL),
+          knowledgeIds,
+        },
+      },
     })),
   addSessionDocument: (sessionId, doc) =>
-    set((s) => ({
-      sessions: s.sessions.map((sess) =>
-        sess.id === sessionId
-          ? { ...sess, sessionDocuments: [...sess.sessionDocuments, doc] }
-          : sess
-      ),
-    })),
+    set((s) => {
+      const current = s.sessionLocalData[sessionId] ?? DEFAULT_SESSION_LOCAL;
+      return {
+        sessionLocalData: {
+          ...s.sessionLocalData,
+          [sessionId]: {
+            ...current,
+            sessionDocuments: [...current.sessionDocuments, doc],
+          },
+        },
+      };
+    }),
   removeSessionDocument: (sessionId, index) =>
-    set((s) => ({
-      sessions: s.sessions.map((sess) =>
-        sess.id === sessionId
-          ? {
-              ...sess,
-              sessionDocuments: sess.sessionDocuments.filter((_, i) => i !== index),
-            }
-          : sess
-      ),
-    })),
+    set((s) => {
+      const current = s.sessionLocalData[sessionId] ?? DEFAULT_SESSION_LOCAL;
+      return {
+        sessionLocalData: {
+          ...s.sessionLocalData,
+          [sessionId]: {
+            ...current,
+            sessionDocuments: current.sessionDocuments.filter((_, i) => i !== index),
+          },
+        },
+      };
+    }),
+  removeSessionLocalData: (sessionId) =>
+    set((s) => {
+      const { [sessionId]: _, ...rest } = s.sessionLocalData;
+      return { sessionLocalData: rest };
+    }),
 }));
