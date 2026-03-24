@@ -8,3 +8,6 @@ ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "f4bc37889e03020
 anyhow = "1.0.100"
 thiserror = "2.0.17"
 url = { version = "2.5.7", features = ["serde"] }
+
+[dev-dependencies]
+tokio = { version = "1.48.0", features = ["macros", "rt"] }
