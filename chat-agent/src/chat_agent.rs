@@ -3,12 +3,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ailoy::agent::ToolFunc;
 use ailoy::{
-    AgentProvider, AgentRuntime, AgentSpec, Message, Part, Role, ToolDescBuilder, ToolRuntime,
-    ToolSet, Value,
+    AgentProvider, AgentRuntime, AgentSpec, LangModelProvider, Message, Part, Role,
+    ToolDescBuilder, ToolRuntime, ToolSet, Value,
 };
 use futures::StreamExt as _;
 
-use crate::knowledge::{self, KbEntry};
+use crate::knowledge::{self, KbEntry, SubAgentProvider};
 
 const DEFAULT_TOOL_UTC_NOW: &str = "utc_now";
 const DEFAULT_TOOL_ADD_INTEGERS: &str = "add_integers";
@@ -45,7 +45,9 @@ impl ChatAgent {
     pub fn new(mut spec: AgentSpec, provider: AgentProvider) -> Self {
         let kb_entries = knowledge::load_kb_config();
         ensure_default_tool_names(&mut spec, &kb_entries);
-        let runtime = AgentRuntime::new(spec, provider, build_tool_set(&kb_entries));
+        // Extract API credentials from the parent provider to pass to knowledge sub-agents
+        let sub_provider = extract_sub_agent_provider(&provider);
+        let runtime = AgentRuntime::new(spec, provider, build_tool_set(&kb_entries, sub_provider));
         Self {
             runtime,
             tool_log: Vec::new(),
@@ -146,12 +148,22 @@ fn build_default_tool_set() -> ToolSet {
     tool_set
 }
 
-fn build_tool_set(kb_entries: &[KbEntry]) -> ToolSet {
+fn build_tool_set(kb_entries: &[KbEntry], sub_provider: SubAgentProvider) -> ToolSet {
     let mut tool_set = build_default_tool_set();
-    if let Some((name, runtime)) = knowledge::build_knowledge_tool(kb_entries) {
+    if let Some((name, runtime)) = knowledge::build_knowledge_tool(kb_entries, sub_provider) {
         tool_set.insert(name, runtime);
     }
     tool_set
+}
+
+/// Extract API credentials from the parent's provider for use by knowledge sub-agents.
+fn extract_sub_agent_provider(provider: &AgentProvider) -> SubAgentProvider {
+    match &provider.lm {
+        LangModelProvider::API { url, api_key, .. } => SubAgentProvider {
+            api_key: api_key.clone().unwrap_or_default(),
+            api_url: url.to_string(),
+        },
+    }
 }
 
 fn utc_now_tool_desc() -> ailoy::ToolDesc {

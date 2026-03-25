@@ -29,6 +29,14 @@ pub struct KbEntry {
     pub corpus_dirs: Vec<String>,
 }
 
+/// Provider config extracted from the parent ChatAgent's provider,
+/// passed down to knowledge sub-agents so they use the same API credentials.
+#[derive(Clone)]
+pub struct SubAgentProvider {
+    pub api_key: String,
+    pub api_url: String,
+}
+
 /// Load KB configuration from `KNOWLEDGE_AGENTS_CONFIG` env var or `./data/knowledge_agents.json`.
 /// Relative paths in `index_dir` and `corpus_dirs` are resolved against the
 /// directory containing the JSON config file, not the process CWD.
@@ -79,14 +87,19 @@ fn resolve_path(base: &Path, raw: &str) -> String {
 }
 
 /// Build the `ask_knowledge` tool from KB entries.
+/// `provider` carries the parent agent's API credentials so sub-agents
+/// use the same key instead of falling back to environment variables.
 /// Returns `None` if entries is empty.
-pub fn build_knowledge_tool(entries: &[KbEntry]) -> Option<(String, ToolRuntime)> {
+pub fn build_knowledge_tool(
+    entries: &[KbEntry],
+    provider: SubAgentProvider,
+) -> Option<(String, ToolRuntime)> {
     if entries.is_empty() {
         return None;
     }
 
     let desc = ask_knowledge_desc(entries);
-    let func = ask_knowledge_func(entries.to_vec());
+    let func = ask_knowledge_func(entries.to_vec(), provider);
     Some((ASK_KNOWLEDGE_TOOL.to_string(), ToolRuntime::new(desc, func)))
 }
 
@@ -143,9 +156,10 @@ fn ask_knowledge_desc(entries: &[KbEntry]) -> ailoy::ToolDesc {
 
 /// Returns a closure that spawns a knowledge sub-agent per invocation.
 /// The sub-agent is created, runs a single query, and is immediately dropped.
-fn ask_knowledge_func(entries: Vec<KbEntry>) -> Arc<ToolFunc> {
+fn ask_knowledge_func(entries: Vec<KbEntry>, provider: SubAgentProvider) -> Arc<ToolFunc> {
     Arc::new(move |args: Value| {
         let entries = entries.clone();
+        let provider = provider.clone();
         Box::pin(async move {
             let args_map = match args.as_object() {
                 Some(m) => m,
@@ -167,7 +181,7 @@ fn ask_knowledge_func(entries: Vec<KbEntry>) -> Arc<ToolFunc> {
                 None => return error_value(&format!("unknown kb_id: {kb_id}")),
             };
 
-            match spawn_sub_agent(&entry, &question).await {
+            match spawn_sub_agent(&entry, &question, &provider).await {
                 Ok(answer) => Value::object([("answer", Value::string(answer))]),
                 Err(e) => {
                     eprintln!("[knowledge] sub-agent error for kb={kb_id}: {e}");
@@ -180,12 +194,21 @@ fn ask_knowledge_func(entries: Vec<KbEntry>) -> Arc<ToolFunc> {
 
 /// Spawn a short-lived knowledge sub-agent, run a single query, and return the answer.
 /// The sub-agent (and its search index handle) are dropped when this function returns.
-async fn spawn_sub_agent(entry: &KbEntry, question: &str) -> anyhow::Result<String> {
+/// Uses the parent agent's API credentials via `provider`.
+async fn spawn_sub_agent(
+    entry: &KbEntry,
+    question: &str,
+    provider: &SubAgentProvider,
+) -> anyhow::Result<String> {
     let index_path = Path::new(&entry.index_dir);
     let search_index = Arc::new(SearchIndex::open(index_path)?);
 
     let target_dirs: Vec<PathBuf> = entry.corpus_dirs.iter().map(PathBuf::from).collect();
-    let agent_config = AgentConfig::default();
+    let agent_config = AgentConfig {
+        api_key: provider.api_key.clone(),
+        api_url: provider.api_url.clone(),
+        ..AgentConfig::default()
+    };
     let tool_config = ToolConfig::default();
 
     // Create sub-agent — it owns its own ReAct loop, independent of the parent ChatAgent
