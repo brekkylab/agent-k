@@ -108,7 +108,14 @@ export function NewChatWelcome() {
   const canSubmit = message.trim() && selectedModel && selectedProfileId && !loading;
 
   return (
-    <div className="flex h-full flex-col items-center justify-center px-4">
+    <div className="relative flex h-full flex-col items-center justify-center px-4 overflow-hidden">
+      {/* Aurora Background */}
+      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+        <div className="absolute -top-[20%] left-[5%] h-[40%] w-[120%] animate-aurora-1 rounded-[50%] bg-gradient-to-r from-violet-500/15 via-cyan-400/10 to-transparent blur-[40px]" />
+        <div className="absolute top-[15%] -left-[10%] h-[35%] w-[130%] animate-aurora-2 rounded-[50%] bg-gradient-to-r from-emerald-400/10 via-blue-500/12 to-purple-500/8 blur-[50px]" />
+        <div className="absolute top-[40%] left-[10%] h-[30%] w-[110%] animate-aurora-3 rounded-[50%] bg-gradient-to-r from-cyan-400/8 via-indigo-500/10 to-transparent blur-[40px]" />
+      </div>
+
       <div className="w-full max-w-2xl space-y-6">
         {/* Welcome */}
         <div className="text-center space-y-2">
