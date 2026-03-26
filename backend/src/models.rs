@@ -114,9 +114,9 @@ pub struct ListSessionsQuery {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
 pub struct UpdateSessionRequest {
-    pub title: String,
+    pub title: Option<String>,
+    pub provider_profile_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

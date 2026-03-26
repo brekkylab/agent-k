@@ -97,6 +97,20 @@ export async function createProviderProfile(data: {
   });
 }
 
+export async function updateProviderProfile(
+  id: string,
+  data: {
+    name: string;
+    provider: ApiProviderProfile["provider"];
+    is_default?: boolean;
+  },
+): Promise<ApiProviderProfile> {
+  return fetchApi<ApiProviderProfile>(`/provider-profiles/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
 export async function deleteProviderProfile(id: string): Promise<void> {
   return fetchApi<void>(`/provider-profiles/${id}`, { method: "DELETE" });
 }
@@ -108,6 +122,20 @@ export async function createAgent(data: {
 }): Promise<ApiAgent> {
   return fetchApi<ApiAgent>("/agents", {
     method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getAgent(id: string): Promise<ApiAgent> {
+  return fetchApi<ApiAgent>(`/agents/${id}`);
+}
+
+export async function updateAgent(
+  id: string,
+  data: { spec: { lm: string; instruction?: string; tools?: unknown[] } },
+): Promise<ApiAgent> {
+  return fetchApi<ApiAgent>(`/agents/${id}`, {
+    method: "PUT",
     body: JSON.stringify(data),
   });
 }
@@ -151,6 +179,16 @@ export async function updateSessionTitle(
   return fetchApi<ApiSession>(`/sessions/${id}`, {
     method: "PUT",
     body: JSON.stringify({ title }),
+  });
+}
+
+export async function updateSession(
+  id: string,
+  data: { title?: string; provider_profile_id?: string },
+): Promise<ApiSession> {
+  return fetchApi<ApiSession>(`/sessions/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
   });
 }
 

@@ -751,6 +751,28 @@ impl Repository for SqliteRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn update_session_provider_profile_id(
+        &self,
+        id: Uuid,
+        provider_profile_id: Uuid,
+    ) -> RepositoryResult<bool> {
+        let now = Self::now_string();
+        let result = sqlx::query(
+            r#"
+            UPDATE sessions
+            SET provider_profile_id = ?, updated_at = ?
+            WHERE id = ?;
+            "#,
+        )
+        .bind(provider_profile_id.to_string())
+        .bind(now)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn add_session_message(
         &self,
         session_id: Uuid,

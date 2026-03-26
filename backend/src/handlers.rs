@@ -540,15 +540,44 @@ async fn update_session(
     payload: web::Json<UpdateSessionRequest>,
 ) -> HttpResponse {
     let id = path.into_inner();
-    let UpdateSessionRequest { title } = payload.into_inner();
+    let req = payload.into_inner();
 
-    match state.repository.update_session_title(id, title).await {
-        Ok(true) => match state.repository.get_session(id).await {
-            Ok(Some(session)) => HttpResponse::Ok().json(session),
-            Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
-            Err(error) => repository_error_response(error),
-        },
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "session not found"),
+    // Verify session exists first
+    match state.repository.get_session(id).await {
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "session not found"),
+        Err(error) => return repository_error_response(error),
+        Ok(Some(_)) => {}
+    }
+
+    if let Some(title) = req.title {
+        if let Err(error) = state.repository.update_session_title(id, title).await {
+            return repository_error_response(error);
+        }
+    }
+
+    if let Some(provider_profile_id) = req.provider_profile_id {
+        // Verify provider profile exists
+        match state.repository.get_provider_profile(provider_profile_id).await {
+            Ok(None) => {
+                return json_error(StatusCode::NOT_FOUND, "provider profile not found");
+            }
+            Err(error) => return repository_error_response(error),
+            Ok(Some(_)) => {}
+        }
+
+        if let Err(error) = state
+            .repository
+            .update_session_provider_profile_id(id, provider_profile_id)
+            .await
+        {
+            return repository_error_response(error);
+        }
+        state.invalidate_session_runtime(id);
+    }
+
+    match state.repository.get_session(id).await {
+        Ok(Some(session)) => HttpResponse::Ok().json(session),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "session not found"),
         Err(error) => repository_error_response(error),
     }
 }

@@ -87,6 +87,11 @@ pub trait Repository: Send + Sync {
         id: Uuid,
         title: String,
     ) -> RepositoryResult<bool>;
+    async fn update_session_provider_profile_id(
+        &self,
+        id: Uuid,
+        provider_profile_id: Uuid,
+    ) -> RepositoryResult<bool>;
     async fn add_session_message(
         &self,
         session_id: Uuid,

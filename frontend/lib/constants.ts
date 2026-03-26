@@ -6,6 +6,12 @@ export const PROVIDER_MODELS = {
 
 export type ProviderName = keyof typeof PROVIDER_MODELS;
 
+export const PROVIDER_DEFAULT_PROFILE_NAMES: Record<ProviderName, string> = {
+  OpenAI: "openai-default",
+  Anthropic: "anthropic-default",
+  Gemini: "gemini-default",
+} as const;
+
 // Backend serde: LangModelAPISchema #[serde(rename_all = "snake_case")]
 // ChatCompletion → "chat_completion", Anthropic → "anthropic", Gemini → "gemini", OpenAI → "open_ai"
 export const PROVIDER_CONFIG: Record<
@@ -22,6 +28,6 @@ export const PROVIDER_CONFIG: Record<
   },
   Gemini: {
     schema: "gemini",
-    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
   },
 } as const;

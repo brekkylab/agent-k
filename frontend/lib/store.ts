@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { SessionSource } from "./types";
+import type { ProviderName } from "./constants";
 
 // ============================================================
 // Zustand State Boundary
@@ -13,6 +14,8 @@ import type { SessionSource } from "./types";
 // Sources             | —
 // Knowledges          | —
 // —                   | activeSessionId
+// —                   | selectedProvider / selectedModel (pending session용)
+// —                   | pendingKnowledgeIds (pending session용)
 // —                   | sessionLocalData (Knowledge/Source associations per session)
 // ============================================================
 
@@ -27,6 +30,16 @@ interface AppState {
   setActiveSession: (id: string | null) => void;
   sessionListVersion: number;
   bumpSessionListVersion: () => void;
+
+  // Pending session model selection (before session is created)
+  selectedProvider: ProviderName | null;
+  selectedModel: string | null;
+  selectedProfileId: string | null;
+  setSelectedModel: (provider: ProviderName, model: string, profileId: string) => void;
+
+  // Pending session knowledge selection
+  pendingKnowledgeIds: string[];
+  setPendingKnowledgeIds: (ids: string[]) => void;
 
   // Per-session local data (Knowledge/Source associations — not in Backend)
   sessionLocalData: Record<string, SessionLocalData>;
@@ -48,6 +61,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveSession: (id) => set({ activeSessionId: id }),
   sessionListVersion: 0,
   bumpSessionListVersion: () => set((s) => ({ sessionListVersion: s.sessionListVersion + 1 })),
+
+  // Pending session model selection
+  selectedProvider: null,
+  selectedModel: null,
+  selectedProfileId: null,
+  setSelectedModel: (provider, model, profileId) =>
+    set({ selectedProvider: provider, selectedModel: model, selectedProfileId: profileId }),
+
+  // Pending session knowledge selection
+  pendingKnowledgeIds: [],
+  setPendingKnowledgeIds: (ids) => set({ pendingKnowledgeIds: ids }),
 
   // Per-session local data
   sessionLocalData: {},
