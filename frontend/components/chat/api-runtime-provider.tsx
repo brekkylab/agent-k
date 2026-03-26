@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ChatModelAdapter } from "@assistant-ui/react";
 import {
   useLocalRuntime,
@@ -43,7 +43,7 @@ function ApiRuntimeInner({
   sessionId: string;
   initialMessages: { role: "user" | "assistant"; content: string; createdAt: Date }[];
 }) {
-  const adapter = createApiAdapter(sessionId);
+  const adapter = useMemo(() => createApiAdapter(sessionId), [sessionId]);
   const runtime = useLocalRuntime(adapter, { initialMessages });
 
   return (

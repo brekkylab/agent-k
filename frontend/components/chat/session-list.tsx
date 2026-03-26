@@ -21,14 +21,14 @@ export function SessionList() {
     try {
       const data = await getSessions(false);
       setSessions(data);
-    } catch {
-      // Backend 미연결 시 빈 목록 유지
+    } catch (err) {
+      console.warn("Failed to load sessions:", err);
     }
   }, []);
 
   useEffect(() => {
     fetchSessions();
-  }, [fetchSessions, activeSessionId, sessionListVersion]);
+  }, [fetchSessions, sessionListVersion]);
 
   const handleNewChat = () => {
     setActiveSession(null);
@@ -52,8 +52,8 @@ export function SessionList() {
       if (activeSessionId === sessionId) {
         setActiveSession(null);
       }
-    } catch {
-      // 삭제 실패 시 무시
+    } catch (err) {
+      console.warn("Failed to delete session:", err);
     }
   };
 
@@ -67,7 +67,7 @@ export function SessionList() {
         새 채팅
       </button>
 
-      <div className="mt-1 space-y-0.5 overflow-y-auto max-h-[calc(100vh-400px)]">
+      <div className="mt-1 space-y-0.5 overflow-y-auto flex-1">
         {sessions.map((session) => (
           <div
             key={session.id}
@@ -85,9 +85,9 @@ export function SessionList() {
               <span className="truncate">{session.title ?? "새 채팅"}</span>
             </button>
             <button
-              className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
+              className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
               onClick={(e) => handleDeleteSession(e, session.id)}
-              title="세션 삭제"
+              aria-label="세션 삭제"
             >
               <X className="h-3 w-3" />
             </button>

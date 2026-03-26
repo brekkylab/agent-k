@@ -73,7 +73,7 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
   };
 
   return (
-    <div className="w-64 flex flex-col">
+    <div className="w-64 flex flex-col" role="dialog" aria-label="Knowledge 선택">
       <div className="flex items-center justify-between p-3 border-b">
         <span className="font-semibold text-sm">Knowledge</span>
         <Button
@@ -81,6 +81,7 @@ export function KnowledgePanel({ onClose }: KnowledgePanelProps) {
           size="icon"
           className="h-7 w-7"
           onClick={onClose}
+          aria-label="Knowledge 패널 닫기"
         >
           <X className="h-4 w-4" />
         </Button>

@@ -52,7 +52,7 @@ export default function SettingsPage() {
         />
         <div className="flex items-center justify-between">
           <div className="space-y-1.5">
-            <p className="flex items-center gap-1.5 text-xs text-amber-600">
+            <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
               <TriangleAlert className="h-3 w-3" />
               새로 시작하는 채팅에만 적용됩니다. 기존 세션에는 영향 없습니다.
             </p>

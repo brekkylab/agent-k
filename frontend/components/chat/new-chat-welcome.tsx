@@ -20,6 +20,7 @@ export function NewChatWelcome() {
   const [error, setError] = useState<string | null>(null);
   const [knowledges, setKnowledges] = useState<ApiKnowledge[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // loading state와 별도로 ref로 중복 방지 — React 비동기 state 업데이트 사이의 race condition 방어
   const creatingRef = useRef(false);
 
   const selectedProvider = useAppStore((s) => s.selectedProvider);
@@ -35,7 +36,7 @@ export function NewChatWelcome() {
   useEffect(() => {
     getKnowledges()
       .then(setKnowledges)
-      .catch(() => {});
+      .catch((err) => console.warn("Failed to load knowledges:", err));
   }, []);
 
   useEffect(() => {
@@ -137,6 +138,7 @@ export function NewChatWelcome() {
             <button
               onClick={handleSubmit}
               disabled={!canSubmit}
+              aria-label="메시지 전송"
               className="inline-flex items-center justify-center h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? (

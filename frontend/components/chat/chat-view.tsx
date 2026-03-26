@@ -31,18 +31,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
     getSession(sessionId).then((session) => {
       setCurrentAgentId(session.agent_id);
       setCurrentProfileId(session.provider_profile_id);
-      // Agent에서 현재 모델 읽기
       getAgent(session.agent_id).then((agent) => {
-        // Zustand에 현재 세션의 모델 반영 (ModelSelector 초기값)
-        // Provider는 profile에서 추론해야 하지만, 현재는 모델명으로 표시
-        setSelectedModel(
-          selectedProvider ?? "OpenAI",
+        const { selectedProvider: currentProvider, setSelectedModel: setModel } =
+          useAppStore.getState();
+        setModel(
+          currentProvider ?? "OpenAI",
           agent.spec.lm,
           session.provider_profile_id,
         );
-      }).catch(() => {});
-    }).catch(() => {});
-  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+      }).catch((err) => console.warn("Failed to load agent:", err));
+    }).catch((err) => console.warn("Failed to load session:", err));
+  }, [sessionId]);
 
   // Mid-session 모델 변경 핸들러
   const handleModelChange = useCallback(
@@ -100,7 +99,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
           variant={isPanelOpen ? "default" : "outline"}
           size="icon"
           onClick={() => setIsPanelOpen((v) => !v)}
-          title="Knowledge 패널"
+          aria-label="Knowledge 패널 열기"
+          aria-expanded={isPanelOpen}
         >
           <BookOpen className="h-4 w-4" />
         </Button>
@@ -109,6 +109,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
           <div
             ref={panelRef}
             className="absolute top-12 left-0 z-20 rounded-lg border bg-background shadow-lg"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setIsPanelOpen(false);
+                buttonRef.current?.focus();
+              }
+            }}
           >
             <KnowledgePanel onClose={() => setIsPanelOpen(false)} />
           </div>

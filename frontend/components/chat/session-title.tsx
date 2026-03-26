@@ -92,13 +92,13 @@ export function SessionTitle({ sessionId }: SessionTitleProps) {
   }
 
   return (
-    <div
-      className="flex items-center gap-2 px-4 py-2 border-b cursor-pointer group"
+    <button
+      className="flex w-full items-center gap-2 px-4 py-2 border-b cursor-pointer group text-left hover:bg-accent/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       onClick={startEditing}
-      title="클릭하여 제목 편집"
+      aria-label={`세션 제목: ${displayTitle}. 클릭하여 편집`}
     >
       <span className="text-sm font-medium truncate">{displayTitle}</span>
-      <Pencil className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-    </div>
+      <Pencil className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity" />
+    </button>
   );
 }

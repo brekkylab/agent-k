@@ -61,7 +61,7 @@ export const Composer: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft 
         />
         <div className="mx-1 mb-2 flex items-center justify-between">
           <div>{composerLeft}</div>
-          <ComposerPrimitive.Send className="inline-flex items-center justify-center h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90">
+          <ComposerPrimitive.Send aria-label="메시지 전송" className="inline-flex items-center justify-center h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90">
             <ArrowUpIcon className="h-4 w-4" />
           </ComposerPrimitive.Send>
         </div>

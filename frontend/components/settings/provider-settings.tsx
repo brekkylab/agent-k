@@ -155,7 +155,7 @@ export function ProviderSettings() {
                 <KeyRound className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-medium">{provider}</span>
                 {isRegistered ? (
-                  <span className="flex items-center gap-1 text-xs text-emerald-600">
+                  <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
                     <Check className="h-3 w-3" />
                     등록됨
                   </span>
@@ -217,7 +217,7 @@ export function ProviderSettings() {
               <p className="ml-11 mt-1 text-xs text-destructive">{card.error}</p>
             )}
             {card.success && (
-              <p className="ml-11 mt-1 text-xs text-emerald-600">저장되었습니다.</p>
+              <p className="ml-11 mt-1 text-xs text-emerald-600 dark:text-emerald-400">저장되었습니다.</p>
             )}
           </div>
         );
