@@ -14,7 +14,7 @@ use crate::agent::spec::{
 use crate::models::{
     AddSessionMessageRequest, AddSessionMessageResponse, Agent, AgentResponse,
     CreateAgentRequest, CreateProviderProfileRequest,
-    CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse, ListSessionsQuery, MessageRole,
+    CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse, ListSessionsQuery, MessageRole, PaginationQuery,
     ProviderProfile, ProviderProfileResponse, Session, SessionMessage, SourceResponse, SourceType,
     SpeedwagonIndexStatus, SpeedwagonResponse,
     UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
@@ -476,11 +476,13 @@ async fn list_sessions(
     let ListSessionsQuery {
         agent_id,
         include_messages,
+        limit,
+        offset,
     } = query.into_inner();
 
     match state
         .repository
-        .list_sessions(agent_id, include_messages.unwrap_or(false))
+        .list_sessions(agent_id, include_messages.unwrap_or(false), limit, offset)
         .await
     {
         Ok(sessions) => HttpResponse::Ok().json(sessions),
@@ -649,8 +651,12 @@ async fn upload_source(
     tag = "sources",
     responses((status = 200, description = "List sources", body = [SourceResponse]))
 )]
-async fn list_sources(state: web::Data<AppState>) -> HttpResponse {
-    match state.repository.list_sources().await {
+async fn list_sources(
+    state: web::Data<AppState>,
+    query: web::Query<PaginationQuery>,
+) -> HttpResponse {
+    let PaginationQuery { limit, offset } = query.into_inner();
+    match state.repository.list_sources(limit, offset).await {
         Ok(sources) => {
             let response: Vec<SourceResponse> = sources.iter().map(SourceResponse::from).collect();
             HttpResponse::Ok().json(response)
@@ -709,7 +715,7 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
             }
 
             // Reset index_status for any speedwagons that referenced this source
-            if let Ok(speedwagons) = state.repository.list_speedwagons().await {
+            if let Ok(speedwagons) = state.repository.list_speedwagons(None, None).await {
                 for sw in speedwagons {
                     if sw.source_ids.contains(&id) && sw.index_status != SpeedwagonIndexStatus::NotIndexed {
                         let _ = state.repository.update_speedwagon_index_status(
@@ -755,8 +761,12 @@ async fn create_speedwagon(
     tag = "speedwagons",
     responses((status = 200, description = "List speedwagons", body = [SpeedwagonResponse]))
 )]
-async fn list_speedwagons(state: web::Data<AppState>) -> HttpResponse {
-    match state.repository.list_speedwagons().await {
+async fn list_speedwagons(
+    state: web::Data<AppState>,
+    query: web::Query<PaginationQuery>,
+) -> HttpResponse {
+    let PaginationQuery { limit, offset } = query.into_inner();
+    match state.repository.list_speedwagons(limit, offset).await {
         Ok(list) => {
             let response: Vec<SpeedwagonResponse> = list.iter().map(SpeedwagonResponse::from).collect();
             HttpResponse::Ok().json(response)

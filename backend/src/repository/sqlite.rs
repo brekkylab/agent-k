@@ -826,17 +826,25 @@ impl Repository for SqliteRepository {
         &self,
         agent_id: Option<Uuid>,
         include_messages: bool,
+        limit: Option<i64>,
+        offset: Option<i64>,
     ) -> RepositoryResult<Vec<Session>> {
+        let limit_val = limit.unwrap_or(-1); // SQLite: -1 = no limit
+        let offset_val = offset.unwrap_or(0);
+
         let rows = if let Some(agent_id) = agent_id {
             sqlx::query(
                 r#"
                 SELECT id, agent_id, provider_profile_id, title, created_at, updated_at
                 FROM sessions
                 WHERE agent_id = ?
-                ORDER BY created_at ASC, id ASC;
+                ORDER BY created_at ASC, id ASC
+                LIMIT ? OFFSET ?;
                 "#,
             )
             .bind(agent_id.to_string())
+            .bind(limit_val)
+            .bind(offset_val)
             .fetch_all(&self.pool)
             .await?
         } else {
@@ -844,9 +852,12 @@ impl Repository for SqliteRepository {
                 r#"
                 SELECT id, agent_id, provider_profile_id, title, created_at, updated_at
                 FROM sessions
-                ORDER BY created_at ASC, id ASC;
+                ORDER BY created_at ASC, id ASC
+                LIMIT ? OFFSET ?;
                 "#,
             )
+            .bind(limit_val)
+            .bind(offset_val)
             .fetch_all(&self.pool)
             .await?
         };
@@ -1063,14 +1074,17 @@ impl Repository for SqliteRepository {
         })
     }
 
-    async fn list_sources(&self) -> RepositoryResult<Vec<Source>> {
+    async fn list_sources(&self, limit: Option<i64>, offset: Option<i64>) -> RepositoryResult<Vec<Source>> {
         let rows = sqlx::query(
             r#"
             SELECT id, name, source_type, file_path, size, created_at, updated_at
             FROM sources
-            ORDER BY created_at DESC;
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?;
             "#,
         )
+        .bind(limit.unwrap_or(-1))
+        .bind(offset.unwrap_or(0))
         .fetch_all(&self.pool)
         .await?;
 
@@ -1146,15 +1160,18 @@ impl Repository for SqliteRepository {
             .ok_or_else(|| RepositoryError::InvalidData("created speedwagon not found".to_string()))
     }
 
-    async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>> {
+    async fn list_speedwagons(&self, limit: Option<i64>, offset: Option<i64>) -> RepositoryResult<Vec<Speedwagon>> {
         let rows = sqlx::query(
             r#"
             SELECT id, name, description, instruction, lm, index_dir, corpus_dir,
                    index_status, index_error, index_started_at, indexed_at, created_at, updated_at
             FROM speedwagons
-            ORDER BY created_at DESC;
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?;
             "#,
         )
+        .bind(limit.unwrap_or(-1))
+        .bind(offset.unwrap_or(0))
         .fetch_all(&self.pool)
         .await?;
 
