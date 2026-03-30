@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::error_value;
+
 use ailoy::agent::ToolFunc;
 use ailoy::{ToolDescBuilder, ToolRuntime, Value};
 use knowledge_agent::{AgentConfig, SearchIndex, ToolConfig, build_agent, run_with_trace};
@@ -151,6 +153,3 @@ pub async fn dispatch_speedwagon(
     Ok(answer)
 }
 
-fn error_value(msg: &str) -> Value {
-    Value::object([("error", Value::string(msg))])
-}

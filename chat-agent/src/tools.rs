@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::error_value;
+
 use ailoy::agent::ToolFunc;
 use ailoy::{ToolDescBuilder, ToolRuntime, ToolSet, Value};
 
@@ -111,14 +113,14 @@ fn add_integers_func() -> Arc<ToolFunc> {
 
 pub(crate) fn add_integers_result(args: Value) -> Value {
     let Some(args_map) = args.as_object() else {
-        return invalid_arguments_value();
+        return error_value("invalid_arguments");
     };
 
     let Some(a) = args_map.get("a").and_then(Value::as_integer) else {
-        return invalid_arguments_value();
+        return error_value("invalid_arguments");
     };
     let Some(b) = args_map.get("b").and_then(Value::as_integer) else {
-        return invalid_arguments_value();
+        return error_value("invalid_arguments");
     };
 
     match a.checked_add(b) {
@@ -127,9 +129,6 @@ pub(crate) fn add_integers_result(args: Value) -> Value {
     }
 }
 
-fn invalid_arguments_value() -> Value {
-    Value::object([("error", Value::string("invalid_arguments"))])
-}
 
 // ---------------------------------------------------------------------------
 // read_source tool
@@ -213,6 +212,3 @@ fn read_source_func(source_paths: Vec<(String, String, PathBuf)>) -> Arc<ToolFun
     })
 }
 
-fn error_value(msg: &str) -> Value {
-    Value::object([("error", Value::string(msg))])
-}

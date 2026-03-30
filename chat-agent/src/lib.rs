@@ -9,3 +9,10 @@ pub mod tools;
 
 pub use chat_agent::{ChatAgent, ChatAgentRunError, ToolCallEntry};
 pub use speedwagon::{KbEntry, SubAgentProvider};
+
+use ailoy::Value;
+
+/// Tool 실행 에러를 나타내는 공통 헬퍼. `{ "error": "<msg>" }` 형태의 Value를 반환.
+pub(crate) fn error_value(msg: &str) -> Value {
+    Value::object([("error", Value::string(msg))])
+}
