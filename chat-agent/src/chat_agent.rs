@@ -1,17 +1,12 @@
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::PathBuf;
 
-use ailoy::agent::ToolFunc;
 use ailoy::{
-    AgentProvider, AgentRuntime, AgentSpec, LangModelProvider, Message, Part, Role,
-    ToolDescBuilder, ToolRuntime, ToolSet, Value,
+    AgentProvider, AgentRuntime, AgentSpec, LangModelProvider, Message, Part, Role, ToolSet, Value,
 };
 use futures::StreamExt as _;
 
-use crate::knowledge::{self, KbEntry, SubAgentProvider};
-
-const DEFAULT_TOOL_UTC_NOW: &str = "utc_now";
-const DEFAULT_TOOL_ADD_INTEGERS: &str = "add_integers";
+use crate::speedwagon::{self, KbEntry, SubAgentProvider};
+use crate::tools::{self, DEFAULT_TOOL_ADD_INTEGERS, DEFAULT_TOOL_UTC_NOW, READ_SOURCE_TOOL};
 
 /// A record of a tool interaction: the LLM's call and the tool's response.
 #[derive(Debug, Clone)]
@@ -42,12 +37,20 @@ pub enum ChatAgentRunError {
 }
 
 impl ChatAgent {
-    pub fn new(mut spec: AgentSpec, provider: AgentProvider) -> Self {
-        let kb_entries = knowledge::load_kb_config();
-        ensure_default_tool_names(&mut spec, &kb_entries);
-        // Extract API credentials from the parent provider to pass to knowledge sub-agents
-        let sub_provider = extract_sub_agent_provider(&provider);
-        let runtime = AgentRuntime::new(spec, provider, build_tool_set(&kb_entries, sub_provider));
+    pub fn new(
+        mut spec: AgentSpec,
+        provider: AgentProvider,
+        kb_entries: Vec<KbEntry>,
+        session_source_paths: Vec<(String, String, PathBuf)>,
+    ) -> Self {
+        ensure_default_tool_names(&mut spec, &kb_entries, &session_source_paths);
+        // Extract API credentials and model name from the parent provider to pass to speedwagon sub-agents
+        let sub_provider = extract_sub_agent_provider(&provider, &spec.lm);
+        let runtime = AgentRuntime::new(
+            spec,
+            provider,
+            build_tool_set(&kb_entries, sub_provider, session_source_paths),
+        );
         Self {
             runtime,
             tool_log: Vec::new(),
@@ -123,10 +126,17 @@ fn ailoy_to_json(v: &Value) -> serde_json::Value {
     v.clone().into()
 }
 
-fn ensure_default_tool_names(spec: &mut AgentSpec, kb_entries: &[KbEntry]) {
+fn ensure_default_tool_names(
+    spec: &mut AgentSpec,
+    kb_entries: &[KbEntry],
+    session_source_paths: &[(String, String, PathBuf)],
+) {
     let mut tool_names: Vec<&str> = vec![DEFAULT_TOOL_UTC_NOW, DEFAULT_TOOL_ADD_INTEGERS];
     if !kb_entries.is_empty() {
-        tool_names.push(knowledge::ASK_KNOWLEDGE_TOOL);
+        tool_names.push(speedwagon::ASK_SPEEDWAGON_TOOL);
+    }
+    if !session_source_paths.is_empty() {
+        tool_names.push(READ_SOURCE_TOOL);
     }
     for tool_name in tool_names {
         if !spec.tools.iter().any(|name| name == tool_name) {
@@ -135,134 +145,30 @@ fn ensure_default_tool_names(spec: &mut AgentSpec, kb_entries: &[KbEntry]) {
     }
 }
 
-fn build_default_tool_set() -> ToolSet {
-    let mut tool_set = ToolSet::new();
-    tool_set.insert(
-        DEFAULT_TOOL_UTC_NOW.to_string(),
-        ToolRuntime::new(utc_now_tool_desc(), utc_now_tool()),
-    );
-    tool_set.insert(
-        DEFAULT_TOOL_ADD_INTEGERS.to_string(),
-        ToolRuntime::new(add_integers_tool_desc(), add_integers_tool()),
-    );
-    tool_set
-}
-
-fn build_tool_set(kb_entries: &[KbEntry], sub_provider: SubAgentProvider) -> ToolSet {
-    let mut tool_set = build_default_tool_set();
-    if let Some((name, runtime)) = knowledge::build_knowledge_tool(kb_entries, sub_provider) {
+fn build_tool_set(
+    kb_entries: &[KbEntry],
+    sub_provider: SubAgentProvider,
+    session_source_paths: Vec<(String, String, PathBuf)>,
+) -> ToolSet {
+    let mut tool_set = tools::build_default_tool_set();
+    if let Some((name, runtime)) = speedwagon::build_speedwagon_tool(kb_entries, sub_provider) {
+        tool_set.insert(name, runtime);
+    }
+    if let Some((name, runtime)) = tools::build_read_source_tool(session_source_paths) {
         tool_set.insert(name, runtime);
     }
     tool_set
 }
 
-/// Extract API credentials from the parent's provider for use by knowledge sub-agents.
-fn extract_sub_agent_provider(provider: &AgentProvider) -> SubAgentProvider {
+/// Extract API credentials and model name from the parent's provider for use by speedwagon sub-agents.
+fn extract_sub_agent_provider(provider: &AgentProvider, model_name: &str) -> SubAgentProvider {
     match &provider.lm {
         LangModelProvider::API { url, api_key, .. } => SubAgentProvider {
             api_key: api_key.clone().unwrap_or_default(),
             api_url: url.to_string(),
+            model_name: model_name.to_string(),
         },
     }
-}
-
-fn utc_now_tool_desc() -> ailoy::ToolDesc {
-    ToolDescBuilder::new(DEFAULT_TOOL_UTC_NOW)
-        .description("Return the current UTC Unix timestamp in seconds.")
-        .parameters(Value::object([
-            ("type", Value::string("object")),
-            ("properties", Value::object_empty()),
-        ]))
-        .returns(Value::object([
-            ("type", Value::string("object")),
-            (
-                "properties",
-                Value::object([(
-                    "unix_seconds",
-                    Value::object([("type", Value::string("number"))]),
-                )]),
-            ),
-        ]))
-        .build()
-}
-
-fn add_integers_tool_desc() -> ailoy::ToolDesc {
-    ToolDescBuilder::new(DEFAULT_TOOL_ADD_INTEGERS)
-        .description("Add two integer values and return their sum.")
-        .parameters(Value::object([
-            ("type", Value::string("object")),
-            (
-                "properties",
-                Value::object([
-                    (
-                        "a",
-                        Value::object([("type", Value::string("number"))]),
-                    ),
-                    (
-                        "b",
-                        Value::object([("type", Value::string("number"))]),
-                    ),
-                ]),
-            ),
-            (
-                "required",
-                Value::array([Value::string("a"), Value::string("b")]),
-            ),
-        ]))
-        .returns(Value::object([
-            ("type", Value::string("object")),
-            (
-                "properties",
-                Value::object([
-                    (
-                        "sum",
-                        Value::object([("type", Value::string("number"))]),
-                    ),
-                    (
-                        "error",
-                        Value::object([("type", Value::string("string"))]),
-                    ),
-                ]),
-            ),
-        ]))
-        .build()
-}
-
-fn utc_now_tool() -> Arc<ToolFunc> {
-    Arc::new(|_args: Value| {
-        Box::pin(async move {
-            match SystemTime::now().duration_since(UNIX_EPOCH) {
-                Ok(duration) => Value::object([("unix_seconds", Value::unsigned(duration.as_secs()))]),
-                Err(_) => Value::object([("error", Value::string("time_before_unix_epoch"))]),
-            }
-        })
-    })
-}
-
-fn add_integers_tool() -> Arc<ToolFunc> {
-    Arc::new(|args: Value| Box::pin(async move { add_integers_result(args) }))
-}
-
-fn add_integers_result(args: Value) -> Value {
-    let Some(args_map) = args.as_object() else {
-        return invalid_arguments_value();
-    };
-
-    let Some(a) = args_map.get("a").and_then(Value::as_integer) else {
-        return invalid_arguments_value();
-    };
-    let Some(b) = args_map.get("b").and_then(Value::as_integer) else {
-        return invalid_arguments_value();
-    };
-
-    match a.checked_add(b) {
-        Some(sum) => Value::object([("sum", Value::integer(sum))]),
-        None => Value::object([("error", Value::string("overflow"))]),
-    }
-}
-
-fn invalid_arguments_value() -> Value {
-    Value::object([("error", Value::string("invalid_arguments"))])
 }
 
 fn extract_assistant_text(message: &Message) -> Option<String> {
@@ -278,9 +184,10 @@ fn extract_assistant_text(message: &Message) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ChatAgent, DEFAULT_TOOL_ADD_INTEGERS, DEFAULT_TOOL_UTC_NOW, add_integers_result,
-        build_default_tool_set, ensure_default_tool_names, extract_assistant_text,
+    use super::{ChatAgent, ensure_default_tool_names, extract_assistant_text};
+    use crate::tools::{
+        DEFAULT_TOOL_ADD_INTEGERS, DEFAULT_TOOL_UTC_NOW, add_integers_result,
+        build_default_tool_set,
     };
     use ailoy::{
         AgentProvider, AgentSpec, LangModelAPISchema, LangModelProvider, Message, Part, Role,
@@ -310,13 +217,13 @@ mod tests {
 
     #[test]
     fn new_creates_chat_agent_with_runtime() {
-        let _agent = ChatAgent::new(sample_spec(), sample_provider());
+        let _agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
     }
 
     #[test]
     fn new_injects_default_tool_names_when_spec_empty() {
         let mut spec = sample_spec();
-        ensure_default_tool_names(&mut spec, &[]);
+        ensure_default_tool_names(&mut spec, &[], &[]);
         assert_eq!(
             spec.tools,
             vec![
@@ -335,7 +242,7 @@ mod tests {
             DEFAULT_TOOL_ADD_INTEGERS.to_string(),
         ];
 
-        ensure_default_tool_names(&mut spec, &[]);
+        ensure_default_tool_names(&mut spec, &[], &[]);
 
         assert_eq!(
             spec.tools,
@@ -433,7 +340,7 @@ mod tests {
 
     #[test]
     fn run_user_text_method_is_available() {
-        let mut agent = ChatAgent::new(sample_spec(), sample_provider());
+        let mut agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
         let fut = agent.run_user_text("hello");
         drop(fut);
     }

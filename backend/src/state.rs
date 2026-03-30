@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
-use chat_agent::ChatAgent;
+use chat_agent::{ChatAgent, KbEntry};
 use tokio::sync::Mutex as TokioMutex;
 use url::Url;
 use uuid::Uuid;
 
-use crate::models::Session;
+use crate::models::{Session, SpeedwagonIndexStatus};
 use crate::repository::{
     Repository, RepositoryError, RepositoryResult, create_repository_from_env,
 };
@@ -17,12 +17,15 @@ use crate::repository::{
 struct CachedRuntime {
     agent_id: Uuid,
     provider_profile_id: Uuid,
+    speedwagon_ids: Vec<Uuid>,
+    source_ids: Vec<Uuid>,
     runtime: Arc<TokioMutex<ChatAgent>>,
 }
 
 pub struct AppState {
     pub repository: Arc<dyn Repository>,
     pub upload_dir: PathBuf,
+    pub speedwagon_data_dir: PathBuf,
     runtime_cache: Mutex<HashMap<Uuid, CachedRuntime>>,
 }
 
@@ -32,6 +35,7 @@ impl AppState {
         let state = Self {
             repository,
             upload_dir: PathBuf::from("./data/uploads"),
+            speedwagon_data_dir: PathBuf::from("./data/speedwagons"),
             runtime_cache: Mutex::new(HashMap::new()),
         };
         state
@@ -52,6 +56,7 @@ impl AppState {
         Ok(Self {
             repository,
             upload_dir,
+            speedwagon_data_dir: PathBuf::from("./data/speedwagons"),
             runtime_cache: Mutex::new(HashMap::new()),
         })
     }
@@ -87,11 +92,14 @@ impl AppState {
         &self,
         session: &Session,
     ) -> RepositoryResult<Arc<TokioMutex<ChatAgent>>> {
+        // Check cache: valid if agent_id, provider_profile_id, speedwagon_ids, source_ids all match
         if let Ok(mut cache) = self.runtime_cache.lock()
             && let Some(cached) = cache.get(&session.id).cloned()
         {
             if cached.agent_id == session.agent_id
                 && cached.provider_profile_id == session.provider_profile_id
+                && cached.speedwagon_ids == session.speedwagon_ids
+                && cached.source_ids == session.source_ids
             {
                 return Ok(cached.runtime);
             }
@@ -114,14 +122,51 @@ impl AppState {
                 RepositoryError::InvalidData("provider profile not found for session".to_string())
             })?;
 
+        // Load built speedwagons for this session → KbEntry list
+        let mut kb_entries: Vec<KbEntry> = Vec::new();
+        for &sw_id in &session.speedwagon_ids {
+            if let Ok(Some(sw)) = self.repository.get_speedwagon(sw_id).await {
+                if sw.index_status == SpeedwagonIndexStatus::Indexed {
+                    if let (Some(index_dir), Some(corpus_dir)) = (sw.index_dir.clone(), sw.corpus_dir.clone()) {
+                        kb_entries.push(KbEntry {
+                            id: sw.id.to_string(),
+                            description: sw.description.clone(),
+                            index_dir,
+                            corpus_dirs: vec![corpus_dir],
+                            instruction: sw.instruction.clone(),
+                            lm: sw.lm.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Load session sources → (source_id, source_name, file_path) tuples
+        let mut session_source_paths: Vec<(String, String, PathBuf)> = Vec::new();
+        for &source_id in &session.source_ids {
+            if let Ok(Some(source)) = self.repository.get_source(source_id).await {
+                if let Some(file_path) = source.file_path {
+                    session_source_paths.push((
+                        source.id.to_string(),
+                        source.name.clone(),
+                        PathBuf::from(file_path),
+                    ));
+                }
+            }
+        }
+
         let runtime = Arc::new(TokioMutex::new(ChatAgent::new(
             agent.spec,
             provider_profile.provider,
+            kb_entries,
+            session_source_paths,
         )));
 
         let cached = CachedRuntime {
             agent_id: session.agent_id,
             provider_profile_id: session.provider_profile_id,
+            speedwagon_ids: session.speedwagon_ids.clone(),
+            source_ids: session.source_ids.clone(),
             runtime: Arc::clone(&runtime),
         };
 

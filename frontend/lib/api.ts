@@ -4,7 +4,7 @@ import type {
   ApiSession,
   ApiSessionMessage,
   ApiSource,
-  ApiKnowledge,
+  ApiSpeedwagon,
 } from "./types";
 
 const API_BASE_URL =
@@ -59,7 +59,7 @@ async function fetchApi<T>(
       throw new ApiError("server", message, response.status);
     }
 
-    if (response.status === 204) {
+    if (response.status === 204 || response.status === 202) {
       return undefined as T;
     }
 
@@ -146,6 +146,8 @@ export async function createSession(data: {
   agent_id: string;
   provider_profile_id?: string;
   title?: string;
+  speedwagon_ids?: string[];
+  source_ids?: string[];
 }): Promise<ApiSession> {
   return fetchApi<ApiSession>("/sessions", {
     method: "POST",
@@ -184,7 +186,12 @@ export async function updateSessionTitle(
 
 export async function updateSession(
   id: string,
-  data: { title?: string; provider_profile_id?: string },
+  data: {
+    title?: string;
+    provider_profile_id?: string;
+    speedwagon_ids?: string[];
+    source_ids?: string[];
+  },
 ): Promise<ApiSession> {
   return fetchApi<ApiSession>(`/sessions/${id}`, {
     method: "PUT",
@@ -227,33 +234,49 @@ export async function deleteSource(id: string): Promise<void> {
   return fetchApi<void>(`/sources/${id}`, { method: "DELETE" });
 }
 
-// --- Knowledges ---
+// --- Speedwagons ---
 
-export async function getKnowledges(): Promise<ApiKnowledge[]> {
-  return fetchApi<ApiKnowledge[]>("/knowledges");
+export async function getSpeedwagons(): Promise<ApiSpeedwagon[]> {
+  return fetchApi<ApiSpeedwagon[]>("/speedwagons");
 }
 
-export async function createKnowledge(data: {
+export async function getSpeedwagon(id: string): Promise<ApiSpeedwagon> {
+  return fetchApi<ApiSpeedwagon>(`/speedwagons/${id}`);
+}
+
+export async function createSpeedwagon(data: {
   name: string;
   description: string;
+  instruction?: string | null;
+  lm?: string | null;
   source_ids?: string[];
-}): Promise<ApiKnowledge> {
-  return fetchApi<ApiKnowledge>("/knowledges", {
+}): Promise<ApiSpeedwagon> {
+  return fetchApi<ApiSpeedwagon>("/speedwagons", {
     method: "POST",
     body: JSON.stringify(data),
   });
 }
 
-export async function updateKnowledge(
+export async function updateSpeedwagon(
   id: string,
-  data: { name: string; description: string; source_ids: string[] },
-): Promise<ApiKnowledge> {
-  return fetchApi<ApiKnowledge>(`/knowledges/${id}`, {
+  data: {
+    name: string;
+    description: string;
+    instruction?: string | null;
+    lm?: string | null;
+    source_ids: string[];
+  },
+): Promise<ApiSpeedwagon> {
+  return fetchApi<ApiSpeedwagon>(`/speedwagons/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
   });
 }
 
-export async function deleteKnowledge(id: string): Promise<void> {
-  return fetchApi<void>(`/knowledges/${id}`, { method: "DELETE" });
+export async function deleteSpeedwagon(id: string): Promise<void> {
+  return fetchApi<void>(`/speedwagons/${id}`, { method: "DELETE" });
+}
+
+export async function indexSpeedwagon(id: string): Promise<void> {
+  return fetchApi<void>(`/speedwagons/${id}/index`, { method: "POST" });
 }

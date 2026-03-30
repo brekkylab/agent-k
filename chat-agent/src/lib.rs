@@ -4,6 +4,8 @@
 //! Session management and backend integration are handled in later phases.
 
 mod chat_agent;
-mod knowledge;
+pub mod speedwagon;
+pub mod tools;
 
 pub use chat_agent::{ChatAgent, ChatAgentRunError, ToolCallEntry};
+pub use speedwagon::{KbEntry, SubAgentProvider};

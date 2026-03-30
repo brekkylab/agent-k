@@ -59,7 +59,7 @@ fn create_agent(model: &str) -> ChatAgent {
         tools: vec![],
     };
 
-    ChatAgent::new(spec, provider)
+    ChatAgent::new(spec, provider, vec![], vec![])
 }
 
 async fn assert_routes_to(query: &str, expected_kb: &str) {

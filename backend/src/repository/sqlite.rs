@@ -7,7 +7,8 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::models::{
-    Agent, Knowledge, MessageRole, ProviderProfile, Session, SessionMessage, Source, SourceType,
+    Agent, MessageRole, ProviderProfile, Session, SessionMessage, Source, SourceType, Speedwagon,
+    SpeedwagonIndexStatus,
 };
 use crate::repository::{Repository, RepositoryError, RepositoryResult};
 use ailoy::{AgentProvider, AgentSpec};
@@ -135,13 +136,21 @@ impl SqliteRepository {
             .execute(&self.pool)
             .await?;
 
-        // --- Knowledges ---
+        // --- Speedwagons ---
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS knowledges (
+            CREATE TABLE IF NOT EXISTS speedwagons (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
+                instruction TEXT,
+                lm TEXT,
+                index_dir TEXT,
+                corpus_dir TEXT,
+                index_status TEXT NOT NULL DEFAULT 'not_indexed',
+                index_error TEXT,
+                index_started_at TEXT,
+                indexed_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -152,11 +161,11 @@ impl SqliteRepository {
 
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS knowledge_sources (
-                knowledge_id TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS speedwagon_sources (
+                speedwagon_id TEXT NOT NULL,
                 source_id TEXT NOT NULL,
-                PRIMARY KEY (knowledge_id, source_id),
-                FOREIGN KEY(knowledge_id) REFERENCES knowledges(id) ON DELETE CASCADE,
+                PRIMARY KEY (speedwagon_id, source_id),
+                FOREIGN KEY(speedwagon_id) REFERENCES speedwagons(id) ON DELETE CASCADE,
                 FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE CASCADE
             );
             "#,
@@ -165,7 +174,35 @@ impl SqliteRepository {
         .await?;
 
         sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_knowledge_sources_source_id ON knowledge_sources(source_id);",
+            "CREATE INDEX IF NOT EXISTS idx_speedwagon_sources_source_id ON speedwagon_sources(source_id);",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_speedwagons (
+                session_id TEXT NOT NULL,
+                speedwagon_id TEXT NOT NULL,
+                PRIMARY KEY (session_id, speedwagon_id),
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY(speedwagon_id) REFERENCES speedwagons(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_sources (
+                session_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                PRIMARY KEY (session_id, source_id),
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE CASCADE
+            );
+            "#,
         )
         .execute(&self.pool)
         .await?;
@@ -189,6 +226,16 @@ impl SqliteRepository {
         Ok(parsed.with_timezone(&Utc))
     }
 
+    fn parse_optional_timestamp(
+        value: Option<String>,
+        field: &str,
+    ) -> RepositoryResult<Option<DateTime<Utc>>> {
+        match value {
+            None => Ok(None),
+            Some(s) => Self::parse_timestamp(s, field).map(Some),
+        }
+    }
+
     fn message_role_to_string(role: &MessageRole) -> &'static str {
         match role {
             MessageRole::System => "system",
@@ -206,6 +253,27 @@ impl SqliteRepository {
             "tool" => Ok(MessageRole::Tool),
             _ => Err(RepositoryError::InvalidData(format!(
                 "invalid message role `{role}`"
+            ))),
+        }
+    }
+
+    fn index_status_to_string(status: &SpeedwagonIndexStatus) -> &'static str {
+        match status {
+            SpeedwagonIndexStatus::NotIndexed => "not_indexed",
+            SpeedwagonIndexStatus::Indexing => "indexing",
+            SpeedwagonIndexStatus::Indexed => "indexed",
+            SpeedwagonIndexStatus::Error => "error",
+        }
+    }
+
+    fn index_status_from_string(s: &str) -> RepositoryResult<SpeedwagonIndexStatus> {
+        match s {
+            "not_indexed" => Ok(SpeedwagonIndexStatus::NotIndexed),
+            "indexing" => Ok(SpeedwagonIndexStatus::Indexing),
+            "indexed" => Ok(SpeedwagonIndexStatus::Indexed),
+            "error" => Ok(SpeedwagonIndexStatus::Error),
+            _ => Err(RepositoryError::InvalidData(format!(
+                "invalid index status `{s}`"
             ))),
         }
     }
@@ -278,23 +346,89 @@ impl SqliteRepository {
         })
     }
 
-    async fn load_source_ids_for_knowledge(
+    fn row_to_speedwagon_without_sources(row: &SqliteRow) -> RepositoryResult<Speedwagon> {
+        let id = Self::parse_uuid(row.get::<String, _>("id"), "speedwagons.id")?;
+        let index_status =
+            Self::index_status_from_string(&row.get::<String, _>("index_status"))?;
+        let created_at = Self::parse_timestamp(
+            row.get::<String, _>("created_at"),
+            "speedwagons.created_at",
+        )?;
+        let updated_at = Self::parse_timestamp(
+            row.get::<String, _>("updated_at"),
+            "speedwagons.updated_at",
+        )?;
+        let index_started_at = Self::parse_optional_timestamp(
+            row.get::<Option<String>, _>("index_started_at"),
+            "speedwagons.index_started_at",
+        )?;
+        let indexed_at = Self::parse_optional_timestamp(
+            row.get::<Option<String>, _>("indexed_at"),
+            "speedwagons.indexed_at",
+        )?;
+
+        Ok(Speedwagon {
+            id,
+            name: row.get::<String, _>("name"),
+            description: row.get::<String, _>("description"),
+            instruction: row.get::<Option<String>, _>("instruction"),
+            lm: row.get::<Option<String>, _>("lm"),
+            source_ids: vec![],
+            index_dir: row.get::<Option<String>, _>("index_dir"),
+            corpus_dir: row.get::<Option<String>, _>("corpus_dir"),
+            index_status,
+            index_error: row.get::<Option<String>, _>("index_error"),
+            index_started_at,
+            indexed_at,
+            created_at,
+            updated_at,
+        })
+    }
+
+    async fn load_source_ids_for_speedwagon(
         &self,
-        knowledge_id: Uuid,
+        speedwagon_id: Uuid,
     ) -> RepositoryResult<Vec<Uuid>> {
         let rows = sqlx::query(
-            "SELECT source_id FROM knowledge_sources WHERE knowledge_id = ?;",
+            "SELECT source_id FROM speedwagon_sources WHERE speedwagon_id = ?;",
         )
-        .bind(knowledge_id.to_string())
+        .bind(speedwagon_id.to_string())
         .fetch_all(&self.pool)
         .await?;
 
         rows.iter()
-            .map(|row| Self::parse_uuid(row.get::<String, _>("source_id"), "knowledge_sources.source_id"))
+            .map(|row| {
+                Self::parse_uuid(
+                    row.get::<String, _>("source_id"),
+                    "speedwagon_sources.source_id",
+                )
+            })
             .collect()
     }
 
-    fn row_to_session_without_messages(row: &SqliteRow) -> RepositoryResult<Session> {
+    async fn load_speedwagon_by_id(&self, id: Uuid) -> RepositoryResult<Option<Speedwagon>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, name, description, instruction, lm, index_dir, corpus_dir,
+                   index_status, index_error, index_started_at, indexed_at, created_at, updated_at
+            FROM speedwagons
+            WHERE id = ?;
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let mut sw = Self::row_to_speedwagon_without_sources(&row)?;
+        sw.source_ids = self.load_source_ids_for_speedwagon(id).await?;
+        Ok(Some(sw))
+    }
+
+    fn row_to_session_without_messages_or_relations(row: &SqliteRow) -> RepositoryResult<Session> {
         let id = Self::parse_uuid(row.get::<String, _>("id"), "sessions.id")?;
         let agent_id = Self::parse_uuid(row.get::<String, _>("agent_id"), "sessions.agent_id")?;
         let provider_profile_id = Self::parse_uuid(
@@ -313,6 +447,8 @@ impl SqliteRepository {
             provider_profile_id,
             title,
             messages: vec![],
+            speedwagon_ids: vec![],
+            source_ids: vec![],
             created_at,
             updated_at,
         })
@@ -368,8 +504,10 @@ impl SqliteRepository {
             return Ok(None);
         };
 
-        let mut session = Self::row_to_session_without_messages(&row)?;
+        let mut session = Self::row_to_session_without_messages_or_relations(&row)?;
         session.messages = self.load_session_messages(session.id).await?;
+        session.speedwagon_ids = self.get_session_speedwagon_ids(session.id).await?;
+        session.source_ids = self.get_session_source_ids(session.id).await?;
         Ok(Some(session))
     }
 }
@@ -655,6 +793,8 @@ impl Repository for SqliteRepository {
         agent_id: Uuid,
         provider_profile_id: Uuid,
         title: Option<String>,
+        speedwagon_ids: Vec<Uuid>,
+        source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Session> {
         let now = Self::now_string();
         let id = Uuid::new_v4();
@@ -673,6 +813,9 @@ impl Repository for SqliteRepository {
         .bind(&now)
         .execute(&self.pool)
         .await?;
+
+        self.set_session_speedwagons(id, speedwagon_ids).await?;
+        self.set_session_sources(id, source_ids).await?;
 
         self.load_session_by_id(id)
             .await?
@@ -710,10 +853,12 @@ impl Repository for SqliteRepository {
 
         let mut sessions = Vec::with_capacity(rows.len());
         for row in rows {
-            let mut session = Self::row_to_session_without_messages(&row)?;
+            let mut session = Self::row_to_session_without_messages_or_relations(&row)?;
             if include_messages {
                 session.messages = self.load_session_messages(session.id).await?;
             }
+            session.speedwagon_ids = self.get_session_speedwagon_ids(session.id).await?;
+            session.source_ids = self.get_session_source_ids(session.id).await?;
             sessions.push(session);
         }
 
@@ -910,26 +1055,31 @@ impl Repository for SqliteRepository {
         Ok(result.rows_affected() > 0)
     }
 
-    // --- Knowledge ---
+    // --- Speedwagon ---
 
-    async fn create_knowledge(
+    async fn create_speedwagon(
         &self,
         name: String,
         description: String,
+        instruction: Option<String>,
+        lm: Option<String>,
         source_ids: Vec<Uuid>,
-    ) -> RepositoryResult<Knowledge> {
+    ) -> RepositoryResult<Speedwagon> {
         let now = Self::now_string();
         let id = Uuid::new_v4();
 
         sqlx::query(
             r#"
-            INSERT INTO knowledges (id, name, description, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO speedwagons
+                (id, name, description, instruction, lm, index_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'not_indexed', ?, ?);
             "#,
         )
         .bind(id.to_string())
         .bind(&name)
         .bind(&description)
+        .bind(&instruction)
+        .bind(&lm)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -937,7 +1087,7 @@ impl Repository for SqliteRepository {
 
         for source_id in &source_ids {
             sqlx::query(
-                "INSERT INTO knowledge_sources (knowledge_id, source_id) VALUES (?, ?);",
+                "INSERT INTO speedwagon_sources (speedwagon_id, source_id) VALUES (?, ?);",
             )
             .bind(id.to_string())
             .bind(source_id.to_string())
@@ -945,120 +1095,108 @@ impl Repository for SqliteRepository {
             .await?;
         }
 
-        Ok(Knowledge {
-            id,
-            name,
-            description,
-            source_ids,
-            created_at: Self::parse_timestamp(now.clone(), "knowledges.created_at")?,
-            updated_at: Self::parse_timestamp(now, "knowledges.updated_at")?,
-        })
+        self.load_speedwagon_by_id(id)
+            .await?
+            .ok_or_else(|| RepositoryError::InvalidData("created speedwagon not found".to_string()))
     }
 
-    async fn list_knowledges(&self) -> RepositoryResult<Vec<Knowledge>> {
+    async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, name, description, created_at, updated_at
-            FROM knowledges
+            SELECT id, name, description, instruction, lm, index_dir, corpus_dir,
+                   index_status, index_error, index_started_at, indexed_at, created_at, updated_at
+            FROM speedwagons
             ORDER BY created_at DESC;
             "#,
         )
         .fetch_all(&self.pool)
         .await?;
 
-        let mut knowledges = Vec::with_capacity(rows.len());
+        let mut speedwagons = Vec::with_capacity(rows.len());
         for row in &rows {
-            let id = Self::parse_uuid(row.get::<String, _>("id"), "knowledges.id")?;
-            let source_ids = self.load_source_ids_for_knowledge(id).await?;
-            let name = row.get::<String, _>("name");
-            let description = row.get::<String, _>("description");
-            let created_at =
-                Self::parse_timestamp(row.get::<String, _>("created_at"), "knowledges.created_at")?;
-            let updated_at =
-                Self::parse_timestamp(row.get::<String, _>("updated_at"), "knowledges.updated_at")?;
-            knowledges.push(Knowledge {
-                id,
-                name,
-                description,
-                source_ids,
-                created_at,
-                updated_at,
-            });
+            let mut sw = Self::row_to_speedwagon_without_sources(row)?;
+            sw.source_ids = self.load_source_ids_for_speedwagon(sw.id).await?;
+            speedwagons.push(sw);
         }
 
-        Ok(knowledges)
+        Ok(speedwagons)
     }
 
-    async fn get_knowledge(&self, id: Uuid) -> RepositoryResult<Option<Knowledge>> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, name, description, created_at, updated_at
-            FROM knowledges
-            WHERE id = ?;
-            "#,
-        )
-        .bind(id.to_string())
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let Some(row) = row else {
-            return Ok(None);
-        };
-
-        let source_ids = self.load_source_ids_for_knowledge(id).await?;
-        let name = row.get::<String, _>("name");
-        let description = row.get::<String, _>("description");
-        let created_at =
-            Self::parse_timestamp(row.get::<String, _>("created_at"), "knowledges.created_at")?;
-        let updated_at =
-            Self::parse_timestamp(row.get::<String, _>("updated_at"), "knowledges.updated_at")?;
-
-        Ok(Some(Knowledge {
-            id,
-            name,
-            description,
-            source_ids,
-            created_at,
-            updated_at,
-        }))
+    async fn get_speedwagon(&self, id: Uuid) -> RepositoryResult<Option<Speedwagon>> {
+        self.load_speedwagon_by_id(id).await
     }
 
-    async fn update_knowledge(
+    async fn update_speedwagon(
         &self,
         id: Uuid,
         name: String,
         description: String,
+        instruction: Option<String>,
+        lm: Option<String>,
         source_ids: Vec<Uuid>,
-    ) -> RepositoryResult<Option<Knowledge>> {
+    ) -> RepositoryResult<Option<Speedwagon>> {
         let now = Self::now_string();
 
-        let result = sqlx::query(
-            r#"
-            UPDATE knowledges
-            SET name = ?, description = ?, updated_at = ?
-            WHERE id = ?;
-            "#,
-        )
-        .bind(&name)
-        .bind(&description)
-        .bind(&now)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?;
+        // Check if source_ids changed to decide whether to reset index_status
+        let existing_source_ids = self.load_source_ids_for_speedwagon(id).await?;
+        let sources_changed = {
+            let mut old = existing_source_ids.clone();
+            let mut new = source_ids.clone();
+            old.sort();
+            new.sort();
+            old != new
+        };
+
+        let result = if sources_changed {
+            sqlx::query(
+                r#"
+                UPDATE speedwagons
+                SET name = ?, description = ?, instruction = ?, lm = ?,
+                    index_status = 'not_indexed', index_error = NULL,
+                    updated_at = ?
+                WHERE id = ?;
+                "#,
+            )
+            .bind(&name)
+            .bind(&description)
+            .bind(&instruction)
+            .bind(&lm)
+            .bind(&now)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                UPDATE speedwagons
+                SET name = ?, description = ?, instruction = ?, lm = ?,
+                    updated_at = ?
+                WHERE id = ?;
+                "#,
+            )
+            .bind(&name)
+            .bind(&description)
+            .bind(&instruction)
+            .bind(&lm)
+            .bind(&now)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?
+        };
 
         if result.rows_affected() == 0 {
             return Ok(None);
         }
 
-        // Replace knowledge_sources entirely
-        sqlx::query("DELETE FROM knowledge_sources WHERE knowledge_id = ?;")
+        // Replace speedwagon_sources entirely
+        sqlx::query("DELETE FROM speedwagon_sources WHERE speedwagon_id = ?;")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
 
         for source_id in &source_ids {
             sqlx::query(
-                "INSERT INTO knowledge_sources (knowledge_id, source_id) VALUES (?, ?);",
+                "INSERT INTO speedwagon_sources (speedwagon_id, source_id) VALUES (?, ?);",
             )
             .bind(id.to_string())
             .bind(source_id.to_string())
@@ -1066,16 +1204,160 @@ impl Repository for SqliteRepository {
             .await?;
         }
 
-        self.get_knowledge(id).await
+        self.load_speedwagon_by_id(id).await
     }
 
-    async fn delete_knowledge(&self, id: Uuid) -> RepositoryResult<bool> {
-        let result = sqlx::query("DELETE FROM knowledges WHERE id = ?;")
+    async fn delete_speedwagon(&self, id: Uuid) -> RepositoryResult<bool> {
+        let result = sqlx::query("DELETE FROM speedwagons WHERE id = ?;")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn update_speedwagon_index_status(
+        &self,
+        id: Uuid,
+        status: SpeedwagonIndexStatus,
+        error: Option<String>,
+        index_dir: Option<String>,
+        corpus_dir: Option<String>,
+        index_started_at: Option<DateTime<Utc>>,
+        indexed_at: Option<DateTime<Utc>>,
+    ) -> RepositoryResult<bool> {
+        let now = Self::now_string();
+        let status_str = Self::index_status_to_string(&status);
+        let index_started_at_str = index_started_at
+            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true));
+        let indexed_at_str = indexed_at
+            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true));
+
+        let result = sqlx::query(
+            r#"
+            UPDATE speedwagons
+            SET index_status = ?, index_error = ?, index_dir = ?, corpus_dir = ?,
+                index_started_at = ?, indexed_at = ?, updated_at = ?
+            WHERE id = ?;
+            "#,
+        )
+        .bind(status_str)
+        .bind(error)
+        .bind(index_dir)
+        .bind(corpus_dir)
+        .bind(index_started_at_str)
+        .bind(indexed_at_str)
+        .bind(now)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // --- Session <-> Speedwagon/Source relationships ---
+
+    async fn set_session_speedwagons(
+        &self,
+        session_id: Uuid,
+        speedwagon_ids: Vec<Uuid>,
+    ) -> RepositoryResult<()> {
+        sqlx::query("DELETE FROM session_speedwagons WHERE session_id = ?;")
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        for speedwagon_id in &speedwagon_ids {
+            sqlx::query(
+                "INSERT INTO session_speedwagons (session_id, speedwagon_id) VALUES (?, ?);",
+            )
+            .bind(session_id.to_string())
+            .bind(speedwagon_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn get_session_speedwagon_ids(&self, session_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
+        let rows = sqlx::query(
+            "SELECT speedwagon_id FROM session_speedwagons WHERE session_id = ?;",
+        )
+        .bind(session_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|row| {
+                Self::parse_uuid(
+                    row.get::<String, _>("speedwagon_id"),
+                    "session_speedwagons.speedwagon_id",
+                )
+            })
+            .collect()
+    }
+
+    async fn set_session_sources(
+        &self,
+        session_id: Uuid,
+        source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<()> {
+        sqlx::query("DELETE FROM session_sources WHERE session_id = ?;")
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
+
+        for source_id in &source_ids {
+            sqlx::query(
+                "INSERT INTO session_sources (session_id, source_id) VALUES (?, ?);",
+            )
+            .bind(session_id.to_string())
+            .bind(source_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn get_session_source_ids(&self, session_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
+        let rows = sqlx::query(
+            "SELECT source_id FROM session_sources WHERE session_id = ?;",
+        )
+        .bind(session_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|row| {
+                Self::parse_uuid(
+                    row.get::<String, _>("source_id"),
+                    "session_sources.source_id",
+                )
+            })
+            .collect()
+    }
+
+    async fn get_sessions_by_speedwagon_id(
+        &self,
+        speedwagon_id: Uuid,
+    ) -> RepositoryResult<Vec<Uuid>> {
+        let rows = sqlx::query(
+            "SELECT session_id FROM session_speedwagons WHERE speedwagon_id = ?;",
+        )
+        .bind(speedwagon_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter()
+            .map(|row| {
+                Self::parse_uuid(
+                    row.get::<String, _>("session_id"),
+                    "session_speedwagons.session_id",
+                )
+            })
+            .collect()
     }
 }
 
@@ -1104,52 +1386,46 @@ mod tests {
             .await
             .expect("agent should be created");
 
-        let provider_profile = repository
-            .create_provider_profile(
-                "openai-default".to_string(),
-                AgentProvider {
-                    lm: LangModelProvider::API {
-                        schema: LangModelAPISchema::ChatCompletion,
-                        url: Url::parse("https://api.openai.com/v1/chat/completions")
-                            .expect("url should parse"),
-                        api_key: Some("secret".to_string()),
-                    },
-                    tools: vec![],
-                },
-                true,
-            )
+        let api_key = Url::parse("env://OPENAI_API_KEY").unwrap();
+        let schema = LangModelAPISchema::OpenAI;
+        let lm_provider = LangModelProvider::new(api_key, schema);
+        let provider = AgentProvider::LangModel(lm_provider);
+
+        let profile = repository
+            .create_provider_profile("test-profile".to_string(), provider, true)
             .await
             .expect("provider profile should be created");
 
         let session = repository
-            .create_session(agent.id, provider_profile.id, None)
+            .create_session(agent.id, profile.id, None, vec![], vec![])
             .await
             .expect("session should be created");
 
-        repository
-            .add_session_message(session.id, MessageRole::User, "hello".to_string())
+        let session2 = SqliteRepository::new(&db_url)
             .await
-            .expect("message should be inserted")
+            .expect("second instance should be created")
+            .get_session(session.id)
+            .await
+            .expect("session should be fetched")
             .expect("session should exist");
 
-        drop(repository);
+        assert_eq!(session.id, session2.id);
+        assert_eq!(session.agent_id, session2.agent_id);
 
-        let restarted_repository = SqliteRepository::new(&db_url)
+        repository
+            .add_session_message(session.id, MessageRole::User, "hello world".to_string())
             .await
-            .expect("sqlite repository should reopen");
+            .expect("message should be added");
 
-        let agents = restarted_repository
-            .list_agents()
+        let updated_session = SqliteRepository::new(&db_url)
             .await
-            .expect("agents should be loaded");
-        assert_eq!(agents.len(), 1);
+            .expect("third instance should be created")
+            .get_session(session.id)
+            .await
+            .expect("session should be fetched")
+            .expect("session should exist");
 
-        let sessions = restarted_repository
-            .list_sessions(None, true)
-            .await
-            .expect("sessions should be loaded");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].messages.len(), 1);
-        assert_eq!(sessions[0].title.as_deref(), Some("hello"));
+        assert_eq!(updated_session.messages.len(), 1);
+        assert_eq!(updated_session.title, Some("hello world".to_string()));
     }
 }

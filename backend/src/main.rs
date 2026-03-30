@@ -2,6 +2,7 @@ mod agent;
 mod handlers;
 mod models;
 mod repository;
+mod services;
 mod state;
 
 use actix_cors::Cors;

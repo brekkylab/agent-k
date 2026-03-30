@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use actix_multipart::Multipart;
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, web};
@@ -13,10 +15,11 @@ use crate::agent::spec::{
 };
 use crate::models::{
     AddSessionMessageRequest, AddSessionMessageResponse, Agent, AgentResponse,
-    CreateAgentRequest, CreateKnowledgeRequest, CreateProviderProfileRequest,
-    CreateSessionRequest, ErrorResponse, Knowledge, ListSessionsQuery, MessageRole,
+    CreateAgentRequest, CreateProviderProfileRequest,
+    CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse, ListSessionsQuery, MessageRole,
     ProviderProfile, ProviderProfileResponse, Session, SessionMessage, SourceResponse, SourceType,
-    UpdateAgentRequest, UpdateKnowledgeRequest, UpdateProviderProfileRequest, UpdateSessionRequest,
+    Speedwagon, SpeedwagonIndexStatus, SpeedwagonResponse,
+    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
 use crate::state::AppState;
@@ -50,11 +53,12 @@ struct HealthResponse {
         list_sources,
         get_source,
         delete_source,
-        create_knowledge,
-        list_knowledges,
-        get_knowledge,
-        update_knowledge,
-        delete_knowledge
+        create_speedwagon,
+        list_speedwagons,
+        get_speedwagon,
+        update_speedwagon,
+        delete_speedwagon,
+        index_speedwagon,
     ),
     components(
         schemas(
@@ -75,9 +79,10 @@ struct HealthResponse {
             AddSessionMessageResponse,
             SourceResponse,
             SourceType,
-            Knowledge,
-            CreateKnowledgeRequest,
-            UpdateKnowledgeRequest,
+            SpeedwagonResponse,
+            SpeedwagonIndexStatus,
+            CreateSpeedwagonRequest,
+            UpdateSpeedwagonRequest,
             crate::agent::spec::AgentSpec,
             crate::agent::spec::LangModelAPISchema,
             crate::agent::spec::LangModelProvider,
@@ -92,7 +97,7 @@ struct HealthResponse {
         (name = "provider_profiles", description = "Provider profile endpoints"),
         (name = "sessions", description = "Session endpoints"),
         (name = "sources", description = "Source endpoints"),
-        (name = "knowledges", description = "Knowledge endpoints")
+        (name = "speedwagons", description = "Speedwagon endpoints")
     )
 )]
 pub struct ApiDoc;
@@ -144,15 +149,19 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(web::delete().to(delete_source)),
         )
         .service(
-            web::resource("/knowledges")
-                .route(web::get().to(list_knowledges))
-                .route(web::post().to(create_knowledge)),
+            web::resource("/speedwagons")
+                .route(web::get().to(list_speedwagons))
+                .route(web::post().to(create_speedwagon)),
         )
         .service(
-            web::resource("/knowledges/{id}")
-                .route(web::get().to(get_knowledge))
-                .route(web::put().to(update_knowledge))
-                .route(web::delete().to(delete_knowledge)),
+            web::resource("/speedwagons/{id}")
+                .route(web::get().to(get_speedwagon))
+                .route(web::put().to(update_speedwagon))
+                .route(web::delete().to(delete_speedwagon)),
+        )
+        .service(
+            web::resource("/speedwagons/{id}/index")
+                .route(web::post().to(index_speedwagon)),
         );
 }
 
@@ -453,6 +462,8 @@ async fn create_session(
         agent_id,
         provider_profile_id,
         title,
+        speedwagon_ids,
+        source_ids,
     } = payload.into_inner();
 
     match state.repository.get_agent(agent_id).await {
@@ -469,7 +480,7 @@ async fn create_session(
 
     match state
         .repository
-        .create_session(agent_id, resolved_provider_profile_id, title)
+        .create_session(agent_id, resolved_provider_profile_id, title, speedwagon_ids, source_ids)
         .await
     {
         Ok(session) => HttpResponse::Created().json(session),
@@ -568,6 +579,28 @@ async fn update_session(
         if let Err(error) = state
             .repository
             .update_session_provider_profile_id(id, provider_profile_id)
+            .await
+        {
+            return repository_error_response(error);
+        }
+        state.invalidate_session_runtime(id);
+    }
+
+    if let Some(speedwagon_ids) = req.speedwagon_ids {
+        if let Err(error) = state
+            .repository
+            .set_session_speedwagons(id, speedwagon_ids)
+            .await
+        {
+            return repository_error_response(error);
+        }
+        state.invalidate_session_runtime(id);
+    }
+
+    if let Some(source_ids) = req.source_ids {
+        if let Err(error) = state
+            .repository
+            .set_session_sources(id, source_ids)
             .await
         {
             return repository_error_response(error);
@@ -733,7 +766,7 @@ async fn upload_source(
 
     let size = file_bytes.len() as i64;
 
-    // Build stored filename: {original}-{timestamp}.{ext}
+    // Construct stored filename: {original}-{timestamp}.{ext}
     let timestamp = chrono::Utc::now().timestamp_millis();
     let stored_name = if let Some(dot_pos) = file_name.rfind('.') {
         let (stem, ext) = file_name.split_at(dot_pos);
@@ -825,11 +858,29 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
     match state.repository.delete_source(id).await {
         Ok(true) => {
             // Delete file from disk
-            if let Some(path) = file_path {
-                if let Err(error) = tokio::fs::remove_file(&path).await {
+            if let Some(path) = &file_path {
+                if let Err(error) = tokio::fs::remove_file(path).await {
                     eprintln!("failed to delete file {path}: {error}");
                 }
             }
+
+            // Reset index_status for any speedwagons that referenced this source
+            if let Ok(speedwagons) = state.repository.list_speedwagons().await {
+                for sw in speedwagons {
+                    if sw.source_ids.contains(&id) && sw.index_status != SpeedwagonIndexStatus::NotIndexed {
+                        let _ = state.repository.update_speedwagon_index_status(
+                            sw.id,
+                            SpeedwagonIndexStatus::NotIndexed,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ).await;
+                    }
+                }
+            }
+
             HttpResponse::NoContent().finish()
         }
         Ok(false) => json_error(StatusCode::NOT_FOUND, "source not found"),
@@ -837,128 +888,188 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
     }
 }
 
-// ===================== Knowledge Handlers =====================
+// ===================== Speedwagon Handlers =====================
 
 #[utoipa::path(
     post,
-    path = "/knowledges",
-    tag = "knowledges",
-    request_body = CreateKnowledgeRequest,
-    responses((status = 201, description = "Created knowledge", body = Knowledge))
+    path = "/speedwagons",
+    tag = "speedwagons",
+    request_body = CreateSpeedwagonRequest,
+    responses((status = 201, description = "Created speedwagon", body = SpeedwagonResponse))
 )]
-async fn create_knowledge(
+async fn create_speedwagon(
     state: web::Data<AppState>,
-    payload: web::Json<CreateKnowledgeRequest>,
+    payload: web::Json<CreateSpeedwagonRequest>,
 ) -> HttpResponse {
-    let CreateKnowledgeRequest {
-        name,
-        description,
-        source_ids,
-    } = payload.into_inner();
+    let CreateSpeedwagonRequest { name, description, instruction, lm, source_ids } = payload.into_inner();
 
-    if name.trim().is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "knowledge name is empty");
-    }
-
-    match state
-        .repository
-        .create_knowledge(name, description, source_ids)
-        .await
-    {
-        Ok(knowledge) => HttpResponse::Created().json(knowledge),
+    match state.repository.create_speedwagon(name, description, instruction, lm, source_ids).await {
+        Ok(sw) => HttpResponse::Created().json(SpeedwagonResponse::from(&sw)),
         Err(error) => repository_error_response(error),
     }
 }
 
 #[utoipa::path(
     get,
-    path = "/knowledges",
-    tag = "knowledges",
-    responses((status = 200, description = "List knowledges", body = [Knowledge]))
+    path = "/speedwagons",
+    tag = "speedwagons",
+    responses((status = 200, description = "List speedwagons", body = [SpeedwagonResponse]))
 )]
-async fn list_knowledges(state: web::Data<AppState>) -> HttpResponse {
-    match state.repository.list_knowledges().await {
-        Ok(knowledges) => HttpResponse::Ok().json(knowledges),
+async fn list_speedwagons(state: web::Data<AppState>) -> HttpResponse {
+    match state.repository.list_speedwagons().await {
+        Ok(list) => {
+            let response: Vec<SpeedwagonResponse> = list.iter().map(SpeedwagonResponse::from).collect();
+            HttpResponse::Ok().json(response)
+        }
         Err(error) => repository_error_response(error),
     }
 }
 
 #[utoipa::path(
     get,
-    path = "/knowledges/{id}",
-    tag = "knowledges",
-    params(("id" = Uuid, Path, description = "Knowledge ID")),
+    path = "/speedwagons/{id}",
+    tag = "speedwagons",
+    params(("id" = Uuid, Path, description = "Speedwagon ID")),
     responses(
-        (status = 200, description = "Knowledge", body = Knowledge),
-        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+        (status = 200, description = "Speedwagon", body = SpeedwagonResponse),
+        (status = 404, description = "Not found", body = ErrorResponse)
     )
 )]
-async fn get_knowledge(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+async fn get_speedwagon(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
     let id = path.into_inner();
-
-    match state.repository.get_knowledge(id).await {
-        Ok(Some(knowledge)) => HttpResponse::Ok().json(knowledge),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
+    match state.repository.get_speedwagon(id).await {
+        Ok(Some(sw)) => HttpResponse::Ok().json(SpeedwagonResponse::from(&sw)),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
         Err(error) => repository_error_response(error),
     }
 }
 
 #[utoipa::path(
     put,
-    path = "/knowledges/{id}",
-    tag = "knowledges",
-    params(("id" = Uuid, Path, description = "Knowledge ID")),
-    request_body = UpdateKnowledgeRequest,
+    path = "/speedwagons/{id}",
+    tag = "speedwagons",
+    params(("id" = Uuid, Path, description = "Speedwagon ID")),
+    request_body = UpdateSpeedwagonRequest,
     responses(
-        (status = 200, description = "Updated knowledge", body = Knowledge),
-        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+        (status = 200, description = "Updated speedwagon", body = SpeedwagonResponse),
+        (status = 404, description = "Not found", body = ErrorResponse)
     )
 )]
-async fn update_knowledge(
+async fn update_speedwagon(
     state: web::Data<AppState>,
     path: web::Path<Uuid>,
-    payload: web::Json<UpdateKnowledgeRequest>,
+    payload: web::Json<UpdateSpeedwagonRequest>,
 ) -> HttpResponse {
     let id = path.into_inner();
-    let UpdateKnowledgeRequest {
-        name,
-        description,
-        source_ids,
-    } = payload.into_inner();
+    let UpdateSpeedwagonRequest { name, description, instruction, lm, source_ids } = payload.into_inner();
 
-    if name.trim().is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "knowledge name is empty");
-    }
-
-    match state
-        .repository
-        .update_knowledge(id, name, description, source_ids)
-        .await
-    {
-        Ok(Some(knowledge)) => HttpResponse::Ok().json(knowledge),
-        Ok(None) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
+    match state.repository.update_speedwagon(id, name, description, instruction, lm, source_ids).await {
+        Ok(Some(sw)) => HttpResponse::Ok().json(SpeedwagonResponse::from(&sw)),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
         Err(error) => repository_error_response(error),
     }
 }
 
 #[utoipa::path(
     delete,
-    path = "/knowledges/{id}",
-    tag = "knowledges",
-    params(("id" = Uuid, Path, description = "Knowledge ID")),
+    path = "/speedwagons/{id}",
+    tag = "speedwagons",
+    params(("id" = Uuid, Path, description = "Speedwagon ID")),
     responses(
-        (status = 204, description = "Knowledge deleted"),
-        (status = 404, description = "Knowledge not found", body = ErrorResponse)
+        (status = 204, description = "Deleted"),
+        (status = 404, description = "Not found", body = ErrorResponse)
     )
 )]
-async fn delete_knowledge(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+async fn delete_speedwagon(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
     let id = path.into_inner();
 
-    match state.repository.delete_knowledge(id).await {
-        Ok(true) => HttpResponse::NoContent().finish(),
-        Ok(false) => json_error(StatusCode::NOT_FOUND, "knowledge not found"),
+    // Get data_dir before deleting
+    let sw = match state.repository.get_speedwagon(id).await {
+        Ok(Some(sw)) => sw,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
+        Err(error) => return repository_error_response(error),
+    };
+
+    match state.repository.delete_speedwagon(id).await {
+        Ok(true) => {
+            // Delete data/speedwagons/{id}/ directory from disk
+            let dir = state.speedwagon_data_dir.join(sw.id.to_string());
+            if dir.exists() {
+                if let Err(e) = std::fs::remove_dir_all(&dir) {
+                    eprintln!("failed to delete speedwagon dir {}: {e}", dir.display());
+                }
+            }
+            HttpResponse::NoContent().finish()
+        }
+        Ok(false) => json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
         Err(error) => repository_error_response(error),
     }
+}
+
+#[utoipa::path(
+    post,
+    path = "/speedwagons/{id}/index",
+    tag = "speedwagons",
+    params(("id" = Uuid, Path, description = "Speedwagon ID")),
+    responses(
+        (status = 202, description = "Indexing started"),
+        (status = 404, description = "Not found", body = ErrorResponse),
+        (status = 409, description = "Already indexing", body = ErrorResponse),
+        (status = 422, description = "No sources", body = ErrorResponse)
+    )
+)]
+async fn index_speedwagon(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
+    let id = path.into_inner();
+
+    let sw: Speedwagon = match state.repository.get_speedwagon(id).await {
+        Ok(Some(sw)) => sw,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "speedwagon not found"),
+        Err(error) => return repository_error_response(error),
+    };
+
+    if sw.source_ids.is_empty() {
+        return json_error(StatusCode::UNPROCESSABLE_ENTITY, "speedwagon has no sources");
+    }
+
+    // Concurrent indexing guard
+    if sw.index_status == SpeedwagonIndexStatus::Indexing {
+        return json_error(StatusCode::CONFLICT, "indexing already in progress");
+    }
+
+    // Set status to indexing
+    let now = chrono::Utc::now();
+    if let Err(error) = state
+        .repository
+        .update_speedwagon_index_status(
+            id,
+            SpeedwagonIndexStatus::Indexing,
+            None,
+            None,
+            None,
+            Some(now),
+            None,
+        )
+        .await
+    {
+        return repository_error_response(error);
+    }
+
+    // Clone everything needed for the background task
+    let repository = Arc::clone(&state.repository);
+    let speedwagon_data_dir = state.speedwagon_data_dir.clone();
+    let state_clone = state.clone();
+
+    tokio::task::spawn(async move {
+        let _ = crate::services::indexing::start_indexing(
+            repository,
+            state_clone,
+            speedwagon_data_dir,
+            sw,
+        )
+        .await;
+    });
+
+    HttpResponse::Accepted().finish()
 }
 
 async fn resolve_provider_profile_id(

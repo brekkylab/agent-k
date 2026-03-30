@@ -257,6 +257,7 @@ dependencies = [
  "chat-agent",
  "chrono",
  "futures-util",
+ "knowledge-agent",
  "serde",
  "serde_json",
  "sqlx",
@@ -639,6 +640,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
  "url",
 ]
 
@@ -2027,7 +2029,7 @@ dependencies = [
 [[package]]
 name = "knowledge-agent"
 version = "0.1.0"
-source = "git+https://github.com/brekkylab/agentmaker.git?rev=c435115ee01ba3dccc2d48047c29a7e886743798#c435115ee01ba3dccc2d48047c29a7e886743798"
+source = "git+https://github.com/brekkylab/agentmaker.git?rev=255beb2#255beb2142fa6bcad4d348276770a52db21e03ba"
 dependencies = [
  "ailoy",
  "anyhow",

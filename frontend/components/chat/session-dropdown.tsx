@@ -17,7 +17,6 @@ import type { ApiSession } from "@/lib/types";
 
 export function SessionDropdown() {
   const setActiveSession = useAppStore((s) => s.setActiveSession);
-  const removeSessionLocalData = useAppStore((s) => s.removeSessionLocalData);
   const activeSessionId = useAppStore((s) => s.activeSessionId);
   const sessionListVersion = useAppStore((s) => s.sessionListVersion);
   const router = useRouter();
@@ -52,7 +51,6 @@ export function SessionDropdown() {
     try {
       await deleteSessionApi(sessionId);
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      removeSessionLocalData(sessionId);
       if (activeSessionId === sessionId) {
         setActiveSession(null);
       }

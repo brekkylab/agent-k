@@ -40,7 +40,9 @@ Thumbs.db
 backend/data/
 
 # Claude Code / OMC / Plugin state
-.omc/
+.claude/
+CLAUDE.md
+**/.omc/
 .superpowers/
 .playwright-mcp/
 docs/superpowers/

@@ -11,10 +11,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
-import { getSources, getKnowledges, deleteSource } from "@/lib/api";
-import type { ApiSource, ApiKnowledge } from "@/lib/types";
+import { getSources, getSpeedwagons, deleteSource } from "@/lib/api";
+import type { ApiSource, ApiSpeedwagon } from "@/lib/types";
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return bytes + " B";
@@ -32,18 +31,18 @@ function formatDate(dateStr: string): string {
 
 export function SourceList({ refreshKey }: { refreshKey?: number }) {
   const [sources, setSources] = useState<ApiSource[]>([]);
-  const [knowledges, setKnowledges] = useState<ApiKnowledge[]>([]);
+  const [speedwagons, setSpeedwagons] = useState<ApiSpeedwagon[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
-      const [srcData, knData] = await Promise.all([
+      const [srcData, swData] = await Promise.all([
         getSources(),
-        getKnowledges(),
+        getSpeedwagons(),
       ]);
       setSources(srcData);
-      setKnowledges(knData);
+      setSpeedwagons(swData);
     } catch (error) {
       console.error("Failed to load sources:", error);
     }
@@ -53,8 +52,8 @@ export function SourceList({ refreshKey }: { refreshKey?: number }) {
     fetchData();
   }, [fetchData, refreshKey]);
 
-  const getKnowledgesForSource = (sourceId: string) =>
-    knowledges.filter((k) => k.source_ids.includes(sourceId));
+  const getSpeedwagonsForSource = (sourceId: string) =>
+    speedwagons.filter((sw) => sw.source_ids.includes(sourceId));
 
   const handleDelete = async (id: string) => {
     try {
@@ -68,8 +67,8 @@ export function SourceList({ refreshKey }: { refreshKey?: number }) {
   };
 
   const deleteTarget = sources.find((s) => s.id === deleteTargetId);
-  const deleteKnowledgeCount = deleteTargetId
-    ? getKnowledgesForSource(deleteTargetId).length
+  const deleteSpeedwagonCount = deleteTargetId
+    ? getSpeedwagonsForSource(deleteTargetId).length
     : 0;
 
   return (
@@ -77,7 +76,7 @@ export function SourceList({ refreshKey }: { refreshKey?: number }) {
       <div className="space-y-1">
         {sources.map((src) => {
           const isExpanded = expandedId === src.id;
-          const srcKnowledges = getKnowledgesForSource(src.id);
+          const srcSpeedwagons = getSpeedwagonsForSource(src.id);
 
           return (
             <div key={src.id} className="rounded-lg border bg-card">
@@ -103,13 +102,13 @@ export function SourceList({ refreshKey }: { refreshKey?: number }) {
                 <div className="border-t px-4 py-3 space-y-3">
                   <div>
                     <span className="text-xs font-medium text-muted-foreground">
-                      소속 Knowledge:
+                      소속 Speedwagon:
                     </span>
                     <div className="mt-1 flex flex-wrap gap-1">
-                      {srcKnowledges.length > 0 ? (
-                        srcKnowledges.map((k) => (
-                          <Badge key={k.id} variant="secondary">
-                            {k.name}
+                      {srcSpeedwagons.length > 0 ? (
+                        srcSpeedwagons.map((sw) => (
+                          <Badge key={sw.id} variant="secondary">
+                            {sw.name}
                           </Badge>
                         ))
                       ) : (
@@ -150,9 +149,9 @@ export function SourceList({ refreshKey }: { refreshKey?: number }) {
             <DialogTitle>Source 삭제</DialogTitle>
             <DialogDescription>
               &ldquo;{deleteTarget?.name}&rdquo;을(를) 삭제하시겠습니까?
-              {deleteKnowledgeCount > 0 && (
+              {deleteSpeedwagonCount > 0 && (
                 <>
-                  {" "}이 Source는 {deleteKnowledgeCount}개 Knowledge에서 사용 중입니다.
+                  {" "}이 Source는 {deleteSpeedwagonCount}개 Speedwagon에서 사용 중입니다.
                 </>
               )}
             </DialogDescription>

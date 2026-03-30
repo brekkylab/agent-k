@@ -89,19 +89,22 @@ frontend/
 │   ├── layout.tsx               # 루트 레이아웃 (Server Component)
 │   ├── page.tsx                 # / → /chat redirect
 │   ├── chat/page.tsx
-│   ├── documents/page.tsx
-│   └── knowledge/page.tsx
+│   ├── sources/page.tsx
+│   ├── knowledge/page.tsx
+│   └── settings/page.tsx
 ├── components/
 │   ├── ui/                      # shadcn/ui 프리미티브 (수정 최소화)
 │   ├── layout/                  # 레이아웃 (sidebar, theme)
 │   ├── assistant-ui/            # assistant-ui 래퍼
 │   ├── chat/                    # 채팅 관련
-│   ├── documents/               # 문서 관련
-│   └── knowledge/               # Knowledge 관련
+│   ├── sources/                 # Source 업로드/관리
+│   ├── knowledge/               # Knowledge 관련
+│   └── settings/                # Provider 프로필 관리
 ├── lib/
 │   ├── types.ts                 # 도메인 타입 정의 (중앙)
 │   ├── store.ts                 # Zustand 스토어 (단일)
-│   ├── dummy-data.ts            # 더미 데이터
+│   ├── api.ts                   # Backend fetch 래퍼 + API 함수
+│   ├── constants.ts             # Provider별 모델/설정 상수
 │   └── utils.ts                 # cn() 등 유틸리티
 ```
 
@@ -117,10 +120,10 @@ frontend/
 ### 상태 관리 (Zustand)
 
 - **단일 스토어**: `useAppStore` (`lib/store.ts`)
-- **셀렉터 패턴**: `const docs = useAppStore((s) => s.documents)`
+- **셀렉터 패턴**: `const activeSessionId = useAppStore((s) => s.activeSessionId)`
 - **비-React 접근**: `useAppStore.getState().someAction()` (이벤트 핸들러, 어댑터 내부)
-- **액션 네이밍**: 동사+명사 (`addDocument`, `removeSession`, `toggleDocumentInKnowledge`)
-- **초기화**: 더미 데이터로 초기화, persist 미사용
+- **액션 네이밍**: 동사+명사 (`setActiveSession`, `updateSessionKnowledge`, `bumpSessionListVersion`)
+- **초기화**: Backend API에서 데이터 로드, persist 미사용
 
 ### 스타일링
 

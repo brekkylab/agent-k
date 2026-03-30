@@ -1,7 +1,8 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::models::{Agent, Knowledge, MessageRole, ProviderProfile, Session, Source, SourceType};
+use crate::models::{Agent, MessageRole, ProviderProfile, Session, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
 use crate::repository::{Repository, RepositoryResult};
 use ailoy::{AgentProvider, AgentSpec};
 
@@ -91,6 +92,8 @@ impl Repository for PostgresRepository {
         _agent_id: Uuid,
         _provider_profile_id: Uuid,
         _title: Option<String>,
+        _speedwagon_ids: Vec<Uuid>,
+        _source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Session> {
         todo!("postgres implementation")
     }
@@ -156,36 +159,86 @@ impl Repository for PostgresRepository {
         todo!("postgres implementation")
     }
 
-    // --- Knowledge ---
+    // --- Speedwagon ---
 
-    async fn create_knowledge(
+    async fn create_speedwagon(
         &self,
         _name: String,
         _description: String,
+        _instruction: Option<String>,
+        _lm: Option<String>,
         _source_ids: Vec<Uuid>,
-    ) -> RepositoryResult<Knowledge> {
+    ) -> RepositoryResult<Speedwagon> {
         todo!("postgres implementation")
     }
 
-    async fn list_knowledges(&self) -> RepositoryResult<Vec<Knowledge>> {
+    async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>> {
         todo!("postgres implementation")
     }
 
-    async fn get_knowledge(&self, _id: Uuid) -> RepositoryResult<Option<Knowledge>> {
+    async fn get_speedwagon(&self, _id: Uuid) -> RepositoryResult<Option<Speedwagon>> {
         todo!("postgres implementation")
     }
 
-    async fn update_knowledge(
+    async fn update_speedwagon(
         &self,
         _id: Uuid,
         _name: String,
         _description: String,
+        _instruction: Option<String>,
+        _lm: Option<String>,
         _source_ids: Vec<Uuid>,
-    ) -> RepositoryResult<Option<Knowledge>> {
+    ) -> RepositoryResult<Option<Speedwagon>> {
         todo!("postgres implementation")
     }
 
-    async fn delete_knowledge(&self, _id: Uuid) -> RepositoryResult<bool> {
+    async fn delete_speedwagon(&self, _id: Uuid) -> RepositoryResult<bool> {
+        todo!("postgres implementation")
+    }
+
+    async fn update_speedwagon_index_status(
+        &self,
+        _id: Uuid,
+        _status: SpeedwagonIndexStatus,
+        _error: Option<String>,
+        _index_dir: Option<String>,
+        _corpus_dir: Option<String>,
+        _index_started_at: Option<DateTime<Utc>>,
+        _indexed_at: Option<DateTime<Utc>>,
+    ) -> RepositoryResult<bool> {
+        todo!("postgres implementation")
+    }
+
+    // --- Session <-> Speedwagon/Source relationships ---
+
+    async fn set_session_speedwagons(
+        &self,
+        _session_id: Uuid,
+        _speedwagon_ids: Vec<Uuid>,
+    ) -> RepositoryResult<()> {
+        todo!("postgres implementation")
+    }
+
+    async fn get_session_speedwagon_ids(&self, _session_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
+        todo!("postgres implementation")
+    }
+
+    async fn set_session_sources(
+        &self,
+        _session_id: Uuid,
+        _source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<()> {
+        todo!("postgres implementation")
+    }
+
+    async fn get_session_source_ids(&self, _session_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
+        todo!("postgres implementation")
+    }
+
+    async fn get_sessions_by_speedwagon_id(
+        &self,
+        _speedwagon_id: Uuid,
+    ) -> RepositoryResult<Vec<Uuid>> {
         todo!("postgres implementation")
     }
 }

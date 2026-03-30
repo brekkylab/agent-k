@@ -4,7 +4,8 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Thread } from "@/components/assistant-ui/thread";
-import { KnowledgePanel } from "@/components/chat/knowledge-panel";
+import { SpeedwagonPanel } from "@/components/chat/speedwagon-panel";
+import { IndexStatusBanner } from "@/components/chat/index-status-banner";
 import { ModelSelector } from "@/components/chat/model-selector";
 import { useAppStore } from "@/lib/store";
 import { getSession, getAgent, updateAgent, updateSession } from "@/lib/api";
@@ -16,6 +17,8 @@ interface ChatViewProps {
 
 export function ChatView({ sessionId }: ChatViewProps) {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [sessionSpeedwagonIds, setSessionSpeedwagonIds] = useState<string[]>([]);
+  const [sessionSourceIds, setSessionSourceIds] = useState<string[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -23,7 +26,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
   const selectedModel = useAppStore((s) => s.selectedModel);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
 
-  // 활성 세션의 현재 모델 로드
+  // 활성 세션의 현재 모델/speedwagon 로드
   const [currentAgentId, setCurrentAgentId] = useState<string | null>(null);
   const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
 
@@ -31,6 +34,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     getSession(sessionId).then((session) => {
       setCurrentAgentId(session.agent_id);
       setCurrentProfileId(session.provider_profile_id);
+      setSessionSpeedwagonIds(session.speedwagon_ids ?? []);
+      setSessionSourceIds(session.source_ids ?? []);
       getAgent(session.agent_id).then((agent) => {
         const { selectedProvider: currentProvider, setSelectedModel: setModel } =
           useAppStore.getState();
@@ -93,13 +98,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
   return (
     <div className="flex flex-col h-full relative">
+      {/* 인덱싱 상태 배너 */}
+      <IndexStatusBanner sessionSpeedwagonIds={sessionSpeedwagonIds} />
+
       <div className="absolute top-3 left-3 z-10">
         <Button
           ref={buttonRef}
           variant={isPanelOpen ? "default" : "outline"}
           size="icon"
           onClick={() => setIsPanelOpen((v) => !v)}
-          aria-label="Knowledge 패널 열기"
+          aria-label="Speedwagon 패널 열기"
           aria-expanded={isPanelOpen}
         >
           <BookOpen className="h-4 w-4" />
@@ -116,7 +124,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
               }
             }}
           >
-            <KnowledgePanel onClose={() => setIsPanelOpen(false)} />
+            <SpeedwagonPanel
+              onClose={() => setIsPanelOpen(false)}
+              sessionId={sessionId}
+              initialSpeedwagonIds={sessionSpeedwagonIds}
+              initialSourceIds={sessionSourceIds}
+            />
           </div>
         )}
       </div>

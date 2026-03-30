@@ -4,10 +4,12 @@ mod sqlite;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::DateTime;
+use chrono::Utc;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::models::{Agent, Knowledge, MessageRole, ProviderProfile, Session, Source, SourceType};
+use crate::models::{Agent, MessageRole, ProviderProfile, Session, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
 use ailoy::{AgentProvider, AgentSpec};
 
 pub use postgres::PostgresRepository;
@@ -74,6 +76,8 @@ pub trait Repository: Send + Sync {
         agent_id: Uuid,
         provider_profile_id: Uuid,
         title: Option<String>,
+        speedwagon_ids: Vec<Uuid>,
+        source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Session>;
     async fn list_sessions(
         &self,
@@ -111,23 +115,55 @@ pub trait Repository: Send + Sync {
     async fn get_source(&self, id: Uuid) -> RepositoryResult<Option<Source>>;
     async fn delete_source(&self, id: Uuid) -> RepositoryResult<bool>;
 
-    // --- Knowledge ---
-    async fn create_knowledge(
+    // --- Speedwagon ---
+    async fn create_speedwagon(
         &self,
         name: String,
         description: String,
+        instruction: Option<String>,
+        lm: Option<String>,
         source_ids: Vec<Uuid>,
-    ) -> RepositoryResult<Knowledge>;
-    async fn list_knowledges(&self) -> RepositoryResult<Vec<Knowledge>>;
-    async fn get_knowledge(&self, id: Uuid) -> RepositoryResult<Option<Knowledge>>;
-    async fn update_knowledge(
+    ) -> RepositoryResult<Speedwagon>;
+    async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>>;
+    async fn get_speedwagon(&self, id: Uuid) -> RepositoryResult<Option<Speedwagon>>;
+    async fn update_speedwagon(
         &self,
         id: Uuid,
         name: String,
         description: String,
+        instruction: Option<String>,
+        lm: Option<String>,
         source_ids: Vec<Uuid>,
-    ) -> RepositoryResult<Option<Knowledge>>;
-    async fn delete_knowledge(&self, id: Uuid) -> RepositoryResult<bool>;
+    ) -> RepositoryResult<Option<Speedwagon>>;
+    async fn delete_speedwagon(&self, id: Uuid) -> RepositoryResult<bool>;
+    async fn update_speedwagon_index_status(
+        &self,
+        id: Uuid,
+        status: SpeedwagonIndexStatus,
+        error: Option<String>,
+        index_dir: Option<String>,
+        corpus_dir: Option<String>,
+        index_started_at: Option<DateTime<Utc>>,
+        indexed_at: Option<DateTime<Utc>>,
+    ) -> RepositoryResult<bool>;
+
+    // --- Session <-> Speedwagon/Source relationships ---
+    async fn set_session_speedwagons(
+        &self,
+        session_id: Uuid,
+        speedwagon_ids: Vec<Uuid>,
+    ) -> RepositoryResult<()>;
+    async fn get_session_speedwagon_ids(&self, session_id: Uuid) -> RepositoryResult<Vec<Uuid>>;
+    async fn set_session_sources(
+        &self,
+        session_id: Uuid,
+        source_ids: Vec<Uuid>,
+    ) -> RepositoryResult<()>;
+    async fn get_session_source_ids(&self, session_id: Uuid) -> RepositoryResult<Vec<Uuid>>;
+    async fn get_sessions_by_speedwagon_id(
+        &self,
+        speedwagon_id: Uuid,
+    ) -> RepositoryResult<Vec<Uuid>>;
 }
 
 pub async fn create_repository_from_env() -> RepositoryResult<Arc<dyn Repository>> {

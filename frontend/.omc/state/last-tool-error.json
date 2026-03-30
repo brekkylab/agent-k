@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"pnpm dlx shadcn@latest add card checkbox input textarea separator sheet tooltip dropdown-menu avatar badge dialog -d 2>&1\",\"timeout\":60000,\"description\":\"Add shadcn/ui components\"}",
-  "error": "Exit code 1\nerror: unknown option '-d'",
-  "timestamp": "2026-03-19T16:40:03.060Z",
-  "retry_count": 1
-}

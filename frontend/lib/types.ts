@@ -1,4 +1,4 @@
-// --- Backend API Source/Knowledge Types ---
+// --- Backend API Source/Speedwagon Types ---
 
 export interface ApiSource {
   id: string;
@@ -9,11 +9,21 @@ export interface ApiSource {
   updated_at: string;
 }
 
-export interface ApiKnowledge {
+export type SpeedwagonIndexStatus = "not_indexed" | "indexing" | "indexed" | "error";
+
+export interface ApiSpeedwagon {
   id: string;
   name: string;
   description: string;
+  instruction: string | null;
+  lm: string | null;
   source_ids: string[];
+  index_dir: string | null;
+  corpus_dir: string | null;
+  index_status: SpeedwagonIndexStatus;
+  index_error: string | null;
+  index_started_at: string | null;
+  indexed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +89,8 @@ export interface ApiSession {
   provider_profile_id: string;
   title: string | null;
   messages?: ApiSessionMessage[];
+  speedwagon_ids: string[];
+  source_ids: string[];
   created_at: string;
   updated_at: string;
 }
