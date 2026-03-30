@@ -72,13 +72,14 @@ export function NewChatWelcome() {
       bumpSessionListVersion();
       setActiveSession(session.id);
     } catch (err) {
-      creatingRef.current = false;
-      setLoading(false);
       if (err instanceof ApiError) {
         setError(err.message);
       } else {
         setError("세션 생성에 실패했습니다. Settings에서 API Key를 확인해주세요.");
       }
+    } finally {
+      creatingRef.current = false;
+      setLoading(false);
     }
   };
 
