@@ -6,7 +6,7 @@ use ailoy::{
 use futures::StreamExt as _;
 
 use crate::speedwagon::{self, KbEntry, SubAgentProvider};
-use crate::tools::{self, DEFAULT_TOOL_ADD_INTEGERS, DEFAULT_TOOL_UTC_NOW, READ_SOURCE_TOOL};
+use crate::tools::{self, DEFAULT_TOOL_ADD_INTEGERS, DEFAULT_TOOL_UTC_NOW};
 
 /// A record of a tool interaction: the LLM's call and the tool's response.
 #[derive(Debug, Clone)]
@@ -43,14 +43,15 @@ impl ChatAgent {
         kb_entries: Vec<KbEntry>,
         session_source_paths: Vec<(String, String, PathBuf)>,
     ) -> Self {
-        ensure_default_tool_names(&mut spec, &kb_entries, &session_source_paths);
         // Extract API credentials and model name from the parent provider to pass to speedwagon sub-agents
         let sub_provider = SubAgentProvider::from_provider(&provider, &spec.lm);
-        let runtime = AgentRuntime::new(
-            spec,
-            provider,
-            build_tool_set(&kb_entries, sub_provider, session_source_paths),
-        );
+        let (tool_names, tool_set) = build_tool_set(&kb_entries, sub_provider, session_source_paths);
+        for name in tool_names {
+            if !spec.tools.iter().any(|n| n == &name) {
+                spec.tools.push(name);
+            }
+        }
+        let runtime = AgentRuntime::new(spec, provider, tool_set);
         Self {
             runtime,
             tool_log: Vec::new(),
@@ -126,38 +127,27 @@ fn ailoy_to_json(v: &Value) -> serde_json::Value {
     v.clone().into()
 }
 
-fn ensure_default_tool_names(
-    spec: &mut AgentSpec,
-    kb_entries: &[KbEntry],
-    session_source_paths: &[(String, String, PathBuf)],
-) {
-    let mut tool_names: Vec<&str> = vec![DEFAULT_TOOL_UTC_NOW, DEFAULT_TOOL_ADD_INTEGERS];
-    if !kb_entries.is_empty() {
-        tool_names.push(speedwagon::ASK_SPEEDWAGON_TOOL);
-    }
-    if !session_source_paths.is_empty() {
-        tool_names.push(READ_SOURCE_TOOL);
-    }
-    for tool_name in tool_names {
-        if !spec.tools.iter().any(|name| name == tool_name) {
-            spec.tools.push(tool_name.to_string());
-        }
-    }
-}
-
+/// Build all tools and return their names alongside the ToolSet.
+/// Tool names are derived from the same source as their runtimes, ensuring consistency.
 fn build_tool_set(
     kb_entries: &[KbEntry],
     sub_provider: SubAgentProvider,
     session_source_paths: Vec<(String, String, PathBuf)>,
-) -> ToolSet {
+) -> (Vec<String>, ToolSet) {
     let mut tool_set = tools::build_default_tool_set();
+    let mut tool_names = vec![
+        DEFAULT_TOOL_UTC_NOW.to_string(),
+        DEFAULT_TOOL_ADD_INTEGERS.to_string(),
+    ];
     if let Some((name, runtime)) = speedwagon::build_speedwagon_tool(kb_entries, sub_provider) {
+        tool_names.push(name.clone());
         tool_set.insert(name, runtime);
     }
     if let Some((name, runtime)) = tools::build_read_source_tool(session_source_paths) {
+        tool_names.push(name.clone());
         tool_set.insert(name, runtime);
     }
-    tool_set
+    (tool_names, tool_set)
 }
 
 
@@ -174,7 +164,8 @@ fn extract_assistant_text(message: &Message) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatAgent, ensure_default_tool_names, extract_assistant_text};
+    use super::{ChatAgent, build_tool_set, extract_assistant_text};
+    use crate::speedwagon::SubAgentProvider;
     use crate::tools::{
         DEFAULT_TOOL_ADD_INTEGERS, DEFAULT_TOOL_UTC_NOW, add_integers_result,
         build_default_tool_set,
@@ -210,34 +201,20 @@ mod tests {
         let _agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
     }
 
-    #[test]
-    fn new_injects_default_tool_names_when_spec_empty() {
-        let mut spec = sample_spec();
-        ensure_default_tool_names(&mut spec, &[], &[]);
-        assert_eq!(
-            spec.tools,
-            vec![
-                DEFAULT_TOOL_UTC_NOW.to_string(),
-                DEFAULT_TOOL_ADD_INTEGERS.to_string()
-            ]
-        );
+    fn sample_sub_provider() -> SubAgentProvider {
+        SubAgentProvider {
+            api_key: "test-key".to_string(),
+            api_url: "https://example.com".to_string(),
+            model_name: "gpt-4.1-mini".to_string(),
+        }
     }
 
     #[test]
-    fn new_does_not_duplicate_default_tool_names_when_already_present() {
-        let mut spec = sample_spec();
-        spec.tools = vec![
-            "custom_tool".to_string(),
-            DEFAULT_TOOL_UTC_NOW.to_string(),
-            DEFAULT_TOOL_ADD_INTEGERS.to_string(),
-        ];
-
-        ensure_default_tool_names(&mut spec, &[], &[]);
-
+    fn build_tool_set_returns_default_tool_names() {
+        let (tool_names, _tool_set) = build_tool_set(&[], sample_sub_provider(), vec![]);
         assert_eq!(
-            spec.tools,
+            tool_names,
             vec![
-                "custom_tool".to_string(),
                 DEFAULT_TOOL_UTC_NOW.to_string(),
                 DEFAULT_TOOL_ADD_INTEGERS.to_string()
             ]
