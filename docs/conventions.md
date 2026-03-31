@@ -33,6 +33,12 @@ backend/src/
     └── postgres.rs      # PostgreSQL 구현 (스텁)
 ```
 
+### Import 규칙
+
+- `use` 문은 파일 최상단에 배치. 함수 내 인라인 정규화 경로(`std::collections::HashMap::new()`) 금지
+- 순서: std → 외부 크레이트 → `crate::` 내부 모듈
+- 사용하지 않는 import는 즉시 제거
+
 ### API 규칙
 
 | 항목 | 규칙 |

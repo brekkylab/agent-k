@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use async_trait::async_trait;
@@ -1184,8 +1185,7 @@ impl Repository for SqliteRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        let mut source_map: std::collections::HashMap<Uuid, Vec<Uuid>> =
-            std::collections::HashMap::new();
+        let mut source_map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
         for sr in &source_rows {
             let sw_id = Self::parse_uuid(
                 sr.get::<String, _>("speedwagon_id"),
