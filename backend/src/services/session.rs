@@ -137,7 +137,7 @@ pub async fn send_message(
         return Err(SessionError::EmptyContent);
     }
 
-    // Save the user/system message
+    // Save the user message
     state
         .repository
         .add_session_message(session_id, role.clone(), content.clone())
