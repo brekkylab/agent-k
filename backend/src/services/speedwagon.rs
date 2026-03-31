@@ -36,7 +36,7 @@ impl ResponseError for SpeedwagonError {
 
     fn error_response(&self) -> HttpResponse {
         if let Self::Repository(e) = self {
-            eprintln!("repository error: {e}");
+            tracing::error!("repository error: {e}");
             return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR)
                 .json(ErrorResponse { error: "internal server error".to_string() });
         }
@@ -112,7 +112,7 @@ pub async fn delete_speedwagon(state: &AppState, id: Uuid) -> Result<(), Speedwa
     let dir = state.speedwagon_data_dir.join(sw.id.to_string());
     if dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&dir) {
-            eprintln!("failed to delete speedwagon dir {}: {e}", dir.display());
+            tracing::error!("failed to delete speedwagon dir {}: {e}", dir.display());
         }
     }
 

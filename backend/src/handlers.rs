@@ -621,13 +621,13 @@ async fn upload_source(
 
     let upload_dir = state.upload_dir.clone();
     if let Err(error) = tokio::fs::create_dir_all(&upload_dir).await {
-        eprintln!("failed to create upload dir: {error}");
+        tracing::error!("failed to create upload dir: {error}");
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create upload directory");
     }
 
     let file_path = upload_dir.join(&stored_name);
     if let Err(error) = tokio::fs::write(&file_path, &file_bytes).await {
-        eprintln!("failed to write file: {error}");
+        tracing::error!("failed to write file: {error}");
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to write file");
     }
 
@@ -704,7 +704,7 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
             // Delete file from disk
             if let Some(path) = &file_path {
                 if let Err(error) = tokio::fs::remove_file(path).await {
-                    eprintln!("failed to delete file {path}: {error}");
+                    tracing::warn!("failed to delete file {path}: {error}");
                 }
             }
 
@@ -893,7 +893,7 @@ fn repository_error_response(error: RepositoryError) -> HttpResponse {
         }
     }
 
-    eprintln!("repository error: {error}");
+    tracing::error!("repository error: {error}");
     json_error(StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
 }
 

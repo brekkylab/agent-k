@@ -111,7 +111,7 @@ fn ask_speedwagon_func(entries: Vec<KbEntry>, provider: SubAgentProvider) -> Arc
             match dispatch_speedwagon(&entry, &question, &provider).await {
                 Ok(answer) => Value::object([("answer", Value::string(answer))]),
                 Err(e) => {
-                    eprintln!("[speedwagon] sub-agent error for kb={kb_id}: {e}");
+                    tracing::error!("[speedwagon] sub-agent error for kb={kb_id}: {e}");
                     error_value(&e.to_string())
                 }
             }

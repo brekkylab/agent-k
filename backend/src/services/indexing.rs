@@ -90,7 +90,7 @@ async fn finalize_indexing(
     // Atomic swap: index_tmp -> index
     if index_dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(index_dir) {
-            eprintln!("[indexing] failed to remove old index: {e}");
+            tracing::error!("[indexing] failed to remove old index: {e}");
         }
     }
     std::fs::rename(index_tmp_dir, index_dir)
@@ -117,7 +117,7 @@ async fn finalize_indexing(
             state.invalidate_session_runtime(session_id);
         }
     }
-    eprintln!("[indexing] speedwagon {id} indexed successfully");
+    tracing::info!("[indexing] speedwagon {id} indexed successfully");
     Ok(())
 }
 
@@ -134,7 +134,7 @@ pub async fn start_indexing(
     let sources = match collect_speedwagon_sources(&*repository, &sw.source_ids).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[indexing] failed to collect sources for speedwagon {id}: {e}");
+            tracing::error!("[indexing] failed to collect sources for speedwagon {id}: {e}");
             let _ = repository
                 .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(e.clone()), None, None, None, None)
                 .await;
@@ -188,7 +188,7 @@ pub async fn start_indexing(
                 let _ = std::fs::remove_dir_all(&index_tmp_dir);
             }
             let msg = format!("indexing failed: {e}");
-            eprintln!("[indexing] speedwagon {id} error: {msg}");
+            tracing::error!("[indexing] speedwagon {id} error: {msg}");
             let _ = repository
                 .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(msg.clone()), None, None, None, None)
                 .await;
@@ -199,7 +199,7 @@ pub async fn start_indexing(
                 let _ = std::fs::remove_dir_all(&index_tmp_dir);
             }
             let msg = format!("spawn_blocking panicked: {e}");
-            eprintln!("[indexing] speedwagon {id} panic: {msg}");
+            tracing::error!("[indexing] speedwagon {id} panic: {msg}");
             let _ = repository
                 .update_speedwagon_index_status(id, SpeedwagonIndexStatus::Error, Some(msg.clone()), None, None, None, None)
                 .await;

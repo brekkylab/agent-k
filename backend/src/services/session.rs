@@ -43,7 +43,7 @@ impl ResponseError for SessionError {
 
     fn error_response(&self) -> HttpResponse {
         if let Self::Repository(e) = self {
-            eprintln!("repository error: {e}");
+            tracing::error!("repository error: {e}");
             return HttpResponse::build(StatusCode::INTERNAL_SERVER_ERROR)
                 .json(ErrorResponse { error: "internal server error".to_string() });
         }
@@ -175,7 +175,7 @@ pub async fn send_message(
             ));
         }
         Err(ChatAgentRunError::Runtime { source }) => {
-            eprintln!("runtime execution error: {source}");
+            tracing::error!("runtime execution error: {source}");
             return Err(SessionError::Runtime(
                 "failed to run language model".to_string(),
             ));

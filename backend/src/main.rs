@@ -14,10 +14,17 @@ use crate::state::AppState;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let app_state = web::Data::new(AppState::new().await?);
 
-    println!("server listening on http://{bind_addr}");
+    tracing::info!("server listening on http://{bind_addr}");
 
     HttpServer::new(move || {
         // TODO: Replace allow_any_origin() with allowed_origin("https://your-domain.com") for production
