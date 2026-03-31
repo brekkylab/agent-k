@@ -117,14 +117,6 @@ pub struct CreateSessionRequest {
 pub struct ListSessionsQuery {
     pub agent_id: Option<Uuid>,
     pub include_messages: Option<bool>,
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PaginationQuery {
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

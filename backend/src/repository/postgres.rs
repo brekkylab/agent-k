@@ -102,8 +102,6 @@ impl Repository for PostgresRepository {
         &self,
         _agent_id: Option<Uuid>,
         _include_messages: bool,
-        _limit: Option<i64>,
-        _offset: Option<i64>,
     ) -> RepositoryResult<Vec<Session>> {
         todo!("postgres implementation")
     }
@@ -148,7 +146,7 @@ impl Repository for PostgresRepository {
         todo!("postgres implementation")
     }
 
-    async fn list_sources(&self, _limit: Option<i64>, _offset: Option<i64>) -> RepositoryResult<Vec<Source>> {
+    async fn list_sources(&self) -> RepositoryResult<Vec<Source>> {
         todo!("postgres implementation")
     }
 
@@ -173,7 +171,7 @@ impl Repository for PostgresRepository {
         todo!("postgres implementation")
     }
 
-    async fn list_speedwagons(&self, _limit: Option<i64>, _offset: Option<i64>) -> RepositoryResult<Vec<Speedwagon>> {
+    async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>> {
         todo!("postgres implementation")
     }
 

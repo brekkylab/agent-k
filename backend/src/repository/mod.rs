@@ -83,8 +83,6 @@ pub trait Repository: Send + Sync {
         &self,
         agent_id: Option<Uuid>,
         include_messages: bool,
-        limit: Option<i64>,
-        offset: Option<i64>,
     ) -> RepositoryResult<Vec<Session>>;
     async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<Session>>;
     async fn delete_session(&self, id: Uuid) -> RepositoryResult<bool>;
@@ -111,7 +109,7 @@ pub trait Repository: Send + Sync {
         file_path: Option<String>,
         size: i64,
     ) -> RepositoryResult<Source>;
-    async fn list_sources(&self, limit: Option<i64>, offset: Option<i64>) -> RepositoryResult<Vec<Source>>;
+    async fn list_sources(&self) -> RepositoryResult<Vec<Source>>;
     async fn get_source(&self, id: Uuid) -> RepositoryResult<Option<Source>>;
     async fn delete_source(&self, id: Uuid) -> RepositoryResult<bool>;
 
@@ -124,7 +122,7 @@ pub trait Repository: Send + Sync {
         lm: Option<String>,
         source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Speedwagon>;
-    async fn list_speedwagons(&self, limit: Option<i64>, offset: Option<i64>) -> RepositoryResult<Vec<Speedwagon>>;
+    async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>>;
     async fn get_speedwagon(&self, id: Uuid) -> RepositoryResult<Option<Speedwagon>>;
     async fn update_speedwagon(
         &self,
