@@ -1793,10 +1793,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    // ===================== Knowledge Tests =====================
+    // ===================== Speedwagon Tests =====================
 
     #[actix_web::test]
-    async fn knowledge_crud() {
+    async fn speedwagon_crud() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let database_url = test_database_url(&temp_dir);
         let state = web::Data::new(
@@ -1806,9 +1806,9 @@ mod tests {
         );
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
-        // Create knowledge
+        // Create speedwagon
         let create_req = test::TestRequest::post()
-            .uri("/knowledges")
+            .uri("/speedwagons")
             .set_json(json!({
                 "name": "마케팅 자료",
                 "description": "마케팅 전략 관련 자료",
@@ -1823,27 +1823,27 @@ mod tests {
         );
         assert_eq!(create_body["source_ids"], json!([]));
 
-        let knowledge_id = create_body["id"]
+        let speedwagon_id = create_body["id"]
             .as_str()
-            .expect("knowledge id must exist")
+            .expect("speedwagon id must exist")
             .to_string();
 
-        // List knowledges
-        let list_req = test::TestRequest::get().uri("/knowledges").to_request();
+        // List speedwagons
+        let list_req = test::TestRequest::get().uri("/speedwagons").to_request();
         let list_body: Value = test::call_and_read_body_json(&app, list_req).await;
-        let knowledges = list_body.as_array().expect("knowledges should be array");
-        assert_eq!(knowledges.len(), 1);
+        let speedwagons = list_body.as_array().expect("speedwagons should be array");
+        assert_eq!(speedwagons.len(), 1);
 
-        // Get knowledge
+        // Get speedwagon
         let get_req = test::TestRequest::get()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .to_request();
         let get_body: Value = test::call_and_read_body_json(&app, get_req).await;
         assert_eq!(get_body["name"], Value::String("마케팅 자료".to_string()));
 
-        // Update knowledge
+        // Update speedwagon
         let update_req = test::TestRequest::put()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .set_json(json!({
                 "name": "업데이트된 자료",
                 "description": "새로운 설명",
@@ -1860,23 +1860,23 @@ mod tests {
             Value::String("새로운 설명".to_string())
         );
 
-        // Delete knowledge
+        // Delete speedwagon
         let delete_req = test::TestRequest::delete()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .to_request();
         let delete_resp = test::call_service(&app, delete_req).await;
         assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
 
         // Verify deleted
         let get_after_delete = test::TestRequest::get()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .to_request();
         let resp = test::call_service(&app, get_after_delete).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[actix_web::test]
-    async fn knowledge_create_empty_name_returns_bad_request() {
+    async fn speedwagon_create_empty_name_returns_bad_request() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let database_url = test_database_url(&temp_dir);
         let state = web::Data::new(
@@ -1887,7 +1887,7 @@ mod tests {
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 
         let req = test::TestRequest::post()
-            .uri("/knowledges")
+            .uri("/speedwagons")
             .set_json(json!({
                 "name": "  ",
                 "description": "desc"
@@ -1898,7 +1898,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn knowledge_with_source_ids() {
+    async fn speedwagon_with_source_ids() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
@@ -1909,9 +1909,9 @@ mod tests {
         let src1_id = src1["id"].as_str().expect("src1 id").to_string();
         let src2_id = src2["id"].as_str().expect("src2 id").to_string();
 
-        // Create knowledge with source_ids
+        // Create speedwagon with source_ids
         let create_req = test::TestRequest::post()
-            .uri("/knowledges")
+            .uri("/speedwagons")
             .set_json(json!({
                 "name": "기술 문서",
                 "description": "API 관련 자료",
@@ -1924,14 +1924,14 @@ mod tests {
             .expect("source_ids should be array");
         assert_eq!(source_ids.len(), 2);
 
-        let knowledge_id = create_body["id"]
+        let speedwagon_id = create_body["id"]
             .as_str()
-            .expect("knowledge id")
+            .expect("speedwagon id")
             .to_string();
 
         // Update: remove one source, keep the other
         let update_req = test::TestRequest::put()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .set_json(json!({
                 "name": "기술 문서",
                 "description": "API 관련 자료",
@@ -1947,7 +1947,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn delete_source_cascades_to_knowledge_sources() {
+    async fn delete_source_cascades_to_speedwagon_sources() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let state = test_state_with_upload_dir(&temp_dir).await;
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
@@ -1956,9 +1956,9 @@ mod tests {
         let src = upload_source(&app, "cascade-test.pdf", b"cascade").await;
         let src_id = src["id"].as_str().expect("source id").to_string();
 
-        // Create knowledge referencing the source
+        // Create speedwagon referencing the source
         let create_req = test::TestRequest::post()
-            .uri("/knowledges")
+            .uri("/speedwagons")
             .set_json(json!({
                 "name": "Cascade Test",
                 "description": "test",
@@ -1966,9 +1966,9 @@ mod tests {
             }))
             .to_request();
         let create_body: Value = test::call_and_read_body_json(&app, create_req).await;
-        let knowledge_id = create_body["id"]
+        let speedwagon_id = create_body["id"]
             .as_str()
-            .expect("knowledge id")
+            .expect("speedwagon id")
             .to_string();
 
         // Verify source_ids contains the source
@@ -1981,16 +1981,16 @@ mod tests {
         let delete_resp = test::call_service(&app, delete_req).await;
         assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
 
-        // Knowledge should still exist, but source_ids should be empty (cascaded)
-        let get_knowledge = test::TestRequest::get()
-            .uri(&format!("/knowledges/{knowledge_id}"))
+        // Speedwagon should still exist, but source_ids should be empty (cascaded)
+        let get_speedwagon = test::TestRequest::get()
+            .uri(&format!("/speedwagons/{speedwagon_id}"))
             .to_request();
-        let knowledge_body: Value = test::call_and_read_body_json(&app, get_knowledge).await;
-        assert_eq!(knowledge_body["source_ids"], json!([]));
+        let speedwagon_body: Value = test::call_and_read_body_json(&app, get_speedwagon).await;
+        assert_eq!(speedwagon_body["source_ids"], json!([]));
     }
 
     #[actix_web::test]
-    async fn knowledge_not_found_returns_404() {
+    async fn speedwagon_not_found_returns_404() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let database_url = test_database_url(&temp_dir);
         let state = web::Data::new(
@@ -2003,7 +2003,7 @@ mod tests {
         let fake_id = Uuid::new_v4();
 
         let get_req = test::TestRequest::get()
-            .uri(&format!("/knowledges/{fake_id}"))
+            .uri(&format!("/speedwagons/{fake_id}"))
             .to_request();
         assert_eq!(
             test::call_service(&app, get_req).await.status(),
@@ -2011,7 +2011,7 @@ mod tests {
         );
 
         let update_req = test::TestRequest::put()
-            .uri(&format!("/knowledges/{fake_id}"))
+            .uri(&format!("/speedwagons/{fake_id}"))
             .set_json(json!({"name": "x", "description": "y", "source_ids": []}))
             .to_request();
         assert_eq!(
@@ -2020,7 +2020,7 @@ mod tests {
         );
 
         let delete_req = test::TestRequest::delete()
-            .uri(&format!("/knowledges/{fake_id}"))
+            .uri(&format!("/speedwagons/{fake_id}"))
             .to_request();
         assert_eq!(
             test::call_service(&app, delete_req).await.status(),

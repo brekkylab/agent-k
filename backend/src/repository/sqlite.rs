@@ -1434,7 +1434,6 @@ impl Repository for SqliteRepository {
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
-    use url::Url;
 
     use super::SqliteRepository;
     use crate::models::MessageRole;
@@ -1456,10 +1455,14 @@ mod tests {
             .await
             .expect("agent should be created");
 
-        let api_key = Url::parse("env://OPENAI_API_KEY").unwrap();
-        let schema = LangModelAPISchema::OpenAI;
-        let lm_provider = LangModelProvider::new(api_key, schema);
-        let provider = AgentProvider::LangModel(lm_provider);
+        let provider = AgentProvider {
+            lm: LangModelProvider::API {
+                schema: LangModelAPISchema::OpenAI,
+                url: "https://api.openai.com/v1/chat/completions".parse().expect("valid URL"),
+                api_key: Some("test-key".to_string()),
+            },
+            tools: vec![],
+        };
 
         let profile = repository
             .create_provider_profile("test-profile".to_string(), provider, true)

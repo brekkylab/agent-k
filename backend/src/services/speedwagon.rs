@@ -17,6 +17,8 @@ pub enum SpeedwagonError {
     AlreadyIndexing,
     #[error("speedwagon has no sources")]
     NoSources,
+    #[error("name must not be empty")]
+    EmptyName,
     #[error(transparent)]
     Repository(#[from] RepositoryError),
 }
@@ -27,6 +29,7 @@ impl ResponseError for SpeedwagonError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::AlreadyIndexing => StatusCode::CONFLICT,
             Self::NoSources => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::EmptyName => StatusCode::BAD_REQUEST,
             Self::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -55,6 +58,10 @@ pub async fn create_speedwagon(
         lm,
         source_ids,
     } = req;
+
+    if name.trim().is_empty() {
+        return Err(SpeedwagonError::EmptyName);
+    }
 
     let sw = state
         .repository
