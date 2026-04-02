@@ -5,6 +5,18 @@
 
 ---
 
+## 0. [High] Provider 삭제가 세션에 의해 차단됨 — UX 병목
+
+**위치**: `handlers.rs:422-443`, `repository/mod.rs:62`
+
+**현상**: `has_sessions_for_provider_profile()` 체크로 세션이 하나라도 참조하면 provider 삭제를 409로 차단. 세션이 누적되면 API 키 교체/provider 정리가 사실상 불가능. 옛 세션 때문에 새 키로 전환하지 못하는 상황 발생.
+
+**영향**: 사용자가 API 키를 변경하거나 provider를 정리하려 할 때 모든 관련 세션을 먼저 삭제해야 함. 세션에 대화 기록이 있으면 기록 유실.
+
+**수정 방향**: provider 삭제 시 연관 세션의 `provider_profile_id`를 NULL로 설정(cascade nullify). DB 스키마에서 `provider_profile_id`를 nullable로 변경. 세션 열 때 provider가 없으면 "모델을 다시 선택하세요" UI 표시. 기존 대화 히스토리는 보존.
+
+---
+
 ## 1. [High] `AddSessionMessageRequest.role` — 과도한 입력 허용
 
 **위치**: `models.rs:138-143`, `services/session.rs:131-151`, `frontend/lib/api.ts:212`
@@ -140,3 +152,7 @@ updateSession(id, data)         // { title?, provider_profile_id?, ... }
 
 ### 보류
 - **#3** — GET /sources/{id} 사용처 생길 때까지 유지
+
+### 향후 (SSE 도입 후)
+- **Mutex 장시간 점유** — SSE 스트리밍 전체 시간 동안 세션별 TokioMutex Lock. 현재 단일 사용자이므로 수용 가능. 다중 사용자 세션 공유, 토큰 스트리밍 도입, SSE hung 연결 시 timeout 필요.
+- **페이지네이션 (H)** — Frontend에 페이지네이션 UI가 필요해지는 시점에 구현

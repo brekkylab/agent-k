@@ -7,8 +7,10 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
 } from "@assistant-ui/react";
+import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer";
+import { ToolCallBlock } from "@/components/chat/tool-call-block";
 
 export const Thread: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft }) => {
   return (
@@ -72,6 +74,17 @@ export const Composer: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft 
   );
 };
 
+function ToolCallFallback({ toolName, args, result, status }: ToolCallMessagePartProps) {
+  return (
+    <ToolCallBlock
+      tool={toolName}
+      status={status?.type === "running" ? "calling" : "done"}
+      args={args as Record<string, unknown> | undefined}
+      result={result}
+    />
+  );
+}
+
 export const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="relative mx-auto w-full max-w-2xl py-4">
@@ -79,6 +92,9 @@ export const AssistantMessage: FC = () => {
         <MessagePrimitive.Content
           components={{
             Text: ({ text }) => <MarkdownRenderer content={text} />,
+            tools: {
+              Fallback: ToolCallFallback,
+            },
           }}
         />
       </div>

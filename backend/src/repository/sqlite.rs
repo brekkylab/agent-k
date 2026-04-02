@@ -8,8 +8,8 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::models::{
-    Agent, MessageRole, ProviderProfile, Session, SessionMessage, Source, SourceType, Speedwagon,
-    SpeedwagonIndexStatus,
+    Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source,
+    SourceType, Speedwagon, SpeedwagonIndexStatus,
 };
 use crate::repository::{Repository, RepositoryError, RepositoryResult};
 use ailoy::{AgentProvider, AgentSpec};
@@ -204,6 +204,30 @@ impl SqliteRepository {
                 FOREIGN KEY(source_id) REFERENCES sources(id) ON DELETE CASCADE
             );
             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // --- Session Tool Calls ---
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_tool_calls (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                tool_args TEXT,
+                tool_result TEXT,
+                duration_ms INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(message_id) REFERENCES session_messages(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_session_tool_calls_message_id ON session_tool_calls(message_id);",
         )
         .execute(&self.pool)
         .await?;
@@ -461,7 +485,7 @@ impl SqliteRepository {
     ) -> RepositoryResult<Vec<SessionMessage>> {
         let rows = sqlx::query(
             r#"
-            SELECT role, content, created_at
+            SELECT id, role, content, created_at
             FROM session_messages
             WHERE session_id = ?
             ORDER BY created_at ASC, id ASC;
@@ -473,6 +497,7 @@ impl SqliteRepository {
 
         let mut messages = Vec::with_capacity(rows.len());
         for row in rows {
+            let id = row.get::<String, _>("id");
             let role = Self::message_role_from_string(&row.get::<String, _>("role"))?;
             let content = row.get::<String, _>("content");
             let created_at = Self::parse_timestamp(
@@ -480,6 +505,7 @@ impl SqliteRepository {
                 "session_messages.created_at",
             )?;
             messages.push(SessionMessage {
+                id,
                 role,
                 content,
                 created_at,
@@ -900,13 +926,14 @@ impl Repository for SqliteRepository {
         };
 
         let now = Self::now_string();
+        let msg_id = Uuid::new_v4().to_string();
         sqlx::query(
             r#"
             INSERT INTO session_messages (id, session_id, role, content, created_at)
             VALUES (?, ?, ?, ?, ?);
             "#,
         )
-        .bind(Uuid::new_v4().to_string())
+        .bind(&msg_id)
         .bind(session_id.to_string())
         .bind(Self::message_role_to_string(&role))
         .bind(&content)
@@ -935,7 +962,7 @@ impl Repository for SqliteRepository {
         tx.commit().await?;
 
         let created_at = Self::parse_timestamp(now, "created_at")?;
-        Ok(Some(SessionMessage { role, content, created_at }))
+        Ok(Some(SessionMessage { id: msg_id, role, content, created_at }))
     }
 
     async fn update_session_atomic(
@@ -1428,6 +1455,133 @@ impl Repository for SqliteRepository {
                 )
             })
             .collect()
+    }
+
+    // --- Session Tool Calls ---
+
+    async fn save_tool_calls(
+        &self,
+        message_id: &str,
+        tool_calls: &[SessionToolCall],
+    ) -> RepositoryResult<()> {
+        for tc in tool_calls {
+            let tool_args_json = tc
+                .tool_args
+                .as_ref()
+                .map(|v| serde_json::to_string(v))
+                .transpose()?;
+            let tool_result_json = tc
+                .tool_result
+                .as_ref()
+                .map(|v| serde_json::to_string(v))
+                .transpose()?;
+            sqlx::query(
+                r#"
+                INSERT INTO session_tool_calls
+                    (id, message_id, tool_name, tool_args, tool_result, duration_ms, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+                "#,
+            )
+            .bind(&tc.id)
+            .bind(message_id)
+            .bind(&tc.tool_name)
+            .bind(tool_args_json)
+            .bind(tool_result_json)
+            .bind(tc.duration_ms)
+            .bind(tc.created_at.to_rfc3339_opts(SecondsFormat::Millis, true))
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn get_tool_calls_for_message(
+        &self,
+        message_id: &str,
+    ) -> RepositoryResult<Vec<SessionToolCall>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, message_id, tool_name, tool_args, tool_result, duration_ms, created_at
+            FROM session_tool_calls
+            WHERE message_id = ?
+            ORDER BY created_at ASC, id ASC;
+            "#,
+        )
+        .bind(message_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            let tool_args = row
+                .get::<Option<String>, _>("tool_args")
+                .map(|s| serde_json::from_str::<serde_json::Value>(&s))
+                .transpose()?;
+            let tool_result = row
+                .get::<Option<String>, _>("tool_result")
+                .map(|s| serde_json::from_str::<serde_json::Value>(&s))
+                .transpose()?;
+            let created_at = Self::parse_timestamp(
+                row.get::<String, _>("created_at"),
+                "session_tool_calls.created_at",
+            )?;
+            result.push(SessionToolCall {
+                id: row.get::<String, _>("id"),
+                message_id: row.get::<String, _>("message_id"),
+                tool_name: row.get::<String, _>("tool_name"),
+                tool_args,
+                tool_result,
+                duration_ms: row.get::<Option<i64>, _>("duration_ms"),
+                created_at,
+            });
+        }
+        Ok(result)
+    }
+
+    async fn get_tool_calls_for_session(
+        &self,
+        session_id: Uuid,
+    ) -> RepositoryResult<Vec<SessionToolCall>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT tc.id, tc.message_id, tc.tool_name, tc.tool_args, tc.tool_result,
+                   tc.duration_ms, tc.created_at
+            FROM session_tool_calls tc
+            WHERE tc.message_id IN (
+                SELECT id FROM session_messages WHERE session_id = ?
+            )
+            ORDER BY tc.created_at ASC, tc.id ASC;
+            "#,
+        )
+        .bind(session_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            let tool_args = row
+                .get::<Option<String>, _>("tool_args")
+                .map(|s| serde_json::from_str::<serde_json::Value>(&s))
+                .transpose()?;
+            let tool_result = row
+                .get::<Option<String>, _>("tool_result")
+                .map(|s| serde_json::from_str::<serde_json::Value>(&s))
+                .transpose()?;
+            let created_at = Self::parse_timestamp(
+                row.get::<String, _>("created_at"),
+                "session_tool_calls.created_at",
+            )?;
+            result.push(SessionToolCall {
+                id: row.get::<String, _>("id"),
+                message_id: row.get::<String, _>("message_id"),
+                tool_name: row.get::<String, _>("tool_name"),
+                tool_args,
+                tool_result,
+                duration_ms: row.get::<Option<i64>, _>("duration_ms"),
+                created_at,
+            });
+        }
+        Ok(result)
     }
 }
 

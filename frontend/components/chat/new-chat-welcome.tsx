@@ -8,7 +8,7 @@ import { useAppStore } from "@/lib/store";
 import {
   createAgent,
   createSession,
-  sendMessage,
+  sendMessageStream,
   ApiError,
 } from "@/lib/api";
 
@@ -66,7 +66,8 @@ export function NewChatWelcome() {
       }
 
       // 메시지 전송
-      await sendMessage(session.id, message.trim());
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _ of sendMessageStream(session.id, message.trim())) { /* drain stream */ }
 
       // 세션 활성화 → ChatView로 전환
       bumpSessionListVersion();

@@ -12,6 +12,7 @@ import {
 import type { ApiSpeedwagon } from "@/lib/types";
 import { PROVIDER_MODELS } from "@/lib/constants";
 import { useAppStore } from "@/lib/store";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -227,7 +228,7 @@ export function SpeedwagonDetail({ id }: Props) {
       setSw((prev) => prev ? { ...prev, index_status: "indexing", index_started_at: new Date().toISOString() } : prev);
       fetchSpeedwagons();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "인덱싱 실패");
+      toast.error(e instanceof Error ? e.message : "인덱싱 실패");
     } finally {
       setIndexing(false);
     }
@@ -240,7 +241,7 @@ export function SpeedwagonDetail({ id }: Props) {
       fetchSpeedwagons();
       router.push("/sources");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete failed");
+      toast.error(e instanceof Error ? e.message : "삭제에 실패했습니다");
       setDeleting(false);
       setDeleteOpen(false);
     }

@@ -199,20 +199,85 @@ export async function updateSession(
   });
 }
 
+// --- SSE Streaming Types ---
+
+export type SseEventType = "thinking" | "tool_call" | "tool_result" | "message" | "done" | "error";
+
+export interface SseEvent {
+  type: string;
+  level?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  error?: string;
+  content?: string;
+  message?: string;
+  assistant_message?: ApiSessionMessage;
+}
+
 // --- Messages ---
 
-export async function sendMessage(
+export async function* sendMessageStream(
   sessionId: string,
   content: string,
-): Promise<{ assistant_message: ApiSessionMessage | null }> {
-  return fetchApi<{ assistant_message: ApiSessionMessage | null }>(
-    `/sessions/${sessionId}/messages`,
-    {
-      method: "POST",
-      body: JSON.stringify({ role: "user", content }),
-      timeout: 60_000,
-    },
-  );
+): AsyncGenerator<{ event: SseEventType; data: SseEvent }> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "user", content }),
+    signal: AbortSignal.timeout(120_000),
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(
+      response.status >= 500 ? "server" : "validation",
+      body?.error ?? `HTTP ${response.status}`,
+      response.status,
+    );
+  }
+
+  const stream = response.body;
+  if (!stream) return;
+
+  const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += value;
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const eventMatch = part.match(/^event: (.+)$/m);
+      const dataMatch = part.match(/^data: (.+)$/m);
+      if (dataMatch) {
+        const event = (eventMatch?.[1] ?? "message") as SseEventType;
+        try {
+          const parsed = JSON.parse(dataMatch[1]) as SseEvent;
+          yield { event, data: parsed };
+        } catch {
+          // Skip unparseable events
+        }
+      }
+    }
+  }
+}
+
+// --- Session Tool Calls ---
+
+export interface ApiSessionToolCall {
+  id: string;
+  message_id: string;
+  tool_name: string;
+  tool_args: Record<string, unknown> | null;
+  tool_result: unknown | null;
+  duration_ms: number | null;
+  created_at: string;
+}
+
+export async function getSessionToolCalls(sessionId: string): Promise<ApiSessionToolCall[]> {
+  return fetchApi<ApiSessionToolCall[]>(`/sessions/${sessionId}/tool-calls`);
 }
 
 // --- Sources ---

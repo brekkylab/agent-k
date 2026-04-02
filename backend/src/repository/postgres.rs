@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
+use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
 use crate::repository::{Repository, RepositoryResult};
 use ailoy::{AgentProvider, AgentSpec};
 
@@ -238,6 +238,30 @@ impl Repository for PostgresRepository {
         &self,
         _speedwagon_id: Uuid,
     ) -> RepositoryResult<Vec<Uuid>> {
+        todo!("postgres implementation")
+    }
+
+    // --- Session Tool Calls ---
+
+    async fn save_tool_calls(
+        &self,
+        _message_id: &str,
+        _tool_calls: &[SessionToolCall],
+    ) -> RepositoryResult<()> {
+        todo!("postgres implementation")
+    }
+
+    async fn get_tool_calls_for_message(
+        &self,
+        _message_id: &str,
+    ) -> RepositoryResult<Vec<SessionToolCall>> {
+        todo!("postgres implementation")
+    }
+
+    async fn get_tool_calls_for_session(
+        &self,
+        _session_id: Uuid,
+    ) -> RepositoryResult<Vec<SessionToolCall>> {
         todo!("postgres implementation")
     }
 }

@@ -9,7 +9,7 @@ use chrono::Utc;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
+use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
 use ailoy::{AgentProvider, AgentSpec};
 
 pub use postgres::PostgresRepository;
@@ -162,6 +162,26 @@ pub trait Repository: Send + Sync {
         &self,
         speedwagon_id: Uuid,
     ) -> RepositoryResult<Vec<Uuid>>;
+
+    // --- Session Tool Calls ---
+    async fn save_tool_calls(
+        &self,
+        message_id: &str,
+        tool_calls: &[SessionToolCall],
+    ) -> RepositoryResult<()>;
+
+    /// Currently unused — will be needed when message-level pagination is introduced,
+    /// allowing lazy-load of tool call details on user expand.
+    #[allow(dead_code)]
+    async fn get_tool_calls_for_message(
+        &self,
+        message_id: &str,
+    ) -> RepositoryResult<Vec<SessionToolCall>>;
+
+    async fn get_tool_calls_for_session(
+        &self,
+        session_id: Uuid,
+    ) -> RepositoryResult<Vec<SessionToolCall>>;
 }
 
 pub async fn create_repository_from_env() -> RepositoryResult<Arc<dyn Repository>> {

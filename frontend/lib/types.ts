@@ -59,6 +59,7 @@ export interface ApiAgent {
 }
 
 export interface ApiSessionMessage {
+  id: string;
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   created_at: string;

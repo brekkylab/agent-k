@@ -53,8 +53,20 @@ pub enum MessageRole {
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct SessionMessage {
+    pub id: String,
     pub role: MessageRole,
     pub content: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+pub struct SessionToolCall {
+    pub id: String,
+    pub message_id: String,
+    pub tool_name: String,
+    pub tool_args: Option<serde_json::Value>,
+    pub tool_result: Option<serde_json::Value>,
+    pub duration_ms: Option<i64>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -130,13 +142,9 @@ pub struct UpdateSessionRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddSessionMessageRequest {
+    #[allow(dead_code)]
     pub role: MessageRole,
     pub content: String,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AddSessionMessageResponse {
-    pub assistant_message: Option<SessionMessage>,
 }
 
 // --- Source ---

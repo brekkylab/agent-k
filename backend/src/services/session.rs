@@ -1,12 +1,15 @@
+use std::pin::Pin;
+
 use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
 use actix_web::http::StatusCode;
 use actix_web::{HttpResponse, ResponseError};
-use chat_agent::ChatAgentRunError;
+use chat_agent::ChatEvent;
+use futures_util::StreamExt;
 use uuid::Uuid;
 
 use crate::models::{
-    AddSessionMessageResponse, CreateSessionRequest, ErrorResponse, MessageRole, Session,
-    UpdateSessionRequest,
+    CreateSessionRequest, ErrorResponse, MessageRole, Session,
+    SessionMessage, SessionToolCall, UpdateSessionRequest,
 };
 use crate::repository::RepositoryError;
 use crate::state::AppState;
@@ -126,13 +129,50 @@ pub async fn delete_session(state: &AppState, id: Uuid) -> Result<(), SessionErr
     Ok(())
 }
 
-/// Save user message, run ChatAgent, and save assistant response.
-pub async fn send_message(
+/// SSE event types emitted during streaming message processing.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SseEvent {
+    Thinking {
+        level: String,
+    },
+    ToolCall {
+        level: String,
+        tool: String,
+        args: Option<serde_json::Value>,
+    },
+    ToolResult {
+        level: String,
+        tool: String,
+        result: Option<serde_json::Value>,
+        error: Option<String>,
+    },
+    Message {
+        level: String,
+        content: String,
+    },
+    Done {
+        assistant_message: SessionMessage,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// Save user message, run ChatAgent in streaming mode, and yield SSE events.
+/// The final `Done` event includes the persisted assistant message.
+///
+/// Uses a channel pattern: a `spawn_local` task holds the MutexGuard and streams
+/// ChatEvents, sending SSE events through an mpsc channel. This avoids the `Send`
+/// bound issue since `run_user_text_streaming` returns a `!Send` stream.
+pub async fn send_message_streaming(
     state: &AppState,
     session_id: Uuid,
-    role: MessageRole,
     content: String,
-) -> Result<AddSessionMessageResponse, SessionError> {
+) -> Result<
+    Pin<Box<dyn futures_util::Stream<Item = Result<SseEvent, SessionError>>>>,
+    SessionError,
+> {
     if content.trim().is_empty() {
         return Err(SessionError::EmptyContent);
     }
@@ -140,55 +180,153 @@ pub async fn send_message(
     // Save the user message
     state
         .repository
-        .add_session_message(session_id, role.clone(), content.clone())
+        .add_session_message(session_id, MessageRole::User, content.clone())
         .await?
         .ok_or(SessionError::NotFound)?;
 
-    if !matches!(role, MessageRole::User) {
-        return Ok(AddSessionMessageResponse {
-            assistant_message: None,
-        });
-    }
-
-    // Load session once for runtime creation (without full message history reload per message)
+    // Load session for runtime creation
     let session = state
         .repository
         .get_session(session_id)
         .await?
         .ok_or(SessionError::NotFound)?;
 
+    // Get or create runtime
     let runtime = state
         .get_or_create_runtime_for_session(&session)
         .await
         .map_err(|e| SessionError::Runtime(format!("failed to initialize agent runtime: {e}")))?;
 
-    let runtime_output = {
+    let repository = state.repository.clone();
+
+    // Use actix_web::rt::spawn (spawn_local) since the ChatAgent stream is !Send.
+    // Actix-web handlers already run on a LocalSet, so spawn_local is valid here.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<SseEvent, SessionError>>(32);
+
+    actix_web::rt::spawn(async move {
         let mut rt = runtime.lock().await;
-        rt.run_user_text(content).await
-    };
+        let mut event_stream = rt.run_user_text_streaming(content);
 
-    let assistant_text = match runtime_output {
-        Ok(text) => text,
-        Err(ChatAgentRunError::NoTextContent) => {
-            return Err(SessionError::Runtime(
-                "model response did not include text content".to_string(),
-            ));
+        let mut assistant_content: Option<String> = None;
+        let mut tool_calls_for_db: Vec<(
+            String,
+            Option<serde_json::Value>,
+            Option<serde_json::Value>,
+        )> = Vec::new();
+
+        while let Some(event_result) = event_stream.next().await {
+            let sse = match event_result {
+                Ok(ChatEvent::Thinking) => SseEvent::Thinking {
+                    level: "info".to_string(),
+                },
+                Ok(ChatEvent::ToolCall { tool, args }) => {
+                    tool_calls_for_db.push((tool.clone(), Some(args.clone()), None));
+                    SseEvent::ToolCall {
+                        level: "info".to_string(),
+                        tool,
+                        args: Some(args),
+                    }
+                }
+                Ok(ChatEvent::ToolResult { tool, result }) => {
+                    // Update the matching tool call's result (last one without a result)
+                    if let Some(tc) = tool_calls_for_db
+                        .iter_mut()
+                        .rev()
+                        .find(|(n, _, r)| n == &tool && r.is_none())
+                    {
+                        tc.2 = Some(result.clone());
+                    }
+                    SseEvent::ToolResult {
+                        level: "info".to_string(),
+                        tool,
+                        result: Some(result),
+                        error: None,
+                    }
+                }
+                Ok(ChatEvent::Message {
+                    content,
+                    tool_calls: _,
+                }) => {
+                    assistant_content = Some(content.clone());
+                    SseEvent::Message {
+                        level: "info".to_string(),
+                        content,
+                    }
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(Ok(SseEvent::Error {
+                            message: e.to_string(),
+                        }))
+                        .await;
+                    return;
+                }
+            };
+            if tx.send(Ok(sse)).await.is_err() {
+                return; // receiver dropped
+            }
         }
-        Err(ChatAgentRunError::Runtime { source }) => {
-            tracing::error!("runtime execution error: {source}");
-            return Err(SessionError::Runtime(
-                "failed to run language model".to_string(),
-            ));
+
+        // Drop the lock before DB operations
+        drop(event_stream);
+        drop(rt);
+
+        // Save assistant message + tool calls to DB
+        if let Some(content) = &assistant_content {
+            match repository
+                .add_session_message(session_id, MessageRole::Assistant, content.clone())
+                .await
+            {
+                Ok(Some(msg)) => {
+                    // Save tool calls
+                    if !tool_calls_for_db.is_empty() {
+                        let now = chrono::Utc::now();
+                        let tool_call_models: Vec<SessionToolCall> = tool_calls_for_db
+                            .iter()
+                            .map(|(name, args, result)| SessionToolCall {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                message_id: msg.id.clone(),
+                                tool_name: name.clone(),
+                                tool_args: args.clone(),
+                                tool_result: result.clone(),
+                                duration_ms: None,
+                                created_at: now,
+                            })
+                            .collect();
+                        let _ = repository.save_tool_calls(&msg.id, &tool_call_models).await;
+                    }
+                    let _ = tx
+                        .send(Ok(SseEvent::Done {
+                            assistant_message: msg,
+                        }))
+                        .await;
+                }
+                Ok(None) => {
+                    let _ = tx
+                        .send(Ok(SseEvent::Error {
+                            message: "session not found".to_string(),
+                        }))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(Ok(SseEvent::Error {
+                            message: format!("failed to save message: {e}"),
+                        }))
+                        .await;
+                }
+            }
+        } else {
+            let _ = tx
+                .send(Ok(SseEvent::Error {
+                    message: "no assistant response".to_string(),
+                }))
+                .await;
         }
-    };
+    });
 
-    // Save assistant message and return it directly (no full session reload)
-    let assistant_message = state
-        .repository
-        .add_session_message(session_id, MessageRole::Assistant, assistant_text)
-        .await?;
-
-    Ok(AddSessionMessageResponse { assistant_message })
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Ok(Box::pin(stream))
 }
 
 async fn resolve_provider_profile_id(

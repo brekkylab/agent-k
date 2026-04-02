@@ -17,6 +17,7 @@ import {
   ApiError,
 } from "@/lib/api";
 import type { ApiProviderProfile } from "@/lib/types";
+import { toast } from "sonner";
 
 const PROVIDERS: ProviderName[] = ["OpenAI", "Anthropic", "Gemini"];
 
@@ -54,7 +55,7 @@ export function ProviderSettings() {
         return next;
       });
     } catch {
-      // ignore
+      toast.error("Provider 프로필을 불러오지 못했습니다");
     } finally {
       setFetching(false);
     }
