@@ -56,6 +56,8 @@ pub struct SessionMessage {
     pub id: String,
     pub role: MessageRole,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<SessionToolCall>,
     pub created_at: DateTime<Utc>,
 }
 

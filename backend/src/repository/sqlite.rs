@@ -508,6 +508,7 @@ impl SqliteRepository {
                 id,
                 role,
                 content,
+                tool_calls: vec![],
                 created_at,
             });
         }
@@ -535,6 +536,22 @@ impl SqliteRepository {
         session.messages = self.load_session_messages(session.id).await?;
         session.speedwagon_ids = self.get_session_speedwagon_ids(session.id).await?;
         session.source_ids = self.get_session_source_ids(session.id).await?;
+
+        // Attach tool calls to their parent assistant messages
+        let tool_calls = self.get_tool_calls_for_session(session.id).await?;
+        if !tool_calls.is_empty() {
+            use std::collections::HashMap;
+            let mut tc_map: HashMap<String, Vec<SessionToolCall>> = HashMap::new();
+            for tc in tool_calls {
+                tc_map.entry(tc.message_id.clone()).or_default().push(tc);
+            }
+            for msg in &mut session.messages {
+                if let Some(tcs) = tc_map.remove(&msg.id) {
+                    msg.tool_calls = tcs;
+                }
+            }
+        }
+
         Ok(Some(session))
     }
 }
@@ -962,7 +979,7 @@ impl Repository for SqliteRepository {
         tx.commit().await?;
 
         let created_at = Self::parse_timestamp(now, "created_at")?;
-        Ok(Some(SessionMessage { id: msg_id, role, content, created_at }))
+        Ok(Some(SessionMessage { id: msg_id, role, content, tool_calls: vec![], created_at }))
     }
 
     async fn update_session_atomic(

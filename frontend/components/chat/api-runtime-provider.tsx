@@ -8,6 +8,24 @@ import {
 } from "@assistant-ui/react";
 import { toast } from "sonner";
 import { sendMessageStream, getSession } from "@/lib/api";
+import type { ApiSessionMessage } from "@/lib/types";
+
+/** Convert a DB message to initial content: plain string for user, content parts array for assistant with tool calls */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- assistant-ui initial message content accepts string | ContentPart[]
+function buildInitialContent(m: ApiSessionMessage): any {
+  if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+    const toolParts = m.tool_calls.map((tc) => ({
+      type: "tool-call" as const,
+      toolCallId: tc.id,
+      toolName: tc.tool_name,
+      args: tc.tool_args ?? {},
+      argsText: JSON.stringify(tc.tool_args ?? {}),
+      result: tc.tool_result,
+    }));
+    return [...toolParts, { type: "text" as const, text: m.content }];
+  }
+  return m.content;
+}
 
 function createApiAdapter(sessionId: string): ChatModelAdapter {
   return {
@@ -140,7 +158,7 @@ export function ApiRuntimeProvider({
           .filter((m) => m.role === "user" || m.role === "assistant")
           .map((m) => ({
             role: m.role as "user" | "assistant",
-            content: m.content,
+            content: buildInitialContent(m),
             createdAt: new Date(m.created_at),
           }));
         setInitialMessages(msgs);

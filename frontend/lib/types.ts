@@ -62,6 +62,17 @@ export interface ApiSessionMessage {
   id: string;
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_calls?: ApiSessionToolCall[];
+  created_at: string;
+}
+
+export interface ApiSessionToolCall {
+  id: string;
+  message_id: string;
+  tool_name: string;
+  tool_args: Record<string, unknown> | null;
+  tool_result: unknown | null;
+  duration_ms: number | null;
   created_at: string;
 }
 
