@@ -58,14 +58,6 @@ export interface ApiAgent {
   updated_at: string;
 }
 
-export interface ApiSessionMessage {
-  id: string;
-  role: "system" | "user" | "assistant" | "tool";
-  content: string;
-  tool_calls?: ApiSessionToolCall[];
-  created_at: string;
-}
-
 export interface ApiSessionToolCall {
   id: string;
   message_id: string;
@@ -73,6 +65,14 @@ export interface ApiSessionToolCall {
   tool_args: Record<string, unknown> | null;
   tool_result: unknown | null;
   duration_ms: number | null;
+  created_at: string;
+}
+
+export interface ApiSessionMessage {
+  id: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: ApiSessionToolCall[];
   created_at: string;
 }
 
@@ -86,4 +86,81 @@ export interface ApiSession {
   source_ids: string[];
   created_at: string;
   updated_at: string;
+}
+
+// --- SSE Streaming Types ---
+
+export type SseEventType = "thinking" | "tool_call" | "tool_result" | "message" | "done" | "error";
+
+export interface SseEvent {
+  type: string;
+  level?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  error?: string;
+  content?: string;
+  message?: string;
+  assistant_message?: ApiSessionMessage;
+}
+
+// --- Request Types ---
+
+export interface CreateProviderProfileRequest {
+  name: string;
+  provider: ApiProviderProfile["provider"];
+  is_default?: boolean;
+}
+
+export interface UpdateProviderProfileRequest {
+  name: string;
+  provider: ApiProviderProfile["provider"];
+  is_default?: boolean;
+}
+
+export interface CreateAgentRequest {
+  spec: {
+    lm: string;
+    instruction?: string;
+    tools?: unknown[];
+  };
+}
+
+export interface UpdateAgentRequest {
+  spec: {
+    lm: string;
+    instruction?: string;
+    tools?: unknown[];
+  };
+}
+
+export interface CreateSessionRequest {
+  agent_id: string;
+  provider_profile_id?: string;
+  title?: string;
+  speedwagon_ids?: string[];
+  source_ids?: string[];
+}
+
+export interface UpdateSessionRequest {
+  title?: string;
+  provider_profile_id?: string;
+  speedwagon_ids?: string[];
+  source_ids?: string[];
+}
+
+export interface CreateSpeedwagonRequest {
+  name: string;
+  description: string;
+  instruction?: string | null;
+  lm?: string | null;
+  source_ids?: string[];
+}
+
+export interface UpdateSpeedwagonRequest {
+  name: string;
+  description: string;
+  instruction?: string | null;
+  lm?: string | null;
+  source_ids: string[];
 }

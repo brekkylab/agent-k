@@ -3,9 +3,22 @@ import type {
   ApiAgent,
   ApiSession,
   ApiSessionMessage,
+  ApiSessionToolCall,
   ApiSource,
   ApiSpeedwagon,
+  SseEventType,
+  SseEvent,
+  CreateProviderProfileRequest,
+  UpdateProviderProfileRequest,
+  CreateAgentRequest,
+  UpdateAgentRequest,
+  CreateSessionRequest,
+  UpdateSessionRequest,
+  CreateSpeedwagonRequest,
+  UpdateSpeedwagonRequest,
 } from "./types";
+
+export type { SseEventType, SseEvent, ApiSessionToolCall };
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
@@ -86,11 +99,9 @@ export async function getProviderProfiles(): Promise<ApiProviderProfile[]> {
   return fetchApi<ApiProviderProfile[]>("/provider-profiles");
 }
 
-export async function createProviderProfile(data: {
-  name: string;
-  provider: ApiProviderProfile["provider"];
-  is_default?: boolean;
-}): Promise<ApiProviderProfile> {
+export async function createProviderProfile(
+  data: CreateProviderProfileRequest,
+): Promise<ApiProviderProfile> {
   return fetchApi<ApiProviderProfile>("/provider-profiles", {
     method: "POST",
     body: JSON.stringify(data),
@@ -99,11 +110,7 @@ export async function createProviderProfile(data: {
 
 export async function updateProviderProfile(
   id: string,
-  data: {
-    name: string;
-    provider: ApiProviderProfile["provider"];
-    is_default?: boolean;
-  },
+  data: UpdateProviderProfileRequest,
 ): Promise<ApiProviderProfile> {
   return fetchApi<ApiProviderProfile>(`/provider-profiles/${id}`, {
     method: "PUT",
@@ -117,9 +124,7 @@ export async function deleteProviderProfile(id: string): Promise<void> {
 
 // --- Agents ---
 
-export async function createAgent(data: {
-  spec: { lm: string; instruction?: string; tools?: unknown[] };
-}): Promise<ApiAgent> {
+export async function createAgent(data: CreateAgentRequest): Promise<ApiAgent> {
   return fetchApi<ApiAgent>("/agents", {
     method: "POST",
     body: JSON.stringify(data),
@@ -132,7 +137,7 @@ export async function getAgent(id: string): Promise<ApiAgent> {
 
 export async function updateAgent(
   id: string,
-  data: { spec: { lm: string; instruction?: string; tools?: unknown[] } },
+  data: UpdateAgentRequest,
 ): Promise<ApiAgent> {
   return fetchApi<ApiAgent>(`/agents/${id}`, {
     method: "PUT",
@@ -142,13 +147,9 @@ export async function updateAgent(
 
 // --- Sessions ---
 
-export async function createSession(data: {
-  agent_id: string;
-  provider_profile_id?: string;
-  title?: string;
-  speedwagon_ids?: string[];
-  source_ids?: string[];
-}): Promise<ApiSession> {
+export async function createSession(
+  data: CreateSessionRequest,
+): Promise<ApiSession> {
   return fetchApi<ApiSession>("/sessions", {
     method: "POST",
     body: JSON.stringify(data),
@@ -172,8 +173,6 @@ export async function deleteSession(id: string): Promise<void> {
   return fetchApi<void>(`/sessions/${id}`, { method: "DELETE" });
 }
 
-// --- Session Title ---
-
 export async function updateSessionTitle(
   id: string,
   title: string,
@@ -186,33 +185,12 @@ export async function updateSessionTitle(
 
 export async function updateSession(
   id: string,
-  data: {
-    title?: string;
-    provider_profile_id?: string;
-    speedwagon_ids?: string[];
-    source_ids?: string[];
-  },
+  data: UpdateSessionRequest,
 ): Promise<ApiSession> {
   return fetchApi<ApiSession>(`/sessions/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
   });
-}
-
-// --- SSE Streaming Types ---
-
-export type SseEventType = "thinking" | "tool_call" | "tool_result" | "message" | "done" | "error";
-
-export interface SseEvent {
-  type: string;
-  level?: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-  result?: unknown;
-  error?: string;
-  content?: string;
-  message?: string;
-  assistant_message?: ApiSessionMessage;
 }
 
 // --- Messages ---
@@ -266,17 +244,9 @@ export async function* sendMessageStream(
 
 // --- Session Tool Calls ---
 
-export interface ApiSessionToolCall {
-  id: string;
-  message_id: string;
-  tool_name: string;
-  tool_args: Record<string, unknown> | null;
-  tool_result: unknown | null;
-  duration_ms: number | null;
-  created_at: string;
-}
-
-export async function getSessionToolCalls(sessionId: string): Promise<ApiSessionToolCall[]> {
+export async function getSessionToolCalls(
+  sessionId: string,
+): Promise<ApiSessionToolCall[]> {
   return fetchApi<ApiSessionToolCall[]>(`/sessions/${sessionId}/tool-calls`);
 }
 
@@ -309,13 +279,9 @@ export async function getSpeedwagon(id: string): Promise<ApiSpeedwagon> {
   return fetchApi<ApiSpeedwagon>(`/speedwagons/${id}`);
 }
 
-export async function createSpeedwagon(data: {
-  name: string;
-  description: string;
-  instruction?: string | null;
-  lm?: string | null;
-  source_ids?: string[];
-}): Promise<ApiSpeedwagon> {
+export async function createSpeedwagon(
+  data: CreateSpeedwagonRequest,
+): Promise<ApiSpeedwagon> {
   return fetchApi<ApiSpeedwagon>("/speedwagons", {
     method: "POST",
     body: JSON.stringify(data),
@@ -324,13 +290,7 @@ export async function createSpeedwagon(data: {
 
 export async function updateSpeedwagon(
   id: string,
-  data: {
-    name: string;
-    description: string;
-    instruction?: string | null;
-    lm?: string | null;
-    source_ids: string[];
-  },
+  data: UpdateSpeedwagonRequest,
 ): Promise<ApiSpeedwagon> {
   return fetchApi<ApiSpeedwagon>(`/speedwagons/${id}`, {
     method: "PUT",
