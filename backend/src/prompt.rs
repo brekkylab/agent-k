@@ -67,6 +67,10 @@ fn build_tools_section(kb_entries: &[KbEntry]) -> String {
     let mut kb_list = String::new();
     for kb in kb_entries {
         kb_list.push_str(&format!("- \"{}\": {}\n", kb.id, kb.description));
+        if !kb.document_names.is_empty() {
+            let names = kb.document_names.join(", ");
+            kb_list.push_str(&format!("  Documents: {names}\n"));
+        }
     }
     // Remove trailing newline for cleaner output
     let kb_list = kb_list.trim_end_matches('\n');
@@ -79,8 +83,13 @@ Available knowledge bases:
 {kb_list}
 
 <tool_usage_rules>
-- When the user's question relates to a connected knowledge base,
-  use ask_speedwagon to find evidence BEFORE answering.
+- If the user's question could relate to ANY document listed above,
+  you MUST call ask_speedwagon BEFORE answering — even if you think
+  you already know the answer from your training data.
+  Your training data may be outdated or different from the user's documents.
+- The ONLY time you may skip the tool is when the question is clearly
+  unrelated to any listed document (e.g. writing code, general math,
+  current events).
 - You may call the tool multiple times with different questions
   to gather comprehensive information.
 - Do NOT pass the user's original question verbatim to the tool.
@@ -122,6 +131,19 @@ Bad tool usage:
   → Too vague — no book title, no character name. The knowledge base
     cannot identify which document to search. Always use specific names
     and titles from the conversation context.
+
+Example — KB documents include "dubliners.txt", user asks: "Dubliners 줄거리 알려줘"
+
+Bad (skipping the tool):
+  → Answering from your own knowledge without calling ask_speedwagon.
+  Even if you know about Dubliners, the user's KB may contain a specific
+  version, annotations, or excerpts that differ from your training data.
+  Always search the KB first when the question matches a listed document.
+
+Good:
+  1st call: ask_speedwagon(kb_id="novel-kb", question="Dubliners plot summary and main themes")
+  → Use KB results as primary source, supplement with your knowledge only
+    when the KB results are insufficient.
 </tool_usage_examples>
 
 <reasoning_with_evidence>
@@ -149,6 +171,7 @@ mod tests {
             corpus_dirs: vec![],
             instruction: None,
             lm: None,
+            document_names: vec![],
         }
     }
 

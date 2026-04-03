@@ -24,6 +24,10 @@ pub struct KbEntry {
     pub instruction: Option<String>,
     #[serde(default)]
     pub lm: Option<String>,
+    /// File names in the corpus directory, exposed to the LLM so it can judge
+    /// whether a question relates to this knowledge base.
+    #[serde(default)]
+    pub document_names: Vec<String>,
 }
 
 /// Provider config extracted from the parent ChatAgent's provider,

@@ -129,6 +129,8 @@ impl AppState {
             if let Ok(Some(sw)) = self.repository.get_speedwagon(sw_id).await {
                 if sw.index_status == SpeedwagonIndexStatus::Indexed {
                     if let (Some(index_dir), Some(corpus_dir)) = (sw.index_dir.clone(), sw.corpus_dir.clone()) {
+                        // Read file names from corpus directory so the LLM can judge relevance
+                        let document_names = read_corpus_file_names(&corpus_dir);
                         kb_entries.push(KbEntry {
                             id: sw.id.to_string(),
                             description: sw.description.clone(),
@@ -136,6 +138,7 @@ impl AppState {
                             corpus_dirs: vec![corpus_dir],
                             instruction: sw.instruction.clone(),
                             lm: sw.lm.clone(),
+                            document_names,
                         });
                     }
                 }
@@ -270,6 +273,18 @@ impl AppState {
 
         Ok(())
     }
+}
+
+/// Read file names from a corpus directory for LLM context.
+/// Returns an empty vec on any I/O error (non-critical).
+fn read_corpus_file_names(corpus_dir: &str) -> Vec<String> {
+    std::fs::read_dir(corpus_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect()
 }
 
 fn to_io_error(error: RepositoryError) -> std::io::Error {
