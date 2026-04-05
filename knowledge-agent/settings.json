@@ -1,0 +1,26 @@
+{
+  "data": {
+    "corpus_dirs": [
+      "../novelqa_downloader/books",
+      "data/financebench"
+    ],
+    "txt_dir": "../novelqa_downloader/books",
+    "qa_file": "../novelqa_downloader/novelqa_merged.json",
+    "index_dir": "./tantivy_index"
+  },
+  "indexing": {
+    "schema_version": 1,
+    "rebuild_on_mismatch": true
+  },
+  "search": {
+    "default_top_k": 1
+  },
+  "tool": {
+    "top_k_max": 10,
+    "context_lines_max": 10,
+    "max_matches": 20,
+    "max_snippet_lines": 40,
+    "max_content_chars": 8000,
+    "max_lines_per_open": 200
+  }
+}

@@ -1,0 +1,6 @@
+.index/
+data/
+tantivy_index/
+
+*_report.json
+test_report_*.json
