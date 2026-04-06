@@ -100,7 +100,8 @@ function createApiAdapter(sessionId: string): ChatModelAdapter {
               break;
             }
             case "done":
-              // Stream complete, final message already yielded via "message" event
+              // Stream complete — refresh sidebar so auto-generated title appears
+              useAppStore.getState().bumpSessionListVersion();
               break;
             case "error":
               toast.error(data.message || "메시지 전송 중 오류가 발생했습니다");

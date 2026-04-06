@@ -324,6 +324,12 @@ frontend/
 | Props | `interface XxxProps` 정의 후 구조분해 할당 |
 | 내보내기 | named export (`export function`, `export const`) |
 
+### assistant-ui API 스타일
+
+- 0.12 신규 API 사용: `useAuiState((s) => s.thread.isRunning)` (O)
+- legacy hooks 금지: `useThread`, `useThreadRuntime` (X, 0.13에서 제거 예정)
+- 참고: https://assistant-ui.com/docs/migrations/v0-12
+
 ### 상태 관리 (Zustand)
 
 - **단일 스토어**: `useAppStore` (`lib/store.ts`)
@@ -331,6 +337,20 @@ frontend/
 - **비-React 접근**: `useAppStore.getState().someAction()` (이벤트 핸들러, 어댑터 내부)
 - **액션 네이밍**: 동사+명사 (`setActiveSession`, `updateSessionKnowledge`)
 - **주의**: 셀렉터로 함수(액션)를 가져오면 리렌더 트리거 안 됨 → 데이터를 직접 구독해야 함
+
+### 사이드바 세션 리스트 갱신 원칙
+
+사이드바 `SessionList`는 `sessionListVersion`이 변경될 때만 re-fetch한다.
+**Backend 상태가 변경되는 모든 시점**에서 `bumpSessionListVersion()`을 호출해야 한다.
+
+필수 호출 시점:
+- 세션 생성 직후 (새 세션이 목록에 나타나도록)
+- 메시지 스트림 완료 후 (첫 메시지 기반 자동 title이 반영되도록)
+- 세션 title 수동 변경 후
+- 세션 삭제 후 (로컬 state로 이미 처리하지만, 일관성을 위해)
+
+새로운 기능을 추가할 때 세션 목록에 영향을 주는 Backend 상태 변경이 있다면
+반드시 `bumpSessionListVersion()` 호출을 포함해야 한다.
 
 ### 스타일링
 
