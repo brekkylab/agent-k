@@ -50,6 +50,10 @@ interface AppState {
   // Pending session speedwagon selection (before session is created)
   pendingSpeedwagonIds: string[];
   setPendingSpeedwagonIds: (ids: string[]) => void;
+
+  // Pending first message (set in NewChatWelcome, consumed by ApiRuntimeProvider)
+  pendingMessage: string | null;
+  setPendingMessage: (msg: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -101,4 +105,8 @@ export const useAppStore = create<AppState>((set) => ({
   // Pending session speedwagon selection
   pendingSpeedwagonIds: [],
   setPendingSpeedwagonIds: (ids) => set({ pendingSpeedwagonIds: ids }),
+
+  // Pending first message
+  pendingMessage: null,
+  setPendingMessage: (msg) => set({ pendingMessage: msg }),
 }));

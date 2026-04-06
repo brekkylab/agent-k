@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { ChatModelAdapter } from "@assistant-ui/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChatModelAdapter, AssistantRuntime } from "@assistant-ui/react";
 import {
   useLocalRuntime,
   AssistantRuntimeProvider,
 } from "@assistant-ui/react";
 import { toast } from "sonner";
 import { sendMessageStream, getSession } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
 import type { ApiSessionMessage } from "@/lib/types";
 
 /** Convert a DB message to initial content: plain string for user, content parts array for assistant with tool calls */
@@ -117,6 +118,25 @@ function createApiAdapter(sessionId: string): ChatModelAdapter {
 
 // Inner component: only mounts AFTER messages are loaded
 // This ensures useLocalRuntime receives correct initialMessages on first call
+function PendingMessageSender({ runtime }: { runtime: AssistantRuntime }) {
+  const pendingMessage = useAppStore((s) => s.pendingMessage);
+  const setPendingMessage = useAppStore((s) => s.setPendingMessage);
+  const sentRef = useRef(false);
+
+  useEffect(() => {
+    if (pendingMessage && !sentRef.current) {
+      sentRef.current = true;
+      // Defer to next tick so runtime is fully initialized
+      queueMicrotask(() => {
+        runtime.thread.append(pendingMessage);
+        setPendingMessage(null);
+      });
+    }
+  }, [pendingMessage, runtime, setPendingMessage]);
+
+  return null;
+}
+
 function ApiRuntimeInner({
   children,
   sessionId,
@@ -131,6 +151,7 @@ function ApiRuntimeInner({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <PendingMessageSender runtime={runtime} />
       {children}
     </AssistantRuntimeProvider>
   );

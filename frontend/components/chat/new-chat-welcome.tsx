@@ -8,7 +8,6 @@ import { useAppStore } from "@/lib/store";
 import {
   createAgent,
   createSession,
-  sendMessageStream,
   ApiError,
 } from "@/lib/api";
 
@@ -30,6 +29,7 @@ export function NewChatWelcome() {
   const setPendingSpeedwagonIds = useAppStore((s) => s.setPendingSpeedwagonIds);
   const setActiveSession = useAppStore((s) => s.setActiveSession);
   const bumpSessionListVersion = useAppStore((s) => s.bumpSessionListVersion);
+  const setPendingMessage = useAppStore((s) => s.setPendingMessage);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -65,11 +65,8 @@ export function NewChatWelcome() {
         setPendingSpeedwagonIds([]);
       }
 
-      // 메시지 전송
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _ of sendMessageStream(session.id, message.trim())) { /* drain stream */ }
-
-      // 세션 활성화 → ChatView로 전환
+      // 세션 활성화 → ChatView로 즉시 전환, 메시지는 ChatView에서 전송
+      setPendingMessage(message.trim());
       bumpSessionListVersion();
       setActiveSession(session.id);
     } catch (err) {
