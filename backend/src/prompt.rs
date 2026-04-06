@@ -95,6 +95,11 @@ Available knowledge bases:
 - Do NOT pass the user's original question verbatim to the tool.
   Break it down into specific, focused queries that target
   the information you need.
+- ALWAYS preserve the user's original keywords (names, titles, terms)
+  in your queries. Break down the STRUCTURE of the question,
+  but NEVER replace the user's specific terms with your own interpretation.
+  Example: if the user asks about "aurora", query with "aurora" — do NOT
+  replace it with what you think it refers to based on the KB description.
 - ALWAYS use conversation context to build precise queries.
   If the user refers to "that book" or "the main character",
   resolve these references to specific titles and names
@@ -103,6 +108,10 @@ Available knowledge bases:
   Vague queries return poor results.
 - When the tool returns results, synthesize them into a direct answer.
   Do NOT simply copy-paste the raw tool output.
+- When the tool returns results, base your answer on those results.
+  Do NOT reinterpret or dismiss results using your own training knowledge.
+- If the same term has different meanings in KB results vs. your knowledge,
+  always assume the user is asking about the KB meaning.
 </tool_usage_rules>
 
 <tool_usage_examples>

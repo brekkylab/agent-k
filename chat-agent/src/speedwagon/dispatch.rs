@@ -6,10 +6,41 @@ use std::sync::Arc;
 use crate::error_value;
 
 use ailoy::agent::ToolFunc;
-use ailoy::{ToolDescBuilder, ToolRuntime, Value};
+use ailoy::{LangModelAPISchema, LangModelProvider, ToolDescBuilder, ToolRuntime, Value};
 use knowledge_agent::{AgentConfig, SearchIndex, ToolConfig, build_agent, run_with_trace};
+use url::Url;
 
 use super::{ASK_SPEEDWAGON_TOOL, KbEntry, SubAgentProvider};
+
+/// Grounding rules injected into every Speedwagon sub-agent system prompt.
+/// Prevents the sub-agent from reframing document content through its own
+/// parametric knowledge — document corpus is always the authoritative source.
+const GROUNDING_RULES: &str = r#"<grounding_rules>
+Your primary source of truth is the document corpus you are searching.
+When you find relevant content, report it as the authoritative answer.
+
+You MAY add expert analysis or synthesis that builds ON TOP of what
+the documents say — this adds value.
+
+You MUST NOT let your training knowledge reframe, contradict, or override
+what the documents contain. If a document contains information about "X",
+report that information as-is — even if "X" also refers to something
+entirely different in the outside world.
+
+The user is asking about THEIR documents. Answer from THEIR documents.
+
+Example:
+  Document "aurora.txt" contains a short story about a cat named Aurora.
+  User question: "Tell me about aurora"
+
+  BAD (reframing through your own knowledge):
+    "This document is not about the aurora borealis.
+     Instead it contains a story about a cat..."
+
+  GOOD (document content as the anchor):
+    "According to aurora.txt, Aurora is a cat living in an alley.
+     The story describes her daily adventures..."
+</grounding_rules>"#;
 
 /// Build the `ask_speedwagon` tool from KB entries.
 /// `provider` carries the parent agent's API credentials so sub-agents
@@ -133,17 +164,24 @@ pub async fn dispatch_speedwagon(
     let target_dirs: Vec<PathBuf> = entry.corpus_dirs.iter().map(PathBuf::from).collect();
 
     let default_config = AgentConfig::default();
+
+    let system_prompt = match &entry.instruction {
+        Some(custom) if !custom.trim().is_empty() => format!(
+            "{}\n\n{}\n\n<additional_instructions>\n{}\n</additional_instructions>",
+            default_config.system_prompt,
+            GROUNDING_RULES,
+            custom.trim()
+        ),
+        _ => format!("{}\n\n{}", default_config.system_prompt, GROUNDING_RULES),
+    };
+
     let agent_config = AgentConfig {
-        api_key: provider.api_key.clone(),
-        api_url: provider.api_url.clone(),
-        system_prompt: match &entry.instruction {
-            Some(custom) if !custom.trim().is_empty() => format!(
-                "{}\n\n<additional_instructions>\n{}\n</additional_instructions>",
-                default_config.system_prompt,
-                custom.trim()
-            ),
-            _ => default_config.system_prompt,
+        provider: LangModelProvider::API {
+            schema: LangModelAPISchema::ChatCompletion,
+            url: Url::parse(&provider.api_url).expect("invalid api_url in SubAgentProvider"),
+            api_key: Some(provider.api_key.clone()),
         },
+        system_prompt,
         model_name: entry
             .lm
             .clone()
