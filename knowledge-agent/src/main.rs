@@ -55,22 +55,11 @@ async fn main() -> Result<()> {
         AppConfig::default()
     };
 
-    // Load API key from environment if not set in config
-    if app_config.agent.api_key.is_empty() {
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            app_config.agent.api_key = key;
-        }
-    }
-
     // Use AgentConfig's model provider if summarize_config is not specified
     if app_config.tool.summarize_config.is_none() {
         app_config.tool.summarize_config = Some(knowledge_agent::SummarizeConfig {
             model_name: app_config.agent.model_name.clone(),
-            model_provider: ailoy::LangModelProvider::API {
-                schema: ailoy::LangModelAPISchema::ChatCompletion,
-                url: url::Url::parse(&app_config.agent.api_url).unwrap(),
-                api_key: Some(app_config.agent.api_key.clone()),
-            },
+            model_provider: app_config.agent.provider.clone(),
         })
     }
 
