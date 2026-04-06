@@ -25,11 +25,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const OPENAI_MODELS: readonly string[] = PROVIDER_MODELS.OpenAI;
-const UNSUPPORTED_PROVIDERS = [
-  { label: "Anthropic", models: PROVIDER_MODELS.Anthropic },
-  { label: "Gemini", models: PROVIDER_MODELS.Gemini },
-] as const;
+const ALL_MODELS: string[] = [
+  ...PROVIDER_MODELS.OpenAI,
+  ...PROVIDER_MODELS.Anthropic,
+  ...PROVIDER_MODELS.Gemini,
+];
 
 interface Props {
   id: string;
@@ -325,25 +325,18 @@ export function SpeedwagonDetail({ id }: Props) {
       <div className="space-y-1.5">
         <label className="text-sm font-medium">서브에이전트 모델</label>
         <p className="text-xs text-muted-foreground">
-          Speedwagon은 현재 OpenAI 호환 provider에서만 지원됩니다.
+          비워두면 메인 에이전트와 같은 모델을 사용합니다.
         </p>
         <select
           className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           value={lm}
           onChange={(e) => handleLmChange(e.target.value)}
         >
-          <option value="" disabled>메인 에이전트와 동일 (OpenAI만 지원)</option>
-          <optgroup label="OpenAI">
-            {OPENAI_MODELS.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </optgroup>
-          {UNSUPPORTED_PROVIDERS.map(({ label, models }) => (
-            <optgroup key={label} label={`${label} (미지원)`}>
-              {models.map((m) => (
-                <option key={m} value={m} disabled>{m}</option>
-              ))}
-            </optgroup>
+          <option value="">메인 에이전트와 동일</option>
+          {ALL_MODELS.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
           ))}
         </select>
       </div>
