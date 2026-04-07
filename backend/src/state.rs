@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
-use chat_agent::{ChatAgent, KbEntry};
+use chat_agent::{ChatAgent, KbEntry, SubAgentProvider, SubAgentSpec};
 use tokio::sync::Mutex as TokioMutex;
 use url::Url;
 use uuid::Uuid;
@@ -123,24 +123,52 @@ impl AppState {
                 RepositoryError::InvalidData("provider profile not found for session".to_string())
             })?;
 
-        // Load built speedwagons for this session → KbEntry list
+        // Load built speedwagons for this session → KbEntry list + per-KB provider overrides
         let mut kb_entries: Vec<KbEntry> = Vec::new();
+        let mut kb_overrides: HashMap<String, SubAgentProvider> = HashMap::new();
         for &sw_id in &session.speedwagon_ids {
-            if let Ok(Some(sw)) = self.repository.get_speedwagon(sw_id).await {
-                if sw.index_status == SpeedwagonIndexStatus::Indexed {
-                    if let (Some(index_dir), Some(corpus_dir)) = (sw.index_dir.clone(), sw.corpus_dir.clone()) {
-                        // Read file names from corpus directory so the LLM can judge relevance
-                        let document_names = read_corpus_file_names(&corpus_dir);
-                        kb_entries.push(KbEntry {
-                            id: sw.id.to_string(),
-                            description: sw.description.clone(),
-                            index_dir,
-                            corpus_dirs: vec![corpus_dir],
-                            instruction: sw.instruction.clone(),
-                            lm: sw.lm.clone(),
-                            document_names,
-                        });
-                    }
+            let Ok(Some(sw)) = self.repository.get_speedwagon(sw_id).await else {
+                continue;
+            };
+            if sw.index_status != SpeedwagonIndexStatus::Indexed {
+                continue;
+            }
+            let (Some(index_dir), Some(corpus_dir)) = (sw.index_dir.clone(), sw.corpus_dir.clone()) else {
+                continue;
+            };
+
+            let document_names = read_corpus_file_names(&corpus_dir);
+            kb_entries.push(KbEntry {
+                id: sw.id.to_string(),
+                description: sw.description.clone(),
+                index_dir,
+                corpus_dirs: vec![corpus_dir],
+                spec: SubAgentSpec {
+                    lm: sw.lm.clone(),
+                    instruction: sw.instruction.clone(),
+                },
+                document_names,
+            });
+
+            // Build per-KB provider override if speedwagon has its own provider_profile_id
+            let Some(pp_id) = sw.provider_profile_id else {
+                continue;
+            };
+            match self.repository.get_provider_profile(pp_id).await {
+                Ok(Some(pp)) => {
+                    let LangModelProvider::API { schema, url, api_key } = &pp.provider.lm;
+                    kb_overrides.insert(sw.id.to_string(), SubAgentProvider {
+                        api_key: api_key.clone().unwrap_or_default(),
+                        api_url: url.clone(),
+                        schema: schema.clone(),
+                    });
+                }
+                _ => {
+                    tracing::warn!(
+                        speedwagon_id = %sw.id,
+                        provider_profile_id = %pp_id,
+                        "speedwagon references missing provider profile; using session default"
+                    );
                 }
             }
         }
@@ -182,6 +210,7 @@ impl AppState {
             spec,
             provider_profile.provider,
             kb_entries,
+            kb_overrides,
             session_source_paths,
         )));
 

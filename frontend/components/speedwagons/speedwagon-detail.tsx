@@ -5,12 +5,14 @@ import { useRouter } from "next/navigation";
 import { Loader2, Trash2, Zap } from "lucide-react";
 import {
   getSpeedwagon,
+  getProviderProfiles,
   updateSpeedwagon,
   deleteSpeedwagon,
   indexSpeedwagon,
 } from "@/lib/api";
-import type { ApiSpeedwagon } from "@/lib/types";
-import { PROVIDER_MODELS } from "@/lib/constants";
+import type { ApiSpeedwagon, ApiProviderProfile } from "@/lib/types";
+import { PROVIDER_MODELS, PROVIDER_DEFAULT_PROFILE_NAMES } from "@/lib/constants";
+import type { ProviderName } from "@/lib/constants";
 import { useAppStore } from "@/lib/store";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -24,12 +26,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-
-const ALL_MODELS: string[] = [
-  ...PROVIDER_MODELS.OpenAI,
-  ...PROVIDER_MODELS.Anthropic,
-  ...PROVIDER_MODELS.Gemini,
-];
 
 interface Props {
   id: string;
@@ -101,7 +97,9 @@ export function SpeedwagonDetail({ id }: Props) {
   const [description, setDescription] = useState("");
   const [instruction, setInstruction] = useState("");
   const [lm, setLm] = useState<string>("");
+  const [providerProfileId, setProviderProfileId] = useState<string>("");
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [providerProfiles, setProviderProfiles] = useState<ApiProviderProfile[]>([]);
 
   // Track initial source_ids to detect re-indexing needed
   const lastBuiltSourceIds = useRef<string[]>([]);
@@ -110,16 +108,18 @@ export function SpeedwagonDetail({ id }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const [swData] = await Promise.all([
+      const [swData, profiles] = await Promise.all([
         getSpeedwagon(id),
-        fetchSources(),
+        fetchSources().then(() => getProviderProfiles()),
       ]);
       setSw(swData);
       setName(swData.name);
       setDescription(swData.description);
       setInstruction(swData.instruction ?? "");
       setLm(swData.lm ?? "");
+      setProviderProfileId(swData.provider_profile_id ?? "");
       setSelectedSourceIds(swData.source_ids);
+      setProviderProfiles(profiles);
       if (swData.index_status === "indexed") {
         lastBuiltSourceIds.current = swData.source_ids;
       }
@@ -167,6 +167,7 @@ export function SpeedwagonDetail({ id }: Props) {
       description: string;
       instruction: string;
       lm: string;
+      providerProfileId: string;
       sourceIds: string[];
     }) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -178,6 +179,7 @@ export function SpeedwagonDetail({ id }: Props) {
             description: patch.description,
             instruction: patch.instruction || null,
             lm: patch.lm || null,
+            provider_profile_id: patch.providerProfileId || null,
             source_ids: patch.sourceIds,
           });
           setSw(updated);
@@ -194,22 +196,35 @@ export function SpeedwagonDetail({ id }: Props) {
 
   const handleNameChange = (v: string) => {
     setName(v);
-    scheduleAutoSave({ name: v, description, instruction, lm, sourceIds: selectedSourceIds });
+    scheduleAutoSave({ name: v, description, instruction, lm, providerProfileId, sourceIds: selectedSourceIds });
   };
 
   const handleDescriptionChange = (v: string) => {
     setDescription(v);
-    scheduleAutoSave({ name, description: v, instruction, lm, sourceIds: selectedSourceIds });
+    scheduleAutoSave({ name, description: v, instruction, lm, providerProfileId, sourceIds: selectedSourceIds });
   };
 
   const handleInstructionChange = (v: string) => {
     setInstruction(v);
-    scheduleAutoSave({ name, description, instruction: v, lm, sourceIds: selectedSourceIds });
+    scheduleAutoSave({ name, description, instruction: v, lm, providerProfileId, sourceIds: selectedSourceIds });
   };
 
-  const handleLmChange = (v: string) => {
-    setLm(v);
-    scheduleAutoSave({ name, description, instruction, lm: v, sourceIds: selectedSourceIds });
+  const handleModelChange = (value: string) => {
+    if (!value) {
+      // "Default (session provider)" selected — clear both
+      setLm("");
+      setProviderProfileId("");
+      scheduleAutoSave({ name, description, instruction, lm: "", providerProfileId: "", sourceIds: selectedSourceIds });
+      return;
+    }
+    // value format: "profileId::modelName"
+    const sepIdx = value.indexOf("::");
+    if (sepIdx === -1) return;
+    const ppId = value.substring(0, sepIdx);
+    const model = value.substring(sepIdx + 2);
+    setLm(model);
+    setProviderProfileId(ppId);
+    scheduleAutoSave({ name, description, instruction, lm: model, providerProfileId: ppId, sourceIds: selectedSourceIds });
   };
 
   const handleSourceToggle = (sourceId: string, checked: boolean) => {
@@ -217,7 +232,7 @@ export function SpeedwagonDetail({ id }: Props) {
       ? [...selectedSourceIds, sourceId]
       : selectedSourceIds.filter((s) => s !== sourceId);
     setSelectedSourceIds(next);
-    scheduleAutoSave({ name, description, instruction, lm, sourceIds: next });
+    scheduleAutoSave({ name, description, instruction, lm, providerProfileId, sourceIds: next });
   };
 
   const handleIndex = async () => {
@@ -321,7 +336,7 @@ export function SpeedwagonDetail({ id }: Props) {
         />
       </div>
 
-      {/* LM Model */}
+      {/* LM Model — grouped by provider profile */}
       <div className="space-y-1.5">
         <label className="text-sm font-medium">서브에이전트 모델</label>
         <p className="text-xs text-muted-foreground">
@@ -329,15 +344,26 @@ export function SpeedwagonDetail({ id }: Props) {
         </p>
         <select
           className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          value={lm}
-          onChange={(e) => handleLmChange(e.target.value)}
+          value={lm && providerProfileId ? `${providerProfileId}::${lm}` : ""}
+          onChange={(e) => handleModelChange(e.target.value)}
         >
-          <option value="">메인 에이전트와 동일</option>
-          {ALL_MODELS.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
+          <option value="">메인 에이전트와 동일 (기본)</option>
+          {(Object.entries(PROVIDER_MODELS) as [ProviderName, readonly string[]][]).map(
+            ([providerName, models]) => {
+              const defaultProfileName = PROVIDER_DEFAULT_PROFILE_NAMES[providerName];
+              const profile = providerProfiles.find((p) => p.name === defaultProfileName);
+              if (!profile) return null;
+              return (
+                <optgroup key={providerName} label={providerName}>
+                  {models.map((m) => (
+                    <option key={`${profile.id}::${m}`} value={`${profile.id}::${m}`}>
+                      {m}
+                    </option>
+                  ))}
+                </optgroup>
+              );
+            },
+          )}
         </select>
       </div>
 

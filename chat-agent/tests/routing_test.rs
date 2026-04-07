@@ -10,6 +10,7 @@
 //!
 //! Run:  cargo test --test routing_test -- --ignored --nocapture
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Once;
 
@@ -59,7 +60,7 @@ fn create_agent(model: &str) -> ChatAgent {
         tools: vec![],
     };
 
-    ChatAgent::new(spec, provider, vec![], vec![])
+    ChatAgent::new(spec, provider, vec![], HashMap::new(), vec![])
 }
 
 async fn assert_routes_to(query: &str, expected_kb: &str) {

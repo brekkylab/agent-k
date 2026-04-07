@@ -120,6 +120,7 @@ pub trait Repository: Send + Sync {
         description: String,
         instruction: Option<String>,
         lm: Option<String>,
+        provider_profile_id: Option<Uuid>,
         source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Speedwagon>;
     async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>>;
@@ -131,6 +132,7 @@ pub trait Repository: Send + Sync {
         description: String,
         instruction: Option<String>,
         lm: Option<String>,
+        provider_profile_id: Option<Uuid>,
         source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Option<Speedwagon>>;
     async fn delete_speedwagon(&self, id: Uuid) -> RepositoryResult<bool>;
