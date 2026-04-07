@@ -1,13 +1,11 @@
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use ailoy::{
-    AgentProvider, AgentRuntime, AgentSpec, Message, Part, Role, ToolSet, Value,
-};
+use ailoy::{AgentProvider, AgentRuntime, AgentSpec, Message, Part, Role, ToolSet, Value};
 use futures::{Stream, StreamExt as _};
 
 use crate::speedwagon::{self, KbEntry, SubAgentProvider};
-use crate::tools::{self, DEFAULT_TOOL_ADD_INTEGERS, DEFAULT_TOOL_UTC_NOW};
+use crate::tools;
 
 /// A record of a tool interaction: the LLM's call and the tool's response.
 #[derive(Debug, Clone)]
@@ -68,7 +66,8 @@ impl ChatAgent {
     ) -> Self {
         // Extract API credentials and model name from the parent provider to pass to speedwagon sub-agents
         let sub_provider = SubAgentProvider::from_provider(&provider, &spec.lm);
-        let (tool_names, tool_set) = build_tool_set(&kb_entries, sub_provider, session_source_paths);
+        let (tool_names, tool_set) =
+            build_tool_set(&kb_entries, sub_provider, session_source_paths);
         for name in tool_names {
             if !spec.tools.iter().any(|n| n == &name) {
                 spec.tools.push(name);
@@ -138,10 +137,8 @@ impl ChatAgent {
             }
         }
 
-        extract_assistant_text(
-            &last_assistant.ok_or(ChatAgentRunError::NoTextContent)?,
-        )
-        .ok_or(ChatAgentRunError::NoTextContent)
+        extract_assistant_text(&last_assistant.ok_or(ChatAgentRunError::NoTextContent)?)
+            .ok_or(ChatAgentRunError::NoTextContent)
     }
 
     /// Returns the current conversation history (clone).
@@ -155,16 +152,15 @@ impl ChatAgent {
     pub fn restore_history(
         &mut self,
         system_prompt: String,
-        messages: Vec<(String, String)>,  // (role_str, content) pairs
+        messages: Vec<(String, String)>, // (role_str, content) pairs
     ) {
-        let mut history = vec![
-            Message::new(Role::System).with_contents([Part::text(system_prompt)]),
-        ];
+        let mut history =
+            vec![Message::new(Role::System).with_contents([Part::text(system_prompt)])];
         for (role_str, content) in messages {
             let role = match role_str.as_str() {
                 "user" => Role::User,
                 "assistant" => Role::Assistant,
-                _ => continue,  // skip system/tool messages
+                _ => continue, // skip system/tool messages
             };
             history.push(Message::new(role).with_contents([Part::text(content)]));
         }
@@ -210,8 +206,7 @@ impl ChatAgent {
     /// be reflected without cache invalidation.
     pub fn update_system_prompt(&mut self, instruction: String) {
         let mut history = self.get_history();
-        let system_msg = Message::new(Role::System)
-            .with_contents([Part::text(instruction)]);
+        let system_msg = Message::new(Role::System).with_contents([Part::text(instruction)]);
         if history.is_empty() || history[0].role != Role::System {
             history.insert(0, system_msg);
         } else {
@@ -314,10 +309,7 @@ fn build_tool_set(
     session_source_paths: Vec<(String, String, PathBuf)>,
 ) -> (Vec<String>, ToolSet) {
     let mut tool_set = tools::build_default_tool_set();
-    let mut tool_names = vec![
-        DEFAULT_TOOL_UTC_NOW.to_string(),
-        DEFAULT_TOOL_ADD_INTEGERS.to_string(),
-    ];
+    let mut tool_names = tool_set.names();
     if let Some((name, runtime)) = speedwagon::build_speedwagon_tool(kb_entries, sub_provider) {
         tool_names.push(name.clone());
         tool_set.insert(name, runtime);
@@ -328,7 +320,6 @@ fn build_tool_set(
     }
     (tool_names, tool_set)
 }
-
 
 fn extract_assistant_text(message: &Message) -> Option<String> {
     let text = message
@@ -345,13 +336,8 @@ fn extract_assistant_text(message: &Message) -> Option<String> {
 mod tests {
     use super::{ChatAgent, build_tool_set, extract_assistant_text};
     use crate::speedwagon::SubAgentProvider;
-    use crate::tools::{
-        DEFAULT_TOOL_ADD_INTEGERS, DEFAULT_TOOL_UTC_NOW, add_integers_result,
-        build_default_tool_set,
-    };
     use ailoy::{
         AgentProvider, AgentSpec, LangModelAPISchema, LangModelProvider, Message, Part, Role,
-        Value,
     };
 
     fn sample_spec() -> AgentSpec {
@@ -391,97 +377,7 @@ mod tests {
     #[test]
     fn build_tool_set_returns_default_tool_names() {
         let (tool_names, _tool_set) = build_tool_set(&[], sample_sub_provider(), vec![]);
-        assert_eq!(
-            tool_names,
-            vec![
-                DEFAULT_TOOL_UTC_NOW.to_string(),
-                DEFAULT_TOOL_ADD_INTEGERS.to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn default_tool_set_contains_two_default_tools() {
-        let tool_set = build_default_tool_set();
-        assert!(tool_set.get(DEFAULT_TOOL_UTC_NOW).is_some());
-        assert!(tool_set.get(DEFAULT_TOOL_ADD_INTEGERS).is_some());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn utc_now_tool_returns_unix_seconds() {
-        let tool_set = build_default_tool_set();
-        let tool = tool_set
-            .get(DEFAULT_TOOL_UTC_NOW)
-            .cloned()
-            .expect("utc_now tool should exist");
-
-        let tool_message = tool
-            .run(Part::function(DEFAULT_TOOL_UTC_NOW, Value::object_empty()))
-            .await
-            .expect("tool call should succeed");
-
-        assert_eq!(tool_message.role, Role::Tool);
-        let value = tool_message
-            .contents
-            .first()
-            .and_then(Part::as_value)
-            .expect("tool message should contain value");
-        let unix_seconds = value
-            .as_object()
-            .and_then(|map| map.get("unix_seconds"))
-            .and_then(Value::as_unsigned);
-        assert!(unix_seconds.is_some());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn add_integers_tool_returns_sum_for_valid_args() {
-        let tool_set = build_default_tool_set();
-        let tool = tool_set
-            .get(DEFAULT_TOOL_ADD_INTEGERS)
-            .cloned()
-            .expect("add_integers tool should exist");
-
-        let tool_message = tool
-            .run(Part::function(
-                DEFAULT_TOOL_ADD_INTEGERS,
-                Value::object([("a", Value::integer(2)), ("b", Value::integer(3))]),
-            ))
-            .await
-            .expect("tool call should succeed");
-
-        let value = tool_message
-            .contents
-            .first()
-            .and_then(Part::as_value)
-            .expect("tool message should contain value");
-        let sum = value
-            .as_object()
-            .and_then(|map| map.get("sum"))
-            .and_then(Value::as_integer);
-        assert_eq!(sum, Some(5));
-    }
-
-    #[test]
-    fn add_integers_tool_returns_error_for_invalid_or_overflow() {
-        let invalid = add_integers_result(Value::object([
-            ("a", Value::string("not-a-number")),
-            ("b", Value::integer(3)),
-        ]));
-        let invalid_error = invalid
-            .as_object()
-            .and_then(|map| map.get("error"))
-            .and_then(Value::as_str);
-        assert_eq!(invalid_error, Some("invalid_arguments"));
-
-        let overflow = add_integers_result(Value::object([
-            ("a", Value::integer(i64::MAX)),
-            ("b", Value::integer(1)),
-        ]));
-        let overflow_error = overflow
-            .as_object()
-            .and_then(|map| map.get("error"))
-            .and_then(Value::as_str);
-        assert_eq!(overflow_error, Some("overflow"));
+        assert_eq!(tool_names, vec!["web_search"]);
     }
 
     #[test]
@@ -493,7 +389,8 @@ mod tests {
 
     #[test]
     fn extract_assistant_text_joins_text_parts() {
-        let message = Message::new(Role::Assistant).with_contents([Part::text("a"), Part::text("b")]);
+        let message =
+            Message::new(Role::Assistant).with_contents([Part::text("a"), Part::text("b")]);
         assert_eq!(extract_assistant_text(&message), Some("ab".to_string()));
     }
 
@@ -510,7 +407,9 @@ mod tests {
         let history = agent.get_history();
         assert!(!history.is_empty());
         assert_eq!(history[0].role, Role::System);
-        let text = history[0].contents.iter()
+        let text = history[0]
+            .contents
+            .iter()
             .filter_map(|p| p.as_text())
             .collect::<Vec<_>>()
             .join("");
@@ -526,12 +425,14 @@ mod tests {
         };
         let mut agent = ChatAgent::new(spec, sample_provider(), vec![], vec![]);
         let history_before = agent.get_history();
-        assert_eq!(history_before.len(), 1);  // System message from spec.instruction
+        assert_eq!(history_before.len(), 1); // System message from spec.instruction
 
         agent.update_system_prompt("replaced".to_string());
         let history_after = agent.get_history();
-        assert_eq!(history_after.len(), 1);  // Still 1 message, replaced
-        let text = history_after[0].contents.iter()
+        assert_eq!(history_after.len(), 1); // Still 1 message, replaced
+        let text = history_after[0]
+            .contents
+            .iter()
             .filter_map(|p| p.as_text())
             .collect::<Vec<_>>()
             .join("");
