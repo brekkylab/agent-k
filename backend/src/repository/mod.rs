@@ -9,7 +9,10 @@ use chrono::Utc;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::models::{Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source, SourceType, Speedwagon, SpeedwagonIndexStatus};
+use crate::models::{
+    Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source,
+    SourceType, Speedwagon, SpeedwagonIndexStatus,
+};
 use ailoy::{AgentProvider, AgentSpec};
 
 pub use postgres::PostgresRepository;
@@ -215,7 +218,7 @@ pub async fn create_repository(database_url: &str) -> RepositoryResult<Arc<dyn R
 mod tests {
     use super::create_repository;
 
-    #[actix_web::test]
+    #[tokio::test]
     #[should_panic(expected = "postgres implementation")]
     async fn postgres_branch_is_explicit_todo() {
         let _ = create_repository("postgres://localhost/agentwebui_test").await;

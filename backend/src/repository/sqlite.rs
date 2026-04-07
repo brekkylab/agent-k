@@ -1587,7 +1587,7 @@ mod tests {
     use crate::repository::Repository;
     use ailoy::{AgentProvider, AgentSpec, LangModelAPISchema, LangModelProvider};
 
-    #[actix_web::test]
+    #[tokio::test]
     async fn sqlite_persists_data_between_repository_instances() {
         let temp_dir = tempdir().expect("temp dir should be created");
         let db_path = temp_dir.path().join("app.db");
