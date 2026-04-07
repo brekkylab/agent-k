@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::error_value;
 
 use ailoy::agent::ToolFunc;
-use ailoy::{ToolDescBuilder, ToolRuntime, ToolSet, Value};
+use ailoy::{ToolDescBuilder, ToolRuntime, ToolSet, Value, agent::BuiltinToolProvider};
 
 pub const READ_SOURCE_TOOL: &str = "read_source";
 
@@ -29,7 +29,7 @@ pub const READ_SOURCE_TOOL: &str = "read_source";
 // ---------------------------------------------------------------------------
 
 pub fn build_default_tool_set() -> ToolSet {
-    ToolSet::new().with_builtin("web_search")
+    ToolSet::new().with_builtin(&BuiltinToolProvider::WebSearch {})
 }
 
 // ---------------------------------------------------------------------------
