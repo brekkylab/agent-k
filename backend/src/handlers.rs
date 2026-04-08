@@ -4,7 +4,7 @@ use std::sync::Arc;
 use aide::NoApi;
 use aide::axum::ApiRouter;
 use aide::axum::routing::{get, post};
-use ailoy::{AgentProvider, LangModelProvider};
+use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
 use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
@@ -55,6 +55,31 @@ impl AppError {
     }
 }
 
+/// Return a copy of the provider with the Gemini URL normalized to base format (`/models/`).
+///
+/// ailoy constructs Gemini API URLs as `format!("{}{}:generateContent", url, model)`,
+/// so the URL must end with `/models/` (base URL without model name or method).
+/// Non-Gemini providers pass through unchanged.
+fn normalize_provider(provider: AgentProvider) -> AgentProvider {
+    let lm = match provider.lm {
+        LangModelProvider::API { schema, url, api_key } => {
+            let url = if matches!(schema, LangModelAPISchema::Gemini) {
+                let s = url.to_string();
+                if let Some(idx) = s.find("/models/") {
+                    let base = &s[..idx + 8];
+                    base.parse().unwrap_or(url)
+                } else {
+                    url
+                }
+            } else {
+                url
+            };
+            LangModelProvider::API { schema, url, api_key }
+        }
+    };
+    AgentProvider { lm, tools: provider.tools }
+}
+
 fn repo_err(error: RepositoryError) -> ApiErr {
     if let RepositoryError::Database(sqlx::Error::Database(db_error)) = &error {
         let msg = db_error.message();
@@ -90,7 +115,9 @@ fn speedwagon_err(e: SpeedwagonError) -> ApiErr {
         SpeedwagonError::NotFound => StatusCode::NOT_FOUND,
         SpeedwagonError::AlreadyIndexing => StatusCode::CONFLICT,
         SpeedwagonError::NoSources => StatusCode::UNPROCESSABLE_ENTITY,
-        SpeedwagonError::EmptyName => StatusCode::BAD_REQUEST,
+        SpeedwagonError::EmptyName | SpeedwagonError::InconsistentOverride => {
+            StatusCode::BAD_REQUEST
+        }
         SpeedwagonError::Repository(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     let msg = if matches!(e, SpeedwagonError::Repository(_)) {
@@ -240,7 +267,7 @@ async fn create_provider_profile(
 
     let profile = state
         .repository
-        .create_provider_profile(name, provider, is_default)
+        .create_provider_profile(name, normalize_provider(provider), is_default)
         .await
         .map_err(repo_err)?;
     Ok((
@@ -294,7 +321,7 @@ async fn update_provider_profile(
 
     match state
         .repository
-        .update_provider_profile(id, name, provider, is_default)
+        .update_provider_profile(id, name, normalize_provider(provider), is_default)
         .await
         .map_err(repo_err)?
     {

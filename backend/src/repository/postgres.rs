@@ -169,6 +169,7 @@ impl Repository for PostgresRepository {
         _description: String,
         _instruction: Option<String>,
         _lm: Option<String>,
+        _provider_profile_id: Option<Uuid>,
         _source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Speedwagon> {
         todo!("postgres implementation")
@@ -189,6 +190,7 @@ impl Repository for PostgresRepository {
         _description: String,
         _instruction: Option<String>,
         _lm: Option<String>,
+        _provider_profile_id: Option<Uuid>,
         _source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Option<Speedwagon>> {
         todo!("postgres implementation")

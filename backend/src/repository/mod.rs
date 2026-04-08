@@ -123,6 +123,7 @@ pub trait Repository: Send + Sync {
         description: String,
         instruction: Option<String>,
         lm: Option<String>,
+        provider_profile_id: Option<Uuid>,
         source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Speedwagon>;
     async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>>;
@@ -134,6 +135,7 @@ pub trait Repository: Send + Sync {
         description: String,
         instruction: Option<String>,
         lm: Option<String>,
+        provider_profile_id: Option<Uuid>,
         source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Option<Speedwagon>>;
     async fn delete_speedwagon(&self, id: Uuid) -> RepositoryResult<bool>;
@@ -201,12 +203,12 @@ pub async fn create_repository_from_env() -> RepositoryResult<Arc<dyn Repository
 pub async fn create_repository(database_url: &str) -> RepositoryResult<Arc<dyn Repository>> {
     if database_url.starts_with("sqlite:") {
         let repository = SqliteRepository::new(database_url).await?;
-        return Ok(Arc::new(repository) as Arc<dyn Repository>);
+        return Ok(Arc::new(repository));
     }
 
     if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
         let repository = PostgresRepository::new(database_url).await?;
-        return Ok(Arc::new(repository) as Arc<dyn Repository>);
+        return Ok(Arc::new(repository));
     }
 
     Err(RepositoryError::InvalidDatabaseUrl(

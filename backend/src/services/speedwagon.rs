@@ -20,6 +20,8 @@ pub enum SpeedwagonError {
     NoSources,
     #[error("name must not be empty")]
     EmptyName,
+    #[error("lm and provider_profile_id must be both set or both unset")]
+    InconsistentOverride,
     #[error(transparent)]
     Repository(#[from] RepositoryError),
 }
@@ -30,7 +32,7 @@ impl IntoResponse for SpeedwagonError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::AlreadyIndexing => StatusCode::CONFLICT,
             Self::NoSources => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::EmptyName => StatusCode::BAD_REQUEST,
+            Self::EmptyName | Self::InconsistentOverride => StatusCode::BAD_REQUEST,
             Self::Repository(e) => {
                 tracing::error!("repository error: {e}");
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -45,6 +47,17 @@ impl IntoResponse for SpeedwagonError {
     }
 }
 
+/// Validate that `lm` and `provider_profile_id` are both-Some or both-None.
+fn validate_override(
+    lm: &Option<String>,
+    provider_profile_id: Option<Uuid>,
+) -> Result<Option<Uuid>, SpeedwagonError> {
+    if lm.is_some() != provider_profile_id.is_some() {
+        return Err(SpeedwagonError::InconsistentOverride);
+    }
+    Ok(provider_profile_id)
+}
+
 /// Create a new speedwagon with the given sources.
 pub async fn create_speedwagon(
     state: &AppState,
@@ -55,6 +68,7 @@ pub async fn create_speedwagon(
         description,
         instruction,
         lm,
+        provider_profile_id,
         source_ids,
     } = req;
 
@@ -62,9 +76,18 @@ pub async fn create_speedwagon(
         return Err(SpeedwagonError::EmptyName);
     }
 
+    let provider_profile_id = validate_override(&lm, provider_profile_id)?;
+
     let sw = state
         .repository
-        .create_speedwagon(name, description, instruction, lm, source_ids)
+        .create_speedwagon(
+            name,
+            description,
+            instruction,
+            lm,
+            provider_profile_id,
+            source_ids,
+        )
         .await?;
 
     Ok(sw)
@@ -81,14 +104,32 @@ pub async fn update_speedwagon(
         description,
         instruction,
         lm,
+        provider_profile_id,
         source_ids,
     } = req;
 
+    let provider_profile_id = validate_override(&lm, provider_profile_id)?;
+
     let sw = state
         .repository
-        .update_speedwagon(id, name, description, instruction, lm, source_ids)
+        .update_speedwagon(
+            id,
+            name,
+            description,
+            instruction,
+            lm,
+            provider_profile_id,
+            source_ids,
+        )
         .await?
         .ok_or(SpeedwagonError::NotFound)?;
+
+    // Invalidate runtime cache for sessions using this speedwagon
+    if let Ok(session_ids) = state.repository.get_sessions_by_speedwagon_id(id).await {
+        for session_id in session_ids {
+            state.invalidate_session_runtime(session_id);
+        }
+    }
 
     Ok(sw)
 }
@@ -101,6 +142,13 @@ pub async fn delete_speedwagon(state: &AppState, id: Uuid) -> Result<(), Speedwa
         .get_speedwagon(id)
         .await?
         .ok_or(SpeedwagonError::NotFound)?;
+
+    // Invalidate runtime cache BEFORE delete (ON DELETE CASCADE removes session_speedwagons rows)
+    if let Ok(session_ids) = state.repository.get_sessions_by_speedwagon_id(id).await {
+        for session_id in session_ids {
+            state.invalidate_session_runtime(session_id);
+        }
+    }
 
     let deleted = state.repository.delete_speedwagon(id).await?;
     if !deleted {

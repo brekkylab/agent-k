@@ -17,6 +17,7 @@ export interface ApiSpeedwagon {
   description: string;
   instruction: string | null;
   lm: string | null;
+  provider_profile_id: string | null;
   source_ids: string[];
   index_dir: string | null;
   corpus_dir: string | null;
@@ -154,6 +155,7 @@ export interface CreateSpeedwagonRequest {
   description: string;
   instruction?: string | null;
   lm?: string | null;
+  provider_profile_id?: string | null;
   source_ids?: string[];
 }
 
@@ -162,5 +164,6 @@ export interface UpdateSpeedwagonRequest {
   description: string;
   instruction?: string | null;
   lm?: string | null;
+  provider_profile_id?: string | null;
   source_ids: string[];
 }
