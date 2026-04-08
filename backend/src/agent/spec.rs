@@ -113,6 +113,38 @@ pub struct AgentProvider {
     pub tools: Vec<ToolProvider>,
 }
 
+impl AgentProvider {
+    /// Return a copy with the Gemini URL normalized to base format (`/models/`).
+    ///
+    /// ailoy constructs Gemini API URLs as `format!("{}{}:generateContent", url, model)`,
+    /// so the URL must end with `/models/` (base URL without model name or method).
+    /// Non-Gemini providers pass through unchanged.
+    pub fn normalized(self) -> Self {
+        let lm = match self.lm {
+            LangModelProvider::API { schema, url, api_key } => {
+                let url = normalize_gemini_url(&url, &schema);
+                LangModelProvider::API { schema, url, api_key }
+            }
+        };
+        Self { lm, tools: self.tools }
+    }
+}
+
+/// Normalize a Gemini URL to the base format ailoy expects (`/models/`).
+/// Non-Gemini schemas and already-normalized URLs pass through unchanged (idempotent).
+fn normalize_gemini_url(url: &Url, schema: &LangModelAPISchema) -> Url {
+    if !matches!(schema, LangModelAPISchema::Gemini) {
+        return url.clone();
+    }
+    let s = url.to_string();
+    if let Some(idx) = s.find("/models/") {
+        let base = &s[..idx + 8]; // includes "/models/"
+        Url::parse(base).unwrap_or_else(|_| url.clone())
+    } else {
+        url.clone()
+    }
+}
+
 impl From<AgentSpec> for ailoy::AgentSpec {
     fn from(value: AgentSpec) -> Self {
         Self {
@@ -254,5 +286,44 @@ impl From<ailoy::AgentProvider> for AgentProvider {
             lm: value.lm.into(),
             tools: value.tools.into_iter().map(Into::into).collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_gemini_full_url_to_base() {
+        let url = Url::parse("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent").unwrap();
+        let result = normalize_gemini_url(&url, &LangModelAPISchema::Gemini);
+        assert_eq!(
+            result.to_string(),
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+        );
+    }
+
+    #[test]
+    fn normalize_gemini_already_base_is_idempotent() {
+        let url = Url::parse("https://generativelanguage.googleapis.com/v1beta/models/").unwrap();
+        let result = normalize_gemini_url(&url, &LangModelAPISchema::Gemini);
+        assert_eq!(
+            result.to_string(),
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+        );
+    }
+
+    #[test]
+    fn normalize_gemini_non_gemini_passthrough() {
+        let url = Url::parse("https://api.openai.com/v1/chat/completions").unwrap();
+        let result = normalize_gemini_url(&url, &LangModelAPISchema::ChatCompletion);
+        assert_eq!(result.to_string(), "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn normalize_gemini_no_models_path_unchanged() {
+        let url = Url::parse("https://custom-proxy.example.com/v1/gemini").unwrap();
+        let result = normalize_gemini_url(&url, &LangModelAPISchema::Gemini);
+        assert_eq!(result.to_string(), "https://custom-proxy.example.com/v1/gemini");
     }
 }

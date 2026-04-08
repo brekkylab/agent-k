@@ -179,8 +179,7 @@ mod tests {
             description: description.to_string(),
             index_dir: String::new(),
             corpus_dirs: vec![],
-            instruction: None,
-            lm: None,
+            spec: Default::default(),
             document_names: vec![],
         }
     }

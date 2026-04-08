@@ -187,6 +187,11 @@ impl SqliteRepository {
         .execute(&self.pool)
         .await?;
 
+        // Idempotent: SQLite errors on duplicate column; ignore the error.
+        let _ = sqlx::query("ALTER TABLE speedwagons ADD COLUMN provider_profile_id TEXT;")
+            .execute(&self.pool)
+            .await;
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS session_speedwagons (
@@ -256,6 +261,13 @@ impl SqliteRepository {
             RepositoryError::InvalidData(format!("invalid timestamp in field `{field}`"))
         })?;
         Ok(parsed.with_timezone(&Utc))
+    }
+
+    fn parse_optional_uuid(value: Option<String>, field: &str) -> RepositoryResult<Option<Uuid>> {
+        match value {
+            None => Ok(None),
+            Some(s) => Self::parse_uuid(s, field).map(Some),
+        }
     }
 
     fn parse_optional_timestamp(
@@ -380,16 +392,11 @@ impl SqliteRepository {
 
     fn row_to_speedwagon_without_sources(row: &SqliteRow) -> RepositoryResult<Speedwagon> {
         let id = Self::parse_uuid(row.get::<String, _>("id"), "speedwagons.id")?;
-        let index_status =
-            Self::index_status_from_string(&row.get::<String, _>("index_status"))?;
-        let created_at = Self::parse_timestamp(
-            row.get::<String, _>("created_at"),
-            "speedwagons.created_at",
-        )?;
-        let updated_at = Self::parse_timestamp(
-            row.get::<String, _>("updated_at"),
-            "speedwagons.updated_at",
-        )?;
+        let index_status = Self::index_status_from_string(&row.get::<String, _>("index_status"))?;
+        let created_at =
+            Self::parse_timestamp(row.get::<String, _>("created_at"), "speedwagons.created_at")?;
+        let updated_at =
+            Self::parse_timestamp(row.get::<String, _>("updated_at"), "speedwagons.updated_at")?;
         let index_started_at = Self::parse_optional_timestamp(
             row.get::<Option<String>, _>("index_started_at"),
             "speedwagons.index_started_at",
@@ -399,12 +406,18 @@ impl SqliteRepository {
             "speedwagons.indexed_at",
         )?;
 
+        let provider_profile_id = Self::parse_optional_uuid(
+            row.get::<Option<String>, _>("provider_profile_id"),
+            "speedwagons.provider_profile_id",
+        )?;
+
         Ok(Speedwagon {
             id,
             name: row.get::<String, _>("name"),
             description: row.get::<String, _>("description"),
             instruction: row.get::<Option<String>, _>("instruction"),
             lm: row.get::<Option<String>, _>("lm"),
+            provider_profile_id,
             source_ids: vec![],
             index_dir: row.get::<Option<String>, _>("index_dir"),
             corpus_dir: row.get::<Option<String>, _>("corpus_dir"),
@@ -421,12 +434,10 @@ impl SqliteRepository {
         &self,
         speedwagon_id: Uuid,
     ) -> RepositoryResult<Vec<Uuid>> {
-        let rows = sqlx::query(
-            "SELECT source_id FROM speedwagon_sources WHERE speedwagon_id = ?;",
-        )
-        .bind(speedwagon_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query("SELECT source_id FROM speedwagon_sources WHERE speedwagon_id = ?;")
+            .bind(speedwagon_id.to_string())
+            .fetch_all(&self.pool)
+            .await?;
 
         rows.iter()
             .map(|row| {
@@ -441,7 +452,7 @@ impl SqliteRepository {
     async fn load_speedwagon_by_id(&self, id: Uuid) -> RepositoryResult<Option<Speedwagon>> {
         let row = sqlx::query(
             r#"
-            SELECT id, name, description, instruction, lm, index_dir, corpus_dir,
+            SELECT id, name, description, instruction, lm, provider_profile_id, index_dir, corpus_dir,
                    index_status, index_error, index_started_at, indexed_at, created_at, updated_at
             FROM speedwagons
             WHERE id = ?;
@@ -921,12 +932,10 @@ impl Repository for SqliteRepository {
     ) -> RepositoryResult<Option<SessionMessage>> {
         let mut tx = self.pool.begin().await?;
 
-        let session_row = sqlx::query(
-            "SELECT title FROM sessions WHERE id = ?;",
-        )
-        .bind(session_id.to_string())
-        .fetch_optional(tx.as_mut())
-        .await?;
+        let session_row = sqlx::query("SELECT title FROM sessions WHERE id = ?;")
+            .bind(session_id.to_string())
+            .fetch_optional(tx.as_mut())
+            .await?;
 
         let Some(session_row) = session_row else {
             tx.rollback().await?;
@@ -970,7 +979,12 @@ impl Repository for SqliteRepository {
         tx.commit().await?;
 
         let created_at = Self::parse_timestamp(now, "created_at")?;
-        Ok(Some(SessionMessage { id: msg_id, role, content, created_at }))
+        Ok(Some(SessionMessage {
+            id: msg_id,
+            role,
+            content,
+            created_at,
+        }))
     }
 
     async fn update_session_atomic(
@@ -1022,11 +1036,13 @@ impl Repository for SqliteRepository {
                 .execute(tx.as_mut())
                 .await?;
             for sw_id in &speedwagon_ids {
-                sqlx::query("INSERT INTO session_speedwagons (session_id, speedwagon_id) VALUES (?, ?)")
-                    .bind(&id_str)
-                    .bind(sw_id.to_string())
-                    .execute(tx.as_mut())
-                    .await?;
+                sqlx::query(
+                    "INSERT INTO session_speedwagons (session_id, speedwagon_id) VALUES (?, ?)",
+                )
+                .bind(&id_str)
+                .bind(sw_id.to_string())
+                .execute(tx.as_mut())
+                .await?;
             }
             sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?")
                 .bind(&now)
@@ -1147,6 +1163,7 @@ impl Repository for SqliteRepository {
         description: String,
         instruction: Option<String>,
         lm: Option<String>,
+        provider_profile_id: Option<Uuid>,
         source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Speedwagon> {
         let now = Self::now_string();
@@ -1155,8 +1172,8 @@ impl Repository for SqliteRepository {
         sqlx::query(
             r#"
             INSERT INTO speedwagons
-                (id, name, description, instruction, lm, index_status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'not_indexed', ?, ?);
+                (id, name, description, instruction, lm, provider_profile_id, index_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'not_indexed', ?, ?);
             "#,
         )
         .bind(id.to_string())
@@ -1164,19 +1181,18 @@ impl Repository for SqliteRepository {
         .bind(&description)
         .bind(&instruction)
         .bind(&lm)
+        .bind(provider_profile_id.map(|u| u.to_string()))
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
         .await?;
 
         for source_id in &source_ids {
-            sqlx::query(
-                "INSERT INTO speedwagon_sources (speedwagon_id, source_id) VALUES (?, ?);",
-            )
-            .bind(id.to_string())
-            .bind(source_id.to_string())
-            .execute(&self.pool)
-            .await?;
+            sqlx::query("INSERT INTO speedwagon_sources (speedwagon_id, source_id) VALUES (?, ?);")
+                .bind(id.to_string())
+                .bind(source_id.to_string())
+                .execute(&self.pool)
+                .await?;
         }
 
         self.load_speedwagon_by_id(id)
@@ -1187,7 +1203,7 @@ impl Repository for SqliteRepository {
     async fn list_speedwagons(&self) -> RepositoryResult<Vec<Speedwagon>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, name, description, instruction, lm, index_dir, corpus_dir,
+            SELECT id, name, description, instruction, lm, provider_profile_id, index_dir, corpus_dir,
                    index_status, index_error, index_started_at, indexed_at, created_at, updated_at
             FROM speedwagons
             ORDER BY created_at DESC;
@@ -1197,11 +1213,9 @@ impl Repository for SqliteRepository {
         .await?;
 
         // Bulk-load all speedwagon_sources into HashMap<speedwagon_id, [source_id]>
-        let source_rows = sqlx::query(
-            "SELECT speedwagon_id, source_id FROM speedwagon_sources;",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let source_rows = sqlx::query("SELECT speedwagon_id, source_id FROM speedwagon_sources;")
+            .fetch_all(&self.pool)
+            .await?;
 
         let mut source_map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
         for sr in &source_rows {
@@ -1238,6 +1252,7 @@ impl Repository for SqliteRepository {
         description: String,
         instruction: Option<String>,
         lm: Option<String>,
+        provider_profile_id: Option<Uuid>,
         source_ids: Vec<Uuid>,
     ) -> RepositoryResult<Option<Speedwagon>> {
         let now = Self::now_string();
@@ -1257,6 +1272,7 @@ impl Repository for SqliteRepository {
                 r#"
                 UPDATE speedwagons
                 SET name = ?, description = ?, instruction = ?, lm = ?,
+                    provider_profile_id = ?,
                     index_status = 'not_indexed', index_error = NULL,
                     updated_at = ?
                 WHERE id = ?;
@@ -1266,6 +1282,7 @@ impl Repository for SqliteRepository {
             .bind(&description)
             .bind(&instruction)
             .bind(&lm)
+            .bind(provider_profile_id.map(|u| u.to_string()))
             .bind(&now)
             .bind(id.to_string())
             .execute(&self.pool)
@@ -1275,6 +1292,7 @@ impl Repository for SqliteRepository {
                 r#"
                 UPDATE speedwagons
                 SET name = ?, description = ?, instruction = ?, lm = ?,
+                    provider_profile_id = ?,
                     updated_at = ?
                 WHERE id = ?;
                 "#,
@@ -1283,6 +1301,7 @@ impl Repository for SqliteRepository {
             .bind(&description)
             .bind(&instruction)
             .bind(&lm)
+            .bind(provider_profile_id.map(|u| u.to_string()))
             .bind(&now)
             .bind(id.to_string())
             .execute(&self.pool)
@@ -1300,13 +1319,11 @@ impl Repository for SqliteRepository {
             .await?;
 
         for source_id in &source_ids {
-            sqlx::query(
-                "INSERT INTO speedwagon_sources (speedwagon_id, source_id) VALUES (?, ?);",
-            )
-            .bind(id.to_string())
-            .bind(source_id.to_string())
-            .execute(&self.pool)
-            .await?;
+            sqlx::query("INSERT INTO speedwagon_sources (speedwagon_id, source_id) VALUES (?, ?);")
+                .bind(id.to_string())
+                .bind(source_id.to_string())
+                .execute(&self.pool)
+                .await?;
         }
 
         self.load_speedwagon_by_id(id).await
@@ -1333,10 +1350,9 @@ impl Repository for SqliteRepository {
     ) -> RepositoryResult<bool> {
         let now = Self::now_string();
         let status_str = Self::index_status_to_string(&status);
-        let index_started_at_str = index_started_at
-            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true));
-        let indexed_at_str = indexed_at
-            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true));
+        let index_started_at_str =
+            index_started_at.map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true));
+        let indexed_at_str = indexed_at.map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true));
 
         let result = sqlx::query(
             r#"
@@ -1386,12 +1402,11 @@ impl Repository for SqliteRepository {
     }
 
     async fn get_session_speedwagon_ids(&self, session_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
-        let rows = sqlx::query(
-            "SELECT speedwagon_id FROM session_speedwagons WHERE session_id = ?;",
-        )
-        .bind(session_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT speedwagon_id FROM session_speedwagons WHERE session_id = ?;")
+                .bind(session_id.to_string())
+                .fetch_all(&self.pool)
+                .await?;
 
         rows.iter()
             .map(|row| {
@@ -1414,25 +1429,21 @@ impl Repository for SqliteRepository {
             .await?;
 
         for source_id in &source_ids {
-            sqlx::query(
-                "INSERT INTO session_sources (session_id, source_id) VALUES (?, ?);",
-            )
-            .bind(session_id.to_string())
-            .bind(source_id.to_string())
-            .execute(&self.pool)
-            .await?;
+            sqlx::query("INSERT INTO session_sources (session_id, source_id) VALUES (?, ?);")
+                .bind(session_id.to_string())
+                .bind(source_id.to_string())
+                .execute(&self.pool)
+                .await?;
         }
 
         Ok(())
     }
 
     async fn get_session_source_ids(&self, session_id: Uuid) -> RepositoryResult<Vec<Uuid>> {
-        let rows = sqlx::query(
-            "SELECT source_id FROM session_sources WHERE session_id = ?;",
-        )
-        .bind(session_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query("SELECT source_id FROM session_sources WHERE session_id = ?;")
+            .bind(session_id.to_string())
+            .fetch_all(&self.pool)
+            .await?;
 
         rows.iter()
             .map(|row| {
@@ -1448,12 +1459,11 @@ impl Repository for SqliteRepository {
         &self,
         speedwagon_id: Uuid,
     ) -> RepositoryResult<Vec<Uuid>> {
-        let rows = sqlx::query(
-            "SELECT session_id FROM session_speedwagons WHERE speedwagon_id = ?;",
-        )
-        .bind(speedwagon_id.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT session_id FROM session_speedwagons WHERE speedwagon_id = ?;")
+                .bind(speedwagon_id.to_string())
+                .fetch_all(&self.pool)
+                .await?;
 
         rows.iter()
             .map(|row| {
@@ -1600,7 +1610,7 @@ mod tests {
     use super::SqliteRepository;
     use crate::models::MessageRole;
     use crate::repository::Repository;
-    use ailoy::{AgentProvider, AgentSpec, LangModelAPISchema, LangModelProvider};
+    use ailoy::{AgentProvider, AgentSpec, LangModelProvider};
 
     #[actix_web::test]
     async fn sqlite_persists_data_between_repository_instances() {
@@ -1618,11 +1628,7 @@ mod tests {
             .expect("agent should be created");
 
         let provider = AgentProvider {
-            lm: LangModelProvider::API {
-                schema: LangModelAPISchema::OpenAI,
-                url: "https://api.openai.com/v1/chat/completions".parse().expect("valid URL"),
-                api_key: Some("test-key".to_string()),
-            },
+            lm: LangModelProvider::openai("test-key".into()),
             tools: vec![],
         };
 

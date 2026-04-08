@@ -1,6 +1,5 @@
-use ailoy::agent::{LangModelAPISchema, LangModelProvider};
+use ailoy::agent::LangModelProvider;
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = r#"You are an expert research assistant. Your task is to answer questions by systematically searching through a document corpus using the provided tools. Think step by step.
 
@@ -115,11 +114,9 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             model_name: "gpt-5.4-mini".to_string(),
-            provider: LangModelProvider::API {
-                schema: LangModelAPISchema::ChatCompletion,
-                url: Url::parse("https://api.openai.com/v1/chat/completions").unwrap(),
-                api_key: std::env::var("OPENAI_API_KEY").ok(),
-            },
+            provider: LangModelProvider::openai(
+                std::env::var("OPENAI_API_KEY").unwrap_or_default(),
+            ),
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
         }
     }

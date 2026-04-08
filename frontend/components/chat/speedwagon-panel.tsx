@@ -27,13 +27,10 @@ export function SpeedwagonPanel({
   const sources = useAppStore((s) => s.sources);
   const fetchSpeedwagons = useAppStore((s) => s.fetchSpeedwagons);
   const fetchSources = useAppStore((s) => s.fetchSources);
-  const selectedProvider = useAppStore((s) => s.selectedProvider);
   const [selectedSpeedwagonIds, setSelectedSpeedwagonIds] = useState<string[]>(initialSpeedwagonIds);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>(initialSourceIds);
   const [saving, setSaving] = useState(false);
   const bumpSessionListVersion = useAppStore((s) => s.bumpSessionListVersion);
-
-  const isSpeedwagonSupported = selectedProvider === "OpenAI";
 
   useEffect(() => {
     fetchSpeedwagons();
@@ -103,31 +100,25 @@ export function SpeedwagonPanel({
         {/* Speedwagon 섹션 */}
         <div>
           <span className="text-xs font-medium text-muted-foreground">Speedwagons</span>
-          {!isSpeedwagonSupported && (
-            <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
-              Speedwagon은 현재 OpenAI provider에서만 지원됩니다
-            </p>
-          )}
           <div className="mt-2 space-y-1.5">
             {speedwagons.length === 0 && (
               <span className="text-xs text-muted-foreground">등록된 Speedwagon이 없습니다</span>
             )}
             {speedwagons.map((sw) => {
               const isBuilt = sw.index_status === "indexed";
-              const isEnabled = isBuilt && isSpeedwagonSupported;
               const isChecked = selectedSpeedwagonIds.includes(sw.id);
               return (
                 <label
                   key={sw.id}
                   className={`flex items-center gap-2 rounded-md p-2 transition-colors ${
-                    isEnabled ? "cursor-pointer hover:bg-accent" : "opacity-50 cursor-not-allowed"
-                  } ${isChecked && isEnabled ? "bg-primary/10" : ""}`}
-                  title={!isBuilt ? "인덱싱 후 사용 가능합니다" : !isSpeedwagonSupported ? "OpenAI provider에서만 사용 가능합니다" : undefined}
+                    isBuilt ? "cursor-pointer hover:bg-accent" : "opacity-50 cursor-not-allowed"
+                  } ${isChecked && isBuilt ? "bg-primary/10" : ""}`}
+                  title={!isBuilt ? "인덱싱 후 사용 가능합니다" : undefined}
                 >
                   <Checkbox
                     checked={isChecked}
-                    disabled={!isEnabled}
-                    onCheckedChange={() => isEnabled && toggleSpeedwagon(sw.id)}
+                    disabled={!isBuilt}
+                    onCheckedChange={() => isBuilt && toggleSpeedwagon(sw.id)}
                   />
                   <span className="text-sm flex-1 truncate">{sw.name}</span>
                   {indexStatusBadge(sw)}

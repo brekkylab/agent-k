@@ -10,10 +10,7 @@ use url::Url;
 const INDEX_DIR: &str = "/tmp/knowledge_agent_summarize_test_index";
 
 fn md_dir() -> String {
-    format!(
-        "{}/data/financebench",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/data/financebench", env!("CARGO_MANIFEST_DIR"))
 }
 
 static INIT_INDEX: Once = Once::new();
@@ -41,11 +38,7 @@ fn make_config() -> SummarizeConfig {
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
     SummarizeConfig::new(
         "gpt-4.1-mini".to_string(),
-        LangModelProvider::API {
-            schema: LangModelAPISchema::ChatCompletion,
-            url: Url::parse("https://api.openai.com/v1/chat/completions").unwrap(),
-            api_key: Some(api_key),
-        },
+        LangModelProvider::openai(api_key),
     )
 }
 
@@ -54,11 +47,7 @@ fn make_config() -> SummarizeConfig {
 fn summarize_config_construction() {
     let config = SummarizeConfig::new(
         "gpt-4.1-mini".to_string(),
-        LangModelProvider::API {
-            schema: LangModelAPISchema::ChatCompletion,
-            url: Url::parse("https://api.openai.com/v1/chat/completions").unwrap(),
-            api_key: Some("test-key".to_string()),
-        },
+        LangModelProvider::openai("test-key".into()),
     );
     assert_eq!(config.model_name, "gpt-4.1-mini");
     match config.model_provider {

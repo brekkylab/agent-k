@@ -1,14 +1,15 @@
 //! Speedwagon dispatch — registering speedwagon sub-agents as in-memory tools.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ailoy::{LangModelAPISchema, LangModelProvider, ToolSet};
-use knowledge_agent::{AgentConfig, SearchIndex, ToolConfig, build_agent};
 use tokio::sync::Mutex as TokioMutex;
-use url::Url;
 
 use super::{KbEntry, SubAgentProvider};
+use ailoy::LangModelProvider;
+use ailoy::agent::ToolSet;
+use knowledge_agent::{AgentConfig, SearchIndex, ToolConfig, build_agent};
 
 /// Grounding rules injected into every Speedwagon sub-agent system prompt.
 /// Prevents the sub-agent from reframing document content through its own
@@ -51,7 +52,9 @@ Example:
 pub fn register_speedwagon_subagents(
     mut tool_set: ToolSet,
     entries: &[KbEntry],
-    provider: &SubAgentProvider,
+    default_provider: &SubAgentProvider,
+    default_model_name: String,
+    kb_overrides: HashMap<String, SubAgentProvider>,
 ) -> ToolSet {
     for entry in entries {
         let index_path = Path::new(&entry.index_dir);
@@ -70,7 +73,7 @@ pub fn register_speedwagon_subagents(
         let target_dirs: Vec<PathBuf> = entry.corpus_dirs.iter().map(PathBuf::from).collect();
 
         let default_config = AgentConfig::default();
-        let system_prompt = match &entry.instruction {
+        let system_prompt = match &entry.spec.instruction {
             Some(custom) if !custom.trim().is_empty() => format!(
                 "{}\n\n{}\n\n<additional_instructions>\n{}\n</additional_instructions>",
                 default_config.system_prompt,
@@ -80,20 +83,28 @@ pub fn register_speedwagon_subagents(
             _ => format!("{}\n\n{}", default_config.system_prompt, GROUNDING_RULES),
         };
 
+        let provider = kb_overrides.get(&entry.id).unwrap_or(default_provider);
+
         let agent_config = AgentConfig {
             provider: LangModelProvider::API {
-                schema: LangModelAPISchema::ChatCompletion,
-                url: Url::parse(&provider.api_url).expect("invalid api_url in SubAgentProvider"),
+                schema: provider.schema.clone(),
+                url: provider.api_url.clone(),
                 api_key: Some(provider.api_key.clone()),
             },
             system_prompt,
             model_name: entry
+                .spec
                 .lm
                 .clone()
-                .unwrap_or_else(|| provider.model_name.clone()),
+                .unwrap_or_else(|| default_model_name.clone()),
         };
 
-        let agent = build_agent(&agent_config, &ToolConfig::default(), &search_index, target_dirs);
+        let agent = build_agent(
+            &agent_config,
+            &ToolConfig::default(),
+            &search_index,
+            target_dirs,
+        );
         let agent = Arc::new(TokioMutex::new(agent));
 
         tool_set = tool_set.with_subagent_in_memory(

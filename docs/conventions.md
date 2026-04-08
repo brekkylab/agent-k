@@ -150,6 +150,8 @@ backend/src/
 | Response DTO | `Clone, Debug, Serialize, ToSchema` | `XxxResponse` 접미사, `From<&Domain>` impl |
 | Request DTO | `Debug, Deserialize, ToSchema` | `CreateXxxRequest` / `UpdateXxxRequest`, `deny_unknown_fields` |
 
+> **Request DTO 관심사 분리 원칙**: Request DTO의 필드 타입은 Domain Model과 가능한 한 일치시킨다 (예: `Uuid`, `Option<Uuid>`). **파싱(역직렬화)**은 serde에 위임하고, **비즈니스 검증**(쌍 일치, 범위 체크 등)만 service에서 수행한다. Optional + 교차검증 같은 복합 요구사항이 있을 때 "직접 제어하겠다"며 `String`으로 받아서 수동 파싱하는 유혹이 생기지만, 이는 파싱 관심사와 비즈니스 검증 관심사를 혼합하는 것이다. serde가 타입 변환 + 형식 검증을 처리하면 service는 이미 파싱된 타입으로 비즈니스 로직에만 집중할 수 있다.
+
 용도에 따라 같은 리소스도 Response를 분리한다:
 - `SessionResponse` — 목록/생성 (messages 없음)
 - `SessionDetailResponse` — 상세 조회 (messages + tool_calls 포함)

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
 
@@ -62,12 +63,19 @@ impl ChatAgent {
         mut spec: AgentSpec,
         provider: AgentProvider,
         kb_entries: Vec<KbEntry>,
+        kb_overrides: HashMap<String, SubAgentProvider>,
         session_source_paths: Vec<(String, String, PathBuf)>,
     ) -> Self {
-        // Extract API credentials and model name from the parent provider to pass to speedwagon sub-agents
-        let sub_provider = SubAgentProvider::from_provider(&provider, &spec.lm);
-        let (tool_names, tool_set) =
-            build_tool_set(&kb_entries, sub_provider, session_source_paths);
+        // Extract API credentials from the parent provider; model name passed separately as fallback
+        let default_provider = SubAgentProvider::from_provider(&provider);
+        let default_model_name = spec.lm.clone();
+        let (tool_names, tool_set) = build_tool_set(
+            &kb_entries,
+            default_provider,
+            default_model_name,
+            kb_overrides,
+            session_source_paths,
+        );
         for name in tool_names {
             if !spec.tools.iter().any(|n| n == &name) {
                 spec.tools.push(name);
@@ -305,12 +313,19 @@ fn ailoy_to_json(v: &Value) -> serde_json::Value {
 /// Tool names are derived from the same source as their runtimes, ensuring consistency.
 fn build_tool_set(
     kb_entries: &[KbEntry],
-    sub_provider: SubAgentProvider,
+    default_provider: SubAgentProvider,
+    default_model_name: String,
+    kb_overrides: HashMap<String, SubAgentProvider>,
     session_source_paths: Vec<(String, String, PathBuf)>,
 ) -> (Vec<String>, ToolSet) {
     let tool_set = tools::build_default_tool_set();
-    let mut tool_set =
-        speedwagon::register_speedwagon_subagents(tool_set, kb_entries, &sub_provider);
+    let mut tool_set = speedwagon::register_speedwagon_subagents(
+        tool_set,
+        kb_entries,
+        &default_provider,
+        default_model_name,
+        kb_overrides,
+    );
     if let Some((name, runtime)) = tools::build_read_source_tool(session_source_paths) {
         tool_set.insert(name, runtime);
     }
@@ -336,6 +351,7 @@ mod tests {
     use ailoy::{
         AgentProvider, AgentSpec, LangModelAPISchema, LangModelProvider, Message, Part, Role,
     };
+    use std::collections::HashMap;
 
     fn sample_spec() -> AgentSpec {
         AgentSpec {
@@ -360,26 +376,44 @@ mod tests {
 
     #[test]
     fn new_creates_chat_agent_with_runtime() {
-        let _agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
+        let _agent = ChatAgent::new(
+            sample_spec(),
+            sample_provider(),
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
     }
 
-    fn sample_sub_provider() -> SubAgentProvider {
+    fn sample_default_provider() -> SubAgentProvider {
         SubAgentProvider {
             api_key: "test-key".to_string(),
-            api_url: "https://example.com".to_string(),
-            model_name: "gpt-4.1-mini".to_string(),
+            api_url: "https://example.com".parse().unwrap(),
+            schema: LangModelAPISchema::ChatCompletion,
         }
     }
 
     #[test]
     fn build_tool_set_returns_default_tool_names() {
-        let (tool_names, _tool_set) = build_tool_set(&[], sample_sub_provider(), vec![]);
+        let (tool_names, _tool_set) = build_tool_set(
+            &[],
+            sample_default_provider(),
+            "gpt-4.1-mini".into(),
+            HashMap::new(),
+            vec![],
+        );
         assert_eq!(tool_names, vec!["web_search"]);
     }
 
     #[test]
     fn run_user_text_method_is_available() {
-        let mut agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
+        let mut agent = ChatAgent::new(
+            sample_spec(),
+            sample_provider(),
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
         let fut = agent.run_user_text("hello");
         drop(fut);
     }
@@ -399,7 +433,13 @@ mod tests {
 
     #[test]
     fn update_system_prompt_on_new_agent() {
-        let mut agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
+        let mut agent = ChatAgent::new(
+            sample_spec(),
+            sample_provider(),
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
         agent.update_system_prompt("Hello system".to_string());
         let history = agent.get_history();
         assert!(!history.is_empty());
@@ -420,7 +460,7 @@ mod tests {
             instruction: Some("original".to_string()),
             tools: vec![],
         };
-        let mut agent = ChatAgent::new(spec, sample_provider(), vec![], vec![]);
+        let mut agent = ChatAgent::new(spec, sample_provider(), vec![], HashMap::new(), vec![]);
         let history_before = agent.get_history();
         assert_eq!(history_before.len(), 1); // System message from spec.instruction
 
@@ -438,7 +478,13 @@ mod tests {
 
     #[test]
     fn get_history_returns_clone() {
-        let agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
+        let agent = ChatAgent::new(
+            sample_spec(),
+            sample_provider(),
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
         let h1 = agent.get_history();
         let h2 = agent.get_history();
         // Both should be equal (same content)
@@ -447,7 +493,13 @@ mod tests {
 
     #[test]
     fn restore_history_sets_system_and_messages() {
-        let mut agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
+        let mut agent = ChatAgent::new(
+            sample_spec(),
+            sample_provider(),
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
         agent.restore_history(
             "System prompt".to_string(),
             vec![
@@ -466,7 +518,13 @@ mod tests {
 
     #[test]
     fn trim_history_preserves_system_and_recent_turns() {
-        let mut agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
+        let mut agent = ChatAgent::new(
+            sample_spec(),
+            sample_provider(),
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
         // Build 25 user/assistant pairs via restore_history (system + 25 turns = 51 messages)
         let messages: Vec<(String, String)> = (0..25)
             .flat_map(|i| {
@@ -497,7 +555,13 @@ mod tests {
 
     #[test]
     fn trim_history_no_op_when_under_limit() {
-        let mut agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
+        let mut agent = ChatAgent::new(
+            sample_spec(),
+            sample_provider(),
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
         let messages: Vec<(String, String)> = (0..5)
             .flat_map(|i| {
                 vec![
@@ -517,7 +581,13 @@ mod tests {
 
     #[test]
     fn restore_history_skips_tool_and_system_roles() {
-        let mut agent = ChatAgent::new(sample_spec(), sample_provider(), vec![], vec![]);
+        let mut agent = ChatAgent::new(
+            sample_spec(),
+            sample_provider(),
+            vec![],
+            HashMap::new(),
+            vec![],
+        );
         agent.restore_history(
             "System prompt".to_string(),
             vec![

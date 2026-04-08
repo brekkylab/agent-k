@@ -50,11 +50,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let provider = AgentProvider {
-        lm: LangModelProvider::API {
-            schema: LangModelAPISchema::ChatCompletion,
-            url: "https://api.openai.com/v1/chat/completions".parse()?,
-            api_key: Some("YOUR_API_KEY".to_string()),
-        },
+        lm: LangModelProvider::openai("YOUR_API_KEY".to_string()),
         tools: vec![],
     };
 
