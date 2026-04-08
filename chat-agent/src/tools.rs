@@ -1,6 +1,6 @@
 //! Main-agent tool definitions.
 //!
-//! Contains the default tools (`utc_now`, `add_integers`) and the `read_source`
+//! Contains the default tools (`web_search`) and the `read_source`
 //! tool. These are tools used directly by the parent ChatAgent — **not** by
 //! speedwagon sub-agents (which live in `speedwagon/`).
 //!
@@ -16,129 +16,21 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error_value;
 
 use ailoy::agent::ToolFunc;
-use ailoy::{ToolDescBuilder, ToolRuntime, ToolSet, Value};
+use ailoy::{ToolDescBuilder, ToolRuntime, ToolSet, Value, agent::BuiltinToolProvider};
 
-pub const DEFAULT_TOOL_UTC_NOW: &str = "utc_now";
-pub const DEFAULT_TOOL_ADD_INTEGERS: &str = "add_integers";
 pub const READ_SOURCE_TOOL: &str = "read_source";
 
 // ---------------------------------------------------------------------------
-// Default tool set (utc_now + add_integers)
+// Default tool set (web_search)
 // ---------------------------------------------------------------------------
 
 pub fn build_default_tool_set() -> ToolSet {
-    let mut tool_set = ToolSet::new();
-    tool_set.insert(
-        DEFAULT_TOOL_UTC_NOW.to_string(),
-        ToolRuntime::new(utc_now_desc(), utc_now_func()),
-    );
-    tool_set.insert(
-        DEFAULT_TOOL_ADD_INTEGERS.to_string(),
-        ToolRuntime::new(add_integers_desc(), add_integers_func()),
-    );
-    tool_set
+    ToolSet::new().with_builtin(&BuiltinToolProvider::WebSearch {})
 }
-
-fn utc_now_desc() -> ailoy::ToolDesc {
-    ToolDescBuilder::new(DEFAULT_TOOL_UTC_NOW)
-        .description("Return the current UTC Unix timestamp in seconds.")
-        .parameters(Value::object([
-            ("type", Value::string("object")),
-            ("properties", Value::object_empty()),
-        ]))
-        .returns(Value::object([
-            ("type", Value::string("object")),
-            (
-                "properties",
-                Value::object([(
-                    "unix_seconds",
-                    Value::object([("type", Value::string("number"))]),
-                )]),
-            ),
-        ]))
-        .build()
-}
-
-fn add_integers_desc() -> ailoy::ToolDesc {
-    ToolDescBuilder::new(DEFAULT_TOOL_ADD_INTEGERS)
-        .description("Add two integer values and return their sum.")
-        .parameters(Value::object([
-            ("type", Value::string("object")),
-            (
-                "properties",
-                Value::object([
-                    (
-                        "a",
-                        Value::object([("type", Value::string("number"))]),
-                    ),
-                    (
-                        "b",
-                        Value::object([("type", Value::string("number"))]),
-                    ),
-                ]),
-            ),
-            (
-                "required",
-                Value::array([Value::string("a"), Value::string("b")]),
-            ),
-        ]))
-        .returns(Value::object([
-            ("type", Value::string("object")),
-            (
-                "properties",
-                Value::object([
-                    (
-                        "sum",
-                        Value::object([("type", Value::string("number"))]),
-                    ),
-                    (
-                        "error",
-                        Value::object([("type", Value::string("string"))]),
-                    ),
-                ]),
-            ),
-        ]))
-        .build()
-}
-
-fn utc_now_func() -> Arc<ToolFunc> {
-    Arc::new(|_args: Value| {
-        Box::pin(async move {
-            match SystemTime::now().duration_since(UNIX_EPOCH) {
-                Ok(duration) => Value::object([("unix_seconds", Value::unsigned(duration.as_secs()))]),
-                Err(_) => Value::object([("error", Value::string("time_before_unix_epoch"))]),
-            }
-        })
-    })
-}
-
-fn add_integers_func() -> Arc<ToolFunc> {
-    Arc::new(|args: Value| Box::pin(async move { add_integers_result(args) }))
-}
-
-pub(crate) fn add_integers_result(args: Value) -> Value {
-    let Some(args_map) = args.as_object() else {
-        return error_value("invalid_arguments");
-    };
-
-    let Some(a) = args_map.get("a").and_then(Value::as_integer) else {
-        return error_value("invalid_arguments");
-    };
-    let Some(b) = args_map.get("b").and_then(Value::as_integer) else {
-        return error_value("invalid_arguments");
-    };
-
-    match a.checked_add(b) {
-        Some(sum) => Value::object([("sum", Value::integer(sum))]),
-        None => Value::object([("error", Value::string("overflow"))]),
-    }
-}
-
 
 // ---------------------------------------------------------------------------
 // read_source tool
@@ -182,10 +74,7 @@ fn read_source_desc(source_paths: &[(String, String, PathBuf)]) -> ailoy::ToolDe
                     "source_id",
                     Value::object([
                         ("type", Value::string("string")),
-                        (
-                            "description",
-                            Value::string("ID of the source to read"),
-                        ),
+                        ("description", Value::string("ID of the source to read")),
                         ("enum", Value::array(enum_values)),
                     ]),
                 )]),
@@ -221,4 +110,3 @@ fn read_source_func(source_paths: Vec<(String, String, PathBuf)>) -> Arc<ToolFun
         })
     })
 }
-

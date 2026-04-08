@@ -12,7 +12,7 @@ name = "knowledge-agent"
 path = "src/main.rs"
 
 [dependencies]
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "b0c5b92af2da82b7e45523cc9d71e24dea8e24e3" }
+ailoy = { workspace = true }
 dotenvy = "0.15"
 tantivy = "0.22"
 serde = { version = "1", features = ["derive"] }

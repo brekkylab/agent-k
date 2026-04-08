@@ -71,6 +71,12 @@ pub enum LangModelProvider {
     },
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BuiltinToolProvider {
+    WebSearch {},
+}
+
 /// Transport configuration for an MCP (Model Context Protocol) tool server.
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -87,7 +93,7 @@ pub enum MCPToolProvider {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ToolProvider {
     /// A tool baked into the agent runtime, referenced by `name`
-    Builtin { name: String },
+    Builtin(BuiltinToolProvider),
 
     /// A tool served by an external MCP server described by [`MCPToolProvider`]
     MCP(MCPToolProvider),
@@ -213,6 +219,22 @@ impl From<ailoy::LangModelProvider> for LangModelProvider {
     }
 }
 
+impl From<BuiltinToolProvider> for ailoy::agent::BuiltinToolProvider {
+    fn from(value: BuiltinToolProvider) -> Self {
+        match value {
+            BuiltinToolProvider::WebSearch {} => Self::WebSearch {},
+        }
+    }
+}
+
+impl From<ailoy::agent::BuiltinToolProvider> for BuiltinToolProvider {
+    fn from(value: ailoy::agent::BuiltinToolProvider) -> Self {
+        match value {
+            ailoy::agent::BuiltinToolProvider::WebSearch {} => Self::WebSearch {},
+        }
+    }
+}
+
 impl From<MCPToolProvider> for ailoy::agent::MCPToolProvider {
     fn from(value: MCPToolProvider) -> Self {
         match value {
@@ -234,7 +256,7 @@ impl From<ailoy::agent::MCPToolProvider> for MCPToolProvider {
 impl From<ToolProvider> for ailoy::ToolProvider {
     fn from(value: ToolProvider) -> Self {
         match value {
-            ToolProvider::Builtin { name } => Self::Builtin { name },
+            ToolProvider::Builtin(builtin) => Self::Builtin(builtin.into()),
             ToolProvider::MCP(mcp) => Self::MCP(mcp.into()),
         }
     }
@@ -243,7 +265,7 @@ impl From<ToolProvider> for ailoy::ToolProvider {
 impl From<ailoy::ToolProvider> for ToolProvider {
     fn from(value: ailoy::ToolProvider) -> Self {
         match value {
-            ailoy::ToolProvider::Builtin { name } => Self::Builtin { name },
+            ailoy::ToolProvider::Builtin(builtin) => Self::Builtin(builtin.into()),
             ailoy::ToolProvider::MCP(mcp) => Self::MCP(mcp.into()),
         }
     }
