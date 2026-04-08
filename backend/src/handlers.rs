@@ -14,13 +14,12 @@ use crate::agent::spec::{
     AgentProvider as ApiAgentProvider, LangModelProvider as ApiLangModelProvider,
 };
 use crate::models::{
-    AddSessionMessageRequest, Agent, AgentResponse,
-    CreateAgentRequest, CreateProviderProfileRequest,
-    CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse, ListSessionsQuery, MessageRole,
-    ProviderProfile, ProviderProfileResponse, SessionDetailResponse, SessionMessageResponse,
-    SessionResponse, SourceResponse, SourceType,
-    SpeedwagonIndexStatus, SpeedwagonResponse, SessionToolCall,
-    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
+    AddSessionMessageRequest, Agent, AgentResponse, CreateAgentRequest,
+    CreateProviderProfileRequest, CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse,
+    ListSessionsQuery, MessageRole, ProviderProfile, ProviderProfileResponse,
+    SessionDetailResponse, SessionMessageResponse, SessionResponse, SessionToolCall,
+    SourceResponse, SourceType, SpeedwagonIndexStatus, SpeedwagonResponse, UpdateAgentRequest,
+    UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
 use crate::services::session as session_service;
@@ -147,8 +146,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(web::post().to(add_message_streaming)),
         )
         .service(
-            web::resource("/sessions/{id}/tool-calls")
-                .route(web::get().to(get_session_tool_calls)),
+            web::resource("/sessions/{id}/tool-calls").route(web::get().to(get_session_tool_calls)),
         )
         .service(
             web::resource("/sources")
@@ -171,10 +169,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(web::put().to(update_speedwagon))
                 .route(web::delete().to(delete_speedwagon)),
         )
-        .service(
-            web::resource("/speedwagons/{id}/index")
-                .route(web::post().to(index_speedwagon)),
-        );
+        .service(web::resource("/speedwagons/{id}/index").route(web::post().to(index_speedwagon)));
 }
 
 #[utoipa::path(
@@ -586,31 +581,29 @@ async fn add_message_streaming(
 
     let event_stream = session_service::send_message_streaming(&state, id, content).await?;
 
-    let sse_stream = event_stream.map(|event_result| {
-        match event_result {
-            Ok(event) => {
-                let event_type = match &event {
-                    SseEvent::Thinking { .. } => "thinking",
-                    SseEvent::ToolCall { .. } => "tool_call",
-                    SseEvent::ToolResult { .. } => "tool_result",
-                    SseEvent::Message { .. } => "message",
-                    SseEvent::Done { .. } => "done",
-                    SseEvent::Error { .. } => "error",
-                };
-                let data = serde_json::to_string(&event).unwrap_or_default();
-                Ok::<_, actix_web::Error>(bytes::Bytes::from(format!(
-                    "event: {event_type}\ndata: {data}\n\n"
-                )))
-            }
-            Err(e) => {
-                let data = serde_json::to_string(&SseEvent::Error {
-                    message: e.to_string(),
-                })
-                .unwrap_or_default();
-                Ok(bytes::Bytes::from(format!(
-                    "event: error\ndata: {data}\n\n"
-                )))
-            }
+    let sse_stream = event_stream.map(|event_result| match event_result {
+        Ok(event) => {
+            let event_type = match &event {
+                SseEvent::Thinking { .. } => "thinking",
+                SseEvent::ToolCall { .. } => "tool_call",
+                SseEvent::ToolResult { .. } => "tool_result",
+                SseEvent::Message { .. } => "message",
+                SseEvent::Done { .. } => "done",
+                SseEvent::Error { .. } => "error",
+            };
+            let data = serde_json::to_string(&event).unwrap_or_default();
+            Ok::<_, actix_web::Error>(bytes::Bytes::from(format!(
+                "event: {event_type}\ndata: {data}\n\n"
+            )))
+        }
+        Err(e) => {
+            let data = serde_json::to_string(&SseEvent::Error {
+                message: e.to_string(),
+            })
+            .unwrap_or_default();
+            Ok(bytes::Bytes::from(format!(
+                "event: error\ndata: {data}\n\n"
+            )))
         }
     });
 
@@ -630,12 +623,13 @@ async fn add_message_streaming(
         (status = 200, description = "Tool calls for session"),
     )
 )]
-async fn get_session_tool_calls(
-    state: web::Data<AppState>,
-    path: web::Path<Uuid>,
-) -> HttpResponse {
+async fn get_session_tool_calls(state: web::Data<AppState>, path: web::Path<Uuid>) -> HttpResponse {
     let session_id = path.into_inner();
-    match state.repository.get_tool_calls_for_session(session_id).await {
+    match state
+        .repository
+        .get_tool_calls_for_session(session_id)
+        .await
+    {
         Ok(tool_calls) => HttpResponse::Ok().json(tool_calls),
         Err(error) => repository_error_response(error),
     }
@@ -652,10 +646,7 @@ async fn get_session_tool_calls(
         (status = 400, description = "No file in request", body = ErrorResponse)
     )
 )]
-async fn upload_source(
-    state: web::Data<AppState>,
-    mut payload: Multipart,
-) -> HttpResponse {
+async fn upload_source(state: web::Data<AppState>, mut payload: Multipart) -> HttpResponse {
     // Extract the first file field from the multipart stream
     let mut file_name = String::new();
     let mut file_bytes: Vec<u8> = Vec::new();
@@ -691,7 +682,10 @@ async fn upload_source(
     let upload_dir = state.upload_dir.clone();
     if let Err(error) = tokio::fs::create_dir_all(&upload_dir).await {
         tracing::error!("failed to create upload dir: {error}");
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "failed to create upload directory");
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to create upload directory",
+        );
     }
 
     let file_path = upload_dir.join(&stored_name);
@@ -780,16 +774,21 @@ async fn delete_source(state: web::Data<AppState>, path: web::Path<Uuid>) -> Htt
             // Reset index_status for any speedwagons that referenced this source
             if let Ok(speedwagons) = state.repository.list_speedwagons().await {
                 for sw in speedwagons {
-                    if sw.source_ids.contains(&id) && sw.index_status != SpeedwagonIndexStatus::NotIndexed {
-                        let _ = state.repository.update_speedwagon_index_status(
-                            sw.id,
-                            SpeedwagonIndexStatus::NotIndexed,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                        ).await;
+                    if sw.source_ids.contains(&id)
+                        && sw.index_status != SpeedwagonIndexStatus::NotIndexed
+                    {
+                        let _ = state
+                            .repository
+                            .update_speedwagon_index_status(
+                                sw.id,
+                                SpeedwagonIndexStatus::NotIndexed,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                            )
+                            .await;
                     }
                 }
             }
@@ -827,7 +826,8 @@ async fn create_speedwagon(
 async fn list_speedwagons(state: web::Data<AppState>) -> HttpResponse {
     match state.repository.list_speedwagons().await {
         Ok(list) => {
-            let response: Vec<SpeedwagonResponse> = list.iter().map(SpeedwagonResponse::from).collect();
+            let response: Vec<SpeedwagonResponse> =
+                list.iter().map(SpeedwagonResponse::from).collect();
             HttpResponse::Ok().json(response)
         }
         Err(error) => repository_error_response(error),
@@ -1465,7 +1465,10 @@ mod tests {
         // Runtime creation may succeed but the LLM call fails inside the stream
         if status == StatusCode::OK {
             let has_error = events.iter().any(|(e, _)| e == "error");
-            assert!(has_error, "expected error event in SSE stream on connection failure");
+            assert!(
+                has_error,
+                "expected error event in SSE stream on connection failure"
+            );
         } else {
             assert_eq!(status, StatusCode::BAD_GATEWAY);
         }
@@ -1519,7 +1522,9 @@ mod tests {
 
         let (status1, first_events) = stream_user_message(&app, &session_id, "turn-1").await;
         assert_eq!(status1, StatusCode::OK);
-        let first_done = first_events.iter().find(|(e, _)| e == "done")
+        let first_done = first_events
+            .iter()
+            .find(|(e, _)| e == "done")
             .expect("done event must be present for turn-1");
         assert_eq!(
             first_done.1["assistant_message"]["content"],
@@ -1528,7 +1533,9 @@ mod tests {
 
         let (status2, second_events) = stream_user_message(&app, &session_id, "turn-2").await;
         assert_eq!(status2, StatusCode::OK);
-        let second_done = second_events.iter().find(|(e, _)| e == "done")
+        let second_done = second_events
+            .iter()
+            .find(|(e, _)| e == "done")
             .expect("done event must be present for turn-2");
         assert_eq!(
             second_done.1["assistant_message"]["content"],
@@ -1738,10 +1745,8 @@ mod tests {
         let mut body = Vec::new();
         body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         body.extend_from_slice(
-            format!(
-                "Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
-            )
-            .as_bytes(),
+            format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n")
+                .as_bytes(),
         );
         body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
         body.extend_from_slice(content);
@@ -1785,14 +1790,20 @@ mod tests {
         // file_path must NOT be exposed in response
         assert!(body.get("file_path").is_none());
 
-        let source_id = body["id"].as_str().expect("source id must exist").to_string();
+        let source_id = body["id"]
+            .as_str()
+            .expect("source id must exist")
+            .to_string();
 
         // List sources
         let list_req = test::TestRequest::get().uri("/sources").to_request();
         let list_body: Value = test::call_and_read_body_json(&app, list_req).await;
         let sources = list_body.as_array().expect("sources should be array");
         assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0]["name"], Value::String("test-doc.pdf".to_string()));
+        assert_eq!(
+            sources[0]["name"],
+            Value::String("test-doc.pdf".to_string())
+        );
 
         // Get source by ID
         let get_req = test::TestRequest::get()
@@ -1874,7 +1885,10 @@ mod tests {
             }))
             .to_request();
         let create_body: Value = test::call_and_read_body_json(&app, create_req).await;
-        assert_eq!(create_body["name"], Value::String("마케팅 자료".to_string()));
+        assert_eq!(
+            create_body["name"],
+            Value::String("마케팅 자료".to_string())
+        );
         assert_eq!(
             create_body["description"],
             Value::String("마케팅 전략 관련 자료".to_string())

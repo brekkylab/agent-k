@@ -29,12 +29,22 @@ fn ensure_kb_config() {
             return;
         }
         // chat-agent/../backend/data/knowledge_agents.json
-        let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "backend", "data", "knowledge_agents.json"]
-            .iter()
-            .collect();
+        let path: PathBuf = [
+            env!("CARGO_MANIFEST_DIR"),
+            "..",
+            "backend",
+            "data",
+            "knowledge_agents.json",
+        ]
+        .iter()
+        .collect();
         // SAFETY: called exactly once before any parallel tests read this var.
         unsafe {
-            std::env::set_var("KNOWLEDGE_AGENTS_CONFIG", path.canonicalize().expect("knowledge_agents.json not found"));
+            std::env::set_var(
+                "KNOWLEDGE_AGENTS_CONFIG",
+                path.canonicalize()
+                    .expect("knowledge_agents.json not found"),
+            );
         }
     });
 }
@@ -50,13 +60,7 @@ fn create_agent(model: &str) -> ChatAgent {
     };
 
     let provider = AgentProvider {
-        lm: LangModelProvider::API {
-            schema: LangModelAPISchema::ChatCompletion,
-            url: "https://api.openai.com/v1/chat/completions"
-                .parse()
-                .unwrap(),
-            api_key: Some(api_key),
-        },
+        lm: LangModelProvider::openai(api_key),
         tools: vec![],
     };
 
@@ -73,9 +77,7 @@ async fn assert_routes_to(query: &str, expected_kb: &str) {
         .iter()
         .find(|e| e.tool == "ask_knowledge");
 
-    let entry = entry.expect(&format!(
-        "query={query:?} → ask_knowledge was never called"
-    ));
+    let entry = entry.expect(&format!("query={query:?} → ask_knowledge was never called"));
 
     let kb_id = entry.args.get("kb_id").and_then(|v| v.as_str());
     assert_eq!(
@@ -85,7 +87,10 @@ async fn assert_routes_to(query: &str, expected_kb: &str) {
     );
 
     // Verify the tool returned a result (not an error)
-    let result = entry.result.as_ref().expect("tool result should be present");
+    let result = entry
+        .result
+        .as_ref()
+        .expect("tool result should be present");
     assert!(
         result.get("answer").is_some(),
         "query={query:?} → tool result missing 'answer': {result}"
@@ -121,11 +126,7 @@ async fn routes_profit_question_to_finance() {
 #[tokio::test]
 #[ignore]
 async fn routes_character_question_to_novel() {
-    assert_routes_to(
-        "Who is the protagonist of Pride and Prejudice?",
-        "novel",
-    )
-    .await;
+    assert_routes_to("Who is the protagonist of Pride and Prejudice?", "novel").await;
 }
 
 #[tokio::test]
