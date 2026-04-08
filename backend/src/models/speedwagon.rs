@@ -23,6 +23,7 @@ pub struct Speedwagon {
     pub description: String,
     pub instruction: Option<String>,
     pub lm: Option<String>,
+    pub provider_profile_id: Option<Uuid>,
     pub source_ids: Vec<Uuid>,
     pub index_dir: Option<String>,
     pub corpus_dir: Option<String>,
@@ -43,6 +44,7 @@ pub struct SpeedwagonResponse {
     pub description: String,
     pub instruction: Option<String>,
     pub lm: Option<String>,
+    pub provider_profile_id: Option<Uuid>,
     pub source_ids: Vec<Uuid>,
     pub index_dir: Option<String>,
     pub corpus_dir: Option<String>,
@@ -62,6 +64,7 @@ impl From<&Speedwagon> for SpeedwagonResponse {
             description: s.description.clone(),
             instruction: s.instruction.clone(),
             lm: s.lm.clone(),
+            provider_profile_id: s.provider_profile_id,
             source_ids: s.source_ids.clone(),
             index_dir: s.index_dir.clone(),
             corpus_dir: s.corpus_dir.clone(),
@@ -85,6 +88,8 @@ pub struct CreateSpeedwagonRequest {
     pub instruction: Option<String>,
     pub lm: Option<String>,
     #[serde(default)]
+    pub provider_profile_id: Option<Uuid>,
+    #[serde(default)]
     pub source_ids: Vec<Uuid>,
 }
 
@@ -95,6 +100,8 @@ pub struct UpdateSpeedwagonRequest {
     pub description: String,
     pub instruction: Option<String>,
     pub lm: Option<String>,
+    #[serde(default)]
+    pub provider_profile_id: Option<Uuid>,
     #[serde(default)]
     pub source_ids: Vec<Uuid>,
 }

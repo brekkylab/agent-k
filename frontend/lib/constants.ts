@@ -1,7 +1,7 @@
 export const PROVIDER_MODELS = {
-  OpenAI: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
-  Anthropic: ["claude-sonnet-4-20250514", "claude-haiku-4-5-20251001"],
-  Gemini: ["gemini-2.5-flash", "gemini-2.5-pro"],
+  OpenAI: ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o4-mini", "o3", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"],
+  Anthropic: ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"],
+  Gemini: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3-flash-preview"],
 } as const;
 
 export type ProviderName = keyof typeof PROVIDER_MODELS;
@@ -28,6 +28,6 @@ export const PROVIDER_CONFIG: Record<
   },
   Gemini: {
     schema: "gemini",
-    url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+    url: "https://generativelanguage.googleapis.com/v1beta/models/",
   },
 } as const;

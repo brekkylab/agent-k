@@ -1,15 +1,14 @@
 //! Speedwagon dispatch — building the `ask_speedwagon` tool and executing sub-agent queries.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error_value;
 
 use ailoy::agent::ToolFunc;
-use ailoy::{LangModelAPISchema, LangModelProvider, ToolDescBuilder, ToolRuntime, Value};
+use ailoy::{LangModelProvider, ToolDescBuilder, ToolRuntime, Value};
 use knowledge_agent::{AgentConfig, SearchIndex, ToolConfig, build_agent, run_with_trace};
-use url::Url;
-
 use super::{ASK_SPEEDWAGON_TOOL, KbEntry, SubAgentProvider};
 
 /// Grounding rules injected into every Speedwagon sub-agent system prompt.
@@ -43,19 +42,22 @@ Example:
 </grounding_rules>"#;
 
 /// Build the `ask_speedwagon` tool from KB entries.
-/// `provider` carries the parent agent's API credentials so sub-agents
-/// use the same key instead of falling back to environment variables.
+/// `default_provider` carries the parent agent's API credentials.
+/// `default_model_name` is the parent agent's model, used as fallback when `KbEntry.spec.lm` is `None`.
+/// `kb_overrides` maps kb_id → per-KB SubAgentProvider for cross-provider support.
 /// Returns `None` if entries is empty.
 pub fn build_speedwagon_tool(
     entries: &[KbEntry],
-    provider: SubAgentProvider,
+    default_provider: SubAgentProvider,
+    default_model_name: String,
+    kb_overrides: HashMap<String, SubAgentProvider>,
 ) -> Option<(String, ToolRuntime)> {
     if entries.is_empty() {
         return None;
     }
 
     let desc = ask_speedwagon_desc(entries);
-    let func = ask_speedwagon_func(entries.to_vec(), provider);
+    let func = ask_speedwagon_func(entries.to_vec(), default_provider, default_model_name, kb_overrides);
     Some((
         ASK_SPEEDWAGON_TOOL.to_string(),
         ToolRuntime::new(desc, func),
@@ -114,10 +116,18 @@ fn ask_speedwagon_desc(entries: &[KbEntry]) -> ailoy::ToolDesc {
 }
 
 /// Returns a closure that spawns a speedwagon sub-agent per invocation.
-fn ask_speedwagon_func(entries: Vec<KbEntry>, provider: SubAgentProvider) -> Arc<ToolFunc> {
+/// Looks up `kb_overrides` first; falls back to `default_provider`.
+fn ask_speedwagon_func(
+    entries: Vec<KbEntry>,
+    default_provider: SubAgentProvider,
+    default_model_name: String,
+    kb_overrides: HashMap<String, SubAgentProvider>,
+) -> Arc<ToolFunc> {
     Arc::new(move |args: Value| {
         let entries = entries.clone();
-        let provider = provider.clone();
+        let default_provider = default_provider.clone();
+        let default_model_name = default_model_name.clone();
+        let kb_overrides = kb_overrides.clone();
         Box::pin(async move {
             let args_map = match args.as_object() {
                 Some(m) => m,
@@ -139,7 +149,10 @@ fn ask_speedwagon_func(entries: Vec<KbEntry>, provider: SubAgentProvider) -> Arc
                 None => return error_value(&format!("unknown kb_id: {kb_id}")),
             };
 
-            match dispatch_speedwagon(&entry, &question, &provider).await {
+            // Per-KB provider override; fall back to session's main provider
+            let provider = kb_overrides.get(&kb_id).unwrap_or(&default_provider);
+
+            match dispatch_speedwagon(&entry, &question, &default_model_name, provider).await {
                 Ok(answer) => Value::object([("answer", Value::string(answer))]),
                 Err(e) => {
                     tracing::error!("[speedwagon] sub-agent error for kb={kb_id}: {e}");
@@ -151,11 +164,12 @@ fn ask_speedwagon_func(entries: Vec<KbEntry>, provider: SubAgentProvider) -> Arc
 }
 
 /// Spawn a short-lived speedwagon sub-agent, run a single query, and return the answer.
-/// Uses `KbEntry.instruction` as system prompt override (falls back to AgentConfig default).
-/// Uses `KbEntry.lm` as model name override (falls back to parent agent's model).
+/// Uses `KbEntry.spec.instruction` as system prompt override (falls back to AgentConfig default).
+/// Uses `KbEntry.spec.lm` as model name override (falls back to `default_model_name`).
 pub async fn dispatch_speedwagon(
     entry: &KbEntry,
     question: &str,
+    default_model_name: &str,
     provider: &SubAgentProvider,
 ) -> anyhow::Result<String> {
     let index_path = Path::new(&entry.index_dir);
@@ -165,7 +179,7 @@ pub async fn dispatch_speedwagon(
 
     let default_config = AgentConfig::default();
 
-    let system_prompt = match &entry.instruction {
+    let system_prompt = match &entry.spec.instruction {
         Some(custom) if !custom.trim().is_empty() => format!(
             "{}\n\n{}\n\n<additional_instructions>\n{}\n</additional_instructions>",
             default_config.system_prompt,
@@ -177,15 +191,16 @@ pub async fn dispatch_speedwagon(
 
     let agent_config = AgentConfig {
         provider: LangModelProvider::API {
-            schema: LangModelAPISchema::ChatCompletion,
-            url: Url::parse(&provider.api_url).expect("invalid api_url in SubAgentProvider"),
+            schema: provider.schema.clone(),
+            url: provider.api_url.clone(),
             api_key: Some(provider.api_key.clone()),
         },
         system_prompt,
         model_name: entry
+            .spec
             .lm
             .clone()
-            .unwrap_or_else(|| provider.model_name.clone()),
+            .unwrap_or_else(|| default_model_name.to_string()),
     };
     let tool_config = ToolConfig::default();
 

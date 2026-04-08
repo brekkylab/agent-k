@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ailoy::{AgentProvider, LangModelAPISchema, LangModelProvider};
-use chat_agent::{ChatAgent, KbEntry};
+use chat_agent::{ChatAgent, KbEntry, SubAgentProvider, SubAgentSpec};
 use tokio::sync::Mutex as TokioMutex;
-use url::Url;
 use uuid::Uuid;
 
 use crate::models::{MessageRole, Session, SpeedwagonIndexStatus};
@@ -64,11 +63,8 @@ impl AppState {
 
     #[cfg(test)]
     pub async fn new_without_bootstrap(database_url: &str) -> RepositoryResult<Self> {
-        Self::new_without_bootstrap_with_upload_dir(
-            database_url,
-            PathBuf::from("./data/uploads"),
-        )
-        .await
+        Self::new_without_bootstrap_with_upload_dir(database_url, PathBuf::from("./data/uploads"))
+            .await
     }
 
     pub fn invalidate_session_runtime(&self, session_id: Uuid) {
@@ -123,24 +119,60 @@ impl AppState {
                 RepositoryError::InvalidData("provider profile not found for session".to_string())
             })?;
 
-        // Load built speedwagons for this session → KbEntry list
+        // Load built speedwagons for this session → KbEntry list + per-KB provider overrides
         let mut kb_entries: Vec<KbEntry> = Vec::new();
+        let mut kb_overrides: HashMap<String, SubAgentProvider> = HashMap::new();
         for &sw_id in &session.speedwagon_ids {
-            if let Ok(Some(sw)) = self.repository.get_speedwagon(sw_id).await {
-                if sw.index_status == SpeedwagonIndexStatus::Indexed {
-                    if let (Some(index_dir), Some(corpus_dir)) = (sw.index_dir.clone(), sw.corpus_dir.clone()) {
-                        // Read file names from corpus directory so the LLM can judge relevance
-                        let document_names = read_corpus_file_names(&corpus_dir);
-                        kb_entries.push(KbEntry {
-                            id: sw.id.to_string(),
-                            description: sw.description.clone(),
-                            index_dir,
-                            corpus_dirs: vec![corpus_dir],
-                            instruction: sw.instruction.clone(),
-                            lm: sw.lm.clone(),
-                            document_names,
-                        });
-                    }
+            let Ok(Some(sw)) = self.repository.get_speedwagon(sw_id).await else {
+                continue;
+            };
+            if sw.index_status != SpeedwagonIndexStatus::Indexed {
+                continue;
+            }
+            let (Some(index_dir), Some(corpus_dir)) = (sw.index_dir.clone(), sw.corpus_dir.clone())
+            else {
+                continue;
+            };
+
+            let document_names = read_corpus_file_names(&corpus_dir);
+            kb_entries.push(KbEntry {
+                id: sw.id.to_string(),
+                description: sw.description.clone(),
+                index_dir,
+                corpus_dirs: vec![corpus_dir],
+                spec: SubAgentSpec {
+                    lm: sw.lm.clone(),
+                    instruction: sw.instruction.clone(),
+                },
+                document_names,
+            });
+
+            // Build per-KB provider override if speedwagon has its own provider_profile_id
+            let Some(pp_id) = sw.provider_profile_id else {
+                continue;
+            };
+            match self.repository.get_provider_profile(pp_id).await {
+                Ok(Some(pp)) => {
+                    let LangModelProvider::API {
+                        schema,
+                        url,
+                        api_key,
+                    } = &pp.provider.lm;
+                    kb_overrides.insert(
+                        sw.id.to_string(),
+                        SubAgentProvider {
+                            api_key: api_key.clone().unwrap_or_default(),
+                            api_url: url.clone(),
+                            schema: schema.clone(),
+                        },
+                    );
+                }
+                _ => {
+                    tracing::warn!(
+                        speedwagon_id = %sw.id,
+                        provider_profile_id = %pp_id,
+                        "speedwagon references missing provider profile; using session default"
+                    );
                 }
             }
         }
@@ -160,10 +192,8 @@ impl AppState {
         }
 
         // Build assembled system prompt from 4 layers (Base + User + Dynamic Context + Reminder)
-        let assembled_instruction = build_system_prompt(
-            agent.spec.instruction.as_deref(),
-            &kb_entries,
-        );
+        let assembled_instruction =
+            build_system_prompt(agent.spec.instruction.as_deref(), &kb_entries);
 
         // Override spec.instruction with assembled prompt before ChatAgent creation.
         // DB stores raw user text (Layer ②); runtime receives assembled 4-layer prompt.
@@ -182,11 +212,14 @@ impl AppState {
             spec,
             provider_profile.provider,
             kb_entries,
+            kb_overrides,
             session_source_paths,
         )));
 
         // Restore conversation history from DB (last 20 turns = 40 user/assistant messages)
-        let recent_messages: Vec<(String, String)> = session.messages.iter()
+        let recent_messages: Vec<(String, String)> = session
+            .messages
+            .iter()
             .filter(|m| matches!(m.role, MessageRole::User | MessageRole::Assistant))
             .rev()
             .take(40)
@@ -230,23 +263,20 @@ impl AppState {
                 "OPENAI_API_KEY",
                 "openai-default",
                 LangModelAPISchema::ChatCompletion,
-                "https://api.openai.com/v1/chat/completions",
             ),
             (
                 "ANTHROPIC_API_KEY",
                 "anthropic-default",
                 LangModelAPISchema::Anthropic,
-                "https://api.anthropic.com/v1/messages",
             ),
             (
                 "GEMINI_API_KEY",
                 "gemini-default",
                 LangModelAPISchema::Gemini,
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
             ),
         ];
 
-        for (env_key, name, schema, url) in profile_definitions {
+        for (env_key, name, schema) in profile_definitions {
             let Ok(api_key) = std::env::var(env_key) else {
                 continue;
             };
@@ -254,14 +284,12 @@ impl AppState {
                 continue;
             }
 
-            let parsed_url = Url::parse(url)
-                .map_err(|_| RepositoryError::InvalidData(format!("invalid URL for `{name}`")))?;
-
             let provider = AgentProvider {
-                lm: LangModelProvider::API {
-                    schema,
-                    url: parsed_url,
-                    api_key: Some(api_key),
+                lm: match schema {
+                    LangModelAPISchema::Anthropic => LangModelProvider::anthropic(api_key),
+                    LangModelAPISchema::Gemini => LangModelProvider::gemini(api_key),
+                    LangModelAPISchema::OpenAI => LangModelProvider::openai(api_key),
+                    _ => panic!("unsupported api schema"),
                 },
                 tools: vec![],
             };
