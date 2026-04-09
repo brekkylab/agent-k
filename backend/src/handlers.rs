@@ -375,7 +375,7 @@ async fn create_session(
 ) -> Result<(StatusCode, Json<SessionResponse>), (StatusCode, Json<AppError>)> {
     let session = session_service::create_session(&state, payload)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(session_err)?;
     Ok((StatusCode::CREATED, Json(SessionResponse::from(&session))))
 }
 
@@ -914,6 +914,9 @@ mod tests {
         let counts_state = Arc::clone(&request_message_counts);
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should work");
+        listener
+            .set_nonblocking(true)
+            .expect("set_nonblocking should work");
         let addr = listener
             .local_addr()
             .expect("local addr should be available");

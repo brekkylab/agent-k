@@ -1,11 +1,10 @@
 use std::path::Path;
 use std::sync::Once;
 
-use ailoy::{LangModelAPISchema, LangModelProvider};
+use ailoy::LangModelProvider;
 use knowledge_agent::{
     IndexSettings, SearchIndex, SummarizeConfig, check_or_build_index, summarize_document,
 };
-use url::Url;
 
 const INDEX_DIR: &str = "/tmp/knowledge_agent_summarize_test_index";
 

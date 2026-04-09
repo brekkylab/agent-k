@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Once;
 
-use ailoy::{AgentProvider, AgentSpec, LangModelAPISchema, LangModelProvider};
+use ailoy::{AgentProvider, AgentSpec, LangModelProvider};
 use chat_agent::ChatAgent;
 
 static INIT_KB_CONFIG: Once = Once::new();
