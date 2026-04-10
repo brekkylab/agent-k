@@ -175,6 +175,7 @@ mod tests {
     fn make_kb_entry(id: &str, description: &str) -> KbEntry {
         KbEntry {
             id: id.to_string(),
+            name: id.to_string(),
             description: description.to_string(),
             index_dir: String::new(),
             corpus_dirs: vec![],

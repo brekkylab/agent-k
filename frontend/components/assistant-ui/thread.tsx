@@ -1,6 +1,7 @@
 "use client";
 
 import type { FC } from "react";
+import { useMemo } from "react";
 import { ArrowUpIcon } from "lucide-react";
 import {
   ThreadPrimitive,
@@ -12,6 +13,7 @@ import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer";
 import { ToolCallBlock } from "@/components/chat/tool-call-block";
+import { useAppStore } from "@/lib/store";
 
 export const Thread: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft }) => {
   return (
@@ -77,12 +79,28 @@ export const Composer: FC<{ composerLeft?: React.ReactNode }> = ({ composerLeft 
 };
 
 function ToolCallFallback({ toolName, args, result, status }: ToolCallMessagePartProps) {
+  const speedwagons = useAppStore((s) => s.speedwagons);
+
+  const { displayName, isSubagent } = useMemo(() => {
+    const match = toolName.match(/^ask_speedwagon_(.+)$/);
+    if (match) {
+      const id = match[1];
+      const sw = speedwagons?.find((s) => s.id === id);
+      return {
+        displayName: sw ? `Speedwagon(${sw.name})` : toolName,
+        isSubagent: true,
+      };
+    }
+    return { displayName: toolName, isSubagent: false };
+  }, [toolName, speedwagons]);
+
   return (
     <ToolCallBlock
-      tool={toolName}
+      tool={displayName}
       status={status?.type === "running" ? "calling" : "done"}
       args={args as Record<string, unknown> | undefined}
       result={result}
+      variant={isSubagent ? "subagent" : "default"}
     />
   );
 }
