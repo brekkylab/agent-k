@@ -137,6 +137,7 @@ impl AppState {
             let document_names = read_corpus_file_names(&corpus_dir);
             kb_entries.push(KbEntry {
                 id: sw.id.to_string(),
+                name: sw.name.clone(),
                 description: sw.description.clone(),
                 index_dir,
                 corpus_dirs: vec![corpus_dir],

@@ -10,9 +10,10 @@ interface ToolCallBlockProps {
   result?: unknown;
   error?: string;
   level?: "info" | "debug";
+  variant?: "default" | "subagent";
 }
 
-export function ToolCallBlock({ tool, status, args, result, error }: ToolCallBlockProps) {
+export function ToolCallBlock({ tool, status, args, result, error, variant = "default" }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
 
   const hasDetails = args !== undefined || (result !== undefined && result !== null) || error !== undefined;
@@ -32,8 +33,8 @@ export function ToolCallBlock({ tool, status, args, result, error }: ToolCallBlo
 
         {/* Tool name + status text */}
         <span className="flex-1 font-medium">
-          {status === "calling" && `${tool}에 질의 중...`}
-          {status === "done" && `${tool} 완료`}
+          {status === "calling" && (variant === "subagent" ? `${tool}에 물어보는 중..` : `${tool}에 질의 중...`)}
+          {status === "done" && (variant === "subagent" ? `${tool} 답변 완료` : `${tool} 완료`)}
           {status === "error" && `${tool} 오류`}
         </span>
 

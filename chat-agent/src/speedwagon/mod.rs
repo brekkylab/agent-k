@@ -1,9 +1,8 @@
 //! Speedwagon sub-agent integration.
 //!
-//! Exposes the `ask_speedwagon` tool to the parent ChatAgent — a short-lived
-//! sub-agent that queries a pre-indexed knowledge base.
-//!
-//! Each invocation is stateless — the sub-agent has no memory of prior calls.
+//! Registers one in-memory `AgentRuntime` per KB entry as a `SubagentTool` on
+//! the parent ChatAgent's `ToolSet`.  Each subagent is built upfront at
+//! `ChatAgent` construction time and persists for the lifetime of the agent.
 
 pub mod dispatch;
 pub mod indexing;
@@ -11,9 +10,7 @@ pub mod indexing;
 use serde::Deserialize;
 use url::Url;
 
-pub use dispatch::{build_speedwagon_tool, dispatch_speedwagon};
-
-pub const ASK_SPEEDWAGON_TOOL: &str = "ask_speedwagon";
+pub use dispatch::register_speedwagon_subagents;
 
 /// Sub-agent behavior spec — the "what" of a speedwagon sub-agent.
 /// Mirrors `AgentSpec` for the main agent: model choice and instruction.
@@ -29,6 +26,7 @@ pub struct SubAgentSpec {
 #[derive(Debug, Clone, Deserialize)]
 pub struct KbEntry {
     pub id: String,
+    pub name: String,
     pub description: String,
     pub index_dir: String,
     pub corpus_dirs: Vec<String>,
