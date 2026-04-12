@@ -13,7 +13,7 @@ use crate::models::{
     Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source,
     SourceType, Speedwagon, SpeedwagonIndexStatus,
 };
-use crate::repository::{Repository, RepositoryError, RepositoryResult};
+use crate::repository::{Repository, RepositoryError, RepositoryResult, normalize_spec};
 
 pub struct SqliteRepository {
     pool: SqlitePool,
@@ -563,6 +563,7 @@ impl Repository for SqliteRepository {
     async fn create_agent(&self, spec: AgentSpec) -> RepositoryResult<Agent> {
         let now = Self::now_string();
         let id = Uuid::new_v4();
+        let spec_json = normalize_spec(&spec)?;
 
         sqlx::query(
             r#"
@@ -571,18 +572,39 @@ impl Repository for SqliteRepository {
             "#,
         )
         .bind(id.to_string())
-        .bind(serde_json::to_string(&spec)?)
+        .bind(&spec_json)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
         .await?;
 
+        // Deserialize the normalized form so the returned Agent is consistent
+        let normalized_spec: AgentSpec = serde_json::from_str(&spec_json)?;
         Ok(Agent {
             id,
-            spec,
+            spec: normalized_spec,
             created_at: Self::parse_timestamp(now.clone(), "agents.created_at")?,
             updated_at: Self::parse_timestamp(now, "agents.updated_at")?,
         })
+    }
+
+    async fn find_agent_by_spec(
+        &self,
+        normalized_spec_json: &str,
+    ) -> RepositoryResult<Option<Agent>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, spec_json, created_at, updated_at
+            FROM agents
+            WHERE spec_json = ?
+            LIMIT 1;
+            "#,
+        )
+        .bind(normalized_spec_json)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(Self::row_to_agent).transpose()
     }
 
     async fn list_agents(&self) -> RepositoryResult<Vec<Agent>> {
@@ -991,6 +1013,7 @@ impl Repository for SqliteRepository {
         &self,
         id: Uuid,
         title: Option<String>,
+        agent_id: Option<Uuid>,
         provider_profile_id: Option<Uuid>,
         speedwagon_ids: Option<Vec<Uuid>>,
         source_ids: Option<Vec<Uuid>>,
@@ -1015,6 +1038,27 @@ impl Repository for SqliteRepository {
         if let Some(title) = title {
             sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
                 .bind(&title)
+                .bind(&now)
+                .bind(&id_str)
+                .execute(tx.as_mut())
+                .await?;
+        }
+
+        if let Some(new_agent_id) = agent_id {
+            // Verify agent exists before updating
+            let agent_exists: bool =
+                sqlx::query_scalar("SELECT COUNT(*) > 0 FROM agents WHERE id = ?")
+                    .bind(new_agent_id.to_string())
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            if !agent_exists {
+                tx.rollback().await?;
+                return Err(RepositoryError::InvalidData(format!(
+                    "agent not found: {new_agent_id}"
+                )));
+            }
+            sqlx::query("UPDATE sessions SET agent_id = ?, updated_at = ? WHERE id = ?")
+                .bind(new_agent_id.to_string())
                 .bind(&now)
                 .bind(&id_str)
                 .execute(tx.as_mut())

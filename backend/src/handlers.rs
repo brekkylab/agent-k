@@ -24,6 +24,7 @@ use crate::models::{
     UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
+use crate::services::agent::{self as agent_service};
 use crate::services::session::{self as session_service, SessionError, SseEvent};
 use crate::services::speedwagon::{self as speedwagon_service, SpeedwagonError};
 use crate::state::AppState;
@@ -197,12 +198,15 @@ async fn create_agent(
     Json(payload): Json<CreateAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentResponse>), (StatusCode, Json<AppError>)> {
     let CreateAgentRequest { spec } = payload;
-    let agent = state
-        .repository
-        .create_agent(spec)
+    let (agent, created) = agent_service::find_or_create_agent(&state, spec)
         .await
         .map_err(repo_err)?;
-    Ok((StatusCode::CREATED, Json(to_agent_response(&agent))))
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(to_agent_response(&agent))))
 }
 
 async fn list_agents(
@@ -1537,5 +1541,252 @@ mod tests {
         let list_resp = get_req(&app, "/sources").await;
         let list_body = response_json(list_resp).await;
         assert_eq!(list_body.as_array().expect("list should be array").len(), 1);
+    }
+
+    // ===================== find-or-create Agent Tests =====================
+
+    #[tokio::test]
+    async fn find_or_create_same_spec_returns_same_id() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let spec = json!({ "spec": { "lm": "gpt-4.1", "instruction": null, "tools": [] } });
+
+        let resp1 = post_json(&app, "/agents", spec.clone()).await;
+        assert_eq!(resp1.status(), StatusCode::CREATED);
+        let body1 = response_json(resp1).await;
+
+        let resp2 = post_json(&app, "/agents", spec.clone()).await;
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let body2 = response_json(resp2).await;
+
+        assert_eq!(
+            body1["id"], body2["id"],
+            "same spec must return same agent id"
+        );
+
+        // Verify only one row in DB
+        let list = response_json(get_req(&app, "/agents").await).await;
+        assert_eq!(list.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn find_or_create_tools_order_independent() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let resp1 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "tools": ["b", "a"] } }),
+        )
+        .await;
+        assert_eq!(resp1.status(), StatusCode::CREATED);
+        let id1 = response_json(resp1).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "tools": ["a", "b"] } }),
+        )
+        .await;
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let id2 = response_json(resp2).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert_eq!(id1, id2, "tools order must not affect agent identity");
+    }
+
+    #[tokio::test]
+    async fn find_or_create_empty_instruction_variants_match() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let resp1 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "instruction": null, "tools": [] } }),
+        )
+        .await;
+        assert_eq!(resp1.status(), StatusCode::CREATED);
+        let id1 = response_json(resp1).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Some("") should normalize to None
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "instruction": "", "tools": [] } }),
+        )
+        .await;
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let id2 = response_json(resp2).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert_eq!(
+            id1, id2,
+            "null and empty instruction must produce same agent"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_or_create_different_lm_creates_new_agent() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let resp1 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "tools": [] } }),
+        )
+        .await;
+        assert_eq!(resp1.status(), StatusCode::CREATED);
+        let id1 = response_json(resp1).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "claude-opus-4-5", "tools": [] } }),
+        )
+        .await;
+        assert_eq!(resp2.status(), StatusCode::CREATED);
+        let id2 = response_json(resp2).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert_ne!(id1, id2, "different lm must create a new agent");
+    }
+
+    // ===================== Session agent_id relink Tests =====================
+
+    #[tokio::test]
+    async fn update_session_agent_id_relinks_session() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let agent_id1 = create_agent(&app).await;
+        // Create a second agent with a different spec
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "claude-opus-4-5", "tools": [] } }),
+        )
+        .await;
+        let agent_id2 =
+            Uuid::parse_str(response_json(resp2).await["id"].as_str().expect("agent id")).unwrap();
+        assert_ne!(agent_id1, agent_id2);
+
+        let profile_id =
+            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
+
+        let session_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id1, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+        let session_id = Uuid::parse_str(session_body["id"].as_str().expect("session id")).unwrap();
+        assert_eq!(
+            session_body["agent_id"].as_str().unwrap(),
+            agent_id1.to_string()
+        );
+
+        // Relink to agent2
+        let update_resp = put_json(
+            &app,
+            &format!("/sessions/{session_id}"),
+            json!({ "agent_id": agent_id2 }),
+        )
+        .await;
+        assert_eq!(update_resp.status(), StatusCode::OK);
+        let updated = response_json(update_resp).await;
+        assert_eq!(updated["agent_id"].as_str().unwrap(), agent_id2.to_string());
+    }
+
+    // ===================== Cascade Delete Tests =====================
+
+    #[tokio::test]
+    async fn delete_session_cascade_deletes_orphaned_agent() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        // Create agent + profile + session
+        let agent_id = create_agent(&app).await;
+        let profile_id =
+            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
+
+        let session_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+        let session_id = Uuid::parse_str(session_body["id"].as_str().expect("session id")).unwrap();
+
+        // Delete the only session → agent should be deleted too
+        let del_resp = delete_req(&app, &format!("/sessions/{session_id}")).await;
+        assert_eq!(del_resp.status(), StatusCode::NO_CONTENT);
+
+        let agent_resp = get_req(&app, &format!("/agents/{agent_id}")).await;
+        assert_eq!(agent_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_session_keeps_agent_when_other_sessions_exist() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let agent_id = create_agent(&app).await;
+        let profile_id =
+            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
+
+        // Create two sessions for the same agent
+        let session1_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+        let session1_id =
+            Uuid::parse_str(session1_body["id"].as_str().expect("session id")).unwrap();
+
+        let _session2_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+
+        // Delete session1 only → agent must still exist
+        let del_resp = delete_req(&app, &format!("/sessions/{session1_id}")).await;
+        assert_eq!(del_resp.status(), StatusCode::NO_CONTENT);
+
+        let agent_resp = get_req(&app, &format!("/agents/{agent_id}")).await;
+        assert_eq!(agent_resp.status(), StatusCode::OK);
     }
 }

@@ -170,6 +170,7 @@ pub struct CreateSessionRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateSessionRequest {
     pub title: Option<String>,
+    pub agent_id: Option<Uuid>,
     pub provider_profile_id: Option<Uuid>,
     pub speedwagon_ids: Option<Vec<Uuid>>,
     pub source_ids: Option<Vec<Uuid>>,

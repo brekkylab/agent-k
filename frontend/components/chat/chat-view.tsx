@@ -9,7 +9,7 @@ import { IndexStatusBanner } from "@/components/chat/index-status-banner";
 import { ModelSelector } from "@/components/chat/model-selector";
 import { useAppStore } from "@/lib/store";
 import { toast } from "sonner";
-import { getSession, getAgent, updateAgent, updateSession } from "@/lib/api";
+import { getSession, getAgent, createAgent, updateSession } from "@/lib/api";
 import type { ProviderName } from "@/lib/constants";
 
 interface ChatViewProps {
@@ -60,15 +60,21 @@ export function ChatView({ sessionId }: ChatViewProps) {
       setSelectedModel(provider, model, profileId);
 
       try {
-        // 1. Agent 모델 변경
-        if (currentAgentId) {
-          await updateAgent(currentAgentId, { spec: { lm: model, tools: [] } });
-        }
+        // 1. 새 Agent 생성 (copy-on-write)
+        const agent = await createAgent({ spec: { lm: model, tools: [] } });
 
-        // 2. Provider가 변경된 경우 Session의 provider_profile_id 업데이트
+        // 2. Session에 새 Agent 연결 (agent_id 변경된 경우) + Provider 변경 시 provider_profile_id도 업데이트
+        const sessionUpdate: { agent_id?: string; provider_profile_id?: string } = {};
+        if (agent.id !== currentAgentId) {
+          sessionUpdate.agent_id = agent.id;
+          setCurrentAgentId(agent.id);
+        }
         if (profileId !== currentProfileId) {
-          await updateSession(sessionId, { provider_profile_id: profileId });
+          sessionUpdate.provider_profile_id = profileId;
           setCurrentProfileId(profileId);
+        }
+        if (Object.keys(sessionUpdate).length > 0) {
+          await updateSession(sessionId, sessionUpdate);
         }
       } catch {
         // Rollback on error

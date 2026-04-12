@@ -31,6 +31,13 @@ impl Repository for PostgresRepository {
         todo!("postgres implementation")
     }
 
+    async fn find_agent_by_spec(
+        &self,
+        _normalized_spec_json: &str,
+    ) -> RepositoryResult<Option<Agent>> {
+        todo!("postgres implementation")
+    }
+
     async fn update_agent(&self, _id: Uuid, _spec: AgentSpec) -> RepositoryResult<Option<Agent>> {
         todo!("postgres implementation")
     }
@@ -130,6 +137,7 @@ impl Repository for PostgresRepository {
         &self,
         _id: Uuid,
         _title: Option<String>,
+        _agent_id: Option<Uuid>,
         _provider_profile_id: Option<Uuid>,
         _speedwagon_ids: Option<Vec<Uuid>>,
         _source_ids: Option<Vec<Uuid>>,

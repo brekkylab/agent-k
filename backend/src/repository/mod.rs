@@ -20,6 +20,28 @@ pub use sqlite::SqliteRepository;
 
 const DEFAULT_DATABASE_URL: &str = "sqlite://./data/app.db";
 
+/// Normalize an AgentSpec for deterministic JSON comparison.
+///
+/// Rules applied:
+/// - `tools`: alphabetical sort + dedup (order-independent matching)
+/// - `instruction`: trim whitespace; empty string → None (unifies Some(""), Some("  "), None)
+/// - `lm`: preserved as-is (controlled by frontend constants)
+///
+/// NOTE: This depends on serde_json preserving struct field order
+/// (guaranteed for #[derive(Serialize)]).
+/// If ailoy's AgentSpec adds new fields (especially floating-point),
+/// this function MUST be reviewed.
+pub fn normalize_spec(spec: &AgentSpec) -> RepositoryResult<String> {
+    let mut normalized = spec.clone();
+    normalized.tools.sort();
+    normalized.tools.dedup();
+    normalized.instruction = normalized
+        .instruction
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    serde_json::to_string(&normalized).map_err(RepositoryError::from)
+}
+
 #[derive(Debug, Error)]
 pub enum RepositoryError {
     #[error("database error: {0}")]
@@ -42,6 +64,10 @@ pub trait Repository: Send + Sync {
     async fn create_agent(&self, spec: AgentSpec) -> RepositoryResult<Agent>;
     async fn list_agents(&self) -> RepositoryResult<Vec<Agent>>;
     async fn get_agent(&self, id: Uuid) -> RepositoryResult<Option<Agent>>;
+    async fn find_agent_by_spec(
+        &self,
+        normalized_spec_json: &str,
+    ) -> RepositoryResult<Option<Agent>>;
     async fn update_agent(&self, id: Uuid, spec: AgentSpec) -> RepositoryResult<Option<Agent>>;
     async fn delete_agent(&self, id: Uuid) -> RepositoryResult<bool>;
     async fn has_sessions_for_agent(&self, agent_id: Uuid) -> RepositoryResult<bool>;
@@ -99,6 +125,7 @@ pub trait Repository: Send + Sync {
         &self,
         id: Uuid,
         title: Option<String>,
+        agent_id: Option<Uuid>,
         provider_profile_id: Option<Uuid>,
         speedwagon_ids: Option<Vec<Uuid>>,
         source_ids: Option<Vec<Uuid>>,
