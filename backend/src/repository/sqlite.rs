@@ -646,7 +646,7 @@ impl Repository for SqliteRepository {
             WHERE id = ?;
             "#,
         )
-        .bind(serde_json::to_string(&spec)?)
+        .bind(normalize_spec(&spec)?)
         .bind(now)
         .bind(id.to_string())
         .execute(&self.pool)

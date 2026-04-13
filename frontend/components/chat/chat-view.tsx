@@ -67,14 +67,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const sessionUpdate: { agent_id?: string; provider_profile_id?: string } = {};
         if (agent.id !== currentAgentId) {
           sessionUpdate.agent_id = agent.id;
-          setCurrentAgentId(agent.id);
         }
         if (profileId !== currentProfileId) {
           sessionUpdate.provider_profile_id = profileId;
-          setCurrentProfileId(profileId);
         }
         if (Object.keys(sessionUpdate).length > 0) {
           await updateSession(sessionId, sessionUpdate);
+        }
+
+        // Update local state only after successful backend call
+        if (sessionUpdate.agent_id) {
+          setCurrentAgentId(agent.id);
+        }
+        if (sessionUpdate.provider_profile_id) {
+          setCurrentProfileId(profileId);
         }
       } catch {
         // Rollback on error

@@ -32,6 +32,7 @@ pub async fn cleanup_orphaned_agent(state: &AppState, agent_id: Uuid) {
                 tracing::warn!(agent_id = %agent_id, "failed to cleanup orphaned agent: {e}");
             }
         }
-        _ => {} // has sessions or error — skip
+        Ok(true) => {} // has sessions — skip
+        Err(e) => tracing::warn!(agent_id = %agent_id, "failed to check orphan status: {e}"),
     }
 }

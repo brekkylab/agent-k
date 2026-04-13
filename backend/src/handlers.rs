@@ -420,7 +420,7 @@ async fn update_session(
 ) -> Result<Json<SessionResponse>, (StatusCode, Json<AppError>)> {
     let session = session_service::update_session(&state, id, payload)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(session_err)?;
     Ok(Json(SessionResponse::from(&session)))
 }
 
@@ -430,7 +430,7 @@ async fn delete_session(
 ) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
     session_service::delete_session(&state, id)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(session_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
