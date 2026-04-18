@@ -80,9 +80,9 @@ pub fn build_open_document_tool(
     let desc = ToolDescBuilder::new("open_document")
             .description(
                 "Read a range of lines from a specific document. \
-                 Returns line-numbered content. \
+                 Returns line-numbered content. Max 200 lines per call. \
                  Use filepath from search_document results and line numbers from find_in_document. \
-                 Keep ranges small (20-40 lines) to be efficient."
+                 Keep ranges small (20-40 lines); make multiple calls if needed."
             )
             .parameters(json!({
                 "type": "object",

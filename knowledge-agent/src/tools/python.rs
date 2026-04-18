@@ -311,6 +311,7 @@ pub fn build_run_python_tool() -> ToolRuntime {
     let desc = ToolDescBuilder::new("run_python")
         .description(
             "Write and execute Python code for data processing, complex calculations, or multi-step logic. \
+             Always use print() to output results — stdout is the only return channel. \
              Only safe modules are allowed (math, json, re, datetime, collections, etc.). \
              File I/O, network access, and system calls are blocked.",
         )
