@@ -65,39 +65,9 @@ pub fn summarize_tool_call(name: &str, input: &serde_json::Value) -> String {
                 _ => format!("open_document(filepath=\"{}\")", filepath),
             }
         }
-        "run_bash" => {
-            let command = input["command"].as_str().unwrap_or("?");
-            let truncated = if command.len() > 80 {
-                format!("{}...", &command[..80])
-            } else {
-                command.to_string()
-            };
-            format!("run_bash(command=\"{}\")", truncated)
-        }
-        "run_python" => {
-            let code = input["code"].as_str().unwrap_or("?");
-            let first_line = code.lines().next().unwrap_or("?");
-            let lines = code.lines().count();
-            if lines > 1 {
-                format!("run_python(\"{}\" +{} lines)", first_line, lines - 1)
-            } else {
-                format!("run_python(\"{}\")", first_line)
-            }
-        }
         "calculate" => {
             let expr = input["expression"].as_str().unwrap_or("?");
             format!("calculate(\"{}\")", expr)
-        }
-        "summarize_document" => {
-            let filepath = input["filepath"].as_str().unwrap_or("?");
-            let focus = input["focus"].as_str();
-            match focus {
-                Some(f) => format!(
-                    "summarize_document(filepath=\"{}\", focus=\"{}\")",
-                    filepath, f
-                ),
-                None => format!("summarize_document(filepath=\"{}\")", filepath),
-            }
         }
         _ => {
             format!("{}({})", name, input)
@@ -189,31 +159,6 @@ pub fn summarize_tool_result(name: &str, output: &serde_json::Value) -> String {
                 filepath, start, end, total, content_len, suffix
             )
         }
-        "run_bash" | "run_python" => {
-            if let Some(err) = output["error"].as_str() {
-                return format!("→ error: {}", err);
-            }
-            let exit_code = output["exit_code"].as_i64().unwrap_or(-1);
-            let timed_out = output["timed_out"].as_bool().unwrap_or(false);
-            let stdout_len = output["stdout"].as_str().map(|s| s.len()).unwrap_or(0);
-            let stderr_len = output["stderr"].as_str().map(|s| s.len()).unwrap_or(0);
-            if timed_out {
-                "→ timed out".to_string()
-            } else if exit_code == -1 {
-                let stderr = output["stderr"].as_str().unwrap_or("");
-                let preview = if stderr.len() > 100 {
-                    format!("{}...", &stderr[..100])
-                } else {
-                    stderr.to_string()
-                };
-                format!("→ BLOCKED: {}", preview)
-            } else {
-                format!(
-                    "→ exit={} stdout={} chars stderr={} chars",
-                    exit_code, stdout_len, stderr_len
-                )
-            }
-        }
         "calculate" => {
             if let Some(result) = output["result"].as_f64() {
                 let expr = output["expression"].as_str().unwrap_or("?");
@@ -221,28 +166,6 @@ pub fn summarize_tool_result(name: &str, output: &serde_json::Value) -> String {
             } else {
                 let err = output["error"].as_str().unwrap_or("unknown error");
                 format!("→ error: {}", err)
-            }
-        }
-        "summarize_document" => {
-            if let Some(err) = output["error"].as_str() {
-                format!("→ error: {}", err)
-            } else {
-                let filepath = output["filepath"].as_str().unwrap_or("?");
-                let lines = output["original_lines"].as_u64().unwrap_or(0);
-                let chunks = output["chunks_processed"].as_u64().unwrap_or(0);
-                let summary_len = output["summary"].as_str().map(|s| s.len()).unwrap_or(0);
-                let failed = output["chunks_failed"].as_u64().unwrap_or(0);
-                let truncated = output["reduce_truncated"].as_bool().unwrap_or(false);
-                let failed_note = if failed > 0 {
-                    format!(" [{} chunks failed]", failed)
-                } else {
-                    String::new()
-                };
-                let trunc_note = if truncated { " [reduce truncated]" } else { "" };
-                format!(
-                    "→ {} ({} lines, {} chunks) summary={} chars{}{}",
-                    filepath, lines, chunks, summary_len, failed_note, trunc_note
-                )
             }
         }
         _ => {
@@ -282,10 +205,7 @@ pub fn print_step(step_num: usize, step: &Step) {
                 "glob_document" => "RESULT_GLOB",
                 "find_in_document" => "RESULT_FIND",
                 "open_document" => "RESULT_OPEN",
-                "run_bash" => "RESULT_BASH",
-                "run_python" => "RESULT_PYTHON",
                 "calculate" => "RESULT_CALC",
-                "summarize_document" => "RESULT_SUMMARY",
                 _ => "RESULT",
             };
             println!("  [{}] {}: {}", step_num, label, summary);

@@ -505,7 +505,7 @@ pub fn build_calculate_tool() -> ToolRuntime {
              ceil, floor, round, trunc, sign, degrees, radians, \
              hypot, gcd, lcm, min, max, pow, factorial. \
              Constants: pi, e. \
-             Use this for simple arithmetic instead of run_python.",
+             Use this for any arithmetic that appears in your reasoning.",
         )
         .parameters(json!({
             "type": "object",
