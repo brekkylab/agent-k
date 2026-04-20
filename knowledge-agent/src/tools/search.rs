@@ -18,9 +18,9 @@ use super::common::{extract_optional_i64, extract_required_str, result_to_value}
 pub struct SearchResult {
     pub filepath: String,
     pub score: f32,
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, default)]
     pub content_preview: String,
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing, default)]
     pub content: String,
 }
 

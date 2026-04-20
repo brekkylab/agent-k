@@ -15,7 +15,7 @@ use serde::Deserialize;
 // ─── Paths ───────────────────────────────────────────────────────────────────
 
 fn md_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/financebench")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../backend/data/financebench/md")
 }
 
 fn finance_index_dir() -> PathBuf {
