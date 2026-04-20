@@ -15,11 +15,11 @@ use serde::Deserialize;
 // ─── Paths ───────────────────────────────────────────────────────────────────
 
 fn md_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/financebench")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../backend/data/corpus/finance")
 }
 
 fn finance_index_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/financebench/index/e2e_react")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../backend/data/index/finance")
 }
 
 fn books_dir() -> String {

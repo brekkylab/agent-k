@@ -351,9 +351,9 @@ async fn test_search_find_open_tool_chain() {
     );
 
     // Step 3: open
-    let ctx_start = matches[0]["context_start"].as_u64().unwrap();
-    let ctx_end = matches[0]["context_end"].as_u64().unwrap();
-    let args = ailoy::to_value!({ "filepath": filepath, "start_line": ctx_start, "end_line": ctx_end + 10 });
+    let ctx_start = first_line.saturating_sub(2);
+    let ctx_end = first_line + 10;
+    let args = ailoy::to_value!({ "filepath": filepath, "start_line": ctx_start, "end_line": ctx_end });
     let result_msg = open_tool
         .run(Part::function("open_document", args))
         .await
