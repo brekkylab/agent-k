@@ -45,8 +45,7 @@ fn load_kb_entries() -> Vec<KbEntry> {
         .to_path_buf();
 
     let raw = fs::read_to_string(&config_path).expect("read knowledge_agents.json");
-    let entries: Vec<RawKbEntry> =
-        serde_json::from_str(&raw).expect("parse knowledge_agents.json");
+    let entries: Vec<RawKbEntry> = serde_json::from_str(&raw).expect("parse knowledge_agents.json");
 
     entries
         .into_iter()
@@ -79,13 +78,7 @@ fn create_agent(model: &str) -> ChatAgent {
         tools: vec![],
     };
 
-    ChatAgent::new(
-        spec,
-        provider,
-        load_kb_entries(),
-        HashMap::new(),
-        vec![],
-    )
+    ChatAgent::new(spec, provider, load_kb_entries(), HashMap::new(), vec![])
 }
 
 async fn assert_routes_to(query: &str, expected_kb: &str) {
@@ -94,14 +87,22 @@ async fn assert_routes_to(query: &str, expected_kb: &str) {
     assert!(result.is_ok(), "run_user_text failed: {result:?}");
 
     let expected_tool = format!("ask_speedwagon_{expected_kb}");
-    let called: Vec<&str> = agent
+    let entry = agent
         .tool_call_log()
         .iter()
-        .map(|e| e.tool.as_str())
-        .collect();
+        .find(|e| e.tool == expected_tool);
+
+    let entry = entry.expect(&format!(
+        "query={query:?} → {expected_tool:?} was never called"
+    ));
+
+    let result = entry
+        .result
+        .as_ref()
+        .expect("tool result should be present");
     assert!(
-        called.contains(&expected_tool.as_str()),
-        "query={query:?} → expected tool {expected_tool:?} not in calls {called:?}"
+        result.as_str().map(|s| !s.is_empty()).unwrap_or(false),
+        "query={query:?} → tool returned empty result: {result}"
     );
 }
 
