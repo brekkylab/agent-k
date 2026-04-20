@@ -41,25 +41,11 @@ fn infer_tool_name(output: &serde_json::Value, positional: Option<&String>) -> S
     if output.get("content").is_some() && output.get("start_line").is_some() {
         return "open_document".to_string();
     }
-    // New tools: stdout/stderr + exit_code pattern
-    if output.get("exit_code").is_some() && output.get("timed_out").is_some() {
-        // Both run_bash and run_python share this shape — prefer positional name
-        if let Some(name) = positional {
-            if name == "run_bash" || name == "run_python" {
-                return name.clone();
-            }
-        }
-        return "run_bash".to_string(); // fallback
-    }
     // calculate: has "result" + "expression" or "error" + "expression"
     if output.get("expression").is_some()
         && (output.get("result").is_some() || output.get("error").is_some())
     {
         return "calculate".to_string();
-    }
-    // summarize_document: has "summary" + "chunks_processed"
-    if output.get("summary").is_some() && output.get("chunks_processed").is_some() {
-        return "summarize_document".to_string();
     }
     positional.cloned().unwrap_or_else(|| "unknown".to_string())
 }

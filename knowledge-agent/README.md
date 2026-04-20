@@ -1,6 +1,6 @@
 # knowledge-agent
 
-A RAG agent that indexes/searches documents and autonomously finds answers using an 8-tool chain with LLM.
+A RAG agent that indexes/searches documents and autonomously finds answers using a 5-tool chain with LLM.
 Validated on two benchmarks: NovelQA (novels) and FinanceBench (SEC financial filings).
 
 ## Stack
@@ -17,18 +17,15 @@ Validated on two benchmarks: NovelQA (novels) and FinanceBench (SEC financial fi
 ```
 .txt / .md files → unified indexing (indexer) → BM25 search (SearchIndex)
                                                     ↓
-                                             ailoy Tool (8 tools)
+                                             ailoy Tool (5 tools)
                                     ┌─ Discovery ──────────────────────────┐
                                     │  glob_document    ← filename glob    │
                                     │  search_document  ← BM25 search     │
                                     ├─ Inspection ─────────────────────────┤
                                     │  find_in_document ← pattern matching │
                                     │  open_document    ← line range read  │
-                                    │  summarize_document ← chunk summary  │
                                     ├─ Computation ────────────────────────┤
                                     │  calculate        ← math expression │
-                                    │  run_python       ← Python sandbox  │
-                                    │  run_bash         ← shell (readonly)│
                                     └──────────────────────────────────────┘
                                                     ↓
                                         runner.rs: run_with_trace()
@@ -39,7 +36,7 @@ Validated on two benchmarks: NovelQA (novels) and FinanceBench (SEC financial fi
 
 ---
 
-## Tools (8)
+## Tools (5)
 
 ### Discovery tools
 
@@ -63,45 +60,13 @@ Returns matched line with position (line:col) and context. Supports cursor pagin
 #### 4. `open_document`
 Line range reading. Truncates when exceeding max_content_chars.
 
-#### 5. `summarize_document`
-Summarize a document via map-reduce: split into chunks, summarize each in parallel, then reduce.
-- Parallel chunk processing with `buffer_unordered(5)` rate limiting
-- Best-effort: partial results returned even if some chunks fail
-- Single-pass for documents under 4000 lines; chunked for larger
-- Optional `focus` parameter to guide the summary topic
-- Configurable `max_length` (default 500 chars)
-
 ### Computation tools
 
-#### 6. `calculate`
+#### 5. `calculate`
 Pure Rust math expression evaluator. No external process.
 - Operators: `+`, `-`, `*`, `/`, `%`, `^`
 - Functions: `sqrt`, `abs`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `log` (1-arg=ln, 2-arg=custom base), `log2`, `log10`, `ln`, `exp`, `ceil`, `floor`, `round`, `trunc`, `sign`, `min`, `max`, `pow`, `hypot`, `gcd`, `lcm`, `factorial`, `degrees`, `radians`
 - Constants: `pi`, `e`
-
-#### 7. `run_python`
-Write and execute Python code in a sandboxed tmpdir.
-- **Allowed modules**: math, statistics, decimal, fractions, re, string, textwrap, difflib, json, csv, collections, itertools, functools, datetime, time, hashlib, base64, pprint, operator, io (StringIO/BytesIO only)
-- **Blocked**: os, sys, subprocess, shutil, pathlib, socket, http, requests, urllib, and all network/file I/O
-- **Blocked builtins**: `open()`, `exec()`, `eval()`, `compile()`, `__import__()`, `time.sleep()`, sandbox escape patterns (`__subclasses__`, `__class__`, `__mro__`, etc.)
-- Memory limit: 512 MB via `resource.setrlimit(RLIMIT_AS)`
-- Configurable timeout (default 30s)
-
-#### 8. `run_bash`
-Execute read-only shell commands with 3-layer security:
-
-**Layer 1 — Command whitelist (45 commands)**: cat, head, tail, nl, wc, file, stat, grep, rg, find, ls, tree, pwd, du, sed, cut, sort, uniq, tr, paste, column, fmt, fold, rev, diff, comm, cmp, iconv, strings, jq, yq, csvtool, xmllint, md5sum, sha256sum, echo, printf, bc, expr, seq, date, true, false, test, xargs, tar, zcat, zgrep, unzip
-
-**Layer 2 — Flag/composition validation**: blocks `sed -i`, `sed /e`, `tar -x/-c`, `unzip` (without `-l`), `> / >>` redirects, `| sh`, `xargs rm`, `find -exec rm`, `find -delete/-execdir`, `tee`, etc. Quoted strings are stripped before metachar checks to prevent false positives.
-
-**Layer 3 — Runtime protection**: tmpdir execution, read-only filesystem permissions on knowledge base, child process kill on timeout.
-
-### Security policy
-
-All tools enforce **read-only access** to the knowledge base:
-- Original source files, `.md` documents, and Tantivy indexes are never modified
-- `run_bash` and `run_python` are sandboxed with whitelist validation
-- `calculate` is a pure function with no I/O
 
 ---
 
@@ -194,25 +159,19 @@ knowledge-agent/
 │   │   ├── runner.rs            # run_with_trace() — execution + retry
 │   │   └── tracer.rs            # Step enum, tool tracing, infer_tool_name()
 │   ├── tools/
-│   │   ├── mod.rs               # ToolConfig, build_tool_set() (8 tools)
+│   │   ├── mod.rs               # ToolConfig, build_tool_set() (5 tools)
 │   │   ├── common.rs            # parameter extraction helpers
 │   │   ├── glob.rs              # glob_document
 │   │   ├── search.rs            # search_document (BM25)
 │   │   ├── find.rs              # find_in_document
 │   │   ├── open.rs              # open_document
-│   │   ├── summarize.rs         # summarize_document
-│   │   ├── calculate.rs         # calculate
-│   │   ├── python.rs            # run_python
-│   │   └── bash.rs              # run_bash
+│   │   └── calculate.rs         # calculate
 │   ├── tui/
 │   │   ├── mod.rs               # REPL loop
 │   │   └── app.rs               # AppConfig
 │   └── main.rs                  # CLI entry point
 └── tests/
-    ├── bash_tests.rs            # whitelist/greyzone/timeout
-    ├── python_tests.rs          # module whitelist/sandbox
     ├── calculator_tests.rs      # expression evaluation
-    ├── summarize_tests.rs       # config smoke test
     ├── find_open_tests.rs       # find/open unit + integration
     ├── find_comparison_test.rs  # find regex behavior
     ├── search_tests.rs          # SearchIndex + ailoy Tool
@@ -230,12 +189,8 @@ cargo build --manifest-path knowledge-agent/Cargo.toml
 # Index only (from repo root)
 cargo run --manifest-path knowledge-agent/Cargo.toml -- --index-only
 
-# Unit tests (new tools, from repo root)
-cargo test --manifest-path knowledge-agent/Cargo.toml --test bash_tests -- --nocapture
-cargo test --manifest-path knowledge-agent/Cargo.toml --test python_tests -- --nocapture
+# Unit tests (from repo root)
 cargo test --manifest-path knowledge-agent/Cargo.toml --test calculator_tests -- --nocapture
-
-# Unit tests (existing, from repo root)
 cargo test --manifest-path knowledge-agent/Cargo.toml --test find_open_tests -- --nocapture
 cargo test --manifest-path knowledge-agent/Cargo.toml --test search_tests -- --nocapture
 

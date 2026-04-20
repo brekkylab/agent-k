@@ -49,19 +49,11 @@ async fn main() -> Result<()> {
     }
 
     // 1. Load config (file or default)
-    let mut app_config = if let Some(config_path) = &cli.config {
+    let app_config = if let Some(config_path) = &cli.config {
         AppConfig::from_file(config_path)?
     } else {
         AppConfig::default()
     };
-
-    // Use AgentConfig's model provider if summarize_config is not specified
-    if app_config.tool.summarize_config.is_none() {
-        app_config.tool.summarize_config = Some(knowledge_agent::SummarizeConfig {
-            model_name: app_config.agent.model_name.clone(),
-            model_provider: app_config.agent.provider.clone(),
-        })
-    }
 
     // 2. Determine target paths
     let target_dirs: Vec<PathBuf> = cli
