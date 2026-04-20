@@ -22,7 +22,7 @@ pub mod read;
 
 use ailoy::{ToolSet, agent::BuiltinToolProvider};
 
-pub use open::{OPEN_DOCUMENT_TOOL, build_open_document_tool};
+pub use open::{OPEN_FILE_TOOL, build_open_file_tool};
 pub use read::{READ_SOURCE_TOOL, build_read_source_tool};
 
 // ---------------------------------------------------------------------------

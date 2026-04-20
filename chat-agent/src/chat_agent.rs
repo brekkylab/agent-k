@@ -342,7 +342,7 @@ async fn build_tool_set(
     if let Some((name, runtime)) = tools::build_read_source_tool(session_source_paths) {
         tool_set.insert(name, runtime);
     }
-    let (name, runtime) = tools::build_open_document_tool();
+    let (name, runtime) = tools::build_open_file_tool();
     tool_set.insert(name, runtime);
     let tool_names = tool_set.names();
     Ok((tool_names, tool_set))

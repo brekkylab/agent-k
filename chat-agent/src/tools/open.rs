@@ -1,7 +1,7 @@
-//! `open_document` tool — read a range of lines from a local `.md` / `.txt` file.
+//! `open_file` tool — read a range of lines from a local `.md` / `.txt` file.
 //!
 //! Intended pairing: `convert_pdf_to_md` returns `{ md_path, size_chars }`;
-//! the LLM then calls `open_document(filepath=md_path, start_line, end_line)`
+//! the LLM then calls `open_file(filepath=md_path, start_line, end_line)`
 //! to read slices of the converted markdown.
 //!
 //! Extension whitelist (`ALLOWED_EXTENSIONS`) blocks arbitrary file reads.
@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::error_value;
 
-pub const OPEN_DOCUMENT_TOOL: &str = "open_document";
+pub const OPEN_FILE_TOOL: &str = "open_file";
 
 const MAX_CONTENT_CHARS: usize = 40000;
 const MAX_LINES_PER_OPEN: usize = 200;
@@ -96,17 +96,17 @@ fn result_to_value(result: &OpenResult) -> Value {
     serde_json::from_value::<Value>(json).unwrap_or(Value::Null)
 }
 
-pub fn build_open_document_tool() -> (String, ToolRuntime) {
-    let desc = open_document_desc();
-    let func = open_document_func();
+pub fn build_open_file_tool() -> (String, ToolRuntime) {
+    let desc = open_file_desc();
+    let func = open_file_func();
     (
-        OPEN_DOCUMENT_TOOL.to_string(),
+        OPEN_FILE_TOOL.to_string(),
         ToolRuntime::new_async(desc, func),
     )
 }
 
-fn open_document_desc() -> ToolDesc {
-    ToolDescBuilder::new(OPEN_DOCUMENT_TOOL)
+fn open_file_desc() -> ToolDesc {
+    ToolDescBuilder::new(OPEN_FILE_TOOL)
         .description(format!(
             "Read a range of lines from a local .md or .txt file. Returns line-numbered content. \
              Use this to read the markdown produced by `convert_pdf_to_md` (pass its `md_path` as filepath). \
@@ -156,7 +156,7 @@ fn open_document_desc() -> ToolDesc {
         .build()
 }
 
-fn open_document_func() -> Arc<ToolAsyncFunc> {
+fn open_file_func() -> Arc<ToolAsyncFunc> {
     Arc::new(move |args: Value| {
         Box::pin(async move {
             let args_map = match args.as_object() {
@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn open_document_returns_requested_range() {
+    fn open_file_returns_requested_range() {
         let c = sample_content();
         let r = open_file("x.md", &c, Some(5), Some(10));
         assert_eq!(r.start_line, 5);
@@ -223,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn open_document_defaults_to_first_window() {
+    fn open_file_defaults_to_first_window() {
         let c = sample_content();
         let r = open_file("x.md", &c, None, None);
         assert_eq!(r.start_line, 1);
@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn open_document_clamps_end_to_total_lines() {
+    fn open_file_clamps_end_to_total_lines() {
         let c = sample_content();
         let r = open_file("x.md", &c, Some(25), Some(999));
         assert_eq!(r.start_line, 25);
@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn open_document_caps_window_at_max_lines_per_open() {
+    fn open_file_caps_window_at_max_lines_per_open() {
         let big: String = (1..=10_000)
             .map(|i| format!("l{i}"))
             .collect::<Vec<_>>()
@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn open_document_truncates_on_char_limit() {
+    fn open_file_truncates_on_char_limit() {
         let long_line = "a".repeat(MAX_CONTENT_CHARS);
         let c = format!("{long_line}\n{long_line}\n{long_line}");
         let r = open_file("x.md", &c, Some(1), Some(3));
@@ -309,15 +309,15 @@ mod tests {
             .await
             .unwrap();
 
-        let (name, runtime) = build_open_document_tool();
-        assert_eq!(name, OPEN_DOCUMENT_TOOL);
+        let (name, runtime) = build_open_file_tool();
+        assert_eq!(name, OPEN_FILE_TOOL);
 
         let args = args_value(&[
             ("filepath", Value::string(path.to_string_lossy().to_string())),
             ("start_line", Value::integer(2)),
             ("end_line", Value::integer(4)),
         ]);
-        let call = ailoy::message::Part::function(OPEN_DOCUMENT_TOOL, args);
+        let call = ailoy::message::Part::function(OPEN_FILE_TOOL, args);
         let msg = runtime.run(call).await.expect("tool run");
         let value = msg.contents[0].as_value().expect("value");
         assert_eq!(
@@ -342,12 +342,12 @@ mod tests {
         let path = scratch.path.join("secret.pdf");
         tokio::fs::write(&path, b"ignored".to_vec()).await.unwrap();
 
-        let (_, runtime) = build_open_document_tool();
+        let (_, runtime) = build_open_file_tool();
         let args = args_value(&[(
             "filepath",
             Value::string(path.to_string_lossy().to_string()),
         )]);
-        let call = ailoy::message::Part::function(OPEN_DOCUMENT_TOOL, args);
+        let call = ailoy::message::Part::function(OPEN_FILE_TOOL, args);
         let msg = runtime.run(call).await.expect("tool run");
         let value = msg.contents[0].as_value().expect("value");
         let err = value
@@ -359,12 +359,12 @@ mod tests {
 
     #[tokio::test]
     async fn tool_reports_missing_file() {
-        let (_, runtime) = build_open_document_tool();
+        let (_, runtime) = build_open_file_tool();
         let args = args_value(&[(
             "filepath",
             Value::string("/tmp/definitely_missing_xyz_chat_agent_open.md"),
         )]);
-        let call = ailoy::message::Part::function(OPEN_DOCUMENT_TOOL, args);
+        let call = ailoy::message::Part::function(OPEN_FILE_TOOL, args);
         let msg = runtime.run(call).await.expect("tool run");
         let value = msg.contents[0].as_value().expect("value");
         let err = value
@@ -376,8 +376,8 @@ mod tests {
 
     #[tokio::test]
     async fn tool_reports_missing_filepath_argument() {
-        let (_, runtime) = build_open_document_tool();
-        let call = ailoy::message::Part::function(OPEN_DOCUMENT_TOOL, Value::object_empty());
+        let (_, runtime) = build_open_file_tool();
+        let call = ailoy::message::Part::function(OPEN_FILE_TOOL, Value::object_empty());
         let msg = runtime.run(call).await.expect("tool run");
         let value = msg.contents[0].as_value().expect("value");
         assert_eq!(
