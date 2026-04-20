@@ -1,7 +1,7 @@
 //! Main-agent tool definitions.
 //!
 //! Contains the default tools (`web_search`, `convert_pdf_to_md`), the
-//! `read_source` tool, and `open_document` (read line ranges from .md/.txt
+//! `read_source` tool, and `open_file` (read line ranges from .md/.txt
 //! files — pairs with `convert_pdf_to_md`). These are tools used directly by
 //! the parent ChatAgent — **not** by speedwagon sub-agents (which live in
 //! `speedwagon/`).

@@ -424,7 +424,7 @@ mod tests {
         tool_names.sort();
         assert_eq!(
             tool_names,
-            vec!["convert_pdf_to_md", "open_document", "web_search"]
+            vec!["convert_pdf_to_md", "open_file", "web_search"]
         );
     }
 
