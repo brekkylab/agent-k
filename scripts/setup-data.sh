@@ -28,10 +28,11 @@ mkdir -p "$DATA_PATH/corpus/finance"
 aws s3 sync "$BUCKET/PatronusAI__financebench/" "$DATA_PATH/corpus/finance/" \
   --exclude "*" --include "*.md"
 
-# 3. Corpus — novel (.txt only)
+# 3. Corpus — novel (.txt only) + QA file
 echo "[3/4] Downloading novel corpus..."
 mkdir -p "$DATA_PATH/corpus/novel"
 aws s3 sync "$BUCKET/NovelQA__NovelQA/books/" "$DATA_PATH/corpus/novel/"
+aws s3 cp "$BUCKET/NovelQA__NovelQA/novelqa_merged.json" "$DATA_PATH/corpus/novel/novelqa_merged.json"
 
 # 4. Indexes
 echo "[4/4] Downloading indexes..."
@@ -42,5 +43,5 @@ aws s3 sync "$BUCKET/agentwebui/index/novel/" "$DATA_PATH/index/novel/"
 echo ""
 echo "=== Done ==="
 echo "  Config:  $DATA_PATH/knowledge_agents.json"
-echo "  Corpus:  $DATA_PATH/corpus/{finance,novel}"
+echo "  Corpus:  $DATA_PATH/corpus/{finance,novel} (novel includes novelqa_merged.json)"
 echo "  Index:   $DATA_PATH/index/{finance,novel}"

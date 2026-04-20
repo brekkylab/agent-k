@@ -5,7 +5,7 @@
       "../backend/data/corpus/finance"
     ],
     "txt_dir": "../backend/data/corpus/novel",
-    "qa_file": "../novelqa_downloader/novelqa_merged.json",
+    "qa_file": "../backend/data/corpus/novel/novelqa_merged.json",
     "index_dir": "./tantivy_index"
   },
   "indexing": {
