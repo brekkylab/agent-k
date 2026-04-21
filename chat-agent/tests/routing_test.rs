@@ -1,52 +1,67 @@
-//! Integration tests for knowledge-agent routing.
+//! Integration tests for speedwagon sub-agent routing.
 //!
-//! Verifies that the LLM selects the correct `kb_id` when calling
-//! the `ask_knowledge` tool. Uses `ChatAgent::tool_call_log()` to
-//! inspect which tools were called with which arguments.
+//! Verifies that the LLM picks the correct per-KB `ask_speedwagon_<id>` tool.
+//! Uses `ChatAgent::tool_call_log()` to inspect which tools were called.
 //!
 //! Requirements:
 //!   - OPENAI_API_KEY environment variable
-//!   - Pre-built tantivy indexes under `backend/data/index/`
+//!   - Pre-built tantivy indexes under `backend/data/index/{finance,novel}/`
+//!   - `backend/data/knowledge_agents.json` describing the KBs
 //!
 //! Run:  cargo test --test routing_test -- --ignored --nocapture
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
-use std::sync::Once;
 
 use ailoy::{AgentProvider, AgentSpec, LangModelProvider};
-use chat_agent::ChatAgent;
+use chat_agent::{ChatAgent, KbEntry};
+use serde::Deserialize;
 
-static INIT_KB_CONFIG: Once = Once::new();
+#[derive(Deserialize)]
+struct RawKbEntry {
+    id: String,
+    description: String,
+    index_dir: String,
+    corpus_dirs: Vec<String>,
+}
 
-/// Set KNOWLEDGE_AGENTS_CONFIG to the backend's knowledge_agents.json
-/// relative to this crate's location, so tests work regardless of CWD.
-/// Uses `Once` to ensure the env var is set exactly once, even under
-/// parallel test execution.
-fn ensure_kb_config() {
-    INIT_KB_CONFIG.call_once(|| {
-        if std::env::var("KNOWLEDGE_AGENTS_CONFIG").is_ok() {
-            return;
-        }
-        // chat-agent/../backend/data/knowledge_agents.json
-        let path: PathBuf = [
-            env!("CARGO_MANIFEST_DIR"),
-            "..",
-            "backend",
-            "data",
-            "knowledge_agents.json",
-        ]
-        .iter()
-        .collect();
-        // SAFETY: called exactly once before any parallel tests read this var.
-        unsafe {
-            std::env::set_var(
-                "KNOWLEDGE_AGENTS_CONFIG",
-                path.canonicalize()
-                    .expect("knowledge_agents.json not found"),
-            );
-        }
-    });
+fn load_kb_entries() -> Vec<KbEntry> {
+    let config_path: PathBuf = [
+        env!("CARGO_MANIFEST_DIR"),
+        "..",
+        "backend",
+        "data",
+        "knowledge_agents.json",
+    ]
+    .iter()
+    .collect();
+    let config_path = config_path
+        .canonicalize()
+        .expect("knowledge_agents.json not found; run scripts/setup-data.sh first");
+    let base_dir = config_path
+        .parent()
+        .expect("config path has no parent")
+        .to_path_buf();
+
+    let raw = fs::read_to_string(&config_path).expect("read knowledge_agents.json");
+    let entries: Vec<RawKbEntry> = serde_json::from_str(&raw).expect("parse knowledge_agents.json");
+
+    entries
+        .into_iter()
+        .map(|r| {
+            let resolve = |p: &str| base_dir.join(p).to_string_lossy().into_owned();
+            KbEntry {
+                id: r.id.clone(),
+                name: r.id.clone(),
+                description: r.description,
+                index_dir: resolve(&r.index_dir),
+                corpus_dirs: r.corpus_dirs.iter().map(|p| resolve(p)).collect(),
+                spec: Default::default(),
+                document_names: vec![],
+            }
+        })
+        .collect()
 }
 
 async fn create_agent(model: &str) -> ChatAgent {
@@ -65,8 +80,6 @@ async fn create_agent(model: &str) -> ChatAgent {
     };
 
     ChatAgent::new(spec, provider, vec![], HashMap::new(), vec![])
-        .await
-        .expect("chat agent should be created")
 }
 
 async fn assert_routes_to(query: &str, expected_kb: &str) {
@@ -74,28 +87,20 @@ async fn assert_routes_to(query: &str, expected_kb: &str) {
     let result = agent.run_user_text(query).await;
     assert!(result.is_ok(), "run_user_text failed: {result:?}");
 
-    let entry = agent
+    let expected_tool = format!("ask_speedwagon_{expected_kb}");
+    let result = agent
         .tool_call_log()
         .iter()
-        .find(|e| e.tool == "ask_knowledge");
-
-    let entry = entry.expect(&format!("query={query:?} → ask_knowledge was never called"));
-
-    let kb_id = entry.args.get("kb_id").and_then(|v| v.as_str());
-    assert_eq!(
-        kb_id,
-        Some(expected_kb),
-        "query={query:?} → expected kb_id={expected_kb:?}, got {kb_id:?}"
-    );
-
-    // Verify the tool returned a result (not an error)
-    let result = entry
+        .find(|e| e.tool == expected_tool)
+        .expect(&format!(
+            "query={query:?} → {expected_tool:?} was never called"
+        ))
         .result
         .as_ref()
         .expect("tool result should be present");
     assert!(
-        result.get("answer").is_some(),
-        "query={query:?} → tool result missing 'answer': {result}"
+        result.as_str().map(|s| !s.is_empty()).unwrap_or(false),
+        "query={query:?} → tool returned empty result: {result}"
     );
 }
 
