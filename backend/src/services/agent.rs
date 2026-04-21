@@ -1,25 +1,21 @@
 use uuid::Uuid;
 
 use crate::models::Agent;
-use crate::repository::{RepositoryError, normalize_spec};
+use crate::repository::RepositoryError;
 use crate::state::AppState;
 
 /// Find an existing agent with the same normalized spec, or create a new one.
 ///
-/// Returns `(agent, created)` where `created` is true if a new agent was inserted.
+/// Returns `(agent, created)` where `created` is true if the returned agent is
+/// freshly inserted. Atomicity is guaranteed at the DB layer by
+/// `UNIQUE(spec_json)` + `INSERT ... ON CONFLICT DO UPDATE RETURNING` inside
+/// `create_agent`. Concurrent identical requests converge to the same row.
 ///
-/// NOTE: Not atomic — concurrent identical requests may create duplicates.
-/// Acceptable for dev stage single-user; revisit with UNIQUE constraint for production.
 pub async fn find_or_create_agent(
     state: &AppState,
     spec: ailoy::AgentSpec,
 ) -> Result<(Agent, bool), RepositoryError> {
-    let normalized = normalize_spec(&spec)?;
-    if let Some(existing) = state.repository.find_agent_by_spec(&normalized).await? {
-        return Ok((existing, false));
-    }
-    let agent = state.repository.create_agent(spec).await?;
-    Ok((agent, true))
+    state.repository.create_agent(spec).await
 }
 
 /// Best-effort cleanup: delete an agent if no sessions reference it anymore.

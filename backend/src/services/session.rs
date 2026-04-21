@@ -124,7 +124,7 @@ pub async fn update_session(
     }
 
     // Atomic update via transaction
-    let session = state
+    let (session, previous_agent_id) = state
         .repository
         .update_session_atomic(
             id,
@@ -139,6 +139,12 @@ pub async fn update_session(
 
     // Invalidate cache once after successful commit
     state.invalidate_session_runtime(id);
+
+    // CoW symmetry: if the agent pointer was swapped, the previous agent may now be
+    // orphaned. Mirror delete_session's cleanup so immutable agents don't accumulate.
+    if let Some(prev) = previous_agent_id {
+        super::agent::cleanup_orphaned_agent(state, prev).await;
+    }
 
     Ok(session)
 }
