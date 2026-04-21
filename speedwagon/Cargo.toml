@@ -1,0 +1,35 @@
+[package]
+name = "speedwagon"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "speedwagon"
+path = "src/lib.rs"
+
+[dependencies]
+ailoy = { workspace = true }
+anyhow = "1.0.100"
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+dirs = "6"
+futures = "0.3"
+globset = "0.4"
+ignore = "0.4"
+indexmap = "2"
+log = "0.4"
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.12", features = ["json"] }
+rustyline = "15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strum = { version = "0.27", features = ["derive"] }
+tantivy = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tempfile = "3"
+url = { version = "2", features = ["serde"] }
+uuid = { version = "1", features = ["v5"] }
+
+[dev-dependencies]
+knowledge-base-examples = { git = "https://github.com/brekkylab/knowledge-base-examples.git", rev = "e1280765241e44a025c3045ffaee4ac307805c5c" }

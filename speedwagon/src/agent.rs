@@ -1,7 +1,6 @@
-use ailoy::agent::LangModelProvider;
-use serde::{Deserialize, Serialize};
+use ailoy::agent::{Agent, AgentCard, AgentProvider, AgentSpec};
 
-pub const DEFAULT_SYSTEM_PROMPT: &str = r#"You are an expert research assistant. Your task is to answer questions by systematically searching through a document corpus using the provided tools. Think step by step.
+pub const SYSTEM_PROMPT: &str = r#"You are an expert research assistant. Your task is to answer questions by systematically searching through a document corpus using the provided tools. Think step by step.
 
 # Strategy
 
@@ -46,26 +45,60 @@ If unsure whether the answer is in the corpus, try a quick search first.
 - If you cannot find the answer after exhausting all approaches, say so and explain what you tried.
 - Be concise in your final answer. Lead with the direct answer, then provide the source reference."#;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentConfig {
-    pub model_name: String,
-    pub provider: LangModelProvider,
-    #[serde(default = "default_system_prompt")]
-    pub system_prompt: String,
+#[derive(Debug, Clone)]
+pub struct SpeedwagonSpec {
+    spec: AgentSpec,
 }
 
-fn default_system_prompt() -> String {
-    DEFAULT_SYSTEM_PROMPT.to_string()
+impl SpeedwagonSpec {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.spec.model = model.into();
+        self
+    }
+
+    pub fn card(mut self, card: AgentCard) -> Self {
+        self.spec.card = Some(card);
+        self
+    }
+
+    pub fn into_spec(self) -> AgentSpec {
+        self.into()
+    }
+
+    pub async fn into_runtime(self) -> anyhow::Result<Agent> {
+        Agent::try_new(self.spec).await
+    }
+
+    pub async fn into_runtime_with_provider(
+        self,
+        provider: &AgentProvider,
+    ) -> anyhow::Result<Agent> {
+        Agent::try_with_provider(self.spec, provider).await
+    }
 }
 
-impl Default for AgentConfig {
+impl Default for SpeedwagonSpec {
     fn default() -> Self {
         Self {
-            model_name: "gpt-5.4-mini".to_string(),
-            provider: LangModelProvider::openai(
-                std::env::var("OPENAI_API_KEY").unwrap_or_default(),
-            ),
-            system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+            spec: AgentSpec::new("openai/gpt-5.4-mini")
+                .instruction(SYSTEM_PROMPT)
+                .tools([
+                    "search_document",
+                    "glob_document",
+                    "find_in_document",
+                    "open_document",
+                    "calculate",
+                ]),
         }
+    }
+}
+
+impl From<SpeedwagonSpec> for AgentSpec {
+    fn from(value: SpeedwagonSpec) -> Self {
+        value.spec
     }
 }
