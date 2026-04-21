@@ -263,7 +263,7 @@ impl AppState {
             (
                 "OPENAI_API_KEY",
                 "openai-default",
-                LangModelAPISchema::ChatCompletion,
+                LangModelAPISchema::OpenAI,
             ),
             (
                 "ANTHROPIC_API_KEY",
@@ -287,18 +287,15 @@ impl AppState {
 
             let provider = AgentProvider {
                 lm: match schema {
-                    LangModelAPISchema::ChatCompletion => LangModelProvider::chat_completion(
-                        "https://api.openai.com/v1/chat/completions",
-                        Some(api_key),
-                    )
-                    .map_err(|e| {
-                        RepositoryError::InvalidData(format!(
-                            "invalid OpenAI chat_completion URL: {e}"
-                        ))
-                    })?,
+                    LangModelAPISchema::OpenAI => LangModelProvider::openai(api_key),
                     LangModelAPISchema::Anthropic => LangModelProvider::anthropic(api_key),
                     LangModelAPISchema::Gemini => LangModelProvider::gemini(api_key),
-                    LangModelAPISchema::OpenAI => LangModelProvider::openai(api_key),
+                    LangModelAPISchema::ChatCompletion => {
+                        return Err(RepositoryError::InvalidData(format!(
+                            "`{name}` cannot be bootstrapped with ChatCompletion schema; \
+                             create the provider profile via POST /provider-profiles"
+                        )));
+                    }
                 },
                 tools: vec![],
             };
