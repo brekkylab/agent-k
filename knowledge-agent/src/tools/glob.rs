@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use ailoy::{ToolDescBuilder, ToolRuntime, Value, agent::ToolFunc};
+use ailoy::{ToolAsyncFunc, ToolDescBuilder, ToolRuntime, Value};
 use futures::future::BoxFuture;
 use globset::{GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
@@ -119,7 +119,7 @@ pub fn build_glob_document_tool(target_dirs: Vec<PathBuf>) -> ToolRuntime {
             .build();
 
     let dirs = target_dirs.clone();
-    let f: Arc<ToolFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
+    let f: Arc<ToolAsyncFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
         let dirs = dirs.clone();
         Box::pin(async move {
             let pattern = match extract_required_str(&args, "pattern") {
@@ -135,5 +135,5 @@ pub fn build_glob_document_tool(target_dirs: Vec<PathBuf>) -> ToolRuntime {
         })
     });
 
-    ToolRuntime::new(desc, f)
+    ToolRuntime::new_async(desc, f)
 }

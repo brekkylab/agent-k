@@ -38,13 +38,22 @@ pub async fn run_tui(
         match input.as_str() {
             "/exit" => break,
             "/clear" => {
-                agent = build_agent(
+                match build_agent(
                     &config.agent,
                     &config.tool,
                     &search_index,
                     corpus_dirs.clone(),
-                );
-                println!("Conversation cleared.");
+                )
+                .await
+                {
+                    Ok(new_agent) => {
+                        agent = new_agent;
+                        println!("Conversation cleared.");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to reset conversation: {e}");
+                    }
+                }
             }
             _ => {
                 println!();

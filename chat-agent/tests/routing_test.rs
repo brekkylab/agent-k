@@ -64,7 +64,8 @@ fn load_kb_entries() -> Vec<KbEntry> {
         .collect()
 }
 
-fn create_agent(model: &str) -> ChatAgent {
+async fn create_agent(model: &str) -> ChatAgent {
+    ensure_kb_config();
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
 
     let spec = AgentSpec {
@@ -78,11 +79,11 @@ fn create_agent(model: &str) -> ChatAgent {
         tools: vec![],
     };
 
-    ChatAgent::new(spec, provider, load_kb_entries(), HashMap::new(), vec![])
+    ChatAgent::new(spec, provider, vec![], HashMap::new(), vec![])
 }
 
 async fn assert_routes_to(query: &str, expected_kb: &str) {
-    let mut agent = create_agent("gpt-4.1-mini");
+    let mut agent = create_agent("gpt-4.1-mini").await;
     let result = agent.run_user_text(query).await;
     assert!(result.is_ok(), "run_user_text failed: {result:?}");
 

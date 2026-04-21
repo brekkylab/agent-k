@@ -209,13 +209,19 @@ impl AppState {
         let mut spec = agent.spec;
         spec.instruction = Some(assembled_instruction.clone());
 
-        let runtime = Arc::new(TokioMutex::new(ChatAgent::new(
-            spec,
-            provider_profile.provider,
-            kb_entries,
-            kb_overrides,
-            session_source_paths,
-        )));
+        let runtime = Arc::new(TokioMutex::new(
+            ChatAgent::new(
+                spec,
+                provider_profile.provider,
+                kb_entries,
+                kb_overrides,
+                session_source_paths,
+            )
+            .await
+            .map_err(|e| {
+                RepositoryError::InvalidData(format!("failed to initialize chat runtime: {e}"))
+            })?,
+        ));
 
         // Restore conversation history from DB (last 20 turns = 40 user/assistant messages)
         let recent_messages: Vec<(String, String)> = session

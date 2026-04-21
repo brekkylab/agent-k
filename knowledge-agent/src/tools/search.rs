@@ -1,6 +1,6 @@
 use std::{collections::HashSet, path::Path, sync::Arc, time::Instant};
 
-use ailoy::{ToolDescBuilder, ToolRuntime, Value, agent::ToolFunc};
+use ailoy::{ToolAsyncFunc, ToolDescBuilder, ToolRuntime, Value};
 use anyhow::Result;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -186,7 +186,7 @@ pub fn build_search_document_tool(index: Arc<SearchIndex>, top_k_max: i64) -> To
             .build();
 
     let idx = index.clone();
-    let f: Arc<ToolFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
+    let f: Arc<ToolAsyncFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
         let idx = idx.clone();
         Box::pin(async move {
             let query = match extract_required_str(&args, "query") {
@@ -204,5 +204,5 @@ pub fn build_search_document_tool(index: Arc<SearchIndex>, top_k_max: i64) -> To
         })
     });
 
-    ToolRuntime::new(desc, f)
+    ToolRuntime::new_async(desc, f)
 }

@@ -190,7 +190,9 @@ async fn test_e2e_react_financebench() {
             &tools_config,
             &search_index,
             corpus_dirs.clone(),
-        );
+        )
+        .await
+        .expect("agent should be built");
         let start = Instant::now();
         let (answer, steps) = match run_with_trace(&mut agent, &qa.question).await {
             Ok((a, s)) => (a, s),
@@ -370,7 +372,9 @@ async fn test_e2e_react_novelqa() {
             &tools_config,
             &search_index,
             target_dirs.clone(),
-        );
+        )
+        .await
+        .expect("agent should be built");
 
         // Include book title hint in prompt so the agent knows which book to search
         let prompt = format!(
