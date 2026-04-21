@@ -287,10 +287,18 @@ impl AppState {
 
             let provider = AgentProvider {
                 lm: match schema {
+                    LangModelAPISchema::ChatCompletion => LangModelProvider::chat_completion(
+                        "https://api.openai.com/v1/chat/completions",
+                        Some(api_key),
+                    )
+                    .map_err(|e| {
+                        RepositoryError::InvalidData(format!(
+                            "invalid OpenAI chat_completion URL: {e}"
+                        ))
+                    })?,
                     LangModelAPISchema::Anthropic => LangModelProvider::anthropic(api_key),
                     LangModelAPISchema::Gemini => LangModelProvider::gemini(api_key),
                     LangModelAPISchema::OpenAI => LangModelProvider::openai(api_key),
-                    _ => panic!("unsupported api schema"),
                 },
                 tools: vec![],
             };
