@@ -7,4 +7,4 @@ members = [
 ]
 
 [workspace.dependencies]
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "b8600090542aa3fef2f5466c7fc6e68dbababbd9" }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "224f612159e1261ca43c32cf13c293cd02f55ff4" }

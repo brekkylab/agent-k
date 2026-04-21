@@ -49,7 +49,7 @@ Example:
 ///
 /// Entries whose search index cannot be opened are skipped with a warning.
 /// Returns the updated `ToolSet` (builder-style chaining).
-pub fn register_speedwagon_subagents(
+pub async fn register_speedwagon_subagents(
     mut tool_set: ToolSet,
     entries: &[KbEntry],
     default_provider: &SubAgentProvider,
@@ -99,12 +99,23 @@ pub fn register_speedwagon_subagents(
                 .unwrap_or_else(|| default_model_name.clone()),
         };
 
-        let agent = build_agent(
+        let agent = match build_agent(
             &agent_config,
             &ToolConfig::default(),
             &search_index,
             target_dirs,
-        );
+        )
+        .await
+        {
+            Ok(agent) => agent,
+            Err(e) => {
+                tracing::warn!(
+                    "[speedwagon] skipping kb={}: failed to create subagent runtime: {e}",
+                    entry.id
+                );
+                continue;
+            }
+        };
         let agent = Arc::new(TokioMutex::new(agent));
 
         tool_set = tool_set.with_subagent_in_memory(

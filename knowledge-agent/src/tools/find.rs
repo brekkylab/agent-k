@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ailoy::{ToolDescBuilder, ToolRuntime, Value, agent::ToolFunc};
+use ailoy::{ToolAsyncFunc, ToolDescBuilder, ToolRuntime, Value};
 use futures::future::BoxFuture;
 use regex::Regex;
 use serde::Serialize;
@@ -386,7 +386,7 @@ pub fn build_find_in_document_tool(index: Arc<SearchIndex>, max_matches: usize) 
             .build();
 
     let idx = index.clone();
-    let f: Arc<ToolFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
+    let f: Arc<ToolAsyncFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
         let idx = idx.clone();
         Box::pin(async move {
             let filepath = match extract_required_str(&args, "filepath") {
@@ -410,7 +410,7 @@ pub fn build_find_in_document_tool(index: Arc<SearchIndex>, max_matches: usize) 
         })
     });
 
-    ToolRuntime::new(desc, f)
+    ToolRuntime::new_async(desc, f)
 }
 
 #[cfg(test)]

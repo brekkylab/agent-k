@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ailoy::{ToolDescBuilder, ToolRuntime, Value, agent::ToolFunc};
+use ailoy::{ToolAsyncFunc, ToolDescBuilder, ToolRuntime, Value};
 use futures::future::BoxFuture;
 use serde::Serialize;
 use serde_json::json;
@@ -519,7 +519,7 @@ pub fn build_calculate_tool() -> ToolRuntime {
         }))
         .build();
 
-    let f: Arc<ToolFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
+    let f: Arc<ToolAsyncFunc> = Arc::new(move |args: Value| -> BoxFuture<'static, Value> {
         Box::pin(async move {
             let expression = match extract_required_str(&args, "expression") {
                 Ok(e) => e,
@@ -535,5 +535,5 @@ pub fn build_calculate_tool() -> ToolRuntime {
         })
     });
 
-    ToolRuntime::new(desc, f)
+    ToolRuntime::new_async(desc, f)
 }
