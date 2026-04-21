@@ -52,6 +52,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
   // Mid-session 모델 변경 핸들러
   const handleModelChange = useCallback(
     async (provider: ProviderName, model: string, profileId: string) => {
+      if (!currentAgentId) return;
+
       const prevProvider = selectedProvider;
       const prevModel = selectedModel;
       const prevProfileId = currentProfileId;
@@ -60,8 +62,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
       setSelectedModel(provider, model, profileId);
 
       try {
-        // 1. 새 Agent 생성 (copy-on-write)
-        const agent = await createAgent({ spec: { lm: model, tools: [] } });
+        // 1. 현재 Agent spec을 로드해 instruction/tools를 보존한 채
+        //    lm만 덮어써서 새 Agent를 구한다 (copy-on-write).
+        //    동일 spec이라면 백엔드 UNIQUE 제약이 기존 Agent를 그대로 반환한다.
+        const currentAgent = await getAgent(currentAgentId);
+        const agent = await createAgent({
+          spec: { ...currentAgent.spec, lm: model },
+        });
 
         // 2. Session에 새 Agent 연결 (agent_id 변경된 경우) + Provider 변경 시 provider_profile_id도 업데이트
         const sessionUpdate: { agent_id?: string; provider_profile_id?: string } = {};
