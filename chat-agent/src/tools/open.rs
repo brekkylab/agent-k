@@ -33,7 +33,7 @@ pub struct OpenResult {
     pub content: String,
 }
 
-/// Slice `content` into a line-numbered window, truncating at `MAX_CONTENT_CHARS`.
+// Slice `content` into a line-numbered window, truncating at `MAX_CONTENT_CHARS`.
 pub fn open_file(
     filepath: &str,
     content: &str,
@@ -93,8 +93,8 @@ fn has_allowed_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Directory that canonicalized paths must stay under.
-/// `convert_pdf_to_md` writes via Python `tempfile`, which uses the system temp dir.
+// Directory that canonicalized paths must stay under.
+// `convert_pdf_to_md` writes via Python `tempfile`, which uses the system temp dir.
 fn allowed_root() -> PathBuf {
     let tmp = std::env::temp_dir();
     tmp.canonicalize().unwrap_or(tmp)
