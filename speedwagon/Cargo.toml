@@ -7,7 +7,12 @@ edition = "2024"
 name = "speedwagon"
 path = "src/lib.rs"
 
+[[bin]]
+name = "speedwagon"
+path = "src/main.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 ailoy = { workspace = true }
 anyhow = "1.0.100"
 chrono = { version = "0.4", features = ["serde"] }
