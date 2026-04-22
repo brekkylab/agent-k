@@ -578,13 +578,14 @@ impl Repository for SqliteRepository {
 
         // Upsert: if another row with identical spec_json already exists, return it.
         // DO UPDATE (not DO NOTHING) is required for RETURNING to emit the conflict row.
-        // The updated_at bump on conflict is a benign side effect; agents are immutable
-        // under the copy-on-write model so updated_at has no semantic meaning.
+        // Self-assignment (`agents.updated_at = agents.updated_at`) takes the conflict
+        // branch without mutating the row — agents are immutable under copy-on-write,
+        // so reuse must not touch created_at/updated_at.
         let row = sqlx::query(
             r#"
             INSERT INTO agents (id, spec_json, created_at, updated_at)
             VALUES (?, ?, ?, ?)
-            ON CONFLICT(spec_json) DO UPDATE SET updated_at = excluded.updated_at
+            ON CONFLICT(spec_json) DO UPDATE SET updated_at = agents.updated_at
             RETURNING id, spec_json, created_at, updated_at;
             "#,
         )

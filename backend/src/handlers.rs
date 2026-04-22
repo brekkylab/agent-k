@@ -1465,7 +1465,7 @@ mod tests {
     // ===================== find-or-create Agent Tests =====================
 
     #[tokio::test]
-    async fn find_or_create_same_spec_returns_same_id() {
+    async fn find_or_create_same_spec_is_idempotent() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
         let app = test_app(&temp_dir).await;
 
@@ -1475,16 +1475,34 @@ mod tests {
         assert_eq!(resp1.status(), StatusCode::CREATED);
         let body1 = response_json(resp1).await;
 
+        // Sleep past now_string()'s millisecond resolution so that any accidental
+        // UPDATE on reuse would produce a visibly different updated_at. Without
+        // this gap, a buggy `SET updated_at = excluded.updated_at` could
+        // coincidentally write the same millisecond and hide the regression.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
         let resp2 = post_json(&app, "/agents", spec.clone()).await;
         assert_eq!(resp2.status(), StatusCode::OK);
         let body2 = response_json(resp2).await;
 
+        // Identity: same spec → same agent id
         assert_eq!(
             body1["id"], body2["id"],
             "same spec must return same agent id"
         );
 
-        // Verify only one row in DB
+        // Immutability: reuse must not touch the row. Agents are immutable
+        // snapshots under copy-on-write, so created_at/updated_at are stable.
+        assert_eq!(
+            body1["updated_at"], body2["updated_at"],
+            "reuse must not bump updated_at — agents are immutable under CoW",
+        );
+        assert_eq!(
+            body1["created_at"], body2["created_at"],
+            "created_at must be stable across reuse",
+        );
+
+        // Uniqueness: exactly one row in DB
         let list = response_json(get_req(&app, "/agents").await).await;
         assert_eq!(list.as_array().unwrap().len(), 1);
     }
