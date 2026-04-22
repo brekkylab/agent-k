@@ -263,7 +263,7 @@ impl AppState {
             (
                 "OPENAI_API_KEY",
                 "openai-default",
-                LangModelAPISchema::ChatCompletion,
+                LangModelAPISchema::OpenAI,
             ),
             (
                 "ANTHROPIC_API_KEY",
@@ -287,10 +287,15 @@ impl AppState {
 
             let provider = AgentProvider {
                 lm: match schema {
+                    LangModelAPISchema::OpenAI => LangModelProvider::openai(api_key),
                     LangModelAPISchema::Anthropic => LangModelProvider::anthropic(api_key),
                     LangModelAPISchema::Gemini => LangModelProvider::gemini(api_key),
-                    LangModelAPISchema::OpenAI => LangModelProvider::openai(api_key),
-                    _ => panic!("unsupported api schema"),
+                    LangModelAPISchema::ChatCompletion => {
+                        return Err(RepositoryError::InvalidData(format!(
+                            "`{name}` cannot be bootstrapped with ChatCompletion schema; \
+                             create the provider profile via POST /provider-profiles"
+                        )));
+                    }
                 },
                 tools: vec![],
             };
