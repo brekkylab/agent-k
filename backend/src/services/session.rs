@@ -101,12 +101,20 @@ pub async fn create_session(
     Ok(session)
 }
 
-/// Update a session atomically (title, provider, speedwagons, sources) and invalidate runtime cache.
+/// Update a session atomically (title, agent, provider, speedwagons, sources) and invalidate runtime cache.
 pub async fn update_session(
     state: &AppState,
     id: Uuid,
     req: UpdateSessionRequest,
 ) -> Result<Session, SessionError> {
+    // Validate agent if provided
+    if let Some(agent_id) = req.agent_id {
+        match state.repository.get_agent(agent_id).await? {
+            Some(_) => {}
+            None => return Err(SessionError::AgentNotFound),
+        }
+    }
+
     // Validate provider profile if provided
     if let Some(pp_id) = req.provider_profile_id {
         match state.repository.get_provider_profile(pp_id).await? {
@@ -116,11 +124,12 @@ pub async fn update_session(
     }
 
     // Atomic update via transaction
-    let session = state
+    let (session, previous_agent_id) = state
         .repository
         .update_session_atomic(
             id,
             req.title,
+            req.agent_id,
             req.provider_profile_id,
             req.speedwagon_ids,
             req.source_ids,
@@ -131,16 +140,34 @@ pub async fn update_session(
     // Invalidate cache once after successful commit
     state.invalidate_session_runtime(id);
 
+    // CoW symmetry: if the agent pointer was swapped, the previous agent may now be
+    // orphaned. Mirror delete_session's cleanup so immutable agents don't accumulate.
+    if let Some(prev) = previous_agent_id {
+        super::agent::cleanup_orphaned_agent(state, prev).await;
+    }
+
     Ok(session)
 }
 
-/// Delete a session and invalidate its runtime cache.
+/// Delete a session, invalidate its runtime cache, and cascade-delete orphaned agent.
 pub async fn delete_session(state: &AppState, id: Uuid) -> Result<(), SessionError> {
+    // Fetch session first to remember agent_id for potential orphan cleanup
+    let session = state
+        .repository
+        .get_session(id)
+        .await?
+        .ok_or(SessionError::NotFound)?;
+    let agent_id = session.agent_id;
+
     let deleted = state.repository.delete_session(id).await?;
     if !deleted {
         return Err(SessionError::NotFound);
     }
     state.invalidate_session_runtime(id);
+
+    // Best-effort: clean up agent if no sessions reference it anymore
+    super::agent::cleanup_orphaned_agent(state, agent_id).await;
+
     Ok(())
 }
 

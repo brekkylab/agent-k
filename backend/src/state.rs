@@ -73,12 +73,6 @@ impl AppState {
         }
     }
 
-    pub fn invalidate_runtimes_by_agent_id(&self, agent_id: Uuid) {
-        if let Ok(mut cache) = self.runtime_cache.lock() {
-            cache.retain(|_, runtime| runtime.agent_id != agent_id);
-        }
-    }
-
     pub fn invalidate_runtimes_by_provider_profile_id(&self, provider_profile_id: Uuid) {
         if let Ok(mut cache) = self.runtime_cache.lock() {
             cache.retain(|_, runtime| runtime.provider_profile_id != provider_profile_id);

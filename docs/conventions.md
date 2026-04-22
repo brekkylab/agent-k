@@ -115,6 +115,13 @@ backend/src/
 | 구조체/Enum | PascalCase | `Agent`, `ProviderProfile`, `MessageRole` |
 | 상수 | SCREAMING_SNAKE_CASE | `DEFAULT_DATABASE_URL` |
 
+### 포맷팅
+
+- `rustfmt` 기본 설정 준수 (커스텀 `rustfmt.toml` 없음)
+- 줄 너비 100자 제한, 초과 시 인자/필드별 줄바꿈 + trailing comma
+- 메서드 체인이 길면 `.method()` 단위로 줄바꿈
+- VSCode `formatOnSave` 활성화 (`.vscode/settings.json`)
+
 ### Import 규칙
 
 - `use` 문은 파일 최상단에 배치. **인라인 정규화 경로 금지** (`crate::models::X::new()` 등)

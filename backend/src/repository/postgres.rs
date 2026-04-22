@@ -19,7 +19,7 @@ impl PostgresRepository {
 
 #[async_trait]
 impl Repository for PostgresRepository {
-    async fn create_agent(&self, _spec: AgentSpec) -> RepositoryResult<Agent> {
+    async fn create_agent(&self, _spec: AgentSpec) -> RepositoryResult<(Agent, bool)> {
         todo!("postgres implementation")
     }
 
@@ -28,10 +28,6 @@ impl Repository for PostgresRepository {
     }
 
     async fn get_agent(&self, _id: Uuid) -> RepositoryResult<Option<Agent>> {
-        todo!("postgres implementation")
-    }
-
-    async fn update_agent(&self, _id: Uuid, _spec: AgentSpec) -> RepositoryResult<Option<Agent>> {
         todo!("postgres implementation")
     }
 
@@ -130,10 +126,11 @@ impl Repository for PostgresRepository {
         &self,
         _id: Uuid,
         _title: Option<String>,
+        _agent_id: Option<Uuid>,
         _provider_profile_id: Option<Uuid>,
         _speedwagon_ids: Option<Vec<Uuid>>,
         _source_ids: Option<Vec<Uuid>>,
-    ) -> RepositoryResult<Option<Session>> {
+    ) -> RepositoryResult<Option<(Session, Option<Uuid>)>> {
         todo!("postgres implementation")
     }
 

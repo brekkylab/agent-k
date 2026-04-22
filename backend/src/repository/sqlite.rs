@@ -13,7 +13,7 @@ use crate::models::{
     Agent, MessageRole, ProviderProfile, Session, SessionMessage, SessionToolCall, Source,
     SourceType, Speedwagon, SpeedwagonIndexStatus,
 };
-use crate::repository::{Repository, RepositoryError, RepositoryResult};
+use crate::repository::{Repository, RepositoryError, RepositoryResult, normalize_spec};
 
 pub struct SqliteRepository {
     pool: SqlitePool,
@@ -51,11 +51,21 @@ impl SqliteRepository {
             r#"
             CREATE TABLE IF NOT EXISTS agents (
                 id TEXT PRIMARY KEY,
-                spec_json TEXT NOT NULL,
+                spec_json TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Belt-and-suspenders: CREATE TABLE IF NOT EXISTS silently ignores the inline
+        // UNIQUE on existing DBs. Add an explicit unique index so pre-existing tables
+        // also get the constraint. Fails with SQLITE_CONSTRAINT if duplicate spec_json
+        // rows already exist — in that case delete backend/data/app.db (dev stage).
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_spec_json ON agents(spec_json);",
         )
         .execute(&self.pool)
         .await?;
@@ -560,29 +570,35 @@ impl SqliteRepository {
 
 #[async_trait]
 impl Repository for SqliteRepository {
-    async fn create_agent(&self, spec: AgentSpec) -> RepositoryResult<Agent> {
+    async fn create_agent(&self, spec: AgentSpec) -> RepositoryResult<(Agent, bool)> {
         let now = Self::now_string();
         let id = Uuid::new_v4();
+        let id_str = id.to_string();
+        let spec_json = normalize_spec(&spec)?;
 
-        sqlx::query(
+        // Upsert: if another row with identical spec_json already exists, return it.
+        // DO UPDATE (not DO NOTHING) is required for RETURNING to emit the conflict row.
+        // Self-assignment (`agents.updated_at = agents.updated_at`) takes the conflict
+        // branch without mutating the row — agents are immutable under copy-on-write,
+        // so reuse must not touch created_at/updated_at.
+        let row = sqlx::query(
             r#"
             INSERT INTO agents (id, spec_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?);
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(spec_json) DO UPDATE SET updated_at = agents.updated_at
+            RETURNING id, spec_json, created_at, updated_at;
             "#,
         )
-        .bind(id.to_string())
-        .bind(serde_json::to_string(&spec)?)
+        .bind(&id_str)
+        .bind(&spec_json)
         .bind(&now)
         .bind(&now)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
 
-        Ok(Agent {
-            id,
-            spec,
-            created_at: Self::parse_timestamp(now.clone(), "agents.created_at")?,
-            updated_at: Self::parse_timestamp(now, "agents.updated_at")?,
-        })
+        let created = row.get::<String, _>("id") == id_str;
+        let agent = Self::row_to_agent(&row)?;
+        Ok((agent, created))
     }
 
     async fn list_agents(&self) -> RepositoryResult<Vec<Agent>> {
@@ -612,29 +628,6 @@ impl Repository for SqliteRepository {
         .await?;
 
         row.as_ref().map(Self::row_to_agent).transpose()
-    }
-
-    async fn update_agent(&self, id: Uuid, spec: AgentSpec) -> RepositoryResult<Option<Agent>> {
-        let now = Self::now_string();
-
-        let result = sqlx::query(
-            r#"
-            UPDATE agents
-            SET spec_json = ?, updated_at = ?
-            WHERE id = ?;
-            "#,
-        )
-        .bind(serde_json::to_string(&spec)?)
-        .bind(now)
-        .bind(id.to_string())
-        .execute(&self.pool)
-        .await?;
-
-        if result.rows_affected() == 0 {
-            return Ok(None);
-        }
-
-        self.get_agent(id).await
     }
 
     async fn delete_agent(&self, id: Uuid) -> RepositoryResult<bool> {
@@ -991,10 +984,11 @@ impl Repository for SqliteRepository {
         &self,
         id: Uuid,
         title: Option<String>,
+        agent_id: Option<Uuid>,
         provider_profile_id: Option<Uuid>,
         speedwagon_ids: Option<Vec<Uuid>>,
         source_ids: Option<Vec<Uuid>>,
-    ) -> RepositoryResult<Option<Session>> {
+    ) -> RepositoryResult<Option<(Session, Option<Uuid>)>> {
         let id_str = id.to_string();
 
         let mut tx = self.pool.begin().await?;
@@ -1019,6 +1013,50 @@ impl Repository for SqliteRepository {
                 .bind(&id_str)
                 .execute(tx.as_mut())
                 .await?;
+        }
+
+        // Track the previous agent_id only when the caller requested an agent change
+        // and the new id actually differs from the current one. This lets the service
+        // layer clean up an orphaned agent symmetrically with delete_session (CoW
+        // pointer-swap cleanup). Skipping the SELECT on pure title/provider/speedwagon
+        // updates avoids a wasted query on the common path.
+        let mut previous_agent_id: Option<Uuid> = None;
+
+        if let Some(new_agent_id) = agent_id {
+            // Verify agent exists before updating
+            let agent_exists: bool =
+                sqlx::query_scalar("SELECT COUNT(*) > 0 FROM agents WHERE id = ?")
+                    .bind(new_agent_id.to_string())
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            if !agent_exists {
+                tx.rollback().await?;
+                return Err(RepositoryError::InvalidData(format!(
+                    "agent not found: {new_agent_id}"
+                )));
+            }
+
+            // Read the current agent_id so we can report an orphan candidate to the
+            // caller. Gated on `agent_id.is_some()` so the query only fires when an
+            // agent swap was actually requested.
+            let current_agent_str: String =
+                sqlx::query_scalar("SELECT agent_id FROM sessions WHERE id = ?")
+                    .bind(&id_str)
+                    .fetch_one(tx.as_mut())
+                    .await?;
+            let current_agent_id = Uuid::parse_str(&current_agent_str).map_err(|e| {
+                RepositoryError::InvalidData(format!("invalid agent_id in sessions row: {e}"))
+            })?;
+
+            if current_agent_id != new_agent_id {
+                previous_agent_id = Some(current_agent_id);
+                sqlx::query("UPDATE sessions SET agent_id = ?, updated_at = ? WHERE id = ?")
+                    .bind(new_agent_id.to_string())
+                    .bind(&now)
+                    .bind(&id_str)
+                    .execute(tx.as_mut())
+                    .await?;
+            }
         }
 
         if let Some(provider_profile_id) = provider_profile_id {
@@ -1072,7 +1110,8 @@ impl Repository for SqliteRepository {
 
         tx.commit().await?;
 
-        self.get_session(id).await
+        let session = self.get_session(id).await?;
+        Ok(session.map(|s| (s, previous_agent_id)))
     }
 
     // --- Source ---
@@ -1605,6 +1644,7 @@ impl Repository for SqliteRepository {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     use super::SqliteRepository;
@@ -1622,7 +1662,7 @@ mod tests {
             .await
             .expect("sqlite repository should be created");
 
-        let agent = repository
+        let (agent, _) = repository
             .create_agent(AgentSpec::new("gpt-4.1"))
             .await
             .expect("agent should be created");
@@ -1668,5 +1708,57 @@ mod tests {
 
         assert_eq!(updated_session.messages.len(), 1);
         assert_eq!(updated_session.title, Some("hello world".to_string()));
+    }
+
+    /// Concurrent `create_agent` calls with identical specs must converge
+    /// to a single row via the `UNIQUE(spec_json)` + `ON CONFLICT` upsert.
+    /// Verifies Finding #3 (CoW Principle E: DB-level atomicity).
+    #[tokio::test]
+    async fn concurrent_create_agent_deduplicates_by_spec() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let db_path = temp_dir.path().join("app.db");
+        let db_url = format!("sqlite://{}", db_path.display());
+
+        let repository = Arc::new(
+            SqliteRepository::new(&db_url)
+                .await
+                .expect("sqlite repository should be created"),
+        );
+
+        let concurrency = 10;
+        let handles: Vec<_> = (0..concurrency)
+            .map(|_| {
+                let repo = Arc::clone(&repository);
+                tokio::spawn(async move { repo.create_agent(AgentSpec::new("gpt-4.1")).await })
+            })
+            .collect();
+
+        let mut ids = std::collections::HashSet::new();
+        let mut created_count = 0usize;
+        for handle in handles {
+            let (agent, created) = handle
+                .await
+                .expect("task should join")
+                .expect("agent should be returned");
+            ids.insert(agent.id);
+            if created {
+                created_count += 1;
+            }
+        }
+
+        assert_eq!(ids.len(), 1, "all concurrent calls should return the same agent id");
+        // The `created` flag drives the handler's 201-vs-200 decision. Under
+        // concurrency, exactly one caller may observe `created=true` — all
+        // others must see the existing row via ON CONFLICT DO UPDATE.
+        assert_eq!(
+            created_count, 1,
+            "exactly one concurrent call should have inserted the row"
+        );
+
+        let agents = repository
+            .list_agents()
+            .await
+            .expect("agents should be listed");
+        assert_eq!(agents.len(), 1, "exactly one agent row should exist in DB");
     }
 }
