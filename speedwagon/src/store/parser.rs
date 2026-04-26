@@ -94,3 +94,142 @@ pub async fn get_title(content: &str) -> Result<String> {
         }
     }
 }
+
+const PURPOSE_INSTRUCTION: &str = concat!(
+    "You are generating search metadata for a document retrieval system. ",
+    "Your output will be used as BM25 search terms — optimize for retrieval, NOT readability.\n\n",
+    "Given a document content preview (first 3000 characters), return ONLY a JSON object: ",
+    "{\"purpose\": \"<string>\"}.\n\n",
+    "purpose rules:\n",
+    "- ONE sentence, 80–150 characters\n",
+    "- MUST include: entity name(s), year/date, document type, 3–5 key topic terms\n",
+    "- Think: \"what search queries should find this document?\"\n",
+    "- Do NOT describe what the document says. Write what it IS and what it is FOR.\n\n",
+    "GOOD: \"3M Company FY2018 10-K Annual Report — revenue $32.8B, safety industrial, healthcare, EPS growth\"\n",
+    "BAD:  \"This document discusses the company's financial results\"",
+);
+
+const PURPOSE_PREVIEW_CHARS: usize = 3000;
+
+/// Wraps an Ailoy agent used to generate document purpose metadata via LLM.
+pub struct PurposeAgent {
+    spec: AgentSpec,
+    provider: Option<AgentProvider>,
+}
+
+impl PurposeAgent {
+    pub fn new(provider: Option<AgentProvider>) -> Self {
+        Self {
+            spec: AgentSpec::new("openai/gpt-5.4-mini").instruction(PURPOSE_INSTRUCTION),
+            provider,
+        }
+    }
+
+    pub async fn generate(&self, content: &str) -> Result<String> {
+        let snippet: String = content.chars().take(PURPOSE_PREVIEW_CHARS).collect();
+        let query = Message::new(Role::User).with_contents([Part::text(snippet)]);
+
+        let mut agent = match &self.provider {
+            Some(provider) => Agent::try_with_provider(self.spec.clone(), provider).await?,
+            None => Agent::try_new(self.spec.clone()).await?,
+        };
+
+        let mut text_parts: Vec<String> = Vec::new();
+        {
+            let mut stream = agent.run(query);
+            while let Some(result) = stream.next().await {
+                let output = result?;
+                for part in &output.message.contents {
+                    if let Some(text) = part.as_text() {
+                        text_parts.push(text.to_string());
+                    }
+                }
+            }
+        }
+
+        let raw = text_parts.join("");
+        Ok(parse_purpose_response(&raw))
+    }
+}
+
+fn parse_purpose_response(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Some(p) = value.get("purpose").and_then(|v| v.as_str())
+    {
+        return p.trim().to_string();
+    }
+
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
+        && start < end
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&trimmed[start..=end])
+        && let Some(p) = value.get("purpose").and_then(|v| v.as_str())
+    {
+        return p.trim().to_string();
+    }
+
+    String::new()
+}
+
+pub async fn get_purpose(content: &str) -> Result<String> {
+    dotenvy::dotenv().ok();
+
+    let mut provider = AgentProvider::new();
+    provider.model_openai(
+        std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set in environment")?,
+    );
+
+    let purpose = PurposeAgent::new(Some(provider)).generate(content).await?;
+    if purpose.is_empty() {
+        log::warn!("purpose generation returned empty string; indexing without purpose metadata");
+    }
+    Ok(purpose)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_purpose_response_plain_json() {
+        let raw = r#"{"purpose": "3M Company FY2018 10-K Annual Report"}"#;
+        assert_eq!(
+            parse_purpose_response(raw),
+            "3M Company FY2018 10-K Annual Report"
+        );
+    }
+
+    #[test]
+    fn parse_purpose_response_with_whitespace() {
+        let raw = "\n  {\"purpose\": \"hello\"}  \n";
+        assert_eq!(parse_purpose_response(raw), "hello");
+    }
+
+    #[test]
+    fn parse_purpose_response_with_surrounding_text() {
+        let raw = "Sure, here you go: {\"purpose\": \"Costco 2023 Q1 earnings\"} — done.";
+        assert_eq!(parse_purpose_response(raw), "Costco 2023 Q1 earnings");
+    }
+
+    #[test]
+    fn parse_purpose_response_empty() {
+        assert_eq!(parse_purpose_response(""), "");
+        assert_eq!(parse_purpose_response("   "), "");
+    }
+
+    #[test]
+    fn parse_purpose_response_invalid_json() {
+        assert_eq!(parse_purpose_response("not json"), "");
+        assert_eq!(parse_purpose_response("{not: json}"), "");
+    }
+
+    #[test]
+    fn parse_purpose_response_missing_field() {
+        let raw = r#"{"other": "value"}"#;
+        assert_eq!(parse_purpose_response(raw), "");
+    }
+}

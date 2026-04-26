@@ -79,9 +79,18 @@ impl Store {
         if !indexer::document_exists(&self.index, &id.to_string())? {
             let content = fs::read_to_string(&corpus_path)
                 .with_context(|| format!("failed to read corpus: {corpus_path:?}"))?;
-            let title = parser::get_title(&content).await?;
+            let (title, purpose) = tokio::try_join!(
+                parser::get_title(&content),
+                parser::get_purpose(&content),
+            )?;
 
-            indexer::add_document(&self.index, &id.to_string(), &title, &content)?;
+            indexer::add_document(
+                &self.index,
+                &id.to_string(),
+                &title,
+                &purpose,
+                &content,
+            )?;
         }
 
         Ok(id)
@@ -132,15 +141,20 @@ impl Store {
             return Ok(all_ids);
         }
 
-        let mut docs: Vec<(String, String, String)> = Vec::with_capacity(to_index.len());
+        let mut docs: Vec<(String, String, String, String)> = Vec::with_capacity(to_index.len());
         for (id, content) in to_index {
-            let title = parser::get_title(&content).await?;
-            docs.push((id.to_string(), title, content));
+            let (title, purpose) = tokio::try_join!(
+                parser::get_title(&content),
+                parser::get_purpose(&content),
+            )?;
+            docs.push((id.to_string(), title, purpose, content));
         }
 
-        let refs: Vec<(&str, &str, &str)> = docs
+        let refs: Vec<(&str, &str, &str, &str)> = docs
             .iter()
-            .map(|(id, title, content)| (id.as_str(), title.as_str(), content.as_str()))
+            .map(|(id, title, purpose, content)| {
+                (id.as_str(), title.as_str(), purpose.as_str(), content.as_str())
+            })
             .collect();
         indexer::add_documents(&self.index, &refs)?;
 

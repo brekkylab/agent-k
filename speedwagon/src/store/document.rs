@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct Document {
     pub id: String,
     pub title: String,
+    pub purpose: String,
     pub content: Option<String>,
     pub len: usize,
 }
@@ -27,8 +28,8 @@ impl fmt::Display for Document {
         };
         write!(
             f,
-            "{{ id: {}, title: {}, len: {}, content: {} }}",
-            self.id, self.title, self.len, content
+            "{{ id: {}, title: {}, purpose: {}, len: {}, content: {} }}",
+            self.id, self.title, self.purpose, self.len, content
         )
     }
 }
