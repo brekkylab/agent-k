@@ -31,8 +31,7 @@ async fn create_session(
     // let ts = speedwagon::build_toolset(store);
     let ts = ailoy::tool::ToolSet::new();
 
-    // Agent::try_new produces a !Send future due to ToolFactory in ailoy;
-    // run it in a blocking thread so the handler future stays Send.
+    // Define agent
     let agent = Agent::try_with_tools(spec, &*default_provider().await, &ts)
         .await
         .map_err(|e| {
