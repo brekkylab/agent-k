@@ -16,13 +16,12 @@ use crate::store::Store;
 pub fn build_toolset(store: Arc<Store>) -> ToolSet {
     let mut toolset = ToolSet::new();
 
-    let (desc, func) = make_search_document_tool(store.clone());
-    toolset.insert("search_document", desc, func);
-    let (desc, func) = build_find_in_document_tool(store.clone());
-    toolset.insert("find_in_document", desc, func);
-    let (desc, func) = build_read_document_tool(store.clone());
-    toolset.insert("read_document", desc, func);
-    let (desc, func) = build_calculate_tool();
-    toolset.insert("calculate", desc, func);
+    toolset.insert("search_document", make_search_document_tool(store.clone()));
+    toolset.insert(
+        "find_in_document",
+        build_find_in_document_tool(store.clone()),
+    );
+    toolset.insert("read_document", build_read_document_tool(store.clone()));
+    toolset.insert("calculate", build_calculate_tool());
     toolset
 }

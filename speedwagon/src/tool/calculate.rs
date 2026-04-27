@@ -1,13 +1,13 @@
 use ailoy::{
     datatype::Value,
-    message::{ToolDesc, ToolDescBuilder},
+    message::ToolDescBuilder,
     to_value,
-    tool::ToolFunc,
+    tool::{ToolFactory, ToolFunc},
 };
 
 // ── Public entry point ─────────────────────────────────────────────────
 
-pub fn build_calculate_tool() -> (ToolDesc, ToolFunc) {
+pub fn build_calculate_tool() -> ToolFactory {
     let desc = ToolDescBuilder::new("calculate")
         .description(
             "Evaluate a mathematical expression and return the numeric result. \
@@ -42,7 +42,7 @@ pub fn build_calculate_tool() -> (ToolDesc, ToolFunc) {
         }
     });
 
-    (desc, func)
+    ToolFactory::simple(desc, func)
 }
 
 // ── Core evaluator ─────────────────────────────────────────────────────

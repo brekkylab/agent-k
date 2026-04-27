@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use ailoy::{
     datatype::Value,
-    message::{ToolDesc, ToolDescBuilder},
+    message::ToolDescBuilder,
     to_value,
-    tool::ToolFunc,
+    tool::{ToolFactory, ToolFunc},
 };
 use uuid::Uuid;
 
 use crate::store::Store;
 
-pub fn build_read_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
+pub fn build_read_document_tool(store: Arc<Store>) -> ToolFactory {
     let desc = ToolDescBuilder::new("read_document")
         .description(concat!(
             "Read a byte range of a document's content. ",
@@ -68,5 +68,5 @@ pub fn build_read_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
         }
     });
 
-    (desc, func)
+    ToolFactory::simple(desc, func)
 }

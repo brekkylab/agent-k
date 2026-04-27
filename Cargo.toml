@@ -1,8 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
+    "backend-v2",
     "./speedwagon",
 ]
 
 [workspace.dependencies]
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "c42231e1023ec91884014b17488aac3b61fb7067" }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "5d4f8d3c3cbbab45138d487555ac1e29be04052c" }
+speedwagon = { path = "./speedwagon", default-features = false }

@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use ailoy::{
     datatype::Value,
-    message::{ToolDesc, ToolDescBuilder},
+    message::ToolDescBuilder,
     to_value,
-    tool::ToolFunc,
+    tool::{ToolFactory, ToolFunc},
 };
 use uuid::Uuid;
 
@@ -33,7 +33,7 @@ fn result_to_value(result: &FindResult) -> Value {
     })
 }
 
-pub fn build_find_in_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
+pub fn build_find_in_document_tool(store: Arc<Store>) -> ToolFactory {
     let desc = ToolDescBuilder::new("find_in_document")
         .description(concat!(
             "Find all occurrences of a regex pattern within a document. ",
@@ -144,5 +144,5 @@ pub fn build_find_in_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
         }
     });
 
-    (desc, func)
+    ToolFactory::simple(desc, func)
 }

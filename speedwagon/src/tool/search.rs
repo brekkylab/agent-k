@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use ailoy::{
     datatype::Value,
-    message::{ToolDesc, ToolDescBuilder},
+    message::ToolDescBuilder,
     to_value,
-    tool::ToolFunc,
+    tool::{ToolFactory, ToolFunc},
 };
 
 use crate::store::{SearchPage, Store};
@@ -26,7 +26,7 @@ fn result_to_value(page: &SearchPage) -> Value {
     Value::Array(results)
 }
 
-pub fn make_search_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
+pub fn make_search_document_tool(store: Arc<Store>) -> ToolFactory {
     let desc = ToolDescBuilder::new("search_document")
         .description(concat!(
             "Search for relevant documents for a given query. ",
@@ -109,5 +109,5 @@ pub fn make_search_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
         }
     });
 
-    (desc, func)
+    ToolFactory::simple(desc, func)
 }
