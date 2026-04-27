@@ -1,5 +1,5 @@
 rm -f run.spec
-.venv/bin/pyinstaller run.py \
+.venv/bin/pyinstaller convert_pdf_to_md.py \
     --onedir \
     --noconfirm \
     --recursive-copy-metadata=docling \
