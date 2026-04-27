@@ -27,8 +27,13 @@ fn result_to_value(result: &FindResult) -> Value {
         Some(c) => Value::from(c),
         None => Value::Null,
     };
+    let relaxation = match result.relaxation {
+        Some(r) => Value::from(r),
+        None => Value::Null,
+    };
     to_value!({
         "next_cursor": next_cursor,
+        "relaxation": relaxation,
         "matches": Value::Array(matches),
     })
 }
@@ -36,11 +41,18 @@ fn result_to_value(result: &FindResult) -> Value {
 pub fn build_find_in_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
     let desc = ToolDescBuilder::new("find_in_document")
         .description(concat!(
-            "Find all occurrences of a regex pattern within a document. ",
-            "Matching is always case-insensitive. ",
-            "Returns matches with surrounding context and byte offsets. ",
-            "Results are paginated — pass 'next_cursor' back as 'cursor' to fetch the next batch. ",
-            "When 'next_cursor' is null, all matches have been returned.",
+            "Find occurrences of a query within a document. Matching is line-oriented and ",
+            "case-insensitive; one match is reported per matching line. ",
+            "Query syntax (subset of structured query syntax): ",
+            "bare words (e.g. `revenue cost`) are treated as keywords joined by AND, ",
+            "with progressive fallback — if no line has all of them, the tool retries with ",
+            "≥half, then ≥one. The fallback level (\"all\"/\"half\"/\"any\") is reported in ",
+            "`relaxation`; null means no fallback was needed or the query used explicit operators. ",
+            "Use `\"phrase\"` for an exact phrase, `+term`/`-term` (or `NOT term`) to require/exclude, ",
+            "`AND`/`OR` for boolean combinations, `(group)` for grouping, and `/regex/` for a regex ",
+            "literal — any of these disables the bare-word fallback so the query is evaluated as written. ",
+            "Returns matches with byte offsets and surrounding context bytes. ",
+            "Paginate by passing `next_cursor` back as `cursor`; null means no more results.",
         ))
         .parameters(to_value!({
             "type": "object",
@@ -51,7 +63,7 @@ pub fn build_find_in_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
                 },
                 "pattern": {
                     "type": "string",
-                    "description": "Regex pattern to search for"
+                    "description": "Query string. Bare words (e.g. `revenue cost`) get AND→half→any fallback. Use `\"phrase\"`, `+term`, `-term`, `AND`, `OR`, `NOT`, `(group)`, or `/regex/` for explicit semantics (no fallback)."
                 },
                 "cursor": {
                     "type": "integer",
@@ -77,6 +89,10 @@ pub fn build_find_in_document_tool(store: Arc<Store>) -> (ToolDesc, ToolFunc) {
                 "next_cursor": {
                     "type": ["integer", "null"],
                     "description": "Pass this value as 'cursor' in the next call to get the next batch; null means no more results"
+                },
+                "relaxation": {
+                    "type": ["string", "null"],
+                    "description": "Fallback level used for bare-word queries: 'all' (every keyword on the matched line), 'half' (≥half), 'any' (≥one). Null when no fallback was applied or the query used explicit operators."
                 },
                 "matches": {
                     "type": "array",
