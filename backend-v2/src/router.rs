@@ -16,7 +16,7 @@ use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
-    response::sse::{Event, Sse},
+    response::sse::{Event, KeepAlive, Sse},
 };
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -62,18 +62,7 @@ async fn create_session(
     };
     let sandbox = Arc::new(Sandbox::new(cfg).await.map_err(internal)?);
 
-    let bash = make_builtin_tool(&BuiltinToolProvider::Bash {})
-        .await
-        .map_err(internal)?;
-
-    let model = build_lang_model(DEFAULT_MODEL).map_err(internal)?;
-
-    let agent = AgentBuilder::new(model)
-        .tool(bash)
-        .sandbox(sandbox)
-        .build()
-        .await
-        .map_err(internal)?;
+    let agent = build_agent(sandbox).await.map_err(internal)?;
 
     let now = Utc::now();
 
@@ -184,17 +173,7 @@ async fn resolve_agent(
         ..Default::default()
     };
     let sandbox = Arc::new(Sandbox::new(cfg).await.map_err(internal)?);
-    let bash = make_builtin_tool(&BuiltinToolProvider::Bash {})
-        .await
-        .map_err(internal)?;
-    let model = build_lang_model(DEFAULT_MODEL).map_err(internal)?;
-
-    let mut agent = AgentBuilder::new(model)
-        .tool(bash)
-        .sandbox(sandbox)
-        .build()
-        .await
-        .map_err(internal)?;
+    let mut agent = build_agent(sandbox).await.map_err(internal)?;
 
     // Restore persisted history so the agent has full conversation context.
     agent.state.history = history;
@@ -293,7 +272,26 @@ async fn send_message_stream(
         yield Ok(Event::default().event("done").data("[DONE]"));
     };
 
-    Ok(Sse::new(stream))
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+async fn build_agent(sandbox: Arc<ailoy::runenv::Sandbox>) -> Result<ailoy::agent::Agent, String> {
+    let (bash, python, web_search) = tokio::try_join!(
+        make_builtin_tool(&BuiltinToolProvider::Bash {}),
+        make_builtin_tool(&BuiltinToolProvider::PythonRepl {}),
+        make_builtin_tool(&BuiltinToolProvider::WebSearch {}),
+    )
+    .map_err(|e| e.to_string())?;
+    let model = build_lang_model(DEFAULT_MODEL)?;
+    AgentBuilder::new(model)
+        .tool(bash)
+        .tool(python)
+        .tool(web_search)
+        .sandbox(sandbox)
+        .context_manager(ailoy::agent::ContextManager::default())
+        .build()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn build_lang_model(model_full_id: &str) -> Result<LangModel, String> {
