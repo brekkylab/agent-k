@@ -65,7 +65,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # to prevent chile process to run entry point again
     import multiprocessing
     multiprocessing.freeze_support()
     main()
