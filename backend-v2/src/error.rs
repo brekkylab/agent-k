@@ -21,4 +21,8 @@ impl AppError {
     pub fn internal(msg: impl Into<String>) -> ApiError {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(Self::new(msg)))
     }
+
+    pub fn not_found(msg: impl Into<String>) -> ApiError {
+        (StatusCode::NOT_FOUND, Json(Self::new(msg)))
+    }
 }

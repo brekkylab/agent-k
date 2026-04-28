@@ -14,6 +14,8 @@ use std::{
     sync::Arc,
 };
 
+use tokio::sync::RwLock;
+
 use ailoy::{
     agent::{Agent, AgentProvider},
     message::{Message, Part, Role},
@@ -22,7 +24,7 @@ use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
 use rustyline::{DefaultEditor, error::ReadlineError};
-use speedwagon::{FileType, SpeedwagonSpec, Store, build_toolset};
+use speedwagon::{FileType, SharedStore, SpeedwagonSpec, Store, build_toolset};
 
 use speedwagon::preset::{PresetKind, setup_docset};
 
@@ -53,7 +55,7 @@ fn resolve_dir(path: &str) -> PathBuf {
 }
 
 async fn build_agent(store_dir: &Path, model: &str, provider: &AgentProvider) -> Result<Agent> {
-    let store = Arc::new(Store::new(store_dir)?);
+    let store: SharedStore = Arc::new(RwLock::new(Store::new(store_dir)?));
     let toolset = build_toolset(store);
     let spec = SpeedwagonSpec::new().model(model).into_spec();
     Agent::try_with_tools(spec, provider, &toolset).await

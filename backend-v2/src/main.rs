@@ -1,20 +1,14 @@
-mod error;
-mod model;
-mod router;
-mod state;
-
 use std::sync::Arc;
 
+use agent_k_backend::router;
+use agent_k_backend::state::AppState;
 use aide::axum::ApiRouter;
 use aide::openapi::{Info, OpenApi};
 use aide::scalar::Scalar;
 use ailoy::agent::default_provider_mut;
 use axum::Extension;
 use axum::response::IntoResponse;
-use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
-
-use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -43,7 +37,6 @@ async fn main() -> std::io::Result<()> {
     }
 
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-    // let app_state = Arc::new(AppState::new().await?);
 
     aide::generate::on_error(|error| {
         tracing::warn!("aide schema error: {error}");
@@ -65,7 +58,7 @@ async fn main() -> std::io::Result<()> {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app_state = Arc::new(Mutex::new(AppState::new()));
+    let app_state = Arc::new(AppState::new());
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)
         .merge(

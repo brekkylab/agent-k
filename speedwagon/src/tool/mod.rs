@@ -3,17 +3,15 @@ mod find;
 mod read;
 mod search;
 
-use std::sync::Arc;
-
 use ailoy::tool::ToolSet;
 pub use calculate::*;
 pub use find::*;
 pub use read::*;
 pub use search::*;
 
-use crate::store::Store;
+use crate::store::SharedStore;
 
-pub fn build_toolset(store: Arc<Store>) -> ToolSet {
+pub fn build_toolset(store: SharedStore) -> ToolSet {
     let mut toolset = ToolSet::new();
 
     toolset.insert("search_document", make_search_document_tool(store.clone()));
