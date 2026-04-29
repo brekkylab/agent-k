@@ -6,5 +6,5 @@ members = [
 ]
 
 [workspace.dependencies]
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "922d25b2c0733b7c95df4d4fe232a73cfdcef928", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "ff71bd186df308e1e6a54e0b1b63c726be5ad8e3", features = ["sandbox"] }
 speedwagon = { path = "./speedwagon", default-features = false }
