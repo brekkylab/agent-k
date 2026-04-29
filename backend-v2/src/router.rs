@@ -342,7 +342,7 @@ async fn build_agent(sandbox: Arc<ailoy::runenv::Sandbox>) -> Result<ailoy::agen
         .tool(bash)
         .tool(python)
         .tool(web_search)
-        .sandbox(sandbox)
+        .runenv(sandbox)
         .build()
         .await
         .map_err(|e| e.to_string())
