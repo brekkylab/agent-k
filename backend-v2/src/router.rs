@@ -343,7 +343,6 @@ async fn build_agent(sandbox: Arc<ailoy::runenv::Sandbox>) -> Result<ailoy::agen
         .tool(python)
         .tool(web_search)
         .sandbox(sandbox)
-        .context_manager(ailoy::agent::ContextManager::default())
         .build()
         .await
         .map_err(|e| e.to_string())
