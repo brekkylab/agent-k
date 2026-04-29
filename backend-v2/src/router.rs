@@ -94,7 +94,7 @@ async fn build_agent(sandbox: Arc<Sandbox>, toolset: &ToolSet) -> Result<Agent, 
         .tool(bash)
         .tool(python)
         .tool(web_search)
-        .sandbox(sandbox)
+        .runenv(sandbox)
         .subagent(sw_card, sw_agent)
         .build()
         .await
