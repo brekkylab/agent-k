@@ -6,20 +6,21 @@ use anyhow::{Context as _, Result};
 ///
 /// Pipeline:
 /// 1. Read HTML from `html_path`.
-/// 2. Extract metadata + baseline body via `dom_smoothie` (Readability-style).
-/// 3. If the page is a MediaWiki/Wikipedia article (`mw-parser-output`),
-///    override the body with a direct `dom_query` extraction that strips
-///    known noise selectors — recovers sibling sections that Readability
-///    scoring tends to prune.
+/// 2. Extract metadata via `dom_smoothie` (title, byline, excerpt, dates,
+///    language, image, favicon, …). `article.content` is **not** used for
+///    the body.
+/// 3. Body extraction: generic chrome-strip — drop HTML5 semantic chrome
+///    (`<nav>`/`<header>`/`<footer>`/`<aside>`), aria landmarks, hidden
+///    nodes, scripts/styles, and known MediaWiki/Fandom in-content noise.
 /// 4. Convert the chosen body HTML to Markdown via `html-to-markdown-rs`.
-/// 5. Emit YAML frontmatter (title, byline, excerpt, language, dates, …)
-///    followed by an optional `# Title` and the Markdown body.
+/// 5. Emit YAML frontmatter followed by an optional `# Title` and the
+///    Markdown body.
 pub(super) fn translate_html(html_path: &Path, md_path: &Path) -> Result<()> {
     // 1. Acquire HTML.
     let html = fs::read_to_string(html_path)
         .with_context(|| format!("failed to read HTML file: {html_path:?}"))?;
 
-    // 2. dom_smoothie — metadata + baseline body.
+    // 2. dom_smoothie — metadata only.
     let cfg = dom_smoothie::Config {
         candidate_select_mode: dom_smoothie::CandidateSelectMode::DomSmoothie,
         readable_min_score: 10.0,
@@ -33,25 +34,14 @@ pub(super) fn translate_html(html_path: &Path, md_path: &Path) -> Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("dom_smoothie::parse: {e}"))?;
 
-    // 3. Site-specific override.
-    let (body_html, strategy) = if html.contains("mw-parser-output") {
-        match extract_wikipedia_content(&html) {
-            Some(wiki) => (wiki, "wikipedia_dom_query"),
-            None => (article.content.to_string(), "dom_smoothie"),
-        }
-    } else if html.contains("theme-doc-markdown") {
-        match extract_docusaurus_content(&html) {
-            Some(d) => (d, "docusaurus_dom_query"),
-            None => (article.content.to_string(), "dom_smoothie"),
-        }
-    } else if html.contains("data-questionid") {
-        match extract_stackoverflow_content(&html) {
-            Some(s) => (s, "stackoverflow_dom_query"),
-            None => (article.content.to_string(), "dom_smoothie"),
-        }
-    } else {
-        (article.content.to_string(), "dom_smoothie")
-    };
+    // 3. Body extraction via chrome-strip. dom_smoothie above is used only
+    //    for metadata; its `article.content` is *not* used for the body.
+    //    Empirical testing on Wikipedia, Fandom, Docusaurus, and Stack
+    //    Overflow showed that simple chrome stripping (HTML5 semantic chrome
+    //    + MediaWiki-style noise classes) preserves heading structure as
+    //    well as Readability-style scoring while avoiding sibling-section
+    //    pruning that Readability-style algorithms commonly cause.
+    let body_html = default_chrome_strip(&html);
 
     // 4. HTML → Markdown.
     let result = html_to_markdown_rs::convert(&body_html, Default::default())
@@ -63,7 +53,6 @@ pub(super) fn translate_html(html_path: &Path, md_path: &Path) -> Result<()> {
     // 5. YAML frontmatter.
     let mut out = String::from("---\n");
     out.push_str("converter: html-to-markdown-rs\n");
-    out.push_str(&format!("extraction_strategy: {strategy}\n"));
     add_field(&mut out, "title", &article.title);
     if let Some(s) = article.byline.as_deref() {
         add_field(&mut out, "byline", s);
@@ -110,118 +99,65 @@ pub(super) fn translate_html(html_path: &Path, md_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Extract `<div class="mw-parser-output">` inner HTML from a Wikipedia /
-/// MediaWiki page after stripping known non-content selectors. Returns `None`
-/// if the wrapper isn't present or the result would be empty.
-fn extract_wikipedia_content(html: &str) -> Option<String> {
+/// Generic chrome-strip baseline — drop HTML5 semantic chrome
+/// (`nav`/`header`/`footer`/`aside`), `[role=…]` aria landmarks, and
+/// `<script>`/`<style>`/`<noscript>` from the document. Then return the
+/// `<body>` inner HTML (or the whole document if there's no body).
+///
+/// Also strips MediaWiki / Wikipedia / Fandom in-content noise classes.
+/// The `.mw-*` prefix is unambiguous, and the remaining names are
+/// sufficiently MW-specific in practice that collateral matches on
+/// non-MW sites are negligible.
+fn extract_chrome_stripped(html: &str) -> Option<String> {
     let doc = dom_query::Document::from(html);
 
     for sel in &[
+        // Generic HTML5 chrome.
         "script",
         "style",
         "noscript",
+        "nav",
+        "header",
+        "footer",
+        "aside",
+        "[role=navigation]",
+        "[role=banner]",
+        "[role=contentinfo]",
+        "[role=complementary]",
+        "[hidden]",
+        "[aria-hidden=true]",
+        // MediaWiki / Wikipedia / Fandom in-content noise.
         ".mw-editsection",
-        ".printfooter",
-        ".catlinks",
-        ".navbox",
-        ".navbox-inner",
-        ".sistersitebox",
-        ".metadata",
-        ".reference",
-        ".reflist",
-        ".references",
-        ".hatnote",
-        ".mbox-text-span",
         ".mw-jump-link",
         ".mw-indicators",
         ".mw-empty-elt",
+        ".printfooter",
+        ".catlinks",
+        ".sistersitebox",
+        ".hatnote",
+        ".mbox-text-span",
+        ".navbox",
+        ".navbox-inner",
     ] {
         doc.select(sel).remove();
     }
 
-    let content = doc.select("div.mw-parser-output");
-    if !content.exists() {
-        return None;
-    }
-    let html_out = content.inner_html().to_string();
+    let body = doc.select("body");
+    let html_out = if body.exists() {
+        body.inner_html().to_string()
+    } else {
+        doc.html().to_string()
+    };
     if html_out.trim().is_empty() {
         return None;
     }
     Some(html_out)
 }
 
-/// Extract `#mainbar` inner HTML from a Stack Exchange Q&A page after
-/// stripping vote arrows, post menus, comment threads, and user cards.
-/// `#mainbar` cleanly contains the question + all answers and excludes
-/// the side rails. Returns `None` if the container isn't present.
-fn extract_stackoverflow_content(html: &str) -> Option<String> {
-    let doc = dom_query::Document::from(html);
-
-    for sel in &[
-        "script",
-        "style",
-        "noscript",
-        ".js-vote-count",
-        ".js-voting-container",
-        ".js-vote-up-btn",
-        ".js-vote-down-btn",
-        ".post-menu",
-        ".post-signature",
-        ".user-action-time",
-        ".comments",
-        ".comments-link",
-        ".js-comments-container",
-        ".user-info",
-        ".user-card",
-        ".bookmark-btn",
-        ".follow-post",
-        "[role=region]",
-    ] {
-        doc.select(sel).remove();
-    }
-
-    let content = doc.select("#mainbar");
-    if !content.exists() {
-        return None;
-    }
-    let html_out = content.inner_html().to_string();
-    if html_out.trim().is_empty() {
-        return None;
-    }
-    Some(html_out)
-}
-
-/// Extract `.theme-doc-markdown` inner HTML from a Docusaurus-built site
-/// (reactnative.dev, docusaurus.io, many JS framework docs). Strips embedded
-/// TOC / pagination / breadcrumb noise. Returns `None` when the marker
-/// isn't present.
-fn extract_docusaurus_content(html: &str) -> Option<String> {
-    let doc = dom_query::Document::from(html);
-
-    for sel in &[
-        "script",
-        "style",
-        "noscript",
-        ".theme-doc-toc-mobile",
-        ".theme-doc-toc-desktop",
-        ".pagination-nav",
-        ".theme-doc-breadcrumbs",
-        ".theme-edit-this-page",
-        ".theme-last-updated",
-        ".theme-doc-version-banner",
-    ] {
-        doc.select(sel).remove();
-    }
-
-    let content = doc.select(".theme-doc-markdown");
-    if !content.exists() {
-        return None;
-    }
-    let html_out = content.inner_html().to_string();
-    if html_out.trim().is_empty() {
-        return None;
-    }
-    Some(html_out)
+/// Default body extractor. Falls back to an empty string if even
+/// chrome-strip yields nothing parseable.
+fn default_chrome_strip(html: &str) -> String {
+    extract_chrome_stripped(html).unwrap_or_default()
 }
 
 fn body_starts_with_h1(body: &str) -> bool {
