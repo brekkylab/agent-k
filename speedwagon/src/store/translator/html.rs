@@ -86,8 +86,8 @@ pub(super) fn translate_html(html_path: &Path, md_path: &Path) -> Result<()> {
     }
     out.push_str("---\n\n");
 
-    // 6. Optional H1 prepend.
-    if !article.title.is_empty() && !body_starts_with_h1(&md_body) {
+    // 6. Prepend H1 only if body has none.
+    if !article.title.is_empty() && !body_has_h1(&md_body) {
         out.push_str("# ");
         out.push_str(&article.title);
         out.push_str("\n\n");
@@ -160,11 +160,8 @@ fn default_chrome_strip(html: &str) -> String {
     extract_chrome_stripped(html).unwrap_or_default()
 }
 
-fn body_starts_with_h1(body: &str) -> bool {
-    body.lines()
-        .find(|l| !l.trim().is_empty())
-        .map(|l| l.trim_start().starts_with("# "))
-        .unwrap_or(false)
+fn body_has_h1(body: &str) -> bool {
+    body.lines().any(|l| l.trim_start().starts_with("# "))
 }
 
 /// YAML 1.2 single-quoted scalar (`'` is the only escape).
