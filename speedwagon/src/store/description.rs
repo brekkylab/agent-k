@@ -26,6 +26,7 @@ const DESCRIPTION_INSTRUCTION: &str = concat!(
     "Output must NOT mention dataset names, QA pairs, paper IDs, contract IDs, ",
     "or any metadata about how this knowledge base was assembled. ",
     "Describe ONLY what documents are inside, as if a curator wrote it. ",
+    "Write the description in English regardless of the document language. ",
     "Length: ~200 characters. Output a JSON object: {\"description\": \"<text>\"}."
 );
 
