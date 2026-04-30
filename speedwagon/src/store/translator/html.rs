@@ -167,14 +167,43 @@ fn body_starts_with_h1(body: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// YAML 1.2 single-quoted scalar (`'` is the only escape).
 fn yaml_str(s: &str) -> String {
     let one_line = s.replace(['\n', '\r'], " ");
-    let escaped = one_line.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
+    let escaped = one_line.replace('\'', "''");
+    format!("'{escaped}'")
 }
 
 fn add_field(out: &mut String, key: &str, value: &str) {
     if !value.is_empty() {
         out.push_str(&format!("{key}: {}\n", yaml_str(value)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::yaml_str;
+
+    #[test]
+    fn yaml_str_wraps_in_single_quotes() {
+        assert_eq!(yaml_str("Hello world"), "'Hello world'");
+    }
+
+    #[test]
+    fn yaml_str_doubles_embedded_single_quote() {
+        assert_eq!(yaml_str("Don't stop"), "'Don''t stop'");
+    }
+
+    #[test]
+    fn yaml_str_passes_double_quote_and_backslash_literally() {
+        assert_eq!(
+            yaml_str(r#"That "Smart" Move with C:\path"#),
+            r#"'That "Smart" Move with C:\path'"#,
+        );
+    }
+
+    #[test]
+    fn yaml_str_collapses_newlines() {
+        assert_eq!(yaml_str("line1\nline2\rline3"), "'line1 line2 line3'");
     }
 }

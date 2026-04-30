@@ -11,7 +11,18 @@ fn parse_title(content: &str) -> Option<String> {
             let frontmatter = &content[3..end + 3];
             for line in frontmatter.lines() {
                 if let Some(rest) = line.strip_prefix("title:") {
-                    let title = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+                    let raw = rest.trim();
+                    let title = if let Some(inner) =
+                        raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\''))
+                    {
+                        inner.replace("''", "'")
+                    } else if let Some(inner) =
+                        raw.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+                    {
+                        inner.to_string()
+                    } else {
+                        raw.to_string()
+                    };
                     if !title.is_empty() {
                         return Some(title);
                     }
@@ -231,5 +242,64 @@ mod tests {
     fn parse_purpose_response_missing_field() {
         let raw = r#"{"other": "value"}"#;
         assert_eq!(parse_purpose_response(raw), "");
+    }
+
+    fn frontmatter_with_title(line: &str) -> String {
+        format!("---\n{line}\n---\n\nbody\n")
+    }
+
+    #[test]
+    fn parse_title_single_quoted_plain() {
+        let doc = frontmatter_with_title("title: 'Hello world'");
+        assert_eq!(parse_title(&doc).as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn parse_title_single_quoted_with_apostrophe() {
+        // `'` is escaped as `''` in YAML single-quoted style.
+        let doc = frontmatter_with_title("title: 'Don''t stop'");
+        assert_eq!(parse_title(&doc).as_deref(), Some("Don't stop"));
+    }
+
+    #[test]
+    fn parse_title_single_quoted_with_double_quote_and_backslash() {
+        // `"` and `\` pass through literally — no escaping in this style.
+        let doc = frontmatter_with_title(r#"title: 'That "Smart" Move with C:\path'"#);
+        assert_eq!(
+            parse_title(&doc).as_deref(),
+            Some(r#"That "Smart" Move with C:\path"#),
+        );
+    }
+
+    #[test]
+    fn parse_title_single_quoted_with_all_special_chars() {
+        let doc = frontmatter_with_title(r#"title: 'Mix ''a'' "b" c\d'"#);
+        assert_eq!(
+            parse_title(&doc).as_deref(),
+            Some(r#"Mix 'a' "b" c\d"#),
+        );
+    }
+
+    #[test]
+    fn parse_title_unquoted_returned_literally() {
+        let doc = frontmatter_with_title("title: Plain Title");
+        assert_eq!(parse_title(&doc).as_deref(), Some("Plain Title"));
+    }
+
+    #[test]
+    fn parse_title_double_quoted_strips_outer_only() {
+        // YAML-style outer `"` is treated as syntax (one stripped from each
+        // side); backslash escapes inside are left literal.
+        let doc = frontmatter_with_title(r#"title: "Hello \"World\"""#);
+        assert_eq!(
+            parse_title(&doc).as_deref(),
+            Some(r#"Hello \"World\""#),
+        );
+    }
+
+    #[test]
+    fn parse_title_falls_back_to_h1_when_frontmatter_missing() {
+        let doc = "# Heading Title\n\nbody\n";
+        assert_eq!(parse_title(doc).as_deref(), Some("Heading Title"));
     }
 }
