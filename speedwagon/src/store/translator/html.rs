@@ -4,167 +4,103 @@ use anyhow::{Context as _, Result};
 
 /// Convert a local HTML file to Markdown with YAML frontmatter.
 ///
-/// Pipeline:
-/// 1. Read HTML from `html_path`.
-/// 2. Extract metadata via `dom_smoothie` (title, byline, excerpt, dates,
-///    language, image, favicon, …). `article.content` is **not** used for
-///    the body.
-/// 3. Body extraction: generic chrome-strip — drop HTML5 semantic chrome
-///    (`<nav>`/`<header>`/`<footer>`/`<aside>`), aria landmarks, hidden
-///    nodes, scripts/styles, and known MediaWiki/Fandom in-content noise.
-/// 4. Convert the chosen body HTML to Markdown via `html-to-markdown-rs`.
-/// 5. Emit YAML frontmatter followed by an optional `# Title` and the
-///    Markdown body.
+/// Single-pass: `html-to-markdown-rs` runs metadata extraction over the
+/// `<head>` while converting the body to Markdown. Chrome (HTML5 semantic
+/// elements, aria landmarks, MediaWiki/Fandom noise classes, …) is excluded
+/// from the body via the converter's `exclude_selectors` option.
 pub(super) fn translate_html(html_path: &Path, md_path: &Path) -> Result<()> {
-    // 1. Acquire HTML.
     let html = fs::read_to_string(html_path)
         .with_context(|| format!("failed to read HTML file: {html_path:?}"))?;
 
-    // 2. dom_smoothie — metadata only.
-    let cfg = dom_smoothie::Config {
-        candidate_select_mode: dom_smoothie::CandidateSelectMode::DomSmoothie,
-        readable_min_score: 10.0,
-        readable_min_content_length: 70,
-        n_top_candidates: 10,
-        ..Default::default()
-    };
-    let mut reader = dom_smoothie::Readability::new(html.as_str(), None, Some(cfg))
-        .map_err(|e| anyhow::anyhow!("dom_smoothie::new: {e}"))?;
-    let article = reader
-        .parse()
-        .map_err(|e| anyhow::anyhow!("dom_smoothie::parse: {e}"))?;
+    let mut options = html_to_markdown_rs::ConversionOptions::default();
+    options.exclude_selectors = CHROME_STRIP_SELECTORS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
 
-    // 3. Body extraction via chrome-strip. dom_smoothie above is used only
-    //    for metadata; its `article.content` is *not* used for the body.
-    //    Empirical testing on Wikipedia, Fandom, Docusaurus, and Stack
-    //    Overflow showed that simple chrome stripping (HTML5 semantic chrome
-    //    + MediaWiki-style noise classes) preserves heading structure as
-    //    well as Readability-style scoring while avoiding sibling-section
-    //    pruning that Readability-style algorithms commonly cause.
-    let body_html = default_chrome_strip(&html);
-
-    // 4. HTML → Markdown.
-    let result = html_to_markdown_rs::convert(&body_html, Default::default())
+    let result = html_to_markdown_rs::convert(&html, Some(options))
         .map_err(|e| anyhow::anyhow!("html-to-markdown-rs: {e}"))?;
     let md_body = result
         .content
+        .clone()
         .context("html-to-markdown-rs returned no content")?;
+    let doc_meta = &result.metadata.document;
+    let title = doc_meta.title.clone().unwrap_or_default();
 
-    // 5. YAML frontmatter.
     let mut out = String::from("---\n");
     out.push_str("converter: html-to-markdown-rs\n");
-    add_field(&mut out, "title", &article.title);
-    if let Some(s) = article.byline.as_deref() {
-        add_field(&mut out, "byline", s);
+    add_field(&mut out, "title", &title);
+    if let Some(s) = doc_meta.author.as_deref() {
+        add_field(&mut out, "author", s);
     }
-    if let Some(s) = article.excerpt.as_deref() {
+    if let Some(s) = doc_meta.description.as_deref() {
         add_field(&mut out, "excerpt", s);
     }
-    if let Some(s) = article.site_name.as_deref() {
+    if let Some(s) = doc_meta.open_graph.get("site_name") {
         add_field(&mut out, "site_name", s);
     }
-    if let Some(s) = article.image.as_deref() {
-        add_field(&mut out, "image", s);
-    }
-    if let Some(s) = article.favicon.as_deref() {
-        add_field(&mut out, "favicon", s);
-    }
-    if let Some(s) = article.lang.as_deref() {
+    if let Some(s) = doc_meta.language.as_deref() {
         add_field(&mut out, "language", s);
     }
-    if let Some(s) = article.published_time.as_deref() {
+    // md-rs stores `<meta property="article:…">` keys with `:` → `-`.
+    if let Some(s) = doc_meta.meta_tags.get("article-published_time") {
         add_field(&mut out, "published_time", s);
     }
-    if let Some(s) = article.modified_time.as_deref() {
+    if let Some(s) = doc_meta.meta_tags.get("article-modified_time") {
         add_field(&mut out, "modified_time", s);
-    }
-    if let Some(s) = article.dir.as_deref() {
-        add_field(&mut out, "dir", s);
-    }
-    if article.length > 0 {
-        out.push_str(&format!("text_length: {}\n", article.length));
     }
     out.push_str("---\n\n");
 
-    // 6. Prepend H1 only if body has none.
-    if !article.title.is_empty() && !body_has_h1(&md_body) {
+    if !title.is_empty() && !body_has_h1(&md_body) {
         out.push_str("# ");
-        out.push_str(&article.title);
+        out.push_str(&title);
         out.push_str("\n\n");
     }
     out.push_str(&md_body);
 
-    // 7. Write.
     fs::write(md_path, out).with_context(|| format!("failed to write corpus: {md_path:?}"))?;
     Ok(())
 }
 
-/// Generic chrome-strip baseline — drop HTML5 semantic chrome
-/// (`nav`/`header`/`footer`/`aside`), `[role=…]` aria landmarks, and
-/// `<script>`/`<style>`/`<noscript>` from the document. Then return the
-/// `<body>` inner HTML (or the whole document if there's no body).
-///
-/// Also strips MediaWiki / Wikipedia / Fandom in-content noise classes.
-/// The `.mw-*` prefix is unambiguous, and the remaining names are
-/// sufficiently MW-specific in practice that collateral matches on
-/// non-MW sites are negligible.
-fn extract_chrome_stripped(html: &str) -> Option<String> {
-    let doc = dom_query::Document::from(html);
-
-    for sel in &[
-        // Generic HTML5 chrome.
-        "script",
-        "style",
-        "noscript",
-        "nav",
-        "header",
-        "footer",
-        "aside",
-        "button",
-        "[role=navigation]",
-        "[role=banner]",
-        "[role=contentinfo]",
-        "[role=complementary]",
-        "[role=menu]",
-        "[role=menubar]",
-        "[role=toolbar]",
-        "[role=dialog]",
-        "[hidden]",
-        "[aria-hidden=true]",
-        ".menu-bar",
-        // MediaWiki / Wikipedia / Fandom in-content noise.
-        ".mw-editsection",
-        ".mw-jump-link",
-        ".mw-indicators",
-        ".mw-empty-elt",
-        ".printfooter",
-        ".catlinks",
-        ".sistersitebox",
-        ".hatnote",
-        ".mbox-text-span",
-        ".navbox",
-        ".navbox-inner",
-    ] {
-        doc.select(sel).remove();
-    }
-
-    let body = doc.select("body");
-    let html_out = if body.exists() {
-        body.inner_html().to_string()
-    } else {
-        doc.html().to_string()
-    };
-    if html_out.trim().is_empty() {
-        return None;
-    }
-    Some(html_out)
-}
-
-/// Default body extractor. Falls back to an empty string if even
-/// chrome-strip yields nothing parseable.
-fn default_chrome_strip(html: &str) -> String {
-    extract_chrome_stripped(html).unwrap_or_default()
-}
+/// Selectors stripped from the body before Markdown conversion. Combines
+/// generic HTML5 semantic chrome, ARIA UI landmarks, hidden nodes, and
+/// MediaWiki/Wikipedia/Fandom in-content noise.
+const CHROME_STRIP_SELECTORS: &[&str] = &[
+    // Generic HTML5 chrome.
+    "script",
+    "style",
+    "noscript",
+    "nav",
+    "header",
+    "footer",
+    "aside",
+    "button",
+    "[role=navigation]",
+    "[role=banner]",
+    "[role=contentinfo]",
+    "[role=complementary]",
+    "[role=menu]",
+    "[role=menubar]",
+    "[role=toolbar]",
+    "[role=dialog]",
+    "[hidden]",
+    "[aria-hidden=true]",
+    ".menu-bar",
+    // MediaWiki / Wikipedia / Fandom in-content noise. The `.mw-*` prefix is
+    // unambiguous; remaining names are MW-specific enough that collateral
+    // matches on non-MW sites are negligible.
+    ".mw-editsection",
+    ".mw-jump-link",
+    ".mw-indicators",
+    ".mw-empty-elt",
+    ".printfooter",
+    ".catlinks",
+    ".sistersitebox",
+    ".hatnote",
+    ".mbox-text-span",
+    ".navbox",
+    ".navbox-inner",
+];
 
 fn body_has_h1(body: &str) -> bool {
     body.lines().any(|l| l.trim_start().starts_with("# "))
@@ -185,7 +121,50 @@ fn add_field(out: &mut String, key: &str, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::yaml_str;
+    use std::fs;
+
+    use super::{translate_html, yaml_str};
+
+    fn run_on(html: &str) -> String {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let in_path = temp.path().join("in.html");
+        let out_path = temp.path().join("out.md");
+        fs::write(&in_path, html).expect("write html");
+        translate_html(&in_path, &out_path).expect("translate must not fail on degenerate input");
+        fs::read_to_string(&out_path).expect("read md")
+    }
+
+    #[test]
+    fn translate_html_succeeds_on_degenerate_inputs() {
+        for input in ["", "   \n\t  ", "<!doctype html>", "<html><body></body></html>"] {
+            let md = run_on(input);
+            assert!(md.starts_with("---\n"), "no frontmatter for input {input:?}");
+            assert!(md.contains("converter: html-to-markdown-rs"));
+            assert!(!md.contains("title:"), "unexpected title for input {input:?}");
+        }
+    }
+
+    #[test]
+    fn translate_html_emits_metadata_fields() {
+        let html = r#"<!doctype html>
+<html lang="ko">
+<head>
+<title>Page Title</title>
+<meta name="author" content="Jane Doe">
+<meta name="description" content="A short summary.">
+<meta property="og:site_name" content="My Site">
+<meta property="article:published_time" content="2025-01-02T03:04:05Z">
+</head>
+<body><p>Body paragraph that's long enough to be content.</p></body>
+</html>"#;
+        let md = run_on(html);
+        assert!(md.contains("title: 'Page Title'"));
+        assert!(md.contains("author: 'Jane Doe'"));
+        assert!(md.contains("excerpt: 'A short summary.'"));
+        assert!(md.contains("site_name: 'My Site'"));
+        assert!(md.contains("language: 'ko'"));
+        assert!(md.contains("published_time: '2025-01-02T03:04:05Z'"));
+    }
 
     #[test]
     fn yaml_str_wraps_in_single_quotes() {

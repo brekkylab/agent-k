@@ -21,8 +21,6 @@ clap = { version = "4", features = ["derive"] }
 ailoy = { workspace = true }
 anyhow = "1.0.100"
 chrono = { version = "0.4", features = ["serde"] }
-dom_query = "0.27"
-dom_smoothie = "0.17"
 dotenvy = "0.15"
 dirs = "6"
 futures = "0.3"
