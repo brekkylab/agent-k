@@ -175,11 +175,14 @@ async fn main() -> Result<()> {
                 eprintln!("File not found: {}", path.display());
                 continue;
             }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let filetype = match ext.to_lowercase().as_str() {
-                "pdf" => FileType::PDF,
-                _ => {
-                    eprintln!("Unsupported file type '.{ext}' — only PDF is supported");
+            let filetype = match FileType::from_path(path) {
+                Some(filetype) => filetype,
+                None => {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    eprintln!(
+                        "Unsupported file type '.{ext}' — supported: {}",
+                        FileType::supported_extensions().join(", ")
+                    );
                     continue;
                 }
             };

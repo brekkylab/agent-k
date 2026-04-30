@@ -36,6 +36,36 @@ pub struct Store {
 pub enum FileType {
     PDF,
     MD,
+    HTML,
+}
+
+impl FileType {
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+        match ext.as_str() {
+            "pdf" => Some(Self::PDF),
+            "md" => Some(Self::MD),
+            "html" | "htm" => Some(Self::HTML),
+            _ => None,
+        }
+    }
+
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let ext = path.extension()?.to_str()?;
+        Self::from_extension(ext)
+    }
+
+    pub fn canonical_extension(&self) -> &'static str {
+        match self {
+            Self::PDF => "pdf",
+            Self::MD => "md",
+            Self::HTML => "html",
+        }
+    }
+
+    pub fn supported_extensions() -> &'static [&'static str] {
+        &["pdf", "html", "htm", "md"]
+    }
 }
 
 impl Store {
@@ -66,12 +96,12 @@ impl Store {
                     fs::write(&corpus_path, &bytes)?;
                 }
                 _ => {
-                    let ext = filetype.to_string();
+                    let ext = filetype.canonical_extension();
                     let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
                     if !origin_path.exists() {
                         fs::write(&origin_path, &bytes)?;
                     }
-                    translator::translate(&origin_path, &corpus_path)?;
+                    translator::translate(filetype, &origin_path, &corpus_path)?;
                 }
             }
         }
@@ -120,12 +150,12 @@ impl Store {
                         fs::write(&corpus_path, bytes)?;
                     }
                     _ => {
-                        let ext = filetype.to_string();
+                        let ext = filetype.canonical_extension();
                         let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
                         if !origin_path.exists() {
                             fs::write(&origin_path, bytes)?;
                         }
-                        translator::translate(&origin_path, &corpus_path)?;
+                        translator::translate(filetype.clone(), &origin_path, &corpus_path)?;
                     }
                 }
             }
@@ -253,6 +283,56 @@ impl Store {
             k,
             context_bytes,
         ))
+    }
+}
+
+#[cfg(test)]
+mod filetype_tests {
+    use super::FileType;
+    use std::path::Path;
+
+    #[test]
+    fn filetype_from_extension_maps_supported_extensions() {
+        assert!(matches!(
+            FileType::from_extension("pdf"),
+            Some(FileType::PDF)
+        ));
+        assert!(matches!(
+            FileType::from_extension("PDF"),
+            Some(FileType::PDF)
+        ));
+        assert!(matches!(
+            FileType::from_extension("html"),
+            Some(FileType::HTML)
+        ));
+        assert!(matches!(
+            FileType::from_extension("htm"),
+            Some(FileType::HTML)
+        ));
+        assert!(matches!(FileType::from_extension("md"), Some(FileType::MD)));
+    }
+
+    #[test]
+    fn filetype_from_extension_rejects_unknown_extensions() {
+        assert!(FileType::from_extension("txt").is_none());
+        assert!(FileType::from_extension("").is_none());
+    }
+
+    #[test]
+    fn filetype_from_path_and_canonical_extension() {
+        assert!(matches!(
+            FileType::from_path(Path::new("/tmp/a.PDF")),
+            Some(FileType::PDF)
+        ));
+        assert!(matches!(
+            FileType::from_path(Path::new("/tmp/a.htm")),
+            Some(FileType::HTML)
+        ));
+        assert!(FileType::from_path(Path::new("/tmp/a")).is_none());
+
+        assert_eq!(FileType::PDF.canonical_extension(), "pdf");
+        assert_eq!(FileType::HTML.canonical_extension(), "html");
+        assert_eq!(FileType::MD.canonical_extension(), "md");
     }
 }
 
