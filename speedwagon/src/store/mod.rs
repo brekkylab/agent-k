@@ -1,5 +1,6 @@
 mod description;
 mod document;
+mod helper;
 mod indexer;
 mod parser;
 #[cfg(feature = "internal")]
@@ -16,7 +17,6 @@ use anyhow::{Context as _, Result};
 use tantivy::Index;
 use uuid::Uuid;
 
-pub use description::{DescriptionAgent, fallback_description};
 pub use document::{Document, FindResult};
 pub use searcher::{SearchPage, SearchResult};
 

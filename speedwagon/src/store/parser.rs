@@ -1,9 +1,7 @@
-use ailoy::{
-    agent::{Agent, AgentSpec},
-    message::{Message, Part, Role},
-};
+use ailoy::message::{Message, Part, Role};
 use anyhow::Result;
-use futures::StreamExt as _;
+
+use super::helper::HelperAgent;
 
 fn parse_title(content: &str) -> Option<String> {
     if content.starts_with("---") {
@@ -43,62 +41,44 @@ fn parse_title(content: &str) -> Option<String> {
     None
 }
 
-/// Wraps an Ailoy agent used to generate document titles via LLM. Uses
-/// ailoy's process-global default provider (see `default_provider_mut`).
-pub struct TitleAgent {
-    spec: AgentSpec,
-}
+const TITLE_PREVIEW_CHARS: usize = 8192;
 
-impl Default for TitleAgent {
-    fn default() -> Self {
-        Self::new()
+const TITLE_INSTRUCTION: &str = concat!(
+    "You are a title generator. ",
+    "Given document content, reply with only a concise title under 10 words.",
+);
+
+/// Generates a document title via LLM. Reads from ailoy's process-global
+/// default provider.
+struct TitleAgent;
+
+impl HelperAgent for TitleAgent {
+    type Input<'a> = &'a str;
+    type Output = String;
+    const MODEL: &'static str = "openai/gpt-5.4-mini";
+    const INSTRUCTION: &'static str = TITLE_INSTRUCTION;
+
+    fn build_query(content: &str) -> Message {
+        let snippet: String = content.chars().take(TITLE_PREVIEW_CHARS).collect();
+        Message::new(Role::User).with_contents([Part::text(snippet)])
     }
-}
 
-impl TitleAgent {
-    pub fn new() -> Self {
-        Self {
-            spec: AgentSpec::new("openai/gpt-5.4-mini").instruction(concat!(
-                "You are a title generator. ",
-                "Given document content, reply with only a concise title under 10 words.",
-            )),
-        }
-    }
-
-    pub async fn generate(&self, content: &str) -> Result<String> {
-        let snippet: String = content.chars().take(8192).collect();
-        let query = Message::new(Role::User).with_contents([Part::text(snippet)]);
-
-        let mut agent = Agent::try_new(self.spec.clone()).await?;
-
-        let mut text_parts: Vec<String> = Vec::new();
-        {
-            let mut stream = agent.run(query);
-            while let Some(result) = stream.next().await {
-                let output = result?;
-                for part in &output.message.contents {
-                    if let Some(text) = part.as_text() {
-                        text_parts.push(text.to_string());
-                    }
-                }
-            }
-        }
-
-        let title = text_parts.join("").trim().to_string();
-        Ok(if title.is_empty() {
+    fn parse(raw: &str) -> String {
+        let title = raw.trim().to_string();
+        if title.is_empty() {
             "Untitled".to_string()
         } else {
             title
-        })
+        }
     }
 }
 
 /// Generates a title from `content`. The frontmatter/H1 fast path runs first;
 /// if neither is present, falls back to `TitleAgent`.
-pub async fn get_title(content: &str) -> Result<String> {
+pub(super) async fn get_title(content: &str) -> Result<String> {
     match parse_title(content) {
         Some(t) => Ok(t),
-        None => TitleAgent::new().generate(content).await,
+        None => TitleAgent::generate(content).await,
     }
 }
 
@@ -118,46 +98,23 @@ const PURPOSE_INSTRUCTION: &str = concat!(
 
 const PURPOSE_PREVIEW_CHARS: usize = 3000;
 
-/// Wraps an Ailoy agent used to generate document purpose metadata via LLM.
-/// Uses ailoy's process-global default provider (see `default_provider_mut`).
-pub struct PurposeAgent {
-    spec: AgentSpec,
-}
+/// Generates BM25-friendly search metadata for a document via LLM. Reads from
+/// ailoy's process-global default provider.
+struct PurposeAgent;
 
-impl Default for PurposeAgent {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl HelperAgent for PurposeAgent {
+    type Input<'a> = &'a str;
+    type Output = String;
+    const MODEL: &'static str = "openai/gpt-5.4-mini";
+    const INSTRUCTION: &'static str = PURPOSE_INSTRUCTION;
 
-impl PurposeAgent {
-    pub fn new() -> Self {
-        Self {
-            spec: AgentSpec::new("openai/gpt-5.4-mini").instruction(PURPOSE_INSTRUCTION),
-        }
-    }
-
-    pub async fn generate(&self, content: &str) -> Result<String> {
+    fn build_query(content: &str) -> Message {
         let snippet: String = content.chars().take(PURPOSE_PREVIEW_CHARS).collect();
-        let query = Message::new(Role::User).with_contents([Part::text(snippet)]);
+        Message::new(Role::User).with_contents([Part::text(snippet)])
+    }
 
-        let mut agent = Agent::try_new(self.spec.clone()).await?;
-
-        let mut text_parts: Vec<String> = Vec::new();
-        {
-            let mut stream = agent.run(query);
-            while let Some(result) = stream.next().await {
-                let output = result?;
-                for part in &output.message.contents {
-                    if let Some(text) = part.as_text() {
-                        text_parts.push(text.to_string());
-                    }
-                }
-            }
-        }
-
-        let raw = text_parts.join("");
-        Ok(parse_purpose_response(&raw))
+    fn parse(raw: &str) -> String {
+        parse_purpose_response(raw)
     }
 }
 
@@ -185,8 +142,8 @@ fn parse_purpose_response(raw: &str) -> String {
 }
 
 /// Runs `PurposeAgent` over `content`.
-pub async fn get_purpose(content: &str) -> Result<String> {
-    let purpose = PurposeAgent::new().generate(content).await?;
+pub(super) async fn get_purpose(content: &str) -> Result<String> {
+    let purpose = PurposeAgent::generate(content).await?;
     if purpose.is_empty() {
         log::warn!("purpose generation returned empty string; indexing without purpose metadata");
     }

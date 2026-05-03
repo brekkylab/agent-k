@@ -4,12 +4,10 @@
 //! Korean output lands ~1/3 the chars of English at the same budget;
 //! per-language budgets are deferred until a near-domain Korean KB shows up.
 
-use ailoy::{
-    agent::{Agent, AgentSpec},
-    message::{Message, Part, Role},
-};
+use ailoy::message::{Message, Part, Role};
 use anyhow::Result;
-use futures::StreamExt as _;
+
+use super::helper::HelperAgent;
 
 const MODEL: &str = "openai/gpt-5.4-mini";
 
@@ -30,51 +28,30 @@ const DESCRIPTION_INSTRUCTION: &str = concat!(
     "Length: ~200 characters. Output a JSON object: {\"description\": \"<text>\"}."
 );
 
-/// Uses ailoy's process-global default provider (see `default_provider_mut`).
-pub struct DescriptionAgent {
-    spec: AgentSpec,
+/// Borrowed input for `DescriptionAgent::generate`.
+struct DescriptionInput<'a> {
+    kb_name: &'a str,
+    instruction: Option<&'a str>,
+    docs: &'a [(&'a str, &'a str)],
 }
 
-impl Default for DescriptionAgent {
-    fn default() -> Self {
-        Self::new()
+/// Generates a KB-level routing description via LLM. Reads from ailoy's
+/// process-global default provider.
+struct DescriptionAgent;
+
+impl HelperAgent for DescriptionAgent {
+    type Input<'a> = DescriptionInput<'a>;
+    type Output = String;
+    const MODEL: &'static str = MODEL;
+    const INSTRUCTION: &'static str = DESCRIPTION_INSTRUCTION;
+
+    fn build_query(input: DescriptionInput<'_>) -> Message {
+        let user = build_user_message(input.kb_name, input.instruction, input.docs);
+        Message::new(Role::User).with_contents([Part::text(user)])
     }
-}
 
-impl DescriptionAgent {
-    pub fn new() -> Self {
-        Self {
-            spec: AgentSpec::new(MODEL).instruction(DESCRIPTION_INSTRUCTION),
-        }
-    }
-
-    /// Only `purpose` is sent to the LLM; `title` is kept in the signature
-    /// so the caller can feed the same slice to `fallback_description`.
-    pub async fn generate(
-        &self,
-        kb_name: &str,
-        instruction: Option<&str>,
-        docs: &[(&str, &str)],
-    ) -> Result<String> {
-        let user = build_user_message(kb_name, instruction, docs);
-        let query = Message::new(Role::User).with_contents([Part::text(user)]);
-
-        let mut agent = Agent::try_new(self.spec.clone()).await?;
-
-        let mut text_parts: Vec<String> = Vec::new();
-        {
-            let mut stream = agent.run(query);
-            while let Some(result) = stream.next().await {
-                let output = result?;
-                for part in &output.message.contents {
-                    if let Some(text) = part.as_text() {
-                        text_parts.push(text.to_string());
-                    }
-                }
-            }
-        }
-        let raw = text_parts.join("");
-        Ok(parse_description_response(&raw))
+    fn parse(raw: &str) -> String {
+        parse_description_response(raw)
     }
 }
 
@@ -126,14 +103,17 @@ fn parse_description_response(raw: &str) -> String {
 
 /// Runs `DescriptionAgent` and substitutes `fallback_description` if the LLM
 /// body is empty. Transport errors propagate.
-pub async fn get_description(
+pub(super) async fn get_description(
     kb_name: &str,
     instruction: Option<&str>,
     docs: &[(&str, &str)],
 ) -> Result<String> {
-    let result = DescriptionAgent::new()
-        .generate(kb_name, instruction, docs)
-        .await?;
+    let result = DescriptionAgent::generate(DescriptionInput {
+        kb_name,
+        instruction,
+        docs,
+    })
+    .await?;
     if result.is_empty() {
         log::warn!("description generation returned empty string; using fallback");
         let titles: Vec<&str> = docs.iter().map(|(t, _)| *t).collect();
@@ -144,7 +124,7 @@ pub async fn get_description(
 }
 
 /// Deterministic fallback when the LLM call fails or returns empty.
-pub fn fallback_description(doc_count: usize, top_titles: &[&str]) -> String {
+fn fallback_description(doc_count: usize, top_titles: &[&str]) -> String {
     if doc_count == 0 {
         return String::new();
     }
