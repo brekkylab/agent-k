@@ -1,8 +1,8 @@
 use ailoy::{
-    agent::{Agent, AgentProvider, AgentSpec},
+    agent::{Agent, AgentSpec},
     message::{Message, Part, Role},
 };
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use futures::StreamExt as _;
 
 fn parse_title(content: &str) -> Option<String> {
@@ -43,20 +43,25 @@ fn parse_title(content: &str) -> Option<String> {
     None
 }
 
-/// Wraps an Ailoy agent used to generate document titles via LLM.
+/// Wraps an Ailoy agent used to generate document titles via LLM. Uses
+/// ailoy's process-global default provider (see `default_provider_mut`).
 pub struct TitleAgent {
     spec: AgentSpec,
-    provider: Option<AgentProvider>,
+}
+
+impl Default for TitleAgent {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TitleAgent {
-    pub fn new(provider: Option<AgentProvider>) -> Self {
+    pub fn new() -> Self {
         Self {
             spec: AgentSpec::new("openai/gpt-5.4-mini").instruction(concat!(
                 "You are a title generator. ",
                 "Given document content, reply with only a concise title under 10 words.",
             )),
-            provider,
         }
     }
 
@@ -64,10 +69,7 @@ impl TitleAgent {
         let snippet: String = content.chars().take(8192).collect();
         let query = Message::new(Role::User).with_contents([Part::text(snippet)]);
 
-        let mut agent = match &self.provider {
-            Some(provider) => Agent::try_with_provider(self.spec.clone(), provider).await?,
-            None => Agent::try_new(self.spec.clone()).await?,
-        };
+        let mut agent = Agent::try_new(self.spec.clone()).await?;
 
         let mut text_parts: Vec<String> = Vec::new();
         {
@@ -91,18 +93,12 @@ impl TitleAgent {
     }
 }
 
+/// Generates a title from `content`. The frontmatter/H1 fast path runs first;
+/// if neither is present, falls back to `TitleAgent`.
 pub async fn get_title(content: &str) -> Result<String> {
     match parse_title(content) {
         Some(t) => Ok(t),
-        None => {
-            dotenvy::dotenv().ok();
-
-            let mut provier = AgentProvider::new();
-            provier.model_openai(
-                std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set in environment")?,
-            );
-            TitleAgent::new(Some(provier)).generate(content).await
-        }
+        None => TitleAgent::new().generate(content).await,
     }
 }
 
@@ -123,16 +119,21 @@ const PURPOSE_INSTRUCTION: &str = concat!(
 const PURPOSE_PREVIEW_CHARS: usize = 3000;
 
 /// Wraps an Ailoy agent used to generate document purpose metadata via LLM.
+/// Uses ailoy's process-global default provider (see `default_provider_mut`).
 pub struct PurposeAgent {
     spec: AgentSpec,
-    provider: Option<AgentProvider>,
+}
+
+impl Default for PurposeAgent {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PurposeAgent {
-    pub fn new(provider: Option<AgentProvider>) -> Self {
+    pub fn new() -> Self {
         Self {
             spec: AgentSpec::new("openai/gpt-5.4-mini").instruction(PURPOSE_INSTRUCTION),
-            provider,
         }
     }
 
@@ -140,10 +141,7 @@ impl PurposeAgent {
         let snippet: String = content.chars().take(PURPOSE_PREVIEW_CHARS).collect();
         let query = Message::new(Role::User).with_contents([Part::text(snippet)]);
 
-        let mut agent = match &self.provider {
-            Some(provider) => Agent::try_with_provider(self.spec.clone(), provider).await?,
-            None => Agent::try_new(self.spec.clone()).await?,
-        };
+        let mut agent = Agent::try_new(self.spec.clone()).await?;
 
         let mut text_parts: Vec<String> = Vec::new();
         {
@@ -186,15 +184,9 @@ fn parse_purpose_response(raw: &str) -> String {
     String::new()
 }
 
+/// Runs `PurposeAgent` over `content`.
 pub async fn get_purpose(content: &str) -> Result<String> {
-    dotenvy::dotenv().ok();
-
-    let mut provider = AgentProvider::new();
-    provider.model_openai(
-        std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set in environment")?,
-    );
-
-    let purpose = PurposeAgent::new(Some(provider)).generate(content).await?;
+    let purpose = PurposeAgent::new().generate(content).await?;
     if purpose.is_empty() {
         log::warn!("purpose generation returned empty string; indexing without purpose metadata");
     }

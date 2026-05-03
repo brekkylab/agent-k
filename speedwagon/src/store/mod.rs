@@ -72,6 +72,9 @@ impl FileType {
 
 impl Store {
     /// Opens an existing store or creates a new one at `root`.
+    /// LLM-backed metadata (ingest's title/purpose, describe) reads from
+    /// ailoy's process-global default provider — populate it once at app
+    /// boot via `ailoy::agent::default_provider_mut`.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(root.join("origin"))?;

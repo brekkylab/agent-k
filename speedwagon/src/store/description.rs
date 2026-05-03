@@ -5,10 +5,10 @@
 //! per-language budgets are deferred until a near-domain Korean KB shows up.
 
 use ailoy::{
-    agent::{Agent, AgentProvider, AgentSpec},
+    agent::{Agent, AgentSpec},
     message::{Message, Part, Role},
 };
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use futures::StreamExt as _;
 
 const MODEL: &str = "openai/gpt-5.4-mini";
@@ -30,16 +30,21 @@ const DESCRIPTION_INSTRUCTION: &str = concat!(
     "Length: ~200 characters. Output a JSON object: {\"description\": \"<text>\"}."
 );
 
+/// Uses ailoy's process-global default provider (see `default_provider_mut`).
 pub struct DescriptionAgent {
     spec: AgentSpec,
-    provider: Option<AgentProvider>,
+}
+
+impl Default for DescriptionAgent {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DescriptionAgent {
-    pub fn new(provider: Option<AgentProvider>) -> Self {
+    pub fn new() -> Self {
         Self {
             spec: AgentSpec::new(MODEL).instruction(DESCRIPTION_INSTRUCTION),
-            provider,
         }
     }
 
@@ -54,10 +59,7 @@ impl DescriptionAgent {
         let user = build_user_message(kb_name, instruction, docs);
         let query = Message::new(Role::User).with_contents([Part::text(user)]);
 
-        let mut agent = match &self.provider {
-            Some(provider) => Agent::try_with_provider(self.spec.clone(), provider).await?,
-            None => Agent::try_new(self.spec.clone()).await?,
-        };
+        let mut agent = Agent::try_new(self.spec.clone()).await?;
 
         let mut text_parts: Vec<String> = Vec::new();
         {
@@ -122,23 +124,16 @@ fn parse_description_response(raw: &str) -> String {
     String::new()
 }
 
-/// Reads `OPENAI_API_KEY` from the environment, runs `DescriptionAgent`, and
-/// substitutes `fallback_description` if the LLM body is empty. Transport
-/// errors (missing key, network) propagate.
+/// Runs `DescriptionAgent` and substitutes `fallback_description` if the LLM
+/// body is empty. Transport errors propagate.
 pub async fn get_description(
     kb_name: &str,
     instruction: Option<&str>,
     docs: &[(&str, &str)],
 ) -> Result<String> {
-    dotenvy::dotenv().ok();
-
-    let mut provider = AgentProvider::new();
-    provider.model_openai(
-        std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set in environment")?,
-    );
-
-    let agent = DescriptionAgent::new(Some(provider));
-    let result = agent.generate(kb_name, instruction, docs).await?;
+    let result = DescriptionAgent::new()
+        .generate(kb_name, instruction, docs)
+        .await?;
     if result.is_empty() {
         log::warn!("description generation returned empty string; using fallback");
         let titles: Vec<&str> = docs.iter().map(|(t, _)| *t).collect();
@@ -291,6 +286,12 @@ mod tests {
         // We need origin/ and corpus/ to exist for Store::new.
         std::fs::create_dir_all(root.join("origin")).unwrap();
         std::fs::create_dir_all(root.join("corpus")).unwrap();
+
+        // Populate ailoy's process-global default provider for this test.
+        dotenvy::dotenv().ok();
+        ailoy::agent::default_provider_mut().await.model_openai(
+            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY required for this test"),
+        );
 
         let store = crate::store::Store::new(root).expect("open store");
         let description = store
