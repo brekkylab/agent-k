@@ -6,9 +6,10 @@ use aide::axum::ApiRouter;
 use aide::openapi::{Info, OpenApi};
 use aide::scalar::Scalar;
 use ailoy::agent::default_provider_mut;
+use ailoy::lang_model::LangModelProvider;
 use axum::Extension;
 use axum::response::IntoResponse;
-use speedwagon::{Store, build_toolset};
+use speedwagon::{Store, build_tools};
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -30,20 +31,6 @@ async fn main() -> std::io::Result<()> {
         tracing::warn!("aide schema error: {error}");
     });
     aide::generate::extract_schemas(true);
-
-    // Register API keys with the global provider (needed by Agent::try_with_tools)
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            provider.model_claude(key);
-        }
-        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-            provider.model_gemini(key);
-        }
-    }
 
     let mut openapi = OpenApi {
         info: Info {
@@ -67,9 +54,31 @@ async fn main() -> std::io::Result<()> {
     let store = Arc::new(RwLock::new(
         Store::new(store_path).expect("speedwagon store init"),
     ));
-    let toolset = build_toolset(store.clone());
 
-    let app_state = Arc::new(AppState::new(repo, store, toolset));
+    // Register API keys with the global provider (needed by Agent::try_with_tools)
+    {
+        let mut provider = default_provider_mut().await;
+
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            provider
+                .models
+                .insert("openai/*".into(), LangModelProvider::openai(key));
+        }
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            provider
+                .models
+                .insert("anthropic/*".into(), LangModelProvider::anthropic(key));
+        }
+        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+            provider
+                .models
+                .insert("google/*".into(), LangModelProvider::gemini(key));
+        }
+
+        provider.tools = build_tools(store.clone());
+    }
+
+    let app_state = Arc::new(AppState::new(repo, store));
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)
         .merge(

@@ -12,11 +12,10 @@ mod common;
 use std::sync::Arc;
 
 use agent_k_backend::{repository, state::AppState};
-use ailoy::agent::default_provider_mut;
 use common::{
     SessionGuard, clear_message_history, clear_message_history_status, extract_text,
     get_message_history, get_message_history_status, make_app_with_repo, make_app_with_state,
-    make_repo, make_test_store, post_session, send_message, send_message_status,
+    make_repo, make_test_store, post_session, send_message, send_message_status, setup_provider,
     try_delete_session,
 };
 use uuid::Uuid;
@@ -37,12 +36,7 @@ async fn session_is_found_after_restart_via_lazy_create() {
     // Dummy key: validated only when agent.run() reaches the Anthropic API,
     // which this test never does (it only checks the HTTP status code).
     dotenvy::dotenv().ok();
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-    }
+    setup_provider().await;
 
     let dir = tempfile::tempdir().unwrap();
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
@@ -89,6 +83,7 @@ async fn session_is_found_after_restart_via_lazy_create() {
 #[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
 async fn agent_restores_history_and_processes_message() {
     dotenvy::dotenv().ok();
+    setup_provider().await;
 
     let dir = tempfile::tempdir().unwrap();
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
@@ -149,12 +144,7 @@ async fn agent_restores_history_and_processes_message() {
 #[tokio::test]
 async fn unknown_session_returns_404() {
     dotenvy::dotenv().ok();
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-    }
+    setup_provider().await;
 
     let dir = tempfile::tempdir().unwrap();
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
@@ -177,8 +167,8 @@ async fn unknown_session_returns_404() {
 /// Creates the session directly in the DB to avoid the microsandbox requirement.
 #[tokio::test]
 async fn get_messages_returns_empty_for_new_session() {
-    let (store, toolset) = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, toolset));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -210,8 +200,8 @@ async fn get_messages_returns_404_for_unknown_session() {
 async fn get_messages_returns_persisted_messages_in_order() {
     use ailoy::message::{Message, Part, Role};
 
-    let (store, toolset) = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, toolset));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -255,8 +245,8 @@ async fn clear_messages_returns_404_for_unknown_session() {
 async fn clear_messages_removes_persisted_messages() {
     use ailoy::message::{Message, Part, Role};
 
-    let (store, toolset) = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, toolset));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -291,8 +281,8 @@ async fn clear_messages_removes_persisted_messages() {
 async fn clear_messages_does_not_delete_session() {
     use ailoy::message::{Message, Part, Role};
 
-    let (store, toolset) = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, toolset));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -318,8 +308,8 @@ async fn clear_messages_does_not_delete_session() {
 async fn can_append_messages_after_clear() {
     use ailoy::message::{Message, Part, Role};
 
-    let (store, toolset) = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, toolset));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -352,12 +342,7 @@ async fn can_append_messages_after_clear() {
 #[ignore = "requires microsandbox runtime"]
 async fn clear_messages_also_clears_in_memory_agent_history() {
     dotenvy::dotenv().ok();
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-    }
+    setup_provider().await;
 
     let dir = tempfile::tempdir().unwrap();
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());

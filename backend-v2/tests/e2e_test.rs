@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use aide::openapi::OpenApi;
+use ailoy::lang_model::LangModelProvider;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -10,7 +11,7 @@ use agent_k_backend::repository;
 use agent_k_backend::router::get_router;
 use agent_k_backend::state::AppState;
 use ailoy::agent::default_provider_mut;
-use speedwagon::{FileType, Store, build_toolset};
+use speedwagon::{FileType, Store, build_tools};
 use tokio::sync::RwLock;
 
 fn json_request(method: &str, uri: &str, body: Option<&str>) -> Request<Body> {
@@ -53,17 +54,20 @@ fn extract_assistant_text(outputs: &serde_json::Value) -> String {
 async fn test_ingest_message_purge_cycle() {
     dotenvy::dotenv().ok();
 
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-    }
-
     let store_path = std::env::temp_dir().join(format!("speedwagon-e2e-{}", uuid::Uuid::new_v4()));
     let store = Arc::new(RwLock::new(
         Store::new(store_path).expect("test store init"),
     ));
+
+    {
+        let mut provider = default_provider_mut().await;
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            provider
+                .models
+                .insert("openai/*".into(), LangModelProvider::openai(key));
+        }
+        provider.tools = build_tools(store.clone());
+    }
 
     let test_content = b"The capital of Freedonia is Glorkville. This is a unique fact.";
     let doc_id = store
@@ -73,11 +77,10 @@ async fn test_ingest_message_purge_cycle() {
         .await
         .expect("ingest failed");
 
-    let toolset = build_toolset(store.clone());
     let repo = repository::create_repository("sqlite::memory:")
         .await
         .expect("test repo init");
-    let state = Arc::new(AppState::new(repo, store.clone(), toolset));
+    let state = Arc::new(AppState::new(repo, store.clone()));
     let app = get_router(state).finish_api(&mut OpenApi::default());
 
     // Create session

@@ -6,11 +6,9 @@ use aide::axum::{
     routing::{delete, post},
 };
 use ailoy::{
-    agent::{Agent, AgentBuilder, AgentCard, AgentSpec, default_provider},
-    lang_model::{LangModel, LangModelProvider},
+    agent::{Agent, AgentBuilder, AgentCard},
     message::{Message, MessageOutput, Part, Role},
     runenv::{Sandbox, SandboxConfig},
-    tool::{BuiltinToolProvider, ToolSet, make_builtin_tool},
 };
 use axum::{
     Json,
@@ -52,17 +50,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .with_state(state)
 }
 
-async fn build_agent(sandbox: Arc<Sandbox>, toolset: &ToolSet) -> Result<Agent, String> {
-    let provider_guard = default_provider().await;
-
-    // Builtin tools for code execution and web search
-    let (bash, python, web_search) = tokio::try_join!(
-        make_builtin_tool(&BuiltinToolProvider::Bash {}),
-        make_builtin_tool(&BuiltinToolProvider::PythonRepl {}),
-        make_builtin_tool(&BuiltinToolProvider::WebSearch {}),
-    )
-    .map_err(|e| e.to_string())?;
-
+async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
     // Speedwagon RAG subagent
     let sw_card = AgentCard {
         name: "speedwagon".into(),
@@ -74,14 +62,8 @@ async fn build_agent(sandbox: Arc<Sandbox>, toolset: &ToolSet) -> Result<Agent, 
         skills: vec![],
     };
     let sw_spec = SpeedwagonSpec::new().card(sw_card.clone()).into_spec();
-    let sw_agent = Agent::try_with_tools(sw_spec, &*provider_guard, toolset)
-        .await
-        .map_err(|e| e.to_string())?;
 
-    let model = build_lang_model(DEFAULT_MODEL)?;
-    drop(provider_guard);
-
-    AgentBuilder::new(model)
+    AgentBuilder::new(DEFAULT_MODEL)
         .instruction(concat!(
             "You are a versatile assistant with access to code execution tools ",
             "(bash, python), web search, and a knowledge base (speedwagon). ",
@@ -91,11 +73,11 @@ async fn build_agent(sandbox: Arc<Sandbox>, toolset: &ToolSet) -> Result<Agent, 
             "Use bash and python tools for computation, data analysis, and code execution tasks. ",
             "Only skip tools for greetings or casual conversation.",
         ))
-        .tool(bash)
-        .tool(python)
-        .tool(web_search)
+        .tool("bash")
+        .tool("python_repl")
+        .tool("web_search")
         .runenv(sandbox)
-        .subagent(sw_card, sw_agent)
+        .subagent(sw_spec)
         .build()
         .await
         .map_err(|e| e.to_string())
@@ -139,36 +121,6 @@ async fn build_agent(sandbox: Arc<Sandbox>, toolset: &ToolSet) -> Result<Agent, 
 //     builder.build().await.map_err(|e| e.to_string())
 // }
 
-fn build_lang_model(model_full_id: &str) -> Result<LangModel, String> {
-    if let Some(m) = model_full_id.strip_prefix("anthropic/") {
-        let key = std::env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
-        Ok(LangModel::new(
-            m.to_string(),
-            LangModelProvider::anthropic(key),
-        ))
-    } else if let Some(m) = model_full_id.strip_prefix("openai/") {
-        let key =
-            std::env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY not set".to_string())?;
-        Ok(LangModel::new(
-            m.to_string(),
-            LangModelProvider::openai(key),
-        ))
-    } else if let Some(m) = model_full_id.strip_prefix("google/") {
-        let key =
-            std::env::var("GEMINI_API_KEY").map_err(|_| "GEMINI_API_KEY not set".to_string())?;
-        Ok(LangModel::new(
-            m.to_string(),
-            LangModelProvider::gemini(key),
-        ))
-    } else {
-        Err(format!(
-            "unknown provider prefix in model id: {}",
-            model_full_id
-        ))
-    }
-}
-
 async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(_payload): Json<CreateSessionRequest>,
@@ -181,13 +133,11 @@ async fn create_session(
         persist: true,
         ..Default::default()
     };
-    let sandbox = Arc::new(
-        Sandbox::new(cfg)
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?,
-    );
+    let sandbox = Sandbox::new(cfg)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let agent = build_agent(sandbox, &state.toolset)
+    let agent = build_agent(sandbox)
         .await
         .map_err(|e| AppError::internal(e))?;
 
@@ -282,13 +232,11 @@ async fn resolve_agent(
         persist: true,
         ..Default::default()
     };
-    let sandbox = Arc::new(
-        Sandbox::new(cfg)
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?,
-    );
+    let sandbox = Sandbox::new(cfg)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let mut agent = build_agent(sandbox, &state.toolset)
+    let mut agent = build_agent(sandbox)
         .await
         .map_err(|e| AppError::internal(e))?;
 

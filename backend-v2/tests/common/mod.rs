@@ -5,11 +5,36 @@ use std::sync::Arc;
 
 use agent_k_backend::{repository, router, state::AppState};
 use aide::openapi::OpenApi;
+use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider, tool::ToolProvider};
 use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
-use speedwagon::{Store, build_toolset};
+use speedwagon::Store;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
+
+// ── Provider setup ────────────────────────────────────────────────────────────
+
+/// Register all available API keys and basic builtin tools with the global
+/// `default_provider`.  Call this once per test after `dotenvy::dotenv().ok()`.
+pub async fn setup_provider() {
+    let mut provider = default_provider_mut().await;
+    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+        provider
+            .models
+            .insert("openai/*".into(), LangModelProvider::openai(key));
+    }
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        provider
+            .models
+            .insert("anthropic/*".into(), LangModelProvider::anthropic(key));
+    }
+    if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+        provider
+            .models
+            .insert("google/*".into(), LangModelProvider::gemini(key));
+    }
+    provider.tools = ToolProvider::new().bash().python_repl().web_search();
+}
 
 // ── App / state creation ──────────────────────────────────────────────────────
 
@@ -21,19 +46,18 @@ pub async fn make_repo() -> repository::AppRepository {
 }
 
 /// Create a SharedStore + ToolSet backed by a temporary directory.
-pub fn make_test_store() -> (speedwagon::SharedStore, ailoy::tool::ToolSet) {
+pub fn make_test_store() -> speedwagon::SharedStore {
     let store_path = std::env::temp_dir().join(format!("speedwagon-test-{}", uuid::Uuid::new_v4()));
     let store = Arc::new(RwLock::new(
         Store::new(store_path).expect("test store init"),
     ));
-    let toolset = build_toolset(store.clone());
-    (store, toolset)
+    store
 }
 
 /// Build an app from an already-constructed repository.
 pub fn make_app_with_repo(repo: repository::AppRepository) -> axum::Router {
-    let (store, toolset) = make_test_store();
-    let state = Arc::new(AppState::new(repo, store, toolset));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(repo, store));
     make_app_with_state(state)
 }
 

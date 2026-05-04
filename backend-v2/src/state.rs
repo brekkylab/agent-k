@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use ailoy::agent::Agent;
-use ailoy::tool::ToolSet;
 use dashmap::DashMap;
 use speedwagon::SharedStore;
 use tokio::sync::Mutex;
@@ -13,16 +12,14 @@ pub struct AppState {
     agents: DashMap<Uuid, Arc<Mutex<Agent>>>,
     pub repository: AppRepository,
     pub store: SharedStore,
-    pub toolset: Arc<ToolSet>,
 }
 
 impl AppState {
-    pub fn new(repository: AppRepository, store: SharedStore, toolset: ToolSet) -> Self {
+    pub fn new(repository: AppRepository, store: SharedStore) -> Self {
         Self {
             agents: DashMap::new(),
             repository,
             store,
-            toolset: Arc::new(toolset),
         }
     }
 

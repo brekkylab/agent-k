@@ -12,17 +12,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use agent_k_backend::state::AppState;
-use ailoy::agent::default_provider_mut;
 use common::{
     delete_session, extract_text, extract_text_from_slice, make_app_with_state, make_repo,
-    make_test_store, post_session, send_message, send_message_stream,
+    make_test_store, post_session, send_message, send_message_stream, setup_provider,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 async fn make_state() -> Arc<AppState> {
-    let (store, toolset) = make_test_store();
-    Arc::new(AppState::new(make_repo().await, store, toolset))
+    let store = make_test_store();
+    Arc::new(AppState::new(make_repo().await, store))
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -36,12 +35,7 @@ async fn make_state() -> Arc<AppState> {
 #[ignore = "requires microsandbox; boots two VMs"]
 async fn two_sessions_get_isolated_sandboxes() {
     dotenvy::dotenv().ok();
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-    }
+    setup_provider().await;
 
     let state = make_state().await;
     let app = make_app_with_state(state.clone());
@@ -92,12 +86,7 @@ async fn two_sessions_get_isolated_sandboxes() {
 #[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
 async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     dotenvy::dotenv().ok();
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-    }
+    setup_provider().await;
 
     let state = make_state().await;
     let app = make_app_with_state(state.clone());
@@ -147,12 +136,7 @@ async fn stream_returns_404_for_unknown_session() {
     use tower::ServiceExt;
 
     dotenvy::dotenv().ok();
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-    }
+    setup_provider().await;
 
     let state = make_state().await;
     let app = make_app_with_state(state);
@@ -178,12 +162,8 @@ async fn stream_returns_404_for_unknown_session() {
 #[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
 async fn agent_writes_and_reads_file_via_bash_streaming() {
     dotenvy::dotenv().ok();
-    {
-        let mut provider = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider.model_openai(key);
-        }
-    }
+    setup_provider().await;
+
     let state = make_state().await;
     let app = make_app_with_state(state.clone());
 
