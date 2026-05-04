@@ -62,7 +62,6 @@ struct TitleAgent;
 impl HelperAgent for TitleAgent {
     type Input<'a> = &'a str;
     type Output = String;
-    const MODEL: &'static str = "openai/gpt-5.4-mini";
     const INSTRUCTION: &'static str = TITLE_INSTRUCTION;
 
     fn build_query(&content: &&str) -> Message {
@@ -108,7 +107,6 @@ struct PurposeAgent;
 impl HelperAgent for PurposeAgent {
     type Input<'a> = &'a str;
     type Output = String;
-    const MODEL: &'static str = "openai/gpt-5.4-mini";
     const INSTRUCTION: &'static str = PURPOSE_INSTRUCTION;
 
     fn build_query(&content: &&str) -> Message {

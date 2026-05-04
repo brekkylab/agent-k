@@ -9,8 +9,6 @@ use anyhow::Result;
 
 use super::helper::HelperAgent;
 
-const MODEL: &str = "openai/gpt-5.4-mini";
-
 const DESCRIPTION_INSTRUCTION: &str = concat!(
     "You write a self-contained description of a knowledge base. ",
     "This description will be read by a routing agent that picks the right ",
@@ -42,7 +40,6 @@ struct DescriptionAgent;
 impl HelperAgent for DescriptionAgent {
     type Input<'a> = DescriptionInput<'a>;
     type Output = String;
-    const MODEL: &'static str = MODEL;
     const INSTRUCTION: &'static str = DESCRIPTION_INSTRUCTION;
 
     fn build_query(input: &DescriptionInput<'_>) -> Message {
