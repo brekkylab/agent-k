@@ -49,7 +49,7 @@ impl DescriptionAgent {
         &self,
         kb_name: &str,
         instruction: Option<&str>,
-        docs: &[(String, String)],
+        docs: &[(&str, &str)],
     ) -> Result<String> {
         let user = build_user_message(kb_name, instruction, docs);
         let query = Message::new(Role::User).with_contents([Part::text(user)]);
@@ -79,7 +79,7 @@ impl DescriptionAgent {
 fn build_user_message(
     kb_name: &str,
     instruction: Option<&str>,
-    docs: &[(String, String)],
+    docs: &[(&str, &str)],
 ) -> String {
     let mut s = String::new();
     s.push_str(&format!("KB name: {kb_name}\n"));
@@ -90,7 +90,7 @@ fn build_user_message(
     }
     s.push_str(&format!("\nDocuments ({}):\n", docs.len()));
     for (_title, purpose) in docs {
-        let p = if purpose.is_empty() { "(no purpose)" } else { purpose.as_str() };
+        let p = if purpose.is_empty() { "(no purpose)" } else { *purpose };
         s.push_str(&format!("- {p}\n"));
     }
     s
@@ -128,7 +128,7 @@ fn parse_description_response(raw: &str) -> String {
 pub async fn get_description(
     kb_name: &str,
     instruction: Option<&str>,
-    docs: &[(String, String)],
+    docs: &[(&str, &str)],
 ) -> Result<String> {
     dotenvy::dotenv().ok();
 
@@ -141,7 +141,7 @@ pub async fn get_description(
     let result = agent.generate(kb_name, instruction, docs).await?;
     if result.is_empty() {
         log::warn!("description generation returned empty string; using fallback");
-        let titles: Vec<String> = docs.iter().map(|(t, _)| t.clone()).collect();
+        let titles: Vec<&str> = docs.iter().map(|(t, _)| *t).collect();
         Ok(fallback_description(docs.len(), &titles))
     } else {
         Ok(result)
@@ -149,7 +149,7 @@ pub async fn get_description(
 }
 
 /// Deterministic fallback when the LLM call fails or returns empty.
-pub fn fallback_description(doc_count: usize, top_titles: &[String]) -> String {
+pub fn fallback_description(doc_count: usize, top_titles: &[&str]) -> String {
     if doc_count == 0 {
         return String::new();
     }
@@ -157,7 +157,7 @@ pub fn fallback_description(doc_count: usize, top_titles: &[String]) -> String {
         .iter()
         .filter(|t| !t.is_empty())
         .take(5)
-        .map(String::as_str)
+        .copied()
         .collect();
     if titles.is_empty() {
         format!("{doc_count} documents")
@@ -213,23 +213,12 @@ mod tests {
     #[test]
     fn fallback_no_titles_falls_back_to_count_only() {
         assert_eq!(fallback_description(7, &[]), "7 documents");
-        assert_eq!(
-            fallback_description(7, &["".to_string(), "".to_string()]),
-            "7 documents"
-        );
+        assert_eq!(fallback_description(7, &["", ""]), "7 documents");
     }
 
     #[test]
     fn fallback_with_titles_takes_top_five() {
-        let titles = vec![
-            "A".to_string(),
-            "B".to_string(),
-            "C".to_string(),
-            "D".to_string(),
-            "E".to_string(),
-            "F".to_string(),
-            "G".to_string(),
-        ];
+        let titles = ["A", "B", "C", "D", "E", "F", "G"];
         assert_eq!(
             fallback_description(7, &titles),
             "7 documents including: A; B; C; D; E"
@@ -238,10 +227,7 @@ mod tests {
 
     #[test]
     fn user_message_skips_blank_instruction() {
-        let docs = vec![
-            ("T1".to_string(), "P1".to_string()),
-            ("T2".to_string(), "".to_string()),
-        ];
+        let docs = [("T1", "P1"), ("T2", "")];
         let msg = build_user_message("kb1", Some("   "), &docs);
         assert!(msg.contains("KB name: kb1"));
         assert!(!msg.contains("KB instruction"));
@@ -251,7 +237,7 @@ mod tests {
 
     #[test]
     fn user_message_renders_purpose_only_not_title() {
-        let docs = vec![("Apple 10-K".to_string(), "Apple FY2021 annual report".to_string())];
+        let docs = [("Apple 10-K", "Apple FY2021 annual report")];
         let msg = build_user_message("finance", None, &docs);
         // purpose is in, title is not
         assert!(msg.contains("Apple FY2021 annual report"));

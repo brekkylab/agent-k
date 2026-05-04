@@ -270,9 +270,9 @@ impl Store {
         if docs.is_empty() {
             return Ok(String::new());
         }
-        let pairs: Vec<(String, String)> = docs
+        let pairs: Vec<(&str, &str)> = docs
             .iter()
-            .map(|d| (d.title.clone(), d.purpose.clone()))
+            .map(|d| (d.title.as_str(), d.purpose.as_str()))
             .collect();
         description::get_description(kb_name, instruction, &pairs).await
     }
