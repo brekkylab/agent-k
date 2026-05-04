@@ -25,7 +25,7 @@ const DESCRIPTION_INSTRUCTION: &str = concat!(
     "or any metadata about how this knowledge base was assembled. ",
     "Describe ONLY what documents are inside, as if a curator wrote it. ",
     "Write the description in English regardless of the document language. ",
-    "Length: ~200 characters. Output a JSON object: {\"description\": \"<text>\"}."
+    "Length: ~200 characters. Output a JSON object: {\"result\": \"<string>\"}."
 );
 
 /// Borrowed input for `DescriptionAgent::generate`.
@@ -45,21 +45,18 @@ impl HelperAgent for DescriptionAgent {
     const MODEL: &'static str = MODEL;
     const INSTRUCTION: &'static str = DESCRIPTION_INSTRUCTION;
 
-    fn build_query(input: DescriptionInput<'_>) -> Message {
+    fn build_query(input: &DescriptionInput<'_>) -> Message {
         let user = build_user_message(input.kb_name, input.instruction, input.docs);
         Message::new(Role::User).with_contents([Part::text(user)])
     }
 
-    fn parse(raw: &str) -> String {
-        parse_description_response(raw)
+    fn fallback(input: &DescriptionInput<'_>) -> String {
+        let titles: Vec<&str> = input.docs.iter().map(|(t, _)| *t).collect();
+        fallback_description(input.docs.len(), &titles)
     }
 }
 
-fn build_user_message(
-    kb_name: &str,
-    instruction: Option<&str>,
-    docs: &[(&str, &str)],
-) -> String {
+fn build_user_message(kb_name: &str, instruction: Option<&str>, docs: &[(&str, &str)]) -> String {
     let mut s = String::new();
     s.push_str(&format!("KB name: {kb_name}\n"));
     if let Some(instr) = instruction {
@@ -69,58 +66,14 @@ fn build_user_message(
     }
     s.push_str(&format!("\nDocuments ({}):\n", docs.len()));
     for (_title, purpose) in docs {
-        let p = if purpose.is_empty() { "(no purpose)" } else { *purpose };
+        let p = if purpose.is_empty() {
+            "(no purpose)"
+        } else {
+            *purpose
+        };
         s.push_str(&format!("- {p}\n"));
     }
     s
-}
-
-/// Empty return signals the caller to use `fallback_description`.
-fn parse_description_response(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if let Some(d) = value.get("description").and_then(|v| v.as_str()) {
-            return d.trim().to_string();
-        }
-    }
-
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if start < end {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]) {
-                if let Some(d) = value.get("description").and_then(|v| v.as_str()) {
-                    return d.trim().to_string();
-                }
-            }
-        }
-    }
-
-    String::new()
-}
-
-/// Runs `DescriptionAgent` and substitutes `fallback_description` if the LLM
-/// body is empty. Transport errors propagate.
-pub(super) async fn get_description(
-    kb_name: &str,
-    instruction: Option<&str>,
-    docs: &[(&str, &str)],
-) -> Result<String> {
-    let result = DescriptionAgent::generate(DescriptionInput {
-        kb_name,
-        instruction,
-        docs,
-    })
-    .await?;
-    if result.is_empty() {
-        log::warn!("description generation returned empty string; using fallback");
-        let titles: Vec<&str> = docs.iter().map(|(t, _)| *t).collect();
-        Ok(fallback_description(docs.len(), &titles))
-    } else {
-        Ok(result)
-    }
 }
 
 /// Deterministic fallback when the LLM call fails or returns empty.
@@ -130,9 +83,9 @@ fn fallback_description(doc_count: usize, top_titles: &[&str]) -> String {
     }
     let titles: Vec<&str> = top_titles
         .iter()
+        .copied()
         .filter(|t| !t.is_empty())
         .take(5)
-        .copied()
         .collect();
     if titles.is_empty() {
         format!("{doc_count} documents")
@@ -141,44 +94,25 @@ fn fallback_description(doc_count: usize, top_titles: &[&str]) -> String {
     }
 }
 
+/// Runs `DescriptionAgent` over the index's `(title, purpose)` slice. An
+/// empty/malformed LLM response is substituted with `fallback_description`
+/// (a deterministic count + top-titles string). Transport errors propagate.
+pub(super) async fn get_description(
+    kb_name: &str,
+    instruction: Option<&str>,
+    docs: &[(&str, &str)],
+) -> Result<String> {
+    DescriptionAgent::generate(DescriptionInput {
+        kb_name,
+        instruction,
+        docs,
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_direct_json() {
-        let raw = r#"{"description": "hello"}"#;
-        assert_eq!(parse_description_response(raw), "hello");
-    }
-
-    #[test]
-    fn parse_json_with_surrounding_text() {
-        let raw = r#"Here you go: {"description": "hello"} done."#;
-        assert_eq!(parse_description_response(raw), "hello");
-    }
-
-    #[test]
-    fn parse_trims_inner_whitespace() {
-        let raw = r#"{"description": "   hello   "}"#;
-        assert_eq!(parse_description_response(raw), "hello");
-    }
-
-    #[test]
-    fn parse_empty_input() {
-        assert_eq!(parse_description_response(""), "");
-        assert_eq!(parse_description_response("   "), "");
-    }
-
-    #[test]
-    fn parse_missing_field() {
-        let raw = r#"{"other": "value"}"#;
-        assert_eq!(parse_description_response(raw), "");
-    }
-
-    #[test]
-    fn parse_malformed_json() {
-        assert_eq!(parse_description_response("{not json"), "");
-    }
 
     #[test]
     fn fallback_zero_docs() {

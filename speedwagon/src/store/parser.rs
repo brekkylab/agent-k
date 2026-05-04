@@ -3,7 +3,10 @@ use anyhow::Result;
 
 use super::helper::HelperAgent;
 
-fn parse_title(content: &str) -> Option<String> {
+/// Pulls a title out of a YAML frontmatter `title:` field or the first H1
+/// heading. Returns `None` when neither is present — caller falls back to
+/// `TitleAgent`.
+fn extract_title(content: &str) -> Option<String> {
     if content.starts_with("---") {
         if let Some(end) = content[3..].find("\n---") {
             let frontmatter = &content[3..end + 3];
@@ -44,8 +47,12 @@ fn parse_title(content: &str) -> Option<String> {
 const TITLE_PREVIEW_CHARS: usize = 8192;
 
 const TITLE_INSTRUCTION: &str = concat!(
-    "You are a title generator. ",
-    "Given document content, reply with only a concise title under 10 words.",
+    "You are generating a title for a document. ",
+    "Given document content, return ONLY a JSON object: ",
+    "{\"result\": \"<string>\"}.\n\n",
+    "title rules:\n",
+    "- Concise, under 10 words.\n",
+    "- Plain text. No markdown, no surrounding quotes inside the value.",
 );
 
 /// Generates a document title via LLM. Reads from ailoy's process-global
@@ -58,35 +65,31 @@ impl HelperAgent for TitleAgent {
     const MODEL: &'static str = "openai/gpt-5.4-mini";
     const INSTRUCTION: &'static str = TITLE_INSTRUCTION;
 
-    fn build_query(content: &str) -> Message {
+    fn build_query(&content: &&str) -> Message {
         let snippet: String = content.chars().take(TITLE_PREVIEW_CHARS).collect();
         Message::new(Role::User).with_contents([Part::text(snippet)])
     }
 
-    fn parse(raw: &str) -> String {
-        let title = raw.trim().to_string();
-        if title.is_empty() {
-            "Untitled".to_string()
-        } else {
-            title
-        }
+    fn fallback(_: &&str) -> String {
+        "Untitled".to_string()
     }
 }
 
 /// Generates a title from `content`. The frontmatter/H1 fast path runs first;
-/// if neither is present, falls back to `TitleAgent`.
+/// if neither is present, falls back to `TitleAgent` (which substitutes
+/// `"Untitled"` for an empty/malformed LLM response).
 pub(super) async fn get_title(content: &str) -> Result<String> {
-    match parse_title(content) {
-        Some(t) => Ok(t),
-        None => TitleAgent::generate(content).await,
+    if let Some(t) = extract_title(content) {
+        return Ok(t);
     }
+    TitleAgent::generate(content).await
 }
 
 const PURPOSE_INSTRUCTION: &str = concat!(
     "You are generating search metadata for a document retrieval system. ",
     "Your output will be used as BM25 search terms — optimize for retrieval, NOT readability.\n\n",
     "Given a document content preview (first 3000 characters), return ONLY a JSON object: ",
-    "{\"purpose\": \"<string>\"}.\n\n",
+    "{\"result\": \"<string>\"}.\n\n",
     "purpose rules:\n",
     "- ONE sentence, 80–150 characters\n",
     "- MUST include: entity name(s), year/date, document type, 3–5 key topic terms\n",
@@ -108,147 +111,85 @@ impl HelperAgent for PurposeAgent {
     const MODEL: &'static str = "openai/gpt-5.4-mini";
     const INSTRUCTION: &'static str = PURPOSE_INSTRUCTION;
 
-    fn build_query(content: &str) -> Message {
+    fn build_query(&content: &&str) -> Message {
         let snippet: String = content.chars().take(PURPOSE_PREVIEW_CHARS).collect();
         Message::new(Role::User).with_contents([Part::text(snippet)])
     }
 
-    fn parse(raw: &str) -> String {
-        parse_purpose_response(raw)
+    /// Empty string is the documented fallback — `Store::ingest` indexes
+    /// the document without purpose metadata in that case.
+    fn fallback(_: &&str) -> String {
+        String::new()
     }
 }
 
-fn parse_purpose_response(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
-        && let Some(p) = value.get("purpose").and_then(|v| v.as_str())
-    {
-        return p.trim().to_string();
-    }
-
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
-        && start < end
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&trimmed[start..=end])
-        && let Some(p) = value.get("purpose").and_then(|v| v.as_str())
-    {
-        return p.trim().to_string();
-    }
-
-    String::new()
-}
-
-/// Runs `PurposeAgent` over `content`.
+/// Runs `PurposeAgent` over `content`. An empty/malformed LLM response is
+/// substituted with `""` (which `Store::ingest` indexes as missing purpose
+/// metadata).
 pub(super) async fn get_purpose(content: &str) -> Result<String> {
-    let purpose = PurposeAgent::generate(content).await?;
-    if purpose.is_empty() {
-        log::warn!("purpose generation returned empty string; indexing without purpose metadata");
-    }
-    Ok(purpose)
+    PurposeAgent::generate(content).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_purpose_response_plain_json() {
-        let raw = r#"{"purpose": "3M Company FY2018 10-K Annual Report"}"#;
-        assert_eq!(
-            parse_purpose_response(raw),
-            "3M Company FY2018 10-K Annual Report"
-        );
-    }
-
-    #[test]
-    fn parse_purpose_response_with_whitespace() {
-        let raw = "\n  {\"purpose\": \"hello\"}  \n";
-        assert_eq!(parse_purpose_response(raw), "hello");
-    }
-
-    #[test]
-    fn parse_purpose_response_with_surrounding_text() {
-        let raw = "Sure, here you go: {\"purpose\": \"Costco 2023 Q1 earnings\"} — done.";
-        assert_eq!(parse_purpose_response(raw), "Costco 2023 Q1 earnings");
-    }
-
-    #[test]
-    fn parse_purpose_response_empty() {
-        assert_eq!(parse_purpose_response(""), "");
-        assert_eq!(parse_purpose_response("   "), "");
-    }
-
-    #[test]
-    fn parse_purpose_response_invalid_json() {
-        assert_eq!(parse_purpose_response("not json"), "");
-        assert_eq!(parse_purpose_response("{not: json}"), "");
-    }
-
-    #[test]
-    fn parse_purpose_response_missing_field() {
-        let raw = r#"{"other": "value"}"#;
-        assert_eq!(parse_purpose_response(raw), "");
-    }
-
     fn frontmatter_with_title(line: &str) -> String {
         format!("---\n{line}\n---\n\nbody\n")
     }
 
     #[test]
-    fn parse_title_single_quoted_plain() {
+    fn extract_title_single_quoted_plain() {
         let doc = frontmatter_with_title("title: 'Hello world'");
-        assert_eq!(parse_title(&doc).as_deref(), Some("Hello world"));
+        assert_eq!(extract_title(&doc).as_deref(), Some("Hello world"));
     }
 
     #[test]
-    fn parse_title_single_quoted_with_apostrophe() {
+    fn extract_title_single_quoted_with_apostrophe() {
         // `'` is escaped as `''` in YAML single-quoted style.
         let doc = frontmatter_with_title("title: 'Don''t stop'");
-        assert_eq!(parse_title(&doc).as_deref(), Some("Don't stop"));
+        assert_eq!(extract_title(&doc).as_deref(), Some("Don't stop"));
     }
 
     #[test]
-    fn parse_title_single_quoted_with_double_quote_and_backslash() {
+    fn extract_title_single_quoted_with_double_quote_and_backslash() {
         // `"` and `\` pass through literally — no escaping in this style.
         let doc = frontmatter_with_title(r#"title: 'That "Smart" Move with C:\path'"#);
         assert_eq!(
-            parse_title(&doc).as_deref(),
+            extract_title(&doc).as_deref(),
             Some(r#"That "Smart" Move with C:\path"#),
         );
     }
 
     #[test]
-    fn parse_title_single_quoted_with_all_special_chars() {
+    fn extract_title_single_quoted_with_all_special_chars() {
         let doc = frontmatter_with_title(r#"title: 'Mix ''a'' "b" c\d'"#);
         assert_eq!(
-            parse_title(&doc).as_deref(),
+            extract_title(&doc).as_deref(),
             Some(r#"Mix 'a' "b" c\d"#),
         );
     }
 
     #[test]
-    fn parse_title_unquoted_returned_literally() {
+    fn extract_title_unquoted_returned_literally() {
         let doc = frontmatter_with_title("title: Plain Title");
-        assert_eq!(parse_title(&doc).as_deref(), Some("Plain Title"));
+        assert_eq!(extract_title(&doc).as_deref(), Some("Plain Title"));
     }
 
     #[test]
-    fn parse_title_double_quoted_strips_outer_only() {
+    fn extract_title_double_quoted_strips_outer_only() {
         // YAML-style outer `"` is treated as syntax (one stripped from each
         // side); backslash escapes inside are left literal.
         let doc = frontmatter_with_title(r#"title: "Hello \"World\"""#);
         assert_eq!(
-            parse_title(&doc).as_deref(),
+            extract_title(&doc).as_deref(),
             Some(r#"Hello \"World\""#),
         );
     }
 
     #[test]
-    fn parse_title_falls_back_to_h1_when_frontmatter_missing() {
+    fn extract_title_falls_back_to_h1_when_frontmatter_missing() {
         let doc = "# Heading Title\n\nbody\n";
-        assert_eq!(parse_title(doc).as_deref(), Some("Heading Title"));
+        assert_eq!(extract_title(doc).as_deref(), Some("Heading Title"));
     }
 }
