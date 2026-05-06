@@ -119,6 +119,7 @@ async fn signup(
             password_hash,
             role: crate::auth::Role::User,
             display_name: payload.display_name,
+            is_active: true,
         })
         .await
         .map_err(|e| match e {
@@ -258,6 +259,7 @@ async fn create_user_admin(
     let password_hash = hash_password(&payload.password)?;
     let id = Uuid::new_v4();
     let role = payload.role.unwrap_or(crate::auth::Role::User);
+    let is_active = payload.is_active.unwrap_or(true);
 
     let user = state
         .repository
@@ -267,28 +269,13 @@ async fn create_user_admin(
             password_hash,
             role,
             display_name: payload.display_name,
+            is_active,
         })
         .await
         .map_err(|e| match e {
             RepositoryError::UniqueViolation(_) => AppError::conflict("username already taken"),
             other => AppError::internal(other.to_string()),
         })?;
-
-    if let Some(false) = payload.is_active {
-        state
-            .repository
-            .update_user(
-                id,
-                UpdateUser {
-                    is_active: Some(false),
-                    display_name: None,
-                    password_hash: None,
-                    role: None,
-                },
-            )
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
-    }
 
     tracing::info!(%id, username = %user.username, "admin created user");
 

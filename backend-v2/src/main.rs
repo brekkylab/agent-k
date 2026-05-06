@@ -70,6 +70,7 @@ async fn run_create_admin(username: String, password: String, display_name: Opti
             password_hash,
             role: auth::Role::Admin,
             display_name,
+            is_active: true,
         })
         .await;
 
@@ -207,6 +208,7 @@ async fn bootstrap_admin_if_needed(repo: &repository::AppRepository) {
                     password_hash,
                     role: auth::Role::Admin,
                     display_name: None,
+                    is_active: true,
                 })
                 .await
             {

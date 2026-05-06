@@ -249,13 +249,14 @@ impl SqliteRepository {
         let now = Self::now_string();
         sqlx::query(
             "INSERT INTO users (id, username, password_hash, role, display_name, is_active, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?);",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
         )
         .bind(user.id.to_string())
         .bind(&user.username)
         .bind(&user.password_hash)
         .bind(user.role.as_str())
         .bind(&user.display_name)
+        .bind(if user.is_active { 1i64 } else { 0i64 })
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -268,7 +269,7 @@ impl SqliteRepository {
             password_hash: user.password_hash,
             role: user.role,
             display_name: user.display_name,
-            is_active: true,
+            is_active: user.is_active,
             created_at: Self::parse_timestamp(now.clone(), "users.created_at")?,
             updated_at: Self::parse_timestamp(now, "users.updated_at")?,
         })
@@ -430,6 +431,7 @@ mod tests {
             password_hash: "hash".to_string(),
             role,
             display_name: None,
+            is_active: true,
         }
     }
 

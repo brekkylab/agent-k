@@ -57,6 +57,7 @@ pub struct NewUser {
     pub password_hash: String,
     pub role: Role,
     pub display_name: Option<String>,
+    pub is_active: bool,
 }
 
 pub struct UpdateUser {
