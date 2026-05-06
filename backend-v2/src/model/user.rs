@@ -86,7 +86,7 @@ pub struct UserListResponse {
     pub total: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct UserListQuery {
     pub page: Option<u32>,
     pub size: Option<u32>,
