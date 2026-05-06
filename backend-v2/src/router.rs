@@ -27,8 +27,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
     let admin_routes = ApiRouter::new()
         .route(
             "/admin/users",
-            axum::routing::get(handlers::user::list_users)
-                .post(handlers::user::create_user_admin),
+            axum::routing::get(handlers::user::list_users).post(handlers::user::create_user_admin),
         )
         .route(
             "/admin/users/{id}",

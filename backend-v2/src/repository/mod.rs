@@ -4,9 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 pub use sqlite::SqliteRepository;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
 use uuid::Uuid;
 
