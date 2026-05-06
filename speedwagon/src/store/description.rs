@@ -198,11 +198,12 @@ mod tests {
         std::fs::create_dir_all(root.join("origin")).unwrap();
         std::fs::create_dir_all(root.join("corpus")).unwrap();
 
-        // Populate ailoy's process-global default provider for this test.
+        // Populate ailoy's process-global default provider for this test
+        // through the same helper main.rs uses, so the env-key → glob-pattern
+        // mapping has a single source of truth.
         dotenvy::dotenv().ok();
-        ailoy::agent::default_provider_mut().await.model_openai(
-            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY required for this test"),
-        );
+        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY required for this test");
+        crate::register_provider_from_env(&mut *ailoy::agent::default_provider_mut().await);
 
         let store = crate::store::Store::new(root).expect("open store");
         let description = store

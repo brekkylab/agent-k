@@ -22,7 +22,9 @@ use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
 use rustyline::{DefaultEditor, error::ReadlineError};
-use speedwagon::{FileType, SpeedwagonSpec, Store, build_toolset};
+use speedwagon::{
+    FileType, SpeedwagonSpec, Store, build_tool_provider, register_provider_from_env,
+};
 
 use speedwagon::preset::{PresetKind, setup_docset};
 
@@ -54,10 +56,13 @@ fn resolve_dir(path: &str) -> PathBuf {
 
 async fn build_agent(store_dir: &Path, model: &str) -> Result<Agent> {
     let store = Arc::new(Store::new(store_dir)?);
-    let toolset = build_toolset(store);
     let spec = SpeedwagonSpec::new().model(model).into_spec();
-    let provider = default_provider().await;
-    Agent::try_with_tools(spec, &provider, &toolset).await
+    // Clone the global provider, then override its tool registry with the
+    // store-bound speedwagon tools. ailoy no longer accepts a separate
+    // ToolSet argument — tool sources live on AgentProvider.tools.
+    let mut provider = default_provider().await.clone();
+    provider.tools = build_tool_provider(store);
+    Agent::try_with_provider(spec, &provider).await
 }
 
 async fn run_query(agent: &mut Agent, input: &str) -> Result<()> {
@@ -110,20 +115,9 @@ async fn main() -> Result<()> {
     };
 
     // Populate ailoy's process-global provider once at boot. Every
-    // `Agent::try_new`/`try_with_tools` (including speedwagon's title/purpose/
+    // `Agent::try_new`/`try_with_provider` (including speedwagon's title/purpose/
     // description helpers) reads from this singleton.
-    {
-        let mut default = default_provider_mut().await;
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            default.model_openai(key);
-        }
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            default.model_claude(key);
-        }
-        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-            default.model_gemini(key);
-        }
-    }
+    register_provider_from_env(&mut *default_provider_mut().await);
 
     if let Some(ref preset) = cli.preset {
         let mut store = Store::new(&store_dir)?;

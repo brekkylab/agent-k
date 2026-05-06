@@ -85,7 +85,7 @@ pub(super) trait HelperAgent {
             Self::MODELS
                 .iter()
                 .copied()
-                .find(|m| provider.get_model(m).is_some())
+                .find(|m| provider.models.get(m).is_some())
         };
 
         let model = match chosen_model {
