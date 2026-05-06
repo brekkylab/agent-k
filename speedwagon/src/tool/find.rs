@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ailoy::{
     datatype::Value,
     message::ToolDescBuilder,
@@ -8,7 +6,7 @@ use ailoy::{
 };
 use uuid::Uuid;
 
-use crate::store::{FindResult, Store};
+use crate::store::{FindResult, SharedStore};
 
 fn result_to_value(result: &FindResult) -> Value {
     let matches: Vec<Value> = result
@@ -33,7 +31,7 @@ fn result_to_value(result: &FindResult) -> Value {
     })
 }
 
-pub fn build_find_in_document_tool(store: Arc<Store>) -> ToolFactory {
+pub fn build_find_in_document_tool(store: SharedStore) -> ToolFactory {
     let desc = ToolDescBuilder::new("find_in_document")
         .description(concat!(
             "Find all occurrences of a regex pattern within a document. ",
@@ -137,7 +135,8 @@ pub fn build_find_in_document_tool(store: Arc<Store>) -> ToolFactory {
                 .unwrap_or(256)
                 .max(0) as usize;
 
-            match store.find(id, &pattern, cursor, k, context_bytes) {
+            let guard = store.read().await;
+            match guard.find(id, &pattern, cursor, k, context_bytes) {
                 Some(result) => result_to_value(&result),
                 None => to_value!({"error": format!("document not found: {id_str}")}),
             }

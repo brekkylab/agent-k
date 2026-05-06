@@ -31,6 +31,7 @@ dependencies = [
  "axum-extra",
  "bytes",
  "chrono",
+ "dashmap",
  "dotenvy",
  "futures-util",
  "http-body-util",
@@ -97,7 +98,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=922d25b2c0733b7c95df4d4fe232a73cfdcef928#922d25b2c0733b7c95df4d4fe232a73cfdcef928"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=098a8289272ccce3cf5719e20732050cb047d04a#098a8289272ccce3cf5719e20732050cb047d04a"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1931,6 +1932,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2912,6 +2927,12 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+
+[[package]]
+name = "hashbrown"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
@@ -4428,7 +4449,7 @@ dependencies = [
  "libc",
  "libloading",
  "log",
- "lru 0.12.5",
+ "lru 0.16.4",
  "msb_krun_arch",
  "msb_krun_hvf",
  "msb_krun_polly",
@@ -7646,7 +7667,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

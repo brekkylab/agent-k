@@ -15,9 +15,9 @@ use agent_k_backend::{repository, state::AppState};
 use common::{
     SessionGuard, clear_message_history, clear_message_history_status, extract_text,
     get_message_history, get_message_history_status, make_app_with_repo, make_app_with_state,
-    make_repo, post_session, send_message, send_message_status, try_delete_session,
+    make_repo, make_test_store, post_session, send_message, send_message_status, setup_provider,
+    try_delete_session,
 };
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -35,9 +35,8 @@ use uuid::Uuid;
 async fn session_is_found_after_restart_via_lazy_create() {
     // Dummy key: validated only when agent.run() reaches the Anthropic API,
     // which this test never does (it only checks the HTTP status code).
-    unsafe {
-        std::env::set_var("ANTHROPIC_API_KEY", "dummy-key-for-lazy-create-test");
-    }
+    dotenvy::dotenv().ok();
+    setup_provider().await;
 
     let dir = tempfile::tempdir().unwrap();
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
@@ -84,6 +83,7 @@ async fn session_is_found_after_restart_via_lazy_create() {
 #[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
 async fn agent_restores_history_and_processes_message() {
     dotenvy::dotenv().ok();
+    setup_provider().await;
 
     let dir = tempfile::tempdir().unwrap();
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
@@ -143,9 +143,8 @@ async fn agent_restores_history_and_processes_message() {
 /// guard is needed.
 #[tokio::test]
 async fn unknown_session_returns_404() {
-    unsafe {
-        std::env::set_var("ANTHROPIC_API_KEY", "dummy");
-    }
+    dotenvy::dotenv().ok();
+    setup_provider().await;
 
     let dir = tempfile::tempdir().unwrap();
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
@@ -168,17 +167,12 @@ async fn unknown_session_returns_404() {
 /// Creates the session directly in the DB to avoid the microsandbox requirement.
 #[tokio::test]
 async fn get_messages_returns_empty_for_new_session() {
-    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
-    state
-        .lock()
-        .await
-        .repository
-        .create_session(id)
-        .await
-        .unwrap();
+    state.repository.create_session(id).await.unwrap();
 
     let messages = get_message_history(&app, id).await;
     assert_eq!(
@@ -206,18 +200,18 @@ async fn get_messages_returns_404_for_unknown_session() {
 async fn get_messages_returns_persisted_messages_in_order() {
     use ailoy::message::{Message, Part, Role};
 
-    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
     {
-        let st = state.lock().await;
-        st.repository.create_session(id).await.unwrap();
+        state.repository.create_session(id).await.unwrap();
         let msgs = vec![
             Message::new(Role::User).with_contents([Part::text("first")]),
             Message::new(Role::Assistant).with_contents([Part::text("second")]),
         ];
-        st.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(id, &msgs).await.unwrap();
     }
 
     let body = get_message_history(&app, id).await;
@@ -251,18 +245,18 @@ async fn clear_messages_returns_404_for_unknown_session() {
 async fn clear_messages_removes_persisted_messages() {
     use ailoy::message::{Message, Part, Role};
 
-    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
     {
-        let st = state.lock().await;
-        st.repository.create_session(id).await.unwrap();
+        state.repository.create_session(id).await.unwrap();
         let msgs = vec![
             Message::new(Role::User).with_contents([Part::text("hello")]),
             Message::new(Role::Assistant).with_contents([Part::text("world")]),
         ];
-        st.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(id, &msgs).await.unwrap();
     }
 
     let before = get_message_history(&app, id).await;
@@ -287,15 +281,15 @@ async fn clear_messages_removes_persisted_messages() {
 async fn clear_messages_does_not_delete_session() {
     use ailoy::message::{Message, Part, Role};
 
-    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
     {
-        let st = state.lock().await;
-        st.repository.create_session(id).await.unwrap();
+        state.repository.create_session(id).await.unwrap();
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("ping")])];
-        st.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(id, &msgs).await.unwrap();
     }
 
     clear_message_history(&app, id).await;
@@ -314,23 +308,22 @@ async fn clear_messages_does_not_delete_session() {
 async fn can_append_messages_after_clear() {
     use ailoy::message::{Message, Part, Role};
 
-    let state = Arc::new(Mutex::new(AppState::new(make_repo().await)));
+    let store = make_test_store();
+    let state = Arc::new(AppState::new(make_repo().await, store));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
     {
-        let st = state.lock().await;
-        st.repository.create_session(id).await.unwrap();
+        state.repository.create_session(id).await.unwrap();
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("old")])];
-        st.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(id, &msgs).await.unwrap();
     }
 
     clear_message_history(&app, id).await;
 
     {
-        let st = state.lock().await;
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("new")])];
-        st.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(id, &msgs).await.unwrap();
     }
 
     let body = get_message_history(&app, id).await;
@@ -348,9 +341,8 @@ async fn can_append_messages_after_clear() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "requires microsandbox runtime"]
 async fn clear_messages_also_clears_in_memory_agent_history() {
-    unsafe {
-        std::env::set_var("ANTHROPIC_API_KEY", "dummy-key-for-clear-history-test");
-    }
+    dotenvy::dotenv().ok();
+    setup_provider().await;
 
     let dir = tempfile::tempdir().unwrap();
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());

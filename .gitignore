@@ -38,6 +38,9 @@ Thumbs.db
 # Backend data (downloaded via scripts/setup-data.sh)
 backend/data/
 
+# Speedwagon store (auto-created on first request)
+backend-v2/.speedwagon/
+
 # Claude Code / OMC / Plugin state
 .claude/
 CLAUDE.md

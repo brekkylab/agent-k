@@ -9,7 +9,10 @@ mod translator;
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
+
+use tokio::sync::RwLock;
 
 use anyhow::{Context as _, Result};
 use tantivy::Index;
@@ -17,6 +20,8 @@ use uuid::Uuid;
 
 pub use document::{Document, FindResult};
 pub use searcher::{SearchPage, SearchResult};
+
+pub type SharedStore = Arc<RwLock<Store>>;
 
 /// Speedwagon store layout:
 ///

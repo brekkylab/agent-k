@@ -1,5 +1,6 @@
 use ailoy::{
     agent::{Agent, AgentProvider, AgentSpec},
+    lang_model::LangModelProvider,
     message::{Message, Part, Role},
 };
 use anyhow::{Context as _, Result};
@@ -86,11 +87,17 @@ pub async fn get_title(content: &str) -> Result<String> {
         None => {
             dotenvy::dotenv().ok();
 
-            let mut provier = AgentProvider::new();
-            provier.model_openai(
-                std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set in environment")?,
+            let mut provider = AgentProvider::new();
+            let mut model_provider = LangModelProvider::new();
+            model_provider.insert(
+                "openai/*".into(),
+                LangModelProvider::openai(
+                    std::env::var("OPENAI_API_KEY")
+                        .context("OPENAI_API_KEY not set in environment")?,
+                ),
             );
-            TitleAgent::new(Some(provier)).generate(content).await
+            provider.models = model_provider;
+            TitleAgent::new(Some(provider)).generate(content).await
         }
     }
 }

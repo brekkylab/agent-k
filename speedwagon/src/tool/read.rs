@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ailoy::{
     datatype::Value,
     message::ToolDescBuilder,
@@ -8,9 +6,9 @@ use ailoy::{
 };
 use uuid::Uuid;
 
-use crate::store::Store;
+use crate::store::SharedStore;
 
-pub fn build_read_document_tool(store: Arc<Store>) -> ToolFactory {
+pub fn build_read_document_tool(store: SharedStore) -> ToolFactory {
     let desc = ToolDescBuilder::new("read_document")
         .description(concat!(
             "Read a byte range of a document's content. ",
@@ -61,7 +59,8 @@ pub fn build_read_document_tool(store: Arc<Store>) -> ToolFactory {
                 None => return to_value!({"error": "missing required parameter: len"}),
             };
 
-            match store.read(id, offset, len) {
+            let guard = store.read().await;
+            match guard.read(id, offset, len) {
                 Some(content) => Value::from(content),
                 None => to_value!({"error": format!("document not found: {id_str}")}),
             }

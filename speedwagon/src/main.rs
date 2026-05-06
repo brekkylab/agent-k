@@ -14,15 +14,18 @@ use std::{
     sync::Arc,
 };
 
+use tokio::sync::RwLock;
+
 use ailoy::{
     agent::{Agent, AgentProvider},
+    lang_model::LangModelProvider,
     message::{Message, Part, Role},
 };
 use anyhow::Result;
 use clap::Parser;
 use futures::StreamExt;
 use rustyline::{DefaultEditor, error::ReadlineError};
-use speedwagon::{FileType, SpeedwagonSpec, Store, build_toolset};
+use speedwagon::{FileType, SharedStore, SpeedwagonSpec, Store, build_tools};
 
 use speedwagon::preset::{PresetKind, setup_docset};
 
@@ -53,10 +56,12 @@ fn resolve_dir(path: &str) -> PathBuf {
 }
 
 async fn build_agent(store_dir: &Path, model: &str, provider: &AgentProvider) -> Result<Agent> {
-    let store = Arc::new(Store::new(store_dir)?);
-    let toolset = build_toolset(store);
+    let store: SharedStore = Arc::new(RwLock::new(Store::new(store_dir)?));
+
     let spec = SpeedwagonSpec::new().model(model).into_spec();
-    Agent::try_with_tools(spec, provider, &toolset).await
+    let mut provider = provider.clone();
+    provider.tools = build_tools(store);
+    Agent::try_with_provider(spec, &provider).await
 }
 
 async fn run_query(agent: &mut Agent, input: &str) -> Result<()> {
@@ -114,15 +119,17 @@ async fn main() -> Result<()> {
     }
 
     let mut provider = AgentProvider::new();
+    let mut model_provider = LangModelProvider::new();
     if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        provider.model_openai(key);
+        model_provider.insert("openai/*".into(), LangModelProvider::openai(key));
     }
     if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        provider.model_claude(key);
+        model_provider.insert("anthropic/*".into(), LangModelProvider::anthropic(key));
     }
     if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-        provider.model_gemini(key);
+        model_provider.insert("google/*".into(), LangModelProvider::gemini(key));
     }
+    provider.models = model_provider;
 
     let mut agent = build_agent(&store_dir, &cli.model, &provider).await?;
     let doc_count = Store::new(&store_dir)?.count();
