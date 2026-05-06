@@ -50,6 +50,8 @@ async fn main() -> std::io::Result<()> {
 }
 
 async fn run_create_admin(username: String, password: String, display_name: Option<String>) {
+    use agent_k_backend::repository::{NewUser, RepositoryError};
+
     let repo = repository::create_repository_from_env()
         .await
         .expect("failed to initialise repository");
@@ -62,7 +64,6 @@ async fn run_create_admin(username: String, password: String, display_name: Opti
         }
     };
 
-    use agent_k_backend::repository::{NewUser, RepositoryError};
     let result = repo
         .create_user(NewUser {
             id: Uuid::new_v4(),
@@ -123,8 +124,7 @@ async fn run_server() -> std::io::Result<()> {
         .await
         .expect("failed to initialise repository");
 
-    // Bootstrap admin from env if no admin exists
-    bootstrap_admin_if_needed(&repo).await;
+    auth::bootstrap_admin_if_needed(&repo).await;
 
     let store_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
     let store = Arc::new(RwLock::new(
@@ -172,61 +172,6 @@ async fn run_server() -> std::io::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     axum::serve(listener, app).await
-}
-
-async fn bootstrap_admin_if_needed(repo: &repository::AppRepository) {
-    let count = match repo.count_admins().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("failed to count admin users: {e}");
-            return;
-        }
-    };
-
-    if count > 0 {
-        return;
-    }
-
-    let username = std::env::var("AGENT_K_ADMIN_USERNAME");
-    let password = std::env::var("AGENT_K_ADMIN_PASSWORD");
-
-    match (username, password) {
-        (Ok(u), Ok(p)) => {
-            let password_hash = match auth::hash_password(&p) {
-                Ok(h) => h,
-                Err(_) => {
-                    tracing::error!("failed to hash bootstrap admin password");
-                    return;
-                }
-            };
-
-            use agent_k_backend::repository::NewUser;
-            match repo
-                .create_user(NewUser {
-                    id: Uuid::new_v4(),
-                    username: u.clone(),
-                    password_hash,
-                    role: auth::Role::Admin,
-                    display_name: None,
-                    is_active: true,
-                })
-                .await
-            {
-                Ok(user) => {
-                    tracing::info!(id = %user.id, username = %u, "bootstrap admin user created from env");
-                }
-                Err(e) => {
-                    tracing::error!("failed to create bootstrap admin: {e}");
-                }
-            }
-        }
-        _ => {
-            tracing::warn!(
-                "no admin user exists — set AGENT_K_ADMIN_USERNAME/AGENT_K_ADMIN_PASSWORD \
-                 or run `agent-k-backend create-admin`"
-            );
-        }
-    }
 }
 
 async fn serve_openapi(Extension(openapi): Extension<Arc<OpenApi>>) -> impl IntoResponse {
