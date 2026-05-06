@@ -5,6 +5,17 @@ use argon2::{
 
 use crate::error::{ApiError, AppError};
 
+pub const MIN_PASSWORD_LEN: usize = 8;
+
+pub fn validate_password(password: &str) -> Result<(), ApiError> {
+    if password.len() < MIN_PASSWORD_LEN {
+        return Err(AppError::bad_request(format!(
+            "password must be at least {MIN_PASSWORD_LEN} characters"
+        )));
+    }
+    Ok(())
+}
+
 pub fn hash_password(plain: &str) -> Result<String, ApiError> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()

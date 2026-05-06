@@ -5,5 +5,5 @@ pub mod role;
 
 pub use jwt::JwtConfig;
 pub use middleware::{AuthUser, admin_required, auth_required};
-pub use password::{hash_password, verify_password};
+pub use password::{hash_password, validate_password, verify_password};
 pub use role::Role;

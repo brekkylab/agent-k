@@ -22,7 +22,7 @@ use speedwagon::SpeedwagonSpec;
 use uuid::Uuid;
 
 use crate::{
-    auth::{AuthUser, admin_required, auth_required, hash_password, verify_password},
+    auth::{AuthUser, admin_required, auth_required, hash_password, validate_password, verify_password},
     error::{ApiResult, AppError},
     model::{
         CreateSessionRequest, SendMessageRequest, SendMessageResponse, SessionResponse,
@@ -36,20 +36,10 @@ use crate::{
 };
 
 const DEFAULT_MODEL: &str = "openai/gpt-5.4-mini";
-const MIN_PASSWORD_LEN: usize = 8;
 
 fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
     format!("session-{}", &s[..12])
-}
-
-fn validate_password(password: &str) -> Result<(), crate::error::ApiError> {
-    if password.len() < MIN_PASSWORD_LEN {
-        return Err(AppError::bad_request(format!(
-            "password must be at least {MIN_PASSWORD_LEN} characters"
-        )));
-    }
-    Ok(())
 }
 
 pub fn get_router(state: Arc<AppState>) -> ApiRouter {
