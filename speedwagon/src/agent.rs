@@ -1,4 +1,4 @@
-use ailoy::agent::{Agent, AgentCard, AgentProvider, AgentSpec};
+use ailoy::agent::{AgentCard, AgentSpec};
 
 pub const SYSTEM_PROMPT: &str = r#"You are an expert research assistant. Your task is to answer questions by systematically searching through a document corpus using the provided tools. Think step by step.
 
@@ -61,17 +61,6 @@ impl SpeedwagonSpec {
 
     pub fn into_spec(self) -> AgentSpec {
         self.into()
-    }
-
-    pub async fn into_runtime(self) -> anyhow::Result<Agent> {
-        Agent::try_new(self.spec).await
-    }
-
-    pub async fn into_runtime_with_provider(
-        self,
-        provider: &AgentProvider,
-    ) -> anyhow::Result<Agent> {
-        Agent::try_with_provider(self.spec, provider).await
     }
 }
 

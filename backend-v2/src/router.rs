@@ -110,7 +110,7 @@ async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
 //         .tool(bash)
 //         .tool(python)
 //         .tool(web_search)
-//         .sandbox(sandbox);
+//         .runenv(sandbox);
 
 //     // Materialize each speedwagon ToolFactory into a concrete Tool.
 //     // ToolFactory::make(spec) selects the right implementation (e.g. sandbox-aware).
