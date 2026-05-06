@@ -51,8 +51,10 @@ async fn main() -> std::io::Result<()> {
 async fn run_server() -> std::io::Result<()> {
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 
-    let jwt_secret =
-        std::env::var("AGENT_K_JWT_SECRET").expect("AGENT_K_JWT_SECRET env var must be set");
+    let jwt_secret = std::env::var("AGENT_K_JWT_SECRET").unwrap_or_else(|_| {
+        tracing::warn!("AGENT_K_JWT_SECRET not set — using insecure fallback secret");
+        "jwtsecret".to_string()
+    });
     let jwt_expiry = std::env::var("JWT_EXPIRY_SECONDS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
