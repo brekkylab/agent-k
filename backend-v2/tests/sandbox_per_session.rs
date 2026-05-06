@@ -8,20 +8,20 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::path::Path;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use agent_k_backend::state::AppState;
 use common::{
     delete_session, extract_text, extract_text_from_slice, make_app_with_state, make_repo,
     make_test_store, post_session, send_message, send_message_stream, setup_provider,
+    test_jwt_config,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 async fn make_state() -> Arc<AppState> {
     let store = make_test_store();
-    Arc::new(AppState::new(make_repo().await, store))
+    Arc::new(AppState::new(make_repo().await, store, test_jwt_config()))
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────

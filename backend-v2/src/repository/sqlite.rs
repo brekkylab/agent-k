@@ -3,7 +3,10 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-use crate::repository::{DbSession, RepositoryError, RepositoryResult};
+use crate::{
+    auth::role::Role,
+    repository::{DbSession, DbUser, NewUser, RepositoryError, RepositoryResult, UpdateUser},
+};
 
 pub struct SqliteRepository {
     pool: SqlitePool,
@@ -55,6 +58,27 @@ impl SqliteRepository {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                display_name TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);")
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 
@@ -72,6 +96,27 @@ impl SqliteRepository {
             .map(|dt| dt.with_timezone(&Utc))
             .map_err(|_| RepositoryError::InvalidData(format!("invalid timestamp in {field}")))
     }
+
+    fn parse_role(s: String, field: &str) -> RepositoryResult<Role> {
+        match s.as_str() {
+            "user" => Ok(Role::User),
+            "admin" => Ok(Role::Admin),
+            _ => Err(RepositoryError::InvalidData(format!(
+                "invalid role '{s}' in {field}"
+            ))),
+        }
+    }
+
+    fn map_db_error(e: sqlx::Error, unique_field: &str) -> RepositoryError {
+        if let sqlx::Error::Database(ref db_err) = e {
+            if db_err.message().contains("UNIQUE constraint failed") {
+                return RepositoryError::UniqueViolation(unique_field.to_string());
+            }
+        }
+        RepositoryError::Database(e)
+    }
+
+    // ── Sessions ──────────────────────────────────────────────────────────────
 
     pub async fn create_session(&self, id: Uuid) -> RepositoryResult<DbSession> {
         let now = Self::now_string();
@@ -178,6 +223,169 @@ impl SqliteRepository {
             })
             .collect()
     }
+
+    // ── Users ─────────────────────────────────────────────────────────────────
+
+    fn row_to_db_user(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<DbUser> {
+        Ok(DbUser {
+            id: Self::parse_uuid(row.get::<String, _>("id"), "users.id")?,
+            username: row.get::<String, _>("username"),
+            password_hash: row.get::<String, _>("password_hash"),
+            role: Self::parse_role(row.get::<String, _>("role"), "users.role")?,
+            display_name: row.get::<Option<String>, _>("display_name"),
+            is_active: row.get::<i64, _>("is_active") != 0,
+            created_at: Self::parse_timestamp(
+                row.get::<String, _>("created_at"),
+                "users.created_at",
+            )?,
+            updated_at: Self::parse_timestamp(
+                row.get::<String, _>("updated_at"),
+                "users.updated_at",
+            )?,
+        })
+    }
+
+    pub async fn create_user(&self, user: NewUser) -> RepositoryResult<DbUser> {
+        let now = Self::now_string();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, display_name, is_active, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?);",
+        )
+        .bind(user.id.to_string())
+        .bind(&user.username)
+        .bind(&user.password_hash)
+        .bind(user.role.as_str())
+        .bind(&user.display_name)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Self::map_db_error(e, "username"))?;
+
+        Ok(DbUser {
+            id: user.id,
+            username: user.username,
+            password_hash: user.password_hash,
+            role: user.role,
+            display_name: user.display_name,
+            is_active: true,
+            created_at: Self::parse_timestamp(now.clone(), "users.created_at")?,
+            updated_at: Self::parse_timestamp(now, "users.updated_at")?,
+        })
+    }
+
+    pub async fn get_user_by_id(&self, id: Uuid) -> RepositoryResult<Option<DbUser>> {
+        let row = sqlx::query(
+            "SELECT id, username, password_hash, role, display_name, is_active, created_at, updated_at \
+             FROM users WHERE id = ?;",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(Self::row_to_db_user).transpose()
+    }
+
+    pub async fn get_user_by_username(&self, username: &str) -> RepositoryResult<Option<DbUser>> {
+        let row = sqlx::query(
+            "SELECT id, username, password_hash, role, display_name, is_active, created_at, updated_at \
+             FROM users WHERE username = ?;",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.as_ref().map(Self::row_to_db_user).transpose()
+    }
+
+    pub async fn list_users(&self, page: u32, size: u32) -> RepositoryResult<(Vec<DbUser>, i64)> {
+        let size = size.min(100) as i64;
+        let offset = ((page.saturating_sub(1)) as i64) * size;
+
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users;")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let rows = sqlx::query(
+            "SELECT id, username, password_hash, role, display_name, is_active, created_at, updated_at \
+             FROM users ORDER BY created_at ASC LIMIT ? OFFSET ?;",
+        )
+        .bind(size)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let users = rows
+            .iter()
+            .map(Self::row_to_db_user)
+            .collect::<RepositoryResult<Vec<_>>>()?;
+
+        Ok((users, total))
+    }
+
+    pub async fn update_user(
+        &self,
+        id: Uuid,
+        update: UpdateUser,
+    ) -> RepositoryResult<Option<DbUser>> {
+        let now = Self::now_string();
+
+        // Build SET clause dynamically
+        let mut set_parts: Vec<&str> = vec!["updated_at = ?"];
+        if update.display_name.is_some() {
+            set_parts.push("display_name = ?");
+        }
+        if update.password_hash.is_some() {
+            set_parts.push("password_hash = ?");
+        }
+        if update.role.is_some() {
+            set_parts.push("role = ?");
+        }
+        if update.is_active.is_some() {
+            set_parts.push("is_active = ?");
+        }
+
+        let sql = format!("UPDATE users SET {} WHERE id = ?;", set_parts.join(", "));
+
+        let mut query = sqlx::query(&sql).bind(&now);
+        if let Some(ref dn) = update.display_name {
+            query = query.bind(dn);
+        }
+        if let Some(ref ph) = update.password_hash {
+            query = query.bind(ph);
+        }
+        if let Some(ref role) = update.role {
+            query = query.bind(role.as_str());
+        }
+        if let Some(active) = update.is_active {
+            query = query.bind(if active { 1i64 } else { 0i64 });
+        }
+        query = query.bind(id.to_string());
+
+        let result = query.execute(&self.pool).await?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        self.get_user_by_id(id).await
+    }
+
+    pub async fn delete_user(&self, id: Uuid) -> RepositoryResult<bool> {
+        let result = sqlx::query("DELETE FROM users WHERE id = ?;")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn count_admins(&self) -> RepositoryResult<i64> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1;",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
@@ -190,6 +398,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::SqliteRepository;
+    use crate::{
+        auth::role::Role as UserRole,
+        repository::{NewUser, UpdateUser},
+    };
 
     async fn make_repo(db_url: &str) -> SqliteRepository {
         let options = db_url
@@ -211,6 +423,16 @@ mod tests {
         repo
     }
 
+    fn new_user(username: &str, role: UserRole) -> NewUser {
+        NewUser {
+            id: Uuid::new_v4(),
+            username: username.to_string(),
+            password_hash: "hash".to_string(),
+            role,
+            display_name: None,
+        }
+    }
+
     #[tokio::test]
     async fn session_and_messages_survive_repository_restart() {
         let dir = tempdir().unwrap();
@@ -218,7 +440,6 @@ mod tests {
 
         let session_id = Uuid::new_v4();
 
-        // First "server instance": create session and write messages.
         {
             let repo = make_repo(&db_url).await;
             repo.create_session(session_id).await.unwrap();
@@ -233,7 +454,6 @@ mod tests {
             assert_eq!(fetched.len(), 2);
         }
 
-        // Second "server instance": open same DB and verify data is intact.
         {
             let repo = make_repo(&db_url).await;
 
@@ -275,10 +495,7 @@ mod tests {
         let deleted = repo.delete_session(session_id).await.unwrap();
         assert!(deleted);
 
-        // Messages must be cascade-deleted.
         assert_eq!(repo.get_messages(session_id).await.unwrap().len(), 0);
-
-        // Session itself must be gone.
         assert!(repo.get_session(session_id).await.unwrap().is_none());
     }
 
@@ -320,5 +537,103 @@ mod tests {
                 "turn2 assistant"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn create_and_get_user() {
+        let repo = make_repo("sqlite::memory:").await;
+
+        let u = new_user("alice", UserRole::User);
+        let id = u.id;
+        let created = repo.create_user(u).await.unwrap();
+
+        assert_eq!(created.username, "alice");
+        assert!(matches!(created.role, UserRole::User));
+        assert!(created.is_active);
+
+        let fetched = repo.get_user_by_id(id).await.unwrap().unwrap();
+        assert_eq!(fetched.id, id);
+
+        let by_name = repo.get_user_by_username("alice").await.unwrap().unwrap();
+        assert_eq!(by_name.id, id);
+    }
+
+    #[tokio::test]
+    async fn duplicate_username_returns_unique_violation() {
+        let repo = make_repo("sqlite::memory:").await;
+
+        repo.create_user(new_user("bob", UserRole::User))
+            .await
+            .unwrap();
+
+        let err = repo
+            .create_user(new_user("bob", UserRole::Admin))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, crate::repository::RepositoryError::UniqueViolation(_)),
+            "expected UniqueViolation, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_user_and_count_admins() {
+        let repo = make_repo("sqlite::memory:").await;
+
+        assert_eq!(repo.count_admins().await.unwrap(), 0);
+
+        let u = new_user("carol", UserRole::User);
+        let id = u.id;
+        repo.create_user(u).await.unwrap();
+
+        repo.update_user(
+            id,
+            UpdateUser {
+                role: Some(UserRole::Admin),
+                display_name: Some("Carol".to_string()),
+                password_hash: None,
+                is_active: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(repo.count_admins().await.unwrap(), 1);
+
+        let updated = repo.get_user_by_id(id).await.unwrap().unwrap();
+        assert!(matches!(updated.role, UserRole::Admin));
+        assert_eq!(updated.display_name.as_deref(), Some("Carol"));
+    }
+
+    #[tokio::test]
+    async fn list_users_pagination() {
+        let repo = make_repo("sqlite::memory:").await;
+
+        for i in 0..5 {
+            repo.create_user(new_user(&format!("user{i}"), UserRole::User))
+                .await
+                .unwrap();
+        }
+
+        let (page1, total) = repo.list_users(1, 3).await.unwrap();
+        assert_eq!(total, 5);
+        assert_eq!(page1.len(), 3);
+
+        let (page2, _) = repo.list_users(2, 3).await.unwrap();
+        assert_eq!(page2.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn delete_user() {
+        let repo = make_repo("sqlite::memory:").await;
+
+        let u = new_user("dave", UserRole::User);
+        let id = u.id;
+        repo.create_user(u).await.unwrap();
+
+        assert!(repo.delete_user(id).await.unwrap());
+        assert!(repo.get_user_by_id(id).await.unwrap().is_none());
+        assert!(!repo.delete_user(id).await.unwrap());
     }
 }
