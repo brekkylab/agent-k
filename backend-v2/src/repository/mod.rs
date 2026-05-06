@@ -4,7 +4,9 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 pub use sqlite::SqliteRepository;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -16,6 +18,9 @@ const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
 pub enum RepositoryError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+
+    #[error("migration error: {0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
 
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -85,14 +90,15 @@ pub async fn create_repository(db_url: &str) -> RepositoryResult<AppRepository> 
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        .synchronous(SqliteSynchronous::Normal);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
         .await?;
 
-    let repo = SqliteRepository::new(pool);
-    repo.migrate().await?;
-    Ok(Arc::new(repo))
+    sqlx::migrate!("./migrations").run(&pool).await?;
+
+    Ok(Arc::new(SqliteRepository::new(pool)))
 }

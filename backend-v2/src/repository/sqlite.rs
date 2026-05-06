@@ -17,71 +17,6 @@ impl SqliteRepository {
         Self { pool }
     }
 
-    pub async fn migrate(&self) -> RepositoryResult<()> {
-        sqlx::query("PRAGMA foreign_keys = ON;")
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("PRAGMA synchronous = NORMAL;")
-            .execute(&self.pool)
-            .await?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS session_messages (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                message_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_session_messages_session_seq \
-             ON session_messages(session_id, seq);",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                username TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'user',
-                display_name TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);")
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
-
     fn now_string() -> String {
         Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
     }
@@ -419,9 +354,9 @@ mod tests {
             .await
             .unwrap();
 
-        let repo = SqliteRepository::new(pool);
-        repo.migrate().await.unwrap();
-        repo
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        SqliteRepository::new(pool)
     }
 
     fn new_user(username: &str, role: UserRole) -> NewUser {
