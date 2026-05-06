@@ -1,10 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "./backend",
-    "./chat-agent",
-    "./knowledge-agent",
+    "./directory",
 ]
 
 [workspace.dependencies]
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "224f612159e1261ca43c32cf13c293cd02f55ff4" }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "098a8289272ccce3cf5719e20732050cb047d04a" }
