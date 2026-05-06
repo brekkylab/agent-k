@@ -4,14 +4,10 @@
 //! Korean output lands ~1/3 the chars of English at the same budget;
 //! per-language budgets are deferred until a near-domain Korean KB shows up.
 
-use ailoy::{
-    agent::{Agent, AgentProvider, AgentSpec},
-    message::{Message, Part, Role},
-};
-use anyhow::{Context as _, Result};
-use futures::StreamExt as _;
+use ailoy::message::{Message, Part, Role};
+use anyhow::Result;
 
-const MODEL: &str = "openai/gpt-5.4-mini";
+use super::helper::HelperAgent;
 
 const DESCRIPTION_INSTRUCTION: &str = concat!(
     "You write a self-contained description of a knowledge base. ",
@@ -27,60 +23,37 @@ const DESCRIPTION_INSTRUCTION: &str = concat!(
     "or any metadata about how this knowledge base was assembled. ",
     "Describe ONLY what documents are inside, as if a curator wrote it. ",
     "Write the description in English regardless of the document language. ",
-    "Length: ~200 characters. Output a JSON object: {\"description\": \"<text>\"}."
+    "Length: ~200 characters. Output a JSON object: {\"result\": \"<string>\"}."
 );
 
-pub struct DescriptionAgent {
-    spec: AgentSpec,
-    provider: Option<AgentProvider>,
+/// Borrowed input for `DescriptionAgent::generate`.
+struct DescriptionInput<'a> {
+    kb_name: &'a str,
+    instruction: Option<&'a str>,
+    docs: &'a [(&'a str, &'a str)],
 }
 
-impl DescriptionAgent {
-    pub fn new(provider: Option<AgentProvider>) -> Self {
-        Self {
-            spec: AgentSpec::new(MODEL).instruction(DESCRIPTION_INSTRUCTION),
-            provider,
-        }
+/// Generates a KB-level routing description via LLM. Reads from ailoy's
+/// process-global default provider.
+struct DescriptionAgent;
+
+impl HelperAgent for DescriptionAgent {
+    type Input<'a> = DescriptionInput<'a>;
+    type Output = String;
+    const INSTRUCTION: &'static str = DESCRIPTION_INSTRUCTION;
+
+    fn build_query(input: &DescriptionInput<'_>) -> Message {
+        let user = build_user_message(input.kb_name, input.instruction, input.docs);
+        Message::new(Role::User).with_contents([Part::text(user)])
     }
 
-    /// Only `purpose` is sent to the LLM; `title` is kept in the signature
-    /// so the caller can feed the same slice to `fallback_description`.
-    pub async fn generate(
-        &self,
-        kb_name: &str,
-        instruction: Option<&str>,
-        docs: &[(&str, &str)],
-    ) -> Result<String> {
-        let user = build_user_message(kb_name, instruction, docs);
-        let query = Message::new(Role::User).with_contents([Part::text(user)]);
-
-        let mut agent = match &self.provider {
-            Some(provider) => Agent::try_with_provider(self.spec.clone(), provider).await?,
-            None => Agent::try_new(self.spec.clone()).await?,
-        };
-
-        let mut text_parts: Vec<String> = Vec::new();
-        {
-            let mut stream = agent.run(query);
-            while let Some(result) = stream.next().await {
-                let output = result?;
-                for part in &output.message.contents {
-                    if let Some(text) = part.as_text() {
-                        text_parts.push(text.to_string());
-                    }
-                }
-            }
-        }
-        let raw = text_parts.join("");
-        Ok(parse_description_response(&raw))
+    fn fallback(input: &DescriptionInput<'_>) -> String {
+        let titles: Vec<&str> = input.docs.iter().map(|(t, _)| *t).collect();
+        fallback_description(input.docs.len(), &titles)
     }
 }
 
-fn build_user_message(
-    kb_name: &str,
-    instruction: Option<&str>,
-    docs: &[(&str, &str)],
-) -> String {
+fn build_user_message(kb_name: &str, instruction: Option<&str>, docs: &[(&str, &str)]) -> String {
     let mut s = String::new();
     s.push_str(&format!("KB name: {kb_name}\n"));
     if let Some(instr) = instruction {
@@ -90,74 +63,26 @@ fn build_user_message(
     }
     s.push_str(&format!("\nDocuments ({}):\n", docs.len()));
     for (_title, purpose) in docs {
-        let p = if purpose.is_empty() { "(no purpose)" } else { *purpose };
+        let p = if purpose.is_empty() {
+            "(no purpose)"
+        } else {
+            *purpose
+        };
         s.push_str(&format!("- {p}\n"));
     }
     s
 }
 
-/// Empty return signals the caller to use `fallback_description`.
-fn parse_description_response(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if let Some(d) = value.get("description").and_then(|v| v.as_str()) {
-            return d.trim().to_string();
-        }
-    }
-
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if start < end {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]) {
-                if let Some(d) = value.get("description").and_then(|v| v.as_str()) {
-                    return d.trim().to_string();
-                }
-            }
-        }
-    }
-
-    String::new()
-}
-
-/// Reads `OPENAI_API_KEY` from the environment, runs `DescriptionAgent`, and
-/// substitutes `fallback_description` if the LLM body is empty. Transport
-/// errors (missing key, network) propagate.
-pub async fn get_description(
-    kb_name: &str,
-    instruction: Option<&str>,
-    docs: &[(&str, &str)],
-) -> Result<String> {
-    dotenvy::dotenv().ok();
-
-    let mut provider = AgentProvider::new();
-    provider.model_openai(
-        std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set in environment")?,
-    );
-
-    let agent = DescriptionAgent::new(Some(provider));
-    let result = agent.generate(kb_name, instruction, docs).await?;
-    if result.is_empty() {
-        log::warn!("description generation returned empty string; using fallback");
-        let titles: Vec<&str> = docs.iter().map(|(t, _)| *t).collect();
-        Ok(fallback_description(docs.len(), &titles))
-    } else {
-        Ok(result)
-    }
-}
-
 /// Deterministic fallback when the LLM call fails or returns empty.
-pub fn fallback_description(doc_count: usize, top_titles: &[&str]) -> String {
+fn fallback_description(doc_count: usize, top_titles: &[&str]) -> String {
     if doc_count == 0 {
         return String::new();
     }
     let titles: Vec<&str> = top_titles
         .iter()
+        .copied()
         .filter(|t| !t.is_empty())
         .take(5)
-        .copied()
         .collect();
     if titles.is_empty() {
         format!("{doc_count} documents")
@@ -166,44 +91,25 @@ pub fn fallback_description(doc_count: usize, top_titles: &[&str]) -> String {
     }
 }
 
+/// Runs `DescriptionAgent` over the index's `(title, purpose)` slice. An
+/// empty/malformed LLM response is substituted with `fallback_description`
+/// (a deterministic count + top-titles string). Transport errors propagate.
+pub(super) async fn get_description(
+    kb_name: &str,
+    instruction: Option<&str>,
+    docs: &[(&str, &str)],
+) -> Result<String> {
+    DescriptionAgent::generate(DescriptionInput {
+        kb_name,
+        instruction,
+        docs,
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_direct_json() {
-        let raw = r#"{"description": "hello"}"#;
-        assert_eq!(parse_description_response(raw), "hello");
-    }
-
-    #[test]
-    fn parse_json_with_surrounding_text() {
-        let raw = r#"Here you go: {"description": "hello"} done."#;
-        assert_eq!(parse_description_response(raw), "hello");
-    }
-
-    #[test]
-    fn parse_trims_inner_whitespace() {
-        let raw = r#"{"description": "   hello   "}"#;
-        assert_eq!(parse_description_response(raw), "hello");
-    }
-
-    #[test]
-    fn parse_empty_input() {
-        assert_eq!(parse_description_response(""), "");
-        assert_eq!(parse_description_response("   "), "");
-    }
-
-    #[test]
-    fn parse_missing_field() {
-        let raw = r#"{"other": "value"}"#;
-        assert_eq!(parse_description_response(raw), "");
-    }
-
-    #[test]
-    fn parse_malformed_json() {
-        assert_eq!(parse_description_response("{not json"), "");
-    }
 
     #[test]
     fn fallback_zero_docs() {
@@ -291,6 +197,12 @@ mod tests {
         // We need origin/ and corpus/ to exist for Store::new.
         std::fs::create_dir_all(root.join("origin")).unwrap();
         std::fs::create_dir_all(root.join("corpus")).unwrap();
+
+        // Populate ailoy's process-global default provider for this test.
+        dotenvy::dotenv().ok();
+        ailoy::agent::default_provider_mut().await.model_openai(
+            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY required for this test"),
+        );
 
         let store = crate::store::Store::new(root).expect("open store");
         let description = store
