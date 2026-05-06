@@ -52,7 +52,7 @@ async fn main() -> std::io::Result<()> {
 
     let store_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
     let store = Arc::new(RwLock::new(
-        Store::new(store_path).expect("speedwagon store init"),
+        Store::new(&store_path).expect("speedwagon store init"),
     ));
 
     // Register API keys with the global provider (needed by Agent::try_with_tools)

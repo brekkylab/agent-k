@@ -49,7 +49,7 @@ pub async fn make_repo() -> repository::AppRepository {
 pub fn make_test_store() -> speedwagon::SharedStore {
     let store_path = std::env::temp_dir().join(format!("speedwagon-test-{}", uuid::Uuid::new_v4()));
     let store = Arc::new(RwLock::new(
-        Store::new(store_path).expect("test store init"),
+        Store::new(&store_path).expect("test store init"),
     ));
     store
 }
@@ -262,6 +262,148 @@ pub async fn clear_message_history_status(
         .unwrap();
 
     app.clone().oneshot(req).await.unwrap().status()
+}
+
+// ── Document helpers ─────────────────────────────────────────────────────────
+
+pub async fn list_documents(app: &axum::Router) -> Vec<serde_json::Value> {
+    let req = Request::builder()
+        .method("GET")
+        .uri("/documents")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn build_multipart_body(files: &[(&str, &[u8])]) -> (String, Vec<u8>) {
+    let boundary = "----testboundary";
+    let mut body = Vec::new();
+    for (filename, content) in files {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
+                 Content-Type: application/octet-stream\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(content);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (boundary.to_string(), body)
+}
+
+/// Ingest a single file and return the first succeeded document.
+pub async fn ingest_document(
+    app: &axum::Router,
+    filename: &str,
+    content: &[u8],
+) -> serde_json::Value {
+    let batch = ingest_documents(app, &[(filename, content)]).await;
+    let succeeded = batch["succeeded"]
+        .as_array()
+        .expect("succeeded should be array");
+    assert!(
+        !succeeded.is_empty(),
+        "ingest_document: no succeeded items — failed: {:?}",
+        batch["failed"]
+    );
+    succeeded[0].clone()
+}
+
+/// Ingest multiple files and return the full BatchIngestResponse.
+pub async fn ingest_documents(app: &axum::Router, files: &[(&str, &[u8])]) -> serde_json::Value {
+    let (boundary, body) = build_multipart_body(files);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/documents")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Ingest files and also return the HTTP status code.
+pub async fn ingest_documents_with_status(
+    app: &axum::Router,
+    files: &[(&str, &[u8])],
+) -> (axum::http::StatusCode, serde_json::Value) {
+    let (boundary, body) = build_multipart_body(files);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/documents")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+pub async fn purge_document(app: &axum::Router, id: &str) -> axum::http::StatusCode {
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!("/documents/{id}"))
+        .body(Body::empty())
+        .unwrap();
+
+    app.clone().oneshot(req).await.unwrap().status()
+}
+
+pub async fn bulk_purge_documents(
+    app: &axum::Router,
+    ids: &[&str],
+) -> (axum::http::StatusCode, serde_json::Value) {
+    let payload = serde_json::json!({ "ids": ids });
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/documents")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+pub async fn get_document(
+    app: &axum::Router,
+    id: &str,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/documents/{id}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, body)
 }
 
 // ── Text extraction ───────────────────────────────────────────────────────────

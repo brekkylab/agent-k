@@ -21,6 +21,30 @@ use uuid::Uuid;
 pub use document::{Document, FindResult};
 pub use searcher::{SearchPage, SearchResult};
 
+#[derive(Debug, Clone)]
+pub struct IngestResult {
+    pub succeeded: Vec<Uuid>,
+    pub failed: Vec<IngestFailure>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IngestFailure {
+    pub index: usize,
+    pub error: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PurgeResult {
+    pub purged: Vec<Uuid>,
+    pub failed: Vec<PurgeFailure>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PurgeFailure {
+    pub id: Uuid,
+    pub error: String,
+}
+
 pub type SharedStore = Arc<RwLock<Store>>;
 
 /// Speedwagon store layout:
@@ -92,64 +116,123 @@ impl Store {
         Ok(id)
     }
 
-    /// Adds multiple files in one batch: translates each to corpus, resolves titles, then
-    /// commits them all to the index in a single write.
+    /// Adds multiple files in one batch with partial-success semantics.
+    /// Successfully processed files are batched into a single index write.
+    /// Files that fail at any stage (translation, reading, title extraction) are
+    /// recorded in `IngestResult::failed` and their intermediate files are cleaned up.
     pub async fn ingest_many(
         &mut self,
         items: impl IntoIterator<Item = (impl IntoIterator<Item = u8>, FileType)>,
-    ) -> Result<Vec<Uuid>> {
-        let items = items
+    ) -> Result<IngestResult> {
+        let items: Vec<(Vec<u8>, FileType)> = items
             .into_iter()
             .map(|v| (v.0.into_iter().collect::<Vec<_>>(), v.1))
-            .collect::<Vec<_>>();
-        let mut all_ids = Vec::with_capacity(items.len());
+            .collect();
+
+        let mut succeeded = Vec::with_capacity(items.len());
+        let mut failed = Vec::new();
         let mut to_index: Vec<(Uuid, String)> = Vec::new(); // (id, content)
 
-        for (bytes, filetype) in &items {
+        for (idx, (bytes, filetype)) in items.iter().enumerate() {
             let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, bytes);
-            all_ids.push(id);
-
             let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
+
             if !corpus_path.exists() {
-                match filetype {
-                    FileType::MD => {
-                        fs::write(&corpus_path, bytes)?;
-                    }
+                let mut new_origin: Option<PathBuf> = None;
+
+                let ok = match filetype {
+                    FileType::MD => fs::write(&corpus_path, bytes).map_err(|e| e.to_string()),
                     _ => {
                         let ext = filetype.to_string();
                         let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
                         if !origin_path.exists() {
-                            fs::write(&origin_path, bytes)?;
+                            if let Err(e) = fs::write(&origin_path, bytes) {
+                                failed.push(IngestFailure {
+                                    index: idx,
+                                    error: e.to_string(),
+                                });
+                                continue;
+                            }
+                            new_origin = Some(origin_path.clone());
                         }
-                        translator::translate(&origin_path, &corpus_path)?;
+                        translator::translate(&origin_path, &corpus_path)
+                            .map_err(|e| e.to_string())
                     }
+                };
+
+                if let Err(e) = ok {
+                    let _ = fs::remove_file(&corpus_path);
+                    if let Some(origin) = &new_origin {
+                        let _ = fs::remove_file(origin);
+                    }
+                    failed.push(IngestFailure {
+                        index: idx,
+                        error: e,
+                    });
+                    continue;
                 }
             }
 
-            if !indexer::document_exists(&self.index, &id.to_string())? {
-                let content = fs::read_to_string(&corpus_path)
-                    .with_context(|| format!("failed to read corpus: {corpus_path:?}"))?;
-                to_index.push((id, content));
+            match indexer::document_exists(&self.index, &id.to_string()) {
+                Ok(true) => {
+                    succeeded.push(id);
+                }
+                Ok(false) => match fs::read_to_string(&corpus_path) {
+                    Ok(content) => {
+                        to_index.push((id, content));
+                    }
+                    Err(e) => {
+                        let _ = fs::remove_file(&corpus_path);
+                        failed.push(IngestFailure {
+                            index: idx,
+                            error: e.to_string(),
+                        });
+                    }
+                },
+                Err(e) => {
+                    failed.push(IngestFailure {
+                        index: idx,
+                        error: e.to_string(),
+                    });
+                }
             }
         }
 
-        if to_index.is_empty() {
-            return Ok(all_ids);
-        }
-
         let mut docs: Vec<(String, String, String)> = Vec::with_capacity(to_index.len());
+        let mut title_failed_ids: Vec<Uuid> = Vec::new();
         for (id, content) in to_index {
-            let title = parser::get_title(&content).await?;
-            docs.push((id.to_string(), title, content));
+            match parser::get_title(&content).await {
+                Ok(title) => docs.push((id.to_string(), title, content)),
+                Err(e) => {
+                    let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
+                    let _ = fs::remove_file(&corpus_path);
+                    title_failed_ids.push(id);
+                    failed.push(IngestFailure {
+                        index: items
+                            .iter()
+                            .position(|(b, _)| Uuid::new_v5(&Uuid::NAMESPACE_OID, b) == id)
+                            .unwrap_or(0),
+                        error: e.to_string(),
+                    });
+                }
+            }
         }
 
-        let refs: Vec<(&str, &str, &str)> = docs
-            .iter()
-            .map(|(id, title, content)| (id.as_str(), title.as_str(), content.as_str()))
-            .collect();
-        indexer::add_documents(&self.index, &refs)?;
+        if !docs.is_empty() {
+            let refs: Vec<(&str, &str, &str)> = docs
+                .iter()
+                .map(|(id, title, content)| (id.as_str(), title.as_str(), content.as_str()))
+                .collect();
+            indexer::add_documents(&self.index, &refs)?;
 
-        Ok(all_ids)
+            for (id_str, _, _) in &docs {
+                if let Ok(id) = id_str.parse::<Uuid>() {
+                    succeeded.push(id);
+                }
+            }
+        }
+
+        Ok(IngestResult { succeeded, failed })
     }
 
     /// Removes a document from the index and deletes its origin and corpus files.
@@ -177,6 +260,28 @@ impl Store {
         }
 
         Ok(doc)
+    }
+
+    /// Removes multiple documents with partial-success semantics.
+    pub fn purge_many(&mut self, ids: impl IntoIterator<Item = Uuid>) -> PurgeResult {
+        let mut purged = Vec::new();
+        let mut failed = Vec::new();
+
+        for id in ids {
+            match self.purge(id) {
+                Ok(Some(_)) => purged.push(id),
+                Ok(None) => failed.push(PurgeFailure {
+                    id,
+                    error: "document not found".into(),
+                }),
+                Err(e) => failed.push(PurgeFailure {
+                    id,
+                    error: e.to_string(),
+                }),
+            }
+        }
+
+        PurgeResult { purged, failed }
     }
 
     /// Get # of documents
