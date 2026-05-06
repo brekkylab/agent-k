@@ -266,39 +266,27 @@ impl SqliteRepository {
     ) -> RepositoryResult<Option<DbUser>> {
         let now = Self::now_string();
 
-        // Build SET clause dynamically
-        let mut set_parts: Vec<&str> = vec!["updated_at = ?"];
-        if update.display_name.is_some() {
-            set_parts.push("display_name = ?");
-        }
-        if update.password_hash.is_some() {
-            set_parts.push("password_hash = ?");
-        }
-        if update.role.is_some() {
-            set_parts.push("role = ?");
-        }
-        if update.is_active.is_some() {
-            set_parts.push("is_active = ?");
-        }
+        let mut builder = sqlx::QueryBuilder::<sqlx::Sqlite>::new("UPDATE users SET updated_at = ");
+        builder.push_bind(&now);
 
-        let sql = format!("UPDATE users SET {} WHERE id = ?;", set_parts.join(", "));
-
-        let mut query = sqlx::query(&sql).bind(&now);
         if let Some(ref dn) = update.display_name {
-            query = query.bind(dn);
+            builder.push(", display_name = ").push_bind(dn);
         }
         if let Some(ref ph) = update.password_hash {
-            query = query.bind(ph);
+            builder.push(", password_hash = ").push_bind(ph);
         }
         if let Some(ref role) = update.role {
-            query = query.bind(role.as_str());
+            builder.push(", role = ").push_bind(role.as_str());
         }
         if let Some(active) = update.is_active {
-            query = query.bind(if active { 1i64 } else { 0i64 });
+            builder
+                .push(", is_active = ")
+                .push_bind(if active { 1i64 } else { 0i64 });
         }
-        query = query.bind(id.to_string());
 
-        let result = query.execute(&self.pool).await?;
+        builder.push(" WHERE id = ").push_bind(id.to_string());
+
+        let result = builder.build().execute(&self.pool).await?;
         if result.rows_affected() == 0 {
             return Ok(None);
         }
