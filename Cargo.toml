@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "backend-v2",
+    "./reflect-agent",
     "./speedwagon",
 ]
 
