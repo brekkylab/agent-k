@@ -1,3 +1,4 @@
+mod description;
 mod document;
 mod indexer;
 mod parser;
@@ -15,6 +16,7 @@ use anyhow::{Context as _, Result};
 use tantivy::Index;
 use uuid::Uuid;
 
+pub use description::{DescriptionAgent, fallback_description};
 pub use document::{Document, FindResult};
 pub use searcher::{SearchPage, SearchResult};
 
@@ -283,6 +285,26 @@ impl Store {
             k,
             context_bytes,
         ))
+    }
+
+    /// One LLM call over every doc's `(title, purpose)` in the index. Input
+    /// is proportional to doc count (~24K chars at N=200), so don't run this
+    /// synchronously on indexing hot paths — use a finalize hook or
+    /// background job. Empty LLM body falls back to a deterministic string.
+    pub async fn describe(
+        &self,
+        kb_name: &str,
+        instruction: Option<&str>,
+    ) -> Result<String> {
+        let docs = indexer::list_documents(&self.index, false)?;
+        if docs.is_empty() {
+            return Ok(String::new());
+        }
+        let pairs: Vec<(&str, &str)> = docs
+            .iter()
+            .map(|d| (d.title.as_str(), d.purpose.as_str()))
+            .collect();
+        description::get_description(kb_name, instruction, &pairs).await
     }
 }
 
