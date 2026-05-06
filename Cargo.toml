@@ -1,8 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
+    "./reflect-agent",
     "./speedwagon",
 ]
 
 [workspace.dependencies]
 ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "098a8289272ccce3cf5719e20732050cb047d04a" }
+speedwagon = { path = "./speedwagon", default-features = false }
