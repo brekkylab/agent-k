@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub fn get_router(state: Arc<AppState>) -> ApiRouter {
-    let public_routes = ApiRouter::new()
+    let auth_routes = ApiRouter::new()
         .api_route("/auth/signup", post(handlers::auth::signup))
         .api_route("/auth/login", post(handlers::auth::login));
 
@@ -56,7 +56,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         );
 
     ApiRouter::new()
-        .merge(public_routes)
+        .merge(auth_routes)
         .merge(me_routes)
         .merge(admin_routes)
         .merge(session_routes)
