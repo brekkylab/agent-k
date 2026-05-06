@@ -266,6 +266,7 @@ async fn setup_admin(_app: &axum::Router) -> (serde_json::Value, String) {
             password_hash,
             role: auth::Role::Admin,
             display_name: Some("Admin".to_string()),
+            is_active: true,
         })
         .await
         .unwrap();
@@ -300,6 +301,7 @@ async fn admin_can_create_and_list_users() {
         password_hash,
         role: auth::Role::Admin,
         display_name: None,
+        is_active: true,
     })
     .await
     .unwrap();
@@ -346,6 +348,7 @@ async fn admin_can_update_user_role() {
         password_hash,
         role: auth::Role::Admin,
         display_name: None,
+        is_active: true,
     })
     .await
     .unwrap();
@@ -386,6 +389,7 @@ async fn admin_can_deactivate_user() {
         password_hash,
         role: auth::Role::Admin,
         display_name: None,
+        is_active: true,
     })
     .await
     .unwrap();
@@ -438,6 +442,7 @@ async fn admin_can_delete_user() {
         password_hash,
         role: auth::Role::Admin,
         display_name: None,
+        is_active: true,
     })
     .await
     .unwrap();
@@ -479,6 +484,7 @@ async fn admin_cannot_delete_self() {
             password_hash,
             role: auth::Role::Admin,
             display_name: None,
+            is_active: true,
         })
         .await
         .unwrap();
@@ -516,6 +522,7 @@ async fn count_admins_starts_at_zero_and_increments() {
         password_hash,
         role: auth::Role::Admin,
         display_name: None,
+        is_active: true,
     })
     .await
     .unwrap();
