@@ -14,7 +14,6 @@ use clap::Parser;
 use speedwagon::{Store, build_tools};
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
-use uuid::Uuid;
 
 use crate::cli::{Cli, Command};
 
@@ -38,7 +37,7 @@ async fn main() -> std::io::Result<()> {
             password,
             display_name,
         }) => {
-            run_create_admin(username, password, display_name).await;
+            cli::run_create_admin(username, password, display_name).await;
             return Ok(());
         }
         None | Some(Command::Serve) => {
@@ -47,47 +46,6 @@ async fn main() -> std::io::Result<()> {
     }
 
     Ok(())
-}
-
-async fn run_create_admin(username: String, password: String, display_name: Option<String>) {
-    use agent_k_backend::repository::{NewUser, RepositoryError};
-
-    let repo = repository::create_repository_from_env()
-        .await
-        .expect("failed to initialise repository");
-
-    let password_hash = match auth::hash_password(&password) {
-        Ok(h) => h,
-        Err(_) => {
-            eprintln!("error: failed to hash password");
-            std::process::exit(1);
-        }
-    };
-
-    let result = repo
-        .create_user(NewUser {
-            id: Uuid::new_v4(),
-            username: username.clone(),
-            password_hash,
-            role: auth::Role::Admin,
-            display_name,
-            is_active: true,
-        })
-        .await;
-
-    match result {
-        Ok(user) => {
-            println!("admin user '{}' created (id={})", user.username, user.id);
-        }
-        Err(RepositoryError::UniqueViolation(_)) => {
-            eprintln!("error: username '{}' already exists", username);
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    }
 }
 
 async fn run_server() -> std::io::Result<()> {
