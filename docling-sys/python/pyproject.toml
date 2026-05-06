@@ -1,0 +1,28 @@
+[project]
+name = "convert_pdf_to_md"
+version = "0.1.0"
+description = "Convert PDF to markdown"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "docling>=2.91.0",
+]
+
+# Install with `uv sync` for the default torch (platform-native: CUDA on Linux, MPS-capable on macOS).
+# Install with `uv sync --extra cpu` to force CPU-only torch wheels.
+[project.optional-dependencies]
+cpu = ["torch", "torchvision"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", extra = "cpu" }]
+torchvision = [{ index = "pytorch-cpu", extra = "cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.20.0",
+]

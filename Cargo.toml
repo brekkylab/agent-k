@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "./backend",
     "./chat-agent",
+    "./docling-sys",
     "./knowledge-agent",
 ]
 
