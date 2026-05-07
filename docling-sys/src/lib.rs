@@ -1,16 +1,10 @@
 //! Convert PDFs to Markdown via a PyInstaller-bundled `docling` binary.
 //!
 //! `build.rs` runs `uv sync` + `pyinstaller` against the Python sources in
-//! `python/`, producing a self-contained bundle directory inside `OUT_DIR`.
-//! [`convert_pdf_to_md`] spawns that bundle as a subprocess, pipes the PDF
-//! bytes to its stdin, and returns the markdown from stdout.
-//!
-//! ## Distribution
-//!
-//! [`bundle_dir`] points into the cargo `OUT_DIR` and is only valid while the
-//! build tree exists. When packaging a downstream binary for shipping, copy
-//! `bundle_dir()` next to the executable and set [`override_bundle_dir`] before
-//! the first call so the runtime resolves the relocated path.
+//! `python/`, producing a self-contained bundle directory. At runtime, the
+//! library expects the bundle to sit as a `run_docling/` folder directly
+//! beside the consuming executable. `build.rs` arranges this for cargo
+//! builds; when shipping, copy `run_docling/` next to your executable.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -21,29 +15,24 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-const COMPILED_BUNDLE_DIR: &str = env!("DOCLING_BUNDLE_DIR");
+const BUNDLE_DIR_NAME: &str = "run_docling";
 
-static BUNDLE_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+#[cfg(windows)]
+const BUNDLE_BINARY: &str = "run_docling.exe";
+#[cfg(not(windows))]
+const BUNDLE_BINARY: &str = "run_docling";
 
-/// Path to the directory containing the bundled `convert_pdf_to_md` binary
-/// and its `_internal` resources, or `None` if the crate was built with
-/// `skip-bundle` and no override has been set.
+static RESOLVED_BUNDLE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Path to the bundle directory (`run_docling/`) sitting beside the
+/// current executable, or `None` if it is not present.
 pub fn bundle_dir() -> Option<&'static Path> {
-    if let Some(p) = BUNDLE_DIR_OVERRIDE.get() {
-        return Some(p.as_path());
-    }
-    if COMPILED_BUNDLE_DIR.is_empty() {
-        None
-    } else {
-        Some(Path::new(COMPILED_BUNDLE_DIR))
-    }
-}
-
-/// Override the bundle location at runtime. Call once, before the first
-/// conversion, when the bundle has been relocated next to the consuming
-/// binary. Subsequent calls are ignored.
-pub fn override_bundle_dir(path: impl Into<PathBuf>) {
-    let _ = BUNDLE_DIR_OVERRIDE.set(path.into());
+    RESOLVED_BUNDLE_DIR
+        .get_or_init(|| {
+            let dir = std::env::current_exe().ok()?.parent()?.join(BUNDLE_DIR_NAME);
+            dir.join(BUNDLE_BINARY).is_file().then_some(dir)
+        })
+        .as_deref()
 }
 
 /// TableFormer extraction mode. `Accurate` trades speed for quality.
@@ -109,13 +98,13 @@ pub async fn convert_pdf_to_md(
     pdf_bytes: &[u8],
     options: &PdfOptions,
 ) -> anyhow::Result<String> {
-    let dir = bundle_dir()
-        .ok_or_else(|| anyhow!("docling-sys was built without a bundle (skip-bundle)"))?;
-    let exe = dir.join(if cfg!(windows) {
-        "convert_pdf_to_md.exe"
-    } else {
-        "convert_pdf_to_md"
-    });
+    let dir = bundle_dir().ok_or_else(|| {
+        anyhow!(
+            "docling bundle not found next to the current executable; \
+             expected a `{BUNDLE_DIR_NAME}/` directory containing `{BUNDLE_BINARY}`"
+        )
+    })?;
+    let exe = dir.join(BUNDLE_BINARY);
 
     let options_json =
         serde_json::to_string(options).context("serialize PdfOptions")?;
@@ -141,9 +130,9 @@ pub async fn convert_pdf_to_md(
     let output = child.wait_with_output().await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("convert_pdf_to_md exited with {}: {}", output.status, stderr);
+        anyhow::bail!("run_docling exited with {}: {}", output.status, stderr);
     }
-    String::from_utf8(output.stdout).context("convert_pdf_to_md stdout was not valid UTF-8")
+    String::from_utf8(output.stdout).context("run_docling stdout was not valid UTF-8")
 }
 
 /// Read a file from disk and convert it to Markdown.

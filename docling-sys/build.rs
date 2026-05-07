@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const PYINSTALLER_ARGS: &[&str] = &[
-    "convert_pdf_to_md.py",
+    "run_docling.py",
     "--onedir",
     "--noconfirm",
     "--recursive-copy-metadata=docling",
@@ -32,7 +32,7 @@ fn main() {
         crate_dir.join("build.rs"),
         python_dir.join("pyproject.toml"),
         python_dir.join("uv.lock"),
-        python_dir.join("convert_pdf_to_md.py"),
+        python_dir.join("run_docling.py"),
     ];
     for path in &inputs {
         println!("cargo:rerun-if-changed={}", path.display());
@@ -40,11 +40,11 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DOCLING_SYS_SKIP_BUNDLE");
 
     let dist_root = out_dir.join("dist");
-    let bundle_dir = dist_root.join("convert_pdf_to_md");
+    let bundle_dir = dist_root.join("run_docling");
     let exe_name = if cfg!(windows) {
-        "convert_pdf_to_md.exe"
+        "run_docling.exe"
     } else {
-        "convert_pdf_to_md"
+        "run_docling"
     };
     let exe_path = bundle_dir.join(exe_name);
 
@@ -55,7 +55,6 @@ fn main() {
             .unwrap_or(false);
     if skip {
         println!("cargo:warning=docling-sys: skip-bundle enabled; runtime API will return an error");
-        println!("cargo:rustc-env=DOCLING_BUNDLE_DIR=");
         return;
     }
 
@@ -72,7 +71,7 @@ fn main() {
         .map(|s| s.trim().to_string());
 
     if cached.as_deref() == Some(&current_hash) && exe_path.exists() {
-        println!("cargo:rustc-env=DOCLING_BUNDLE_DIR={}", bundle_dir.display());
+        link_bundle_into_profile(&out_dir, &bundle_dir);
         return;
     }
 
@@ -136,7 +135,102 @@ fn main() {
         fail(&format!("write stamp file: {err}"));
     }
 
-    println!("cargo:rustc-env=DOCLING_BUNDLE_DIR={}", bundle_dir.display());
+    link_bundle_into_profile(&out_dir, &bundle_dir);
+}
+
+/// Place the freshly-built bundle wherever cargo lands executables that
+/// might call into this crate. The runtime lookup in `lib.rs` only checks
+/// the directory of `current_exe()`, so we drop the bundle into:
+///
+///   - `target/{profile}/`            — `cargo run`, regular bin targets
+///   - `target/{profile}/deps/`       — `cargo test` integration tests
+///   - `target/{profile}/examples/`   — `cargo run --example`
+///
+/// Uses a directory symlink (Unix or Windows) and falls back to a
+/// recursive copy if symlinks aren't permitted.
+fn link_bundle_into_profile(out_dir: &PathBuf, bundle_dir: &PathBuf) {
+    let Some(profile_dir) = out_dir.ancestors().nth(3) else {
+        println!("cargo:warning=docling-sys: could not locate profile dir from OUT_DIR");
+        return;
+    };
+    for sub in ["", "deps", "examples"] {
+        let parent = if sub.is_empty() {
+            profile_dir.to_path_buf()
+        } else {
+            profile_dir.join(sub)
+        };
+        if let Err(err) = fs::create_dir_all(&parent) {
+            println!(
+                "cargo:warning=docling-sys: mkdir {} failed ({err})",
+                parent.display()
+            );
+            continue;
+        }
+        place_bundle_link(bundle_dir, &parent.join("run_docling"));
+    }
+}
+
+fn place_bundle_link(bundle_dir: &PathBuf, link: &PathBuf) {
+    match fs::symlink_metadata(link) {
+        Ok(meta) => {
+            let result = if meta.file_type().is_symlink() || meta.file_type().is_file() {
+                fs::remove_file(link)
+            } else {
+                fs::remove_dir_all(link)
+            };
+            if let Err(err) = result {
+                println!(
+                    "cargo:warning=docling-sys: failed to clear stale {} ({err})",
+                    link.display()
+                );
+                return;
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            println!(
+                "cargo:warning=docling-sys: stat {} failed ({err})",
+                link.display()
+            );
+            return;
+        }
+    }
+
+    if let Err(err) = symlink_dir(bundle_dir, link) {
+        println!(
+            "cargo:warning=docling-sys: symlink {} failed ({err}); falling back to copy",
+            link.display()
+        );
+        if let Err(err) = copy_dir_all(bundle_dir, link) {
+            fail(&format!("copy bundle to {}: {err}", link.display()));
+        }
+    }
+}
+
+#[cfg(unix)]
+fn symlink_dir(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(src, dst)
+}
+
+#[cfg(windows)]
+fn symlink_dir(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(src, dst)
+}
+
+fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 fn input_hash(paths: &[PathBuf], cpu_only: bool) -> std::io::Result<String> {
