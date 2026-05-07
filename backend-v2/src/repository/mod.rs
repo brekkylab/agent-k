@@ -1,13 +1,13 @@
 mod sqlite;
 mod user;
+mod session;
 pub use user::{DbUser, NewUser, UpdateUser};
+pub use session::{DbSession, SessionAccess, ShareMode};
 
 use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 pub use sqlite::SqliteRepository;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
 use uuid::Uuid;
@@ -37,33 +37,6 @@ pub enum RepositoryError {
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ShareMode {
-    Private,
-    SharedReadonly,
-    SharedChat,
-}
-
-impl ShareMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ShareMode::Private => "private",
-            ShareMode::SharedReadonly => "shared_readonly",
-            ShareMode::SharedChat => "shared_chat",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "private" => Some(ShareMode::Private),
-            "shared_readonly" => Some(ShareMode::SharedReadonly),
-            "shared_chat" => Some(ShareMode::SharedChat),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct DbProject {
     pub id: Uuid,
@@ -79,23 +52,6 @@ pub struct DbProjectMember {
     pub project_id: Uuid,
     pub user_id: Uuid,
     pub added_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub enum SessionAccess {
-    Creator,
-    ChatMember,
-    ReadOnlyMember,
-}
-
-#[derive(Debug, Clone)]
-pub struct DbSession {
-    pub id: Uuid,
-    pub project_id: Uuid,
-    pub creator_id: Uuid,
-    pub share_mode: ShareMode,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 pub type AppRepository = Arc<SqliteRepository>;
