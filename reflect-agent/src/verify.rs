@@ -344,9 +344,131 @@ fn check_citations(history: &[Message], tool_log: &[ToolCall]) -> Vec<Issue> {
     let haystack = build_tool_log_haystack(tool_log);
     citations
         .into_iter()
-        .filter(|c| !haystack.contains(c.as_str()))
+        .filter(|c| !appears_in_haystack(c, &haystack))
         .map(|citation| Issue::UnverifiedCitation { citation })
         .collect()
+}
+
+/// Is `citation` justified by `haystack` under any of the tolerated
+/// representational variants? Tolerated variants are intentionally
+/// narrow — each is a paraphrase the same canonical artifact tends to
+/// take in real LLM output, not an open-ended fuzzy match.
+///
+/// Order matters: cheaper / stronger checks first, the broader ones
+/// (e.g. timestamp prefix) last.
+fn appears_in_haystack(citation: &str, haystack: &str) -> bool {
+    // 1. Exact substring — what PR #53 originally shipped.
+    if haystack.contains(citation) {
+        return true;
+    }
+
+    // 2. URL: tolerate trailing-slash and http/https swaps.
+    if is_url_citation(citation) {
+        for alt in url_variants(citation) {
+            if haystack.contains(&alt) {
+                return true;
+            }
+        }
+    }
+
+    // 3. File path: strip leading `./` / `~/` and trailing `/`,
+    //    so `/tmp/log.txt` and `./log.txt` line up if the haystack
+    //    contains one shape but the assistant cited the other.
+    if is_path_citation(citation) {
+        let cit_norm = normalize_path(citation);
+        if !cit_norm.is_empty() && haystack.contains(&cit_norm) {
+            return true;
+        }
+    }
+
+    // 4. ISO-style timestamp: walk back to the date prefix. The agent
+    //    might cite a precise instant (`2024-01-15T10:30:00`) when the
+    //    tool log only echoed the date. Walking the *citation* (not the
+    //    haystack) keeps this asymmetric: vague tool output can satisfy
+    //    a precise quote, but a precise tool output never licenses a
+    //    vague quote.
+    if is_iso_timestamp(citation) {
+        for prefix in timestamp_prefixes(citation) {
+            if !prefix.is_empty() && haystack.contains(prefix) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn is_url_citation(c: &str) -> bool {
+    c.starts_with("http://") || c.starts_with("https://")
+}
+
+fn is_path_citation(c: &str) -> bool {
+    c.starts_with('/') || c.starts_with("./") || c.starts_with("~/")
+}
+
+fn is_iso_timestamp(c: &str) -> bool {
+    // Cheap shape check — at least YYYY-MM-DD.
+    let b = c.as_bytes();
+    b.len() >= 10 && is_date_at(b, 0)
+}
+
+/// Generate URL variants we accept as equivalent. Kept tiny on purpose:
+/// trailing slash on/off, and (only when http/https swap is otherwise a
+/// no-op string) the other scheme. Anything broader is a false-positive
+/// risk.
+fn url_variants(c: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let trimmed = c.trim_end_matches('/');
+    if trimmed != c {
+        out.push(trimmed.to_string());
+    } else {
+        out.push(format!("{c}/"));
+    }
+    if let Some(rest) = c.strip_prefix("https://") {
+        out.push(format!("http://{rest}"));
+    } else if let Some(rest) = c.strip_prefix("http://") {
+        out.push(format!("https://{rest}"));
+    }
+    out
+}
+
+fn normalize_path(c: &str) -> &str {
+    let trimmed = c
+        .trim_start_matches("./")
+        .trim_start_matches("~/")
+        .trim_end_matches('/');
+    trimmed
+}
+
+/// Successive shorter prefixes of a timestamp citation, longest first.
+/// `2024-01-15T10:30:00Z` → `2024-01-15T10:30:00`, `2024-01-15T10:30`,
+/// `2024-01-15T10`, `2024-01-15`. The exact citation (full string) is
+/// already covered by step 1 in [`appears_in_haystack`], so we don't
+/// repeat it here.
+fn timestamp_prefixes(c: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    // Strip any zone suffix first — Z or ±HH:MM — then walk inward.
+    let stripped = c
+        .trim_end_matches(|ch: char| ch.is_ascii_digit() || ch == ':')
+        .trim_end_matches(|ch: char| ch == '+' || ch == '-' || ch == 'Z');
+    if stripped.len() < c.len() && stripped.len() >= 10 {
+        out.push(stripped);
+    }
+    // Successive truncations along the natural separators.
+    for cut in [16usize, 13, 10] {
+        if c.len() > cut && cut <= c.len() {
+            // Only take the prefix if the cut lands on a separator we
+            // recognise (T, :, end-of-date) so we don't hand back
+            // half-tokens like `2024-01-15T1`.
+            let prefix = &c[..cut];
+            let next = c.as_bytes().get(cut).copied();
+            let landed_clean = matches!(next, Some(b'T') | Some(b':') | Some(b'Z') | Some(b'+') | Some(b'-'));
+            if landed_clean && !out.iter().any(|p: &&str| *p == prefix) {
+                out.push(prefix);
+            }
+        }
+    }
+    out
 }
 
 fn last_assistant_text(history: &[Message]) -> Option<String> {
@@ -777,6 +899,155 @@ mod tests {
         let cs = extract_citations("on 2024-01-15 and at 2024-01-15T10:30:00Z");
         assert!(cs.contains(&"2024-01-15".to_string()));
         assert!(cs.contains(&"2024-01-15T10:30:00Z".to_string()));
+    }
+
+    // ── fuzzy match: representational variants are accepted ──────────────
+
+    /// A precise-time citation against a date-only haystack — the agent
+    /// fabricated the time-of-day, but the date itself came from a tool
+    /// result. Conservative call: license the citation, since the date is
+    /// real.
+    #[test]
+    fn timestamp_precise_citation_matches_date_only_haystack() {
+        let history = [
+            assistant_with_call("c1", "bash", to_value!({"cmd": "head log.txt"})),
+            tool_message("c1", to_value!({"stdout": "build started 2024-01-15", "exit_code": 0})),
+            assistant_text("The spike happened at 2024-01-15T10:30:00."),
+        ];
+        let report = verify_run(&history, &VerifyConfig::default());
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::UnverifiedCitation { .. })),
+            "date prefix should license the precise timestamp citation, got: {:?}",
+            report.issues
+        );
+    }
+
+    /// Inverse asymmetry: vague citation against a precise haystack —
+    /// `2024-01-15` is contained in `2024-01-15T10:30:00`, so the
+    /// substring step (step 1) already accepts it. Pinned for clarity.
+    #[test]
+    fn timestamp_date_citation_matches_precise_haystack() {
+        let history = [
+            assistant_with_call("c1", "bash", to_value!({"cmd": "head log.txt"})),
+            tool_message("c1", to_value!({"stdout": "2024-01-15T10:30:00 metric=42", "exit_code": 0})),
+            assistant_text("Found a record on 2024-01-15."),
+        ];
+        let report = verify_run(&history, &VerifyConfig::default());
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::UnverifiedCitation { .. }))
+        );
+    }
+
+    /// Genuinely fabricated timestamp — date itself is not in the
+    /// haystack, so even prefix walking can't license it.
+    #[test]
+    fn timestamp_fabricated_is_still_flagged() {
+        let history = [
+            assistant_with_call("c1", "bash", to_value!({"cmd": "head log.txt"})),
+            tool_message("c1", to_value!({"stdout": "build started 2024-01-15", "exit_code": 0})),
+            // 2099 is not in the haystack at any granularity.
+            assistant_text("The spike happened at 2099-12-31T23:59:59."),
+        ];
+        let report = verify_run(&history, &VerifyConfig::default());
+        assert!(
+            report.issues.iter().any(|i| matches!(
+                i,
+                Issue::UnverifiedCitation { citation } if citation == "2099-12-31T23:59:59"
+            )),
+            "fabricated future timestamp must still be flagged, got: {:?}",
+            report.issues
+        );
+    }
+
+    /// URL trailing slash is tolerated symmetrically: cited with slash,
+    /// haystack without (or vice versa).
+    #[test]
+    fn url_trailing_slash_is_tolerated() {
+        let history = [
+            assistant_with_call("c1", "bash", to_value!({"cmd": "curl https://example.com/foo"})),
+            tool_message("c1", to_value!({"stdout": "ok", "exit_code": 0})),
+            // Cited with trailing slash, tool-log uses bare form.
+            assistant_text("See https://example.com/foo/ for details."),
+        ];
+        let report = verify_run(&history, &VerifyConfig::default());
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::UnverifiedCitation { .. })),
+            "trailing-slash variant should match, got: {:?}",
+            report.issues
+        );
+    }
+
+    /// http vs https swap is also tolerated — the agent often re-quotes
+    /// the more secure form even when the tool fetched plain HTTP.
+    #[test]
+    fn url_http_https_swap_is_tolerated() {
+        let history = [
+            assistant_with_call("c1", "bash", to_value!({"cmd": "curl http://example.com/foo"})),
+            tool_message("c1", to_value!({"stdout": "ok", "exit_code": 0})),
+            assistant_text("See https://example.com/foo for details."),
+        ];
+        let report = verify_run(&history, &VerifyConfig::default());
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::UnverifiedCitation { .. })),
+            "https/http swap should match, got: {:?}",
+            report.issues
+        );
+    }
+
+    /// `~/foo.txt` (cited) is licensed by `foo.txt` (haystack) thanks to
+    /// the leading-`~/` strip; the absolute/relative gap is *not*
+    /// crossed (we don't invent path prefixes).
+    #[test]
+    fn path_leading_tilde_is_normalized() {
+        let history = [
+            assistant_with_call("c1", "bash", to_value!({"cmd": "cat foo.txt"})),
+            tool_message("c1", to_value!({"stdout": "wrote to foo.txt", "exit_code": 0})),
+            assistant_text("Result is in ~/foo.txt."),
+        ];
+        let report = verify_run(&history, &VerifyConfig::default());
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::UnverifiedCitation { .. })),
+            "leading ~/ should normalize away, got: {:?}",
+            report.issues
+        );
+    }
+
+    /// We deliberately do NOT cross the absolute-vs-relative gap:
+    /// `/tmp/foo.txt` (cited) against `tmp/foo.txt` (haystack without
+    /// the leading slash) is still flagged. The path normaliser only
+    /// strips leads from the citation; it never invents a prefix to
+    /// make a haystack token match.
+    #[test]
+    fn path_absolute_vs_bare_is_not_normalized() {
+        let history = [
+            assistant_with_call("c1", "bash", to_value!({"cmd": "echo hi"})),
+            tool_message("c1", to_value!({"stdout": "see tmp/foo.txt", "exit_code": 0})),
+            assistant_text("Result is in /tmp/foo.txt."),
+        ];
+        let report = verify_run(&history, &VerifyConfig::default());
+        assert!(
+            report.issues.iter().any(|i| matches!(
+                i,
+                Issue::UnverifiedCitation { citation } if citation == "/tmp/foo.txt"
+            )),
+            "absolute path with no matching absolute haystack token must stay flagged, got: {:?}",
+            report.issues
+        );
     }
 
     // ── report aggregation ────────────────────────────────────────────────
