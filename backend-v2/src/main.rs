@@ -88,7 +88,7 @@ async fn run_server() -> std::io::Result<()> {
 
     let store_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
     let store = Arc::new(RwLock::new(
-        Store::new(store_path).expect("speedwagon store init"),
+        Store::new(&store_path).expect("speedwagon store init"),
     ));
 
     {

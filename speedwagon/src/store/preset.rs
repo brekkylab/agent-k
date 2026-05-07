@@ -33,8 +33,12 @@ pub async fn setup_docset(store: &mut Store, preset: &PresetKind) -> Result<()> 
             }
 
             println!("Ingesting corpus FinanceBench...");
-            let ids = store.ingest_many(items).await?;
-            println!("Done. {} documents ingested.", ids.len());
+            let result = store.ingest_many(items).await?;
+            println!(
+                "Done. {} documents ingested, {} failed.",
+                result.succeeded.len(),
+                result.failed.len(),
+            );
         }
     }
     Ok(())

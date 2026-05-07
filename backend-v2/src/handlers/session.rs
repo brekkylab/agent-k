@@ -23,7 +23,7 @@ use crate::{
     state::AppState,
 };
 
-const DEFAULT_MODEL: &str = "openai/gpt-4o-mini";
+const DEFAULT_MODEL: &str = "openai/gpt-5.4-mini";
 
 fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
