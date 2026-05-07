@@ -55,15 +55,15 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         );
 
     let document_routes = ApiRouter::new()
-        .route(
+        .api_route(
             "/documents",
-            axum::routing::get(handlers::list_documents)
+            get(handlers::list_documents)
                 .post(handlers::ingest_document)
                 .delete(handlers::purge_documents),
         )
-        .route(
+        .api_route(
             "/documents/{id}",
-            axum::routing::get(handlers::get_document).delete(handlers::purge_document),
+            get(handlers::get_document).delete(handlers::purge_document),
         );
 
     ApiRouter::new()

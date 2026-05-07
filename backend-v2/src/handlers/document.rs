@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+use aide::NoApi;
 use axum::{
     Json,
     extract::{Multipart, Path, Query, State},
     http::StatusCode,
 };
+use schemars::JsonSchema;
 use serde::Deserialize;
 use speedwagon::FileType;
 use uuid::Uuid;
@@ -17,7 +19,7 @@ use crate::{
     state::AppState,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListDocumentsQuery {
     #[serde(default)]
     pub page: Option<u32>,
@@ -64,7 +66,7 @@ fn parse_filetype(filename: &str) -> Result<FileType, String> {
 
 pub async fn ingest_document(
     State(state): State<Arc<AppState>>,
-    mut multipart: Multipart,
+    NoApi(mut multipart): NoApi<Multipart>,
 ) -> ApiResult<(StatusCode, Json<BatchIngestResponse>)> {
     let mut valid_items: Vec<(Vec<u8>, FileType)> = Vec::new();
     let mut filenames: Vec<String> = Vec::new();
