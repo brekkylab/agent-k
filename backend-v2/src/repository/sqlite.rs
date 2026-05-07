@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub struct SqliteRepository {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl SqliteRepository {
@@ -17,22 +17,22 @@ impl SqliteRepository {
         Self { pool }
     }
 
-    fn now_string() -> String {
+    pub(crate) fn now_string() -> String {
         Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
     }
 
-    fn parse_uuid(s: String, field: &str) -> RepositoryResult<Uuid> {
+    pub(crate) fn parse_uuid(s: String, field: &str) -> RepositoryResult<Uuid> {
         Uuid::parse_str(&s)
             .map_err(|_| RepositoryError::InvalidData(format!("invalid uuid in {field}")))
     }
 
-    fn parse_timestamp(s: String, field: &str) -> RepositoryResult<DateTime<Utc>> {
+    pub(crate) fn parse_timestamp(s: String, field: &str) -> RepositoryResult<DateTime<Utc>> {
         DateTime::parse_from_rfc3339(&s)
             .map(|dt| dt.with_timezone(&Utc))
             .map_err(|_| RepositoryError::InvalidData(format!("invalid timestamp in {field}")))
     }
 
-    fn parse_role(s: String, field: &str) -> RepositoryResult<Role> {
+    pub(crate) fn parse_role(s: String, field: &str) -> RepositoryResult<Role> {
         match s.as_str() {
             "user" => Ok(Role::User),
             "admin" => Ok(Role::Admin),
@@ -42,7 +42,7 @@ impl SqliteRepository {
         }
     }
 
-    fn map_db_error(e: sqlx::Error, unique_field: &str) -> RepositoryError {
+    pub(crate) fn map_db_error(e: sqlx::Error, unique_field: &str) -> RepositoryError {
         if let sqlx::Error::Database(ref db_err) = e {
             if db_err.message().contains("UNIQUE constraint failed") {
                 return RepositoryError::UniqueViolation(unique_field.to_string());
