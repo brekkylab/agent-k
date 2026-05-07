@@ -18,10 +18,12 @@ sandbox = ["ailoy/sandbox"]
 [dependencies]
 ailoy = { workspace = true }
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15"
 futures = "0.3"
 indexmap = "2"
+regex = "1"
 rustyline = "15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

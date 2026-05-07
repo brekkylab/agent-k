@@ -23,11 +23,14 @@
 //! system prompts (Cowork, Devin, Claude Code).
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use ailoy::{
     datatype::Value,
     message::{Message, Part, Role},
 };
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
+use regex::Regex;
 use serde::Serialize;
 
 /// Knobs for the verify pass. Only the loop threshold is exposed today;
@@ -407,9 +410,9 @@ fn is_path_citation(c: &str) -> bool {
 }
 
 fn is_iso_timestamp(c: &str) -> bool {
-    // Cheap shape check — at least YYYY-MM-DD.
-    let b = c.as_bytes();
-    b.len() >= 10 && is_date_at(b, 0)
+    // chrono-validated calendar instant — same gate as extraction, so a
+    // citation that survived `extract_citations` always answers true here.
+    is_valid_iso_timestamp(c)
 }
 
 /// Generate URL variants we accept as equivalent. Kept tiny on purpose:
@@ -441,31 +444,29 @@ fn normalize_path(c: &str) -> &str {
 }
 
 /// Successive shorter prefixes of a timestamp citation, longest first.
-/// `2024-01-15T10:30:00Z` → `2024-01-15T10:30:00`, `2024-01-15T10:30`,
-/// `2024-01-15T10`, `2024-01-15`. The exact citation (full string) is
-/// already covered by step 1 in [`appears_in_haystack`], so we don't
-/// repeat it here.
+/// `2024-01-15T10:30:00Z` → `2024-01-15T10:30:00`, `2024-01-15`. The exact
+/// citation (full string) is already covered by step 1 in
+/// [`appears_in_haystack`], so we don't repeat it here.
+///
+/// Each candidate is gated through chrono so we never hand back a half-
+/// token like `2024-01-15T1` even if the cut happens to land mid-field.
 fn timestamp_prefixes(c: &str) -> Vec<&str> {
     let mut out = Vec::new();
-    // Strip any zone suffix first — Z or ±HH:MM — then walk inward.
+    // Strip any zone suffix first — Z or ±HH:MM — then keep the result
+    // only if chrono accepts it as a real `YYYY-MM-DDTHH:MM:SS`.
     let stripped = c
         .trim_end_matches(|ch: char| ch.is_ascii_digit() || ch == ':')
         .trim_end_matches(|ch: char| ch == '+' || ch == '-' || ch == 'Z');
-    if stripped.len() < c.len() && stripped.len() >= 10 {
+    if stripped.len() < c.len() && is_valid_iso_timestamp(stripped) {
         out.push(stripped);
     }
-    // Successive truncations along the natural separators.
-    for cut in [16usize, 13, 10] {
-        if c.len() > cut && cut <= c.len() {
-            // Only take the prefix if the cut lands on a separator we
-            // recognise (T, :, end-of-date) so we don't hand back
-            // half-tokens like `2024-01-15T1`.
-            let prefix = &c[..cut];
-            let next = c.as_bytes().get(cut).copied();
-            let landed_clean = matches!(next, Some(b'T') | Some(b':') | Some(b'Z') | Some(b'+') | Some(b'-'));
-            if landed_clean && !out.iter().any(|p: &&str| *p == prefix) {
-                out.push(prefix);
-            }
+    // Date-only fallback: take the first 10 chars and ask chrono whether
+    // they form a real calendar date. This drops `2024-13-15` style
+    // shape-only strings even if step 1 above let them through.
+    if c.len() > 10 {
+        let date_prefix = &c[..10];
+        if is_valid_iso_timestamp(date_prefix) && !out.iter().any(|p: &&str| *p == date_prefix) {
+            out.push(date_prefix);
         }
     }
     out
@@ -502,6 +503,29 @@ fn build_tool_log_haystack(tool_log: &[ToolCall]) -> String {
     haystack
 }
 
+/// One regex, three named alternatives — single pass over the text covers
+/// every citation shape we recognise:
+///
+/// - `url` — HTTP(S) URLs, stopping at whitespace / quote / bracket / comma
+/// - `path` — absolute or `./` / `~/` file paths, stopping at whitespace /
+///   quote / comma / semicolon
+/// - `ts` — ISO-8601 / RFC 3339 timestamp candidates (just the *shape*;
+///   chrono validates them in [`extract_citations`])
+///
+/// Trailing sentence punctuation (`.`, `,`, `;`, `:`, `)`, `]`, `?`, `!`)
+/// is stripped after the match so prose like "see https://foo.com." yields
+/// `https://foo.com`, not the period.
+static CITATION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?x)
+          (?P<url>https?://[^\s<>"',\)]+)
+        | (?P<path>(?:/|\./|~/)[^\s,;"'`]+)
+        | (?P<ts>\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?)?)
+        "#,
+    )
+    .expect("citation regex compiles")
+});
+
 /// Pick out citation candidates from assistant prose. Three patterns,
 /// chosen for low false-positive rate at the cost of missing weirder
 /// citation forms (those can be added once we see them in real runs):
@@ -509,134 +533,52 @@ fn build_tool_log_haystack(tool_log: &[ToolCall]) -> String {
 /// - HTTP(S) URLs
 /// - Absolute or `./` / `~/` file paths
 /// - ISO-8601 timestamps (the demo task's main citation form: experiment
-///   logs carry per-event timestamps that should round-trip to the plot)
+///   logs carry per-event timestamps that should round-trip to the plot).
+///   Timestamps go through chrono so that shape-only fakes like
+///   `2024-13-45` or `2024-02-30` are dropped at extraction rather than
+///   leaking into the haystack-miss path as false UnverifiedCitation hits.
 fn extract_citations(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    out.extend(scan_pattern(text, is_url_char, "http://"));
-    out.extend(scan_pattern(text, is_url_char, "https://"));
-    out.extend(scan_paths(text));
-    out.extend(scan_iso_timestamps(text));
-    // Dedup while preserving order.
     let mut seen = std::collections::HashSet::new();
-    out.retain(|s| seen.insert(s.clone()));
-    out
-}
-
-fn scan_pattern(text: &str, allowed: fn(char) -> bool, prefix: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while let Some(found) = text[i..].find(prefix) {
-        let start = i + found;
-        let mut end = start + prefix.len();
-        while end < bytes.len() {
-            let c = text[end..].chars().next().unwrap_or(' ');
-            if allowed(c) {
-                end += c.len_utf8();
-            } else {
-                break;
+    for caps in CITATION_RE.captures_iter(text) {
+        let raw = if let Some(m) = caps.name("url") {
+            trim_trailing_punct(m.as_str())
+        } else if let Some(m) = caps.name("path") {
+            let trimmed = trim_trailing_punct(m.as_str());
+            // Keep the original gate: paths must contain `/` or `.` past
+            // the leading marker, so a bare "/" or "~/" doesn't qualify.
+            if trimmed.len() <= 1 || !trimmed[1..].contains(['/', '.']) {
+                continue;
             }
+            trimmed
+        } else if let Some(m) = caps.name("ts") {
+            let candidate = m.as_str();
+            if !is_valid_iso_timestamp(candidate) {
+                continue;
+            }
+            candidate
+        } else {
+            continue;
+        };
+        if !raw.is_empty() && seen.insert(raw.to_string()) {
+            out.push(raw.to_string());
         }
-        // Trim a trailing punctuation we don't want to be part of the citation.
-        let candidate = trim_trailing_punct(&text[start..end]);
-        if candidate.len() > prefix.len() {
-            out.push(candidate.to_string());
-        }
-        i = end.max(start + prefix.len());
     }
     out
-}
-
-fn is_url_char(c: char) -> bool {
-    !c.is_whitespace() && c != '<' && c != '>' && c != '"' && c != '\'' && c != ',' && c != ')'
 }
 
 fn trim_trailing_punct(s: &str) -> &str {
     s.trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | ')' | ']' | '?' | '!'))
 }
 
-fn scan_paths(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for token in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
-        let token = trim_trailing_punct(token).trim_matches(|c| matches!(c, '`' | '"' | '\''));
-        let starts_path = token.starts_with('/') || token.starts_with("./") || token.starts_with("~/");
-        if starts_path && token.len() > 1 && token.contains(|c: char| c == '/' || c == '.') {
-            out.push(token.to_string());
-        }
-    }
-    out
-}
-
-/// ISO-8601 / RFC 3339 style timestamps. We accept the common subsets:
-///
-/// - `YYYY-MM-DD`
-/// - `YYYY-MM-DDTHH:MM:SS`
-/// - `YYYY-MM-DDTHH:MM:SSZ` or with `+HH:MM` / `-HH:MM` offsets
-///
-/// Conservative on purpose: anything fancier (fractional seconds, week
-/// numbers, etc.) is left for follow-ups when we see them in real runs.
-fn scan_iso_timestamps(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let bytes = text.as_bytes();
-    let n = bytes.len();
-    let mut i = 0;
-    while i + 10 <= n {
-        if is_date_at(bytes, i) {
-            // Greedy: try to extend with T HH:MM:SS and optional zone.
-            let mut end = i + 10;
-            if end < n && bytes[end] == b'T' && end + 9 <= n && is_time_at(bytes, end + 1) {
-                end += 9;
-                if end < n && bytes[end] == b'Z' {
-                    end += 1;
-                } else if end + 6 <= n
-                    && (bytes[end] == b'+' || bytes[end] == b'-')
-                    && bytes[end + 3] == b':'
-                    && is_digit(bytes[end + 1])
-                    && is_digit(bytes[end + 2])
-                    && is_digit(bytes[end + 4])
-                    && is_digit(bytes[end + 5])
-                {
-                    end += 6;
-                }
-            }
-            out.push(std::str::from_utf8(&bytes[i..end]).unwrap_or("").to_string());
-            i = end;
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
-
-fn is_digit(b: u8) -> bool {
-    b.is_ascii_digit()
-}
-
-fn is_date_at(b: &[u8], i: usize) -> bool {
-    // YYYY-MM-DD
-    is_digit(b[i])
-        && is_digit(b[i + 1])
-        && is_digit(b[i + 2])
-        && is_digit(b[i + 3])
-        && b[i + 4] == b'-'
-        && is_digit(b[i + 5])
-        && is_digit(b[i + 6])
-        && b[i + 7] == b'-'
-        && is_digit(b[i + 8])
-        && is_digit(b[i + 9])
-}
-
-fn is_time_at(b: &[u8], i: usize) -> bool {
-    // HH:MM:SS  (8 chars), called via is_time_at(b, end+1) where end+1+8 ≤ n
-    i + 8 <= b.len()
-        && is_digit(b[i])
-        && is_digit(b[i + 1])
-        && b[i + 2] == b':'
-        && is_digit(b[i + 3])
-        && is_digit(b[i + 4])
-        && b[i + 5] == b':'
-        && is_digit(b[i + 6])
-        && is_digit(b[i + 7])
+/// Does `s` parse as a real calendar instant? Three accepted shapes match
+/// the regex's `ts` alternative — chrono checks month / day / leap-year
+/// validity so that `2024-13-45` (bad month) or `2024-02-30` (no Feb 30)
+/// are rejected at extraction.
+fn is_valid_iso_timestamp(s: &str) -> bool {
+    DateTime::parse_from_rfc3339(s).is_ok()
+        || NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").is_ok()
+        || NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
 }
 
 #[cfg(test)]
@@ -899,6 +841,46 @@ mod tests {
         let cs = extract_citations("on 2024-01-15 and at 2024-01-15T10:30:00Z");
         assert!(cs.contains(&"2024-01-15".to_string()));
         assert!(cs.contains(&"2024-01-15T10:30:00Z".to_string()));
+    }
+
+    /// Shape-only timestamps (impossible months / days) get dropped at
+    /// extraction. Without chrono validation these would have fallen
+    /// through to the haystack lookup and surfaced as
+    /// `UnverifiedCitation`; that's a false positive — the assistant
+    /// never wrote a real date.
+    #[test]
+    fn extract_iso_rejects_invalid_calendar_dates() {
+        let cs = extract_citations("bad month 2024-13-45 and bad day 2024-02-30");
+        assert!(
+            !cs.iter().any(|c| c == "2024-13-45"),
+            "13/45 must not be picked up as a citation, got: {cs:?}"
+        );
+        assert!(
+            !cs.iter().any(|c| c == "2024-02-30"),
+            "Feb 30 must not be picked up as a citation, got: {cs:?}"
+        );
+    }
+
+    /// A bogus timestamp in the assistant's text no longer becomes an
+    /// `UnverifiedCitation` — it never enters the citation set in the
+    /// first place. End-to-end check that chrono validation actually
+    /// suppresses the false positive on the verify report.
+    #[test]
+    fn invalid_calendar_date_is_not_flagged_as_citation() {
+        let history = [
+            assistant_with_call("c1", "bash", to_value!({"cmd": "head log.txt"})),
+            tool_message("c1", to_value!({"stdout": "build at 2024-01-15", "exit_code": 0})),
+            assistant_text("Saw the spike at 2024-13-45T10:30:00."),
+        ];
+        let report = verify_run(&history, &VerifyConfig::default());
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::UnverifiedCitation { .. })),
+            "shape-only timestamp must not surface as a citation, got: {:?}",
+            report.issues
+        );
     }
 
     // ── fuzzy match: representational variants are accepted ──────────────
