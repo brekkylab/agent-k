@@ -66,6 +66,11 @@ async fn login_returns_jwt_for_valid_credentials() {
     assert_eq!(body["token_type"], "Bearer");
     assert!(body["expires_in"].is_number());
     assert_eq!(body["user"]["username"], "eve");
+
+    // Signup should have created a Personal project automatically
+    let token = body["access_token"].as_str().unwrap().to_string();
+    let personal = common::get_personal_project(&app, &token).await;
+    assert_eq!(personal["name"], "Personal");
 }
 
 #[tokio::test]

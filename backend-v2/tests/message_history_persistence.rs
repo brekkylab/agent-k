@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 use agent_k_backend::{repository, state::AppState};
 use common::{
-    SessionGuard, clear_message_history, clear_message_history_status, extract_text,
-    get_message_history, get_message_history_status, make_app_with_repo, make_app_with_state,
-    make_repo, make_test_store, post_session, send_message, send_message_status, setup_provider,
-    test_jwt_config, try_delete_session,
+    SessionGuard, authed, clear_message_history, clear_message_history_status, extract_text,
+    get_message_history, get_message_history_status, login, make_app_with_repo,
+    make_app_with_state, make_repo, make_test_store, post_session_authed, send_message,
+    send_message_status, setup_provider, signup, test_jwt_config, try_delete_session,
 };
 use uuid::Uuid;
 
@@ -42,10 +42,16 @@ async fn session_is_found_after_restart_via_lazy_create() {
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
 
     // ── Instance 1: create session ────────────────────────────────────────
-    let session_id = {
+    let (session_id, token) = {
         let repo = repository::create_repository(&db_url).await.unwrap();
         let app = make_app_with_repo(repo);
-        post_session(&app).await
+        let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+        signup(&app, &username, "Password123!").await;
+        let token = login(&app, &username, "Password123!").await;
+        let project = common::get_personal_project(&app, &token).await;
+        let project_id = project["id"].as_str().unwrap().to_string();
+        let id = post_session_authed(&app, &token, &project_id).await;
+        (id, token)
         // app (instance 1) drops here — simulates server restart
     };
 
@@ -57,9 +63,10 @@ async fn session_is_found_after_restart_via_lazy_create() {
     let _guard = SessionGuard {
         app: app.clone(),
         id: session_id,
+        token: token.clone(),
     };
 
-    let status = send_message_status(&app, session_id, "hello").await;
+    let status = send_message_status(&app, session_id, "hello", &token).await;
 
     assert_ne!(
         status,
@@ -89,23 +96,29 @@ async fn agent_restores_history_and_processes_message() {
     let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
 
     // ── Turn 1 (instance 1) ───────────────────────────────────────────────
-    let (session_id, turn1_text) = {
+    let (session_id, token, turn1_text) = {
         let repo = repository::create_repository(&db_url).await.unwrap();
         let app = make_app_with_repo(repo);
-        let id = post_session(&app).await;
+        let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+        signup(&app, &username, "Password123!").await;
+        let token = login(&app, &username, "Password123!").await;
+        let project = common::get_personal_project(&app, &token).await;
+        let project_id = project["id"].as_str().unwrap().to_string();
+        let id = post_session_authed(&app, &token, &project_id).await;
 
         // Guard covers any panic inside this scope (e.g. send_message asserting non-200).
         let guard = SessionGuard {
             app: app.clone(),
             id,
+            token: token.clone(),
         };
 
-        let outputs = send_message(&app, id, "What is the capital of France?").await;
+        let outputs = send_message(&app, id, "What is the capital of France?", &token).await;
         let text = extract_text(&outputs);
 
         // Turn 1 succeeded — disarm. Instance 2's guard will own cleanup.
         std::mem::forget(guard);
-        (id, text)
+        (id, token, text)
         // app (instance 1) drops here — simulates server restart
     };
 
@@ -117,12 +130,14 @@ async fn agent_restores_history_and_processes_message() {
     let _guard = SessionGuard {
         app: app.clone(),
         id: session_id,
+        token: token.clone(),
     };
 
     let outputs = send_message(
         &app,
         session_id,
         "What city did I ask about in my previous question?",
+        &token,
     )
     .await;
     let turn2_text = extract_text(&outputs);
@@ -152,8 +167,13 @@ async fn unknown_session_returns_404() {
     let repo = repository::create_repository(&db_url).await.unwrap();
     let app = make_app_with_repo(repo);
 
+    // Create a user just to get a valid token (the session doesn't exist)
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+
     let fake_id = uuid::Uuid::new_v4();
-    let status = send_message_status(&app, fake_id, "hello").await;
+    let status = send_message_status(&app, fake_id, "hello", &token).await;
     assert_eq!(
         status,
         axum::http::StatusCode::NOT_FOUND,
@@ -168,13 +188,25 @@ async fn unknown_session_returns_404() {
 #[tokio::test]
 async fn get_messages_returns_empty_for_new_session() {
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
+    let repo = make_repo().await;
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
-    let id = Uuid::new_v4();
-    state.repository.create_session(id).await.unwrap();
+    // Create user + project to get a valid token and project_id
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = uuid::Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
 
-    let messages = get_message_history(&app, id).await;
+    // Get the user id from the me endpoint
+    let (_, me) = authed(&app, "GET", "/me", &token, None).await;
+    let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
+
+    // Create session directly in DB using correct signature
+    let session = state.repository.create_session(project_id, user_id).await.unwrap();
+
+    let messages = get_message_history(&app, session.id, &token).await;
     assert_eq!(
         messages,
         serde_json::json!([]),
@@ -187,7 +219,11 @@ async fn get_messages_returns_empty_for_new_session() {
 async fn get_messages_returns_404_for_unknown_session() {
     let app = make_app_with_repo(make_repo().await);
 
-    let status = get_message_history_status(&app, Uuid::new_v4()).await;
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+
+    let status = get_message_history_status(&app, Uuid::new_v4(), &token).await;
     assert_eq!(
         status,
         axum::http::StatusCode::NOT_FOUND,
@@ -201,20 +237,29 @@ async fn get_messages_returns_persisted_messages_in_order() {
     use ailoy::message::{Message, Part, Role};
 
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
+    let repo = make_repo().await;
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
-    let id = Uuid::new_v4();
+    // Create user + project
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = uuid::Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+    let (_, me) = authed(&app, "GET", "/me", &token, None).await;
+    let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
+
+    let session = state.repository.create_session(project_id, user_id).await.unwrap();
     {
-        state.repository.create_session(id).await.unwrap();
         let msgs = vec![
             Message::new(Role::User).with_contents([Part::text("first")]),
             Message::new(Role::Assistant).with_contents([Part::text("second")]),
         ];
-        state.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(session.id, &msgs).await.unwrap();
     }
 
-    let body = get_message_history(&app, id).await;
+    let body = get_message_history(&app, session.id, &token).await;
     let arr = body.as_array().expect("response must be a JSON array");
     assert_eq!(arr.len(), 2, "must return exactly two messages");
 
@@ -231,7 +276,11 @@ async fn get_messages_returns_persisted_messages_in_order() {
 async fn clear_messages_returns_404_for_unknown_session() {
     let app = make_app_with_repo(make_repo().await);
 
-    let status = clear_message_history_status(&app, Uuid::new_v4()).await;
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+
+    let status = clear_message_history_status(&app, Uuid::new_v4(), &token).await;
     assert_eq!(
         status,
         axum::http::StatusCode::NOT_FOUND,
@@ -246,29 +295,38 @@ async fn clear_messages_removes_persisted_messages() {
     use ailoy::message::{Message, Part, Role};
 
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
+    let repo = make_repo().await;
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
-    let id = Uuid::new_v4();
+    // Create user + project
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = uuid::Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+    let (_, me) = authed(&app, "GET", "/me", &token, None).await;
+    let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
+
+    let session = state.repository.create_session(project_id, user_id).await.unwrap();
     {
-        state.repository.create_session(id).await.unwrap();
         let msgs = vec![
             Message::new(Role::User).with_contents([Part::text("hello")]),
             Message::new(Role::Assistant).with_contents([Part::text("world")]),
         ];
-        state.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(session.id, &msgs).await.unwrap();
     }
 
-    let before = get_message_history(&app, id).await;
+    let before = get_message_history(&app, session.id, &token).await;
     assert_eq!(
         before.as_array().unwrap().len(),
         2,
         "expected two messages before clear"
     );
 
-    clear_message_history(&app, id).await;
+    clear_message_history(&app, session.id, &token).await;
 
-    let after = get_message_history(&app, id).await;
+    let after = get_message_history(&app, session.id, &token).await;
     assert_eq!(
         after,
         serde_json::json!([]),
@@ -282,20 +340,29 @@ async fn clear_messages_does_not_delete_session() {
     use ailoy::message::{Message, Part, Role};
 
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
+    let repo = make_repo().await;
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
-    let id = Uuid::new_v4();
+    // Create user + project
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = uuid::Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+    let (_, me) = authed(&app, "GET", "/me", &token, None).await;
+    let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
+
+    let session = state.repository.create_session(project_id, user_id).await.unwrap();
     {
-        state.repository.create_session(id).await.unwrap();
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("ping")])];
-        state.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(session.id, &msgs).await.unwrap();
     }
 
-    clear_message_history(&app, id).await;
+    clear_message_history(&app, session.id, &token).await;
 
     // Session still exists: GET messages returns 200 (not 404).
-    let status = get_message_history_status(&app, id).await;
+    let status = get_message_history_status(&app, session.id, &token).await;
     assert_eq!(
         status,
         axum::http::StatusCode::OK,
@@ -309,24 +376,33 @@ async fn can_append_messages_after_clear() {
     use ailoy::message::{Message, Part, Role};
 
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
+    let repo = make_repo().await;
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
-    let id = Uuid::new_v4();
+    // Create user + project
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = uuid::Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+    let (_, me) = authed(&app, "GET", "/me", &token, None).await;
+    let user_id = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
+
+    let session = state.repository.create_session(project_id, user_id).await.unwrap();
     {
-        state.repository.create_session(id).await.unwrap();
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("old")])];
-        state.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(session.id, &msgs).await.unwrap();
     }
 
-    clear_message_history(&app, id).await;
+    clear_message_history(&app, session.id, &token).await;
 
     {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("new")])];
-        state.repository.append_messages(id, &msgs).await.unwrap();
+        state.repository.append_messages(session.id, &msgs).await.unwrap();
     }
 
-    let body = get_message_history(&app, id).await;
+    let body = get_message_history(&app, session.id, &token).await;
     let arr = body.as_array().unwrap();
     assert_eq!(arr.len(), 1, "only the new message must remain");
 
@@ -350,10 +426,17 @@ async fn clear_messages_also_clears_in_memory_agent_history() {
     let repo = repository::create_repository(&db_url).await.unwrap();
     let app = make_app_with_repo(repo.clone());
 
-    let id = post_session(&app).await;
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap().to_string();
+    let id = post_session_authed(&app, &token, &project_id).await;
+
     let _guard = SessionGuard {
         app: app.clone(),
         id,
+        token: token.clone(),
     };
 
     // Manually insert history into the DB and sync it into the agent via the
@@ -370,7 +453,7 @@ async fn clear_messages_also_clears_in_memory_agent_history() {
         .unwrap();
     }
 
-    clear_message_history(&app, id).await;
+    clear_message_history(&app, id, &token).await;
 
     // DB must be empty.
     let db_count = repo.get_messages(id).await.unwrap().len();
@@ -389,7 +472,11 @@ async fn try_delete_returns_err_for_unknown_session() {
     let repo = repository::create_repository(&db_url).await.unwrap();
     let app = make_app_with_repo(repo);
 
-    let result = try_delete_session(&app, uuid::Uuid::new_v4()).await;
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+
+    let result = try_delete_session(&app, uuid::Uuid::new_v4(), &token).await;
     assert!(
         result.is_err(),
         "try_delete_session must return Err for an unknown session"

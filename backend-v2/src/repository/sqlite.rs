@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::Role,
-    repository::{DbSession, DbUser, NewUser, RepositoryError, RepositoryResult, UpdateUser},
+    repository::{DbProject, DbSession, DbUser, NewUser, RepositoryError, RepositoryResult, UpdateUser},
 };
 
 pub struct SqliteRepository {
@@ -53,43 +53,168 @@ impl SqliteRepository {
 
     // ── Sessions ──────────────────────────────────────────────────────────────
 
-    pub async fn create_session(&self, id: Uuid) -> RepositoryResult<DbSession> {
+    fn row_to_db_session(row: sqlx::sqlite::SqliteRow) -> RepositoryResult<DbSession> {
+        let share_mode_str: String = row.get("share_mode");
+        let share_mode = crate::repository::ShareMode::from_str(&share_mode_str)
+            .ok_or_else(|| crate::repository::RepositoryError::InvalidData(
+                format!("invalid share_mode: {share_mode_str}"),
+            ))?;
+        Ok(DbSession {
+            id: Self::parse_uuid(row.get::<String, _>("id"), "sessions.id")?,
+            project_id: Self::parse_uuid(row.get::<String, _>("project_id"), "sessions.project_id")?,
+            creator_id: Self::parse_uuid(row.get::<String, _>("creator_id"), "sessions.creator_id")?,
+            share_mode,
+            created_at: Self::parse_timestamp(row.get::<String, _>("created_at"), "sessions.created_at")?,
+            updated_at: Self::parse_timestamp(row.get::<String, _>("updated_at"), "sessions.updated_at")?,
+        })
+    }
+
+    pub async fn create_session(
+        &self,
+        project_id: Uuid,
+        creator_id: Uuid,
+    ) -> RepositoryResult<DbSession> {
+        let id = Uuid::new_v4();
         let now = Self::now_string();
-        sqlx::query("INSERT INTO sessions (id, created_at, updated_at) VALUES (?, ?, ?);")
-            .bind(id.to_string())
-            .bind(&now)
-            .bind(&now)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', ?, ?);",
+        )
+        .bind(id.to_string())
+        .bind(project_id.to_string())
+        .bind(creator_id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
 
         Ok(DbSession {
             id,
+            project_id,
+            creator_id,
+            share_mode: crate::repository::ShareMode::Private,
             created_at: Self::parse_timestamp(now.clone(), "sessions.created_at")?,
             updated_at: Self::parse_timestamp(now, "sessions.updated_at")?,
         })
     }
 
     pub async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<DbSession>> {
-        let row = sqlx::query("SELECT id, created_at, updated_at FROM sessions WHERE id = ?;")
-            .bind(id.to_string())
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(
+            "SELECT id, project_id, creator_id, share_mode, created_at, updated_at \
+             FROM sessions WHERE id = ?;",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
 
-        let Some(row) = row else {
-            return Ok(None);
+        let Some(row) = row else { return Ok(None) };
+        Ok(Some(Self::row_to_db_session(row)?))
+    }
+
+    /// Returns (DbSession, SessionAccess) for the requesting user, or None if no access.
+    /// Private sessions of other users return None (403 semantics handled by caller).
+    pub async fn get_session_with_authz(
+        &self,
+        session_id: Uuid,
+        requesting_user_id: Uuid,
+    ) -> RepositoryResult<Option<(DbSession, crate::repository::SessionAccess)>> {
+        let uid = requesting_user_id.to_string();
+        let sid = session_id.to_string();
+
+        let row = sqlx::query(
+            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.created_at, s.updated_at,
+                    CASE
+                        WHEN s.creator_id = ?1 THEN 'creator'
+                        WHEN (p.owner_id = ?1 OR pm.user_id IS NOT NULL)
+                             AND s.share_mode = 'shared_chat' THEN 'chat_member'
+                        WHEN (p.owner_id = ?1 OR pm.user_id IS NOT NULL)
+                             AND s.share_mode = 'shared_readonly' THEN 'readonly_member'
+                        ELSE NULL
+                    END AS access_level
+             FROM sessions s
+             JOIN projects p ON p.id = s.project_id
+             LEFT JOIN project_members pm
+                   ON pm.project_id = s.project_id AND pm.user_id = ?1
+             WHERE s.id = ?2",
+        )
+        .bind(&uid)
+        .bind(&sid)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else { return Ok(None) };
+
+        let access_level: Option<String> = row.get("access_level");
+        let access = match access_level.as_deref() {
+            Some("creator") => crate::repository::SessionAccess::Creator,
+            Some("chat_member") => crate::repository::SessionAccess::ChatMember,
+            Some("readonly_member") => crate::repository::SessionAccess::ReadOnlyMember,
+            _ => return Ok(None),
         };
 
-        Ok(Some(DbSession {
-            id: Self::parse_uuid(row.get::<String, _>("id"), "sessions.id")?,
-            created_at: Self::parse_timestamp(
-                row.get::<String, _>("created_at"),
-                "sessions.created_at",
-            )?,
-            updated_at: Self::parse_timestamp(
-                row.get::<String, _>("updated_at"),
-                "sessions.updated_at",
-            )?,
-        }))
+        Ok(Some((Self::row_to_db_session(row)?, access)))
+    }
+
+    pub async fn list_sessions_in_project(
+        &self,
+        project_id: Uuid,
+        requesting_user_id: Uuid,
+    ) -> RepositoryResult<Vec<DbSession>> {
+        let pid = project_id.to_string();
+        let uid = requesting_user_id.to_string();
+
+        let rows = sqlx::query(
+            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.created_at, s.updated_at
+             FROM sessions s
+             JOIN projects p ON p.id = s.project_id
+             WHERE s.project_id = ?1
+               AND (
+                   s.creator_id = ?2
+                   OR (
+                       s.share_mode != 'private'
+                       AND (
+                           p.owner_id = ?2
+                           OR EXISTS (SELECT 1 FROM project_members pm
+                                      WHERE pm.project_id = ?1 AND pm.user_id = ?2)
+                       )
+                   )
+               )
+             ORDER BY s.created_at DESC",
+        )
+        .bind(&pid)
+        .bind(&uid)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(Self::row_to_db_session)
+            .collect()
+    }
+
+    pub async fn update_session_share_mode(
+        &self,
+        session_id: Uuid,
+        share_mode: &crate::repository::ShareMode,
+    ) -> RepositoryResult<DbSession> {
+        let now = Self::now_string();
+        let result = sqlx::query(
+            "UPDATE sessions SET share_mode = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(share_mode.as_str())
+        .bind(&now)
+        .bind(session_id.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(crate::repository::RepositoryError::InvalidData(
+                format!("session {session_id} not found"),
+            ));
+        }
+
+        self.get_session(session_id).await?.ok_or_else(|| {
+            crate::repository::RepositoryError::InvalidData("session disappeared after update".into())
+        })
     }
 
     pub async fn delete_session(&self, id: Uuid) -> RepositoryResult<bool> {
@@ -295,8 +420,22 @@ impl SqliteRepository {
     }
 
     pub async fn delete_user(&self, id: Uuid) -> RepositoryResult<bool> {
+        let uid = id.to_string();
+        // Delete sessions created by the user in projects they do not own
+        // (project-owned sessions cascade when the project is deleted below).
+        sqlx::query("DELETE FROM sessions WHERE creator_id = ?;")
+            .bind(&uid)
+            .execute(&self.pool)
+            .await?;
+        // Delete projects owned by the user (FK is RESTRICT, not CASCADE).
+        // project_members and sessions in those projects cascade automatically.
+        sqlx::query("DELETE FROM projects WHERE owner_id = ?;")
+            .bind(&uid)
+            .execute(&self.pool)
+            .await?;
+
         let result = sqlx::query("DELETE FROM users WHERE id = ?;")
-            .bind(id.to_string())
+            .bind(&uid)
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
@@ -309,6 +448,216 @@ impl SqliteRepository {
         .fetch_one(&self.pool)
         .await?;
         Ok(count)
+    }
+
+    // ── Projects ──────────────────────────────────────────────────────────────────
+
+    fn row_to_db_project(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<DbProject> {
+        Ok(DbProject {
+            id: Self::parse_uuid(row.get::<String, _>("id"), "projects.id")?,
+            name: row.get("name"),
+            description: row.get("description"),
+            owner_id: Self::parse_uuid(row.get::<String, _>("owner_id"), "projects.owner_id")?,
+            created_at: Self::parse_timestamp(row.get::<String, _>("created_at"), "projects.created_at")?,
+            updated_at: Self::parse_timestamp(row.get::<String, _>("updated_at"), "projects.updated_at")?,
+        })
+    }
+
+    pub async fn create_project(
+        &self,
+        name: String,
+        description: Option<String>,
+        owner_id: Uuid,
+    ) -> RepositoryResult<DbProject> {
+        let id = Uuid::new_v4();
+        let now = Self::now_string();
+        sqlx::query(
+            "INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id.to_string())
+        .bind(&name)
+        .bind(&description)
+        .bind(owner_id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(DbProject {
+            id,
+            name,
+            description,
+            owner_id,
+            created_at: Self::parse_timestamp(now.clone(), "projects.created_at")?,
+            updated_at: Self::parse_timestamp(now, "projects.updated_at")?,
+        })
+    }
+
+    pub async fn get_project(&self, id: Uuid) -> RepositoryResult<Option<DbProject>> {
+        let row = sqlx::query(
+            "SELECT id, name, description, owner_id, created_at, updated_at \
+             FROM projects WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(Self::row_to_db_project).transpose()
+    }
+
+    pub async fn list_projects_for_user(&self, user_id: Uuid) -> RepositoryResult<Vec<DbProject>> {
+        let uid = user_id.to_string();
+        let rows = sqlx::query(
+            "SELECT DISTINCT p.id, p.name, p.description, p.owner_id, p.created_at, p.updated_at
+             FROM projects p
+             LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?1
+             WHERE p.owner_id = ?1 OR pm.user_id IS NOT NULL
+             ORDER BY p.created_at ASC",
+        )
+        .bind(&uid)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(Self::row_to_db_project).collect()
+    }
+
+    pub async fn update_project(
+        &self,
+        id: Uuid,
+        name: Option<String>,
+        description: Option<Option<String>>,
+    ) -> RepositoryResult<DbProject> {
+        let now = Self::now_string();
+        let current = self
+            .get_project(id)
+            .await?
+            .ok_or_else(|| RepositoryError::InvalidData(format!("project {id} not found")))?;
+
+        let new_name = name.unwrap_or(current.name);
+        let new_desc = description.unwrap_or(current.description);
+
+        sqlx::query(
+            "UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(&new_name)
+        .bind(&new_desc)
+        .bind(&now)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+
+        self.get_project(id).await?.ok_or_else(|| {
+            RepositoryError::InvalidData("project disappeared after update".into())
+        })
+    }
+
+    pub async fn delete_project(&self, id: Uuid) -> RepositoryResult<bool> {
+        let result = sqlx::query("DELETE FROM projects WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ── Project Members ───────────────────────────────────────────────────────────
+
+    pub async fn add_project_member(
+        &self,
+        project_id: Uuid,
+        user_id: Uuid,
+    ) -> RepositoryResult<()> {
+        let now = Self::now_string();
+        sqlx::query(
+            "INSERT INTO project_members (project_id, user_id, added_at) VALUES (?, ?, ?)",
+        )
+        .bind(project_id.to_string())
+        .bind(user_id.to_string())
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Self::map_db_error(e, "project_members.user_id"))?;
+        Ok(())
+    }
+
+    pub async fn remove_project_member(
+        &self,
+        project_id: Uuid,
+        user_id: Uuid,
+    ) -> RepositoryResult<bool> {
+        let result = sqlx::query(
+            "DELETE FROM project_members WHERE project_id = ? AND user_id = ?",
+        )
+        .bind(project_id.to_string())
+        .bind(user_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn list_project_members(
+        &self,
+        project_id: Uuid,
+    ) -> RepositoryResult<Vec<(DbUser, chrono::DateTime<chrono::Utc>)>> {
+        let rows = sqlx::query(
+            "SELECT u.id, u.username, u.password_hash, u.role, u.display_name, u.is_active,
+                    u.created_at, u.updated_at, pm.added_at
+             FROM project_members pm
+             JOIN users u ON u.id = pm.user_id
+             WHERE pm.project_id = ?
+             ORDER BY pm.added_at ASC",
+        )
+        .bind(project_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|r| {
+                let added_at = Self::parse_timestamp(r.get::<String, _>("added_at"), "pm.added_at")?;
+                let user = Self::row_to_db_user(&r)?;
+                Ok((user, added_at))
+            })
+            .collect()
+    }
+
+    pub async fn user_in_project(
+        &self,
+        user_id: Uuid,
+        project_id: Uuid,
+    ) -> RepositoryResult<bool> {
+        let row = sqlx::query(
+            "SELECT 1 FROM projects WHERE id = ? AND owner_id = ?
+             UNION ALL
+             SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?
+             LIMIT 1",
+        )
+        .bind(project_id.to_string())
+        .bind(user_id.to_string())
+        .bind(project_id.to_string())
+        .bind(user_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    pub async fn user_is_project_owner(
+        &self,
+        user_id: Uuid,
+        project_id: Uuid,
+    ) -> RepositoryResult<bool> {
+        let row = sqlx::query("SELECT 1 FROM projects WHERE id = ? AND owner_id = ?")
+            .bind(project_id.to_string())
+            .bind(user_id.to_string())
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.is_some())
+    }
+
+    pub async fn create_user_with_personal_project(
+        &self,
+        new_user: NewUser,
+    ) -> RepositoryResult<(DbUser, DbProject)> {
+        let user = self.create_user(new_user).await?;
+        let project = self.create_project("Personal".to_string(), None, user.id).await?;
+        Ok((user, project))
     }
 }
 
@@ -326,6 +675,27 @@ mod tests {
         auth::Role as UserRole,
         repository::{NewUser, UpdateUser},
     };
+
+    async fn make_project(pool: &sqlx::SqlitePool, owner_id: Uuid) -> Uuid {
+        let id = Uuid::new_v4();
+        let now = SqliteRepository::now_string();
+        sqlx::query("INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) VALUES (?, 'Test Project', NULL, ?, ?, ?)")
+            .bind(id.to_string())
+            .bind(owner_id.to_string())
+            .bind(&now)
+            .bind(&now)
+            .execute(pool)
+            .await
+            .unwrap();
+        id
+    }
+
+    async fn make_user(repo: &SqliteRepository, username: &str) -> Uuid {
+        let u = new_user(username, UserRole::User);
+        let id = u.id;
+        repo.create_user(u).await.unwrap();
+        id
+    }
 
     async fn make_repo(db_url: &str) -> SqliteRepository {
         let options = db_url
@@ -363,11 +733,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
 
-        let session_id = Uuid::new_v4();
+        let session_id;
 
         {
             let repo = make_repo(&db_url).await;
-            repo.create_session(session_id).await.unwrap();
+            let user_id = make_user(&repo, "testuser_restart").await;
+            let project_id = make_project(&repo.pool, user_id).await;
+            let session = repo.create_session(project_id, user_id).await.unwrap();
+            session_id = session.id;
 
             let msgs = vec![
                 Message::new(Role::User).with_contents([Part::text("What is 1+1?")]),
@@ -405,9 +778,11 @@ mod tests {
         let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
 
         let repo = make_repo(&db_url).await;
-        let session_id = Uuid::new_v4();
+        let user_id = make_user(&repo, "testuser_delete").await;
+        let project_id = make_project(&repo.pool, user_id).await;
+        let session = repo.create_session(project_id, user_id).await.unwrap();
+        let session_id = session.id;
 
-        repo.create_session(session_id).await.unwrap();
         repo.append_messages(
             session_id,
             &[Message::new(Role::User).with_contents([Part::text("hello")])],
@@ -430,8 +805,10 @@ mod tests {
         let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
 
         let repo = make_repo(&db_url).await;
-        let sid = Uuid::new_v4();
-        repo.create_session(sid).await.unwrap();
+        let user_id = make_user(&repo, "testuser_order").await;
+        let project_id = make_project(&repo.pool, user_id).await;
+        let session = repo.create_session(project_id, user_id).await.unwrap();
+        let sid = session.id;
 
         let batch1 = vec![
             Message::new(Role::User).with_contents([Part::text("turn1 user")]),

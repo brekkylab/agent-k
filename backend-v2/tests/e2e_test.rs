@@ -6,7 +6,10 @@ use std::sync::Arc;
 use agent_k_backend::{repository, router::get_router, state::AppState};
 use aide::openapi::OpenApi;
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
-use common::{extract_text, post_session, send_message, test_jwt_config};
+use common::{
+    extract_text, get_personal_project, login, post_session_authed, send_message, signup,
+    test_jwt_config,
+};
 use speedwagon::{FileType, Store, build_tools};
 use tokio::sync::RwLock;
 
@@ -44,9 +47,15 @@ async fn test_ingest_message_purge_cycle() {
     let state = Arc::new(AppState::new(repo, store.clone(), test_jwt_config()));
     let app = get_router(state).finish_api(&mut OpenApi::default());
 
-    let session_id = post_session(&app).await;
+    // Create a user and session
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+    let session_id = post_session_authed(&app, &token, project_id).await;
 
-    let outputs = send_message(&app, session_id, "What is the capital of Freedonia?").await;
+    let outputs = send_message(&app, session_id, "What is the capital of Freedonia?", &token).await;
     let arr = outputs.as_array().expect("response must be an array");
 
     assert!(!arr.is_empty(), "messages should not be empty");
@@ -73,7 +82,7 @@ async fn test_ingest_message_purge_cycle() {
     store.write().await.purge(doc_id).expect("purge failed");
 
     // Send same message after purge
-    let outputs = send_message(&app, session_id, "What is the capital of Freedonia?").await;
+    let outputs = send_message(&app, session_id, "What is the capital of Freedonia?", &token).await;
     let post_purge_text = extract_text(&outputs);
     assert!(
         !post_purge_text.is_empty(),

@@ -40,24 +40,61 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             auth_required,
         ));
 
-    let session_routes = ApiRouter::new()
-        .api_route("/sessions", post(handlers::create_session))
-        .api_route("/sessions/{id}", delete(handlers::delete_session))
+    let project_routes = ApiRouter::new()
         .api_route(
-            "/sessions/{id}/messages",
+            "/projects",
+            get(handlers::list_projects).post(handlers::create_project),
+        )
+        .api_route(
+            "/projects/{project_id}",
+            get(handlers::get_project)
+                .patch(handlers::update_project)
+                .delete(handlers::delete_project),
+        )
+        .api_route(
+            "/projects/{project_id}/members",
+            get(handlers::list_members).post(handlers::add_member),
+        )
+        .api_route(
+            "/projects/{project_id}/members/{user_id}",
+            delete(handlers::remove_member),
+        )
+        .api_route(
+            "/projects/{project_id}/sessions",
+            get(handlers::list_sessions).post(handlers::create_session),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_required,
+        ));
+
+    let session_routes = ApiRouter::new()
+        .api_route(
+            "/sessions/{session_id}",
+            get(handlers::get_session)
+                .patch(handlers::update_session)
+                .delete(handlers::delete_session),
+        )
+        .api_route(
+            "/sessions/{session_id}/messages",
             get(handlers::get_message_history)
                 .post(handlers::send_message)
                 .delete(handlers::clear_message_history),
         )
         .api_route(
-            "/sessions/{id}/messages/stream",
+            "/sessions/{session_id}/messages/stream",
             post(handlers::send_message_stream),
-        );
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_required,
+        ));
 
     ApiRouter::new()
         .merge(auth_routes)
         .merge(me_routes)
         .merge(admin_routes)
+        .merge(project_routes)
         .merge(session_routes)
         .with_state(state)
 }

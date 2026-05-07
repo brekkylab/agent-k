@@ -155,94 +155,167 @@ pub async fn authed(
     (status, value)
 }
 
-// ── Session helpers (unchanged) ───────────────────────────────────────────────
+// ── Project helpers ───────────────────────────────────────────────────────────
 
-pub async fn post_session(app: &axum::Router) -> uuid::Uuid {
-    let req = Request::builder()
-        .method("POST")
-        .uri("/sessions")
-        .header("content-type", "application/json")
-        .body(Body::from("{}"))
-        .unwrap();
+pub async fn get_personal_project(app: &axum::Router, token: &str) -> serde_json::Value {
+    let (status, body) = authed(app, "GET", "/projects", token, None).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "list_projects failed: {body}");
+    body["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .find(|p| p["name"] == "Personal")
+        .cloned()
+        .expect("Personal project not found")
+}
 
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+pub async fn post_session_authed(
+    app: &axum::Router,
+    token: &str,
+    project_id: &str,
+) -> uuid::Uuid {
+    let (status, body) = authed(
+        app,
+        "POST",
+        &format!("/projects/{project_id}/sessions"),
+        token,
+        Some(serde_json::json!({})),
+    )
+    .await;
     assert_eq!(
         status,
         axum::http::StatusCode::CREATED,
-        "POST /sessions failed: {}",
-        String::from_utf8_lossy(&bytes)
+        "post_session_authed failed: {body}"
     );
-    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    uuid::Uuid::parse_str(v["id"].as_str().unwrap()).unwrap()
+    uuid::Uuid::parse_str(body["id"].as_str().unwrap()).unwrap()
 }
 
-pub async fn try_delete_session(app: &axum::Router, id: uuid::Uuid) -> Result<(), String> {
-    let req = Request::builder()
-        .method("DELETE")
-        .uri(format!("/sessions/{id}"))
-        .body(Body::empty())
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.map_err(|e| e.to_string())?;
-    let status = resp.status();
+pub async fn add_member(
+    app: &axum::Router,
+    owner_token: &str,
+    project_id: &str,
+    username: &str,
+) {
+    let (status, body) = authed(
+        app,
+        "POST",
+        &format!("/projects/{project_id}/members"),
+        owner_token,
+        Some(serde_json::json!({ "username": username })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NO_CONTENT,
+        "add_member failed: {body}"
+    );
+}
+
+pub async fn update_share_mode(
+    app: &axum::Router,
+    token: &str,
+    session_id: uuid::Uuid,
+    mode: &str,
+) {
+    let (status, body) = authed(
+        app,
+        "PATCH",
+        &format!("/sessions/{session_id}"),
+        token,
+        Some(serde_json::json!({ "share_mode": mode })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "update_share_mode failed: {body}"
+    );
+}
+
+// ── Session helpers ───────────────────────────────────────────────────────────
+
+/// Creates a throwaway user, logs in, and creates a session under their Personal project.
+/// Use for tests that don't care about auth identity.
+pub async fn post_session(app: &axum::Router) -> uuid::Uuid {
+    let username = format!("testuser_{}", uuid::Uuid::new_v4().simple());
+    signup(app, &username, "Password123!").await;
+    let token = login(app, &username, "Password123!").await;
+    let project = get_personal_project(app, &token).await;
+    let project_id = project["id"].as_str().unwrap().to_string();
+    post_session_authed(app, &token, &project_id).await
+}
+
+pub async fn try_delete_session(
+    app: &axum::Router,
+    id: uuid::Uuid,
+    token: &str,
+) -> Result<(), String> {
+    let (status, _body) = authed(app, "DELETE", &format!("/sessions/{id}"), token, None).await;
     if status != axum::http::StatusCode::NO_CONTENT {
         return Err(format!("DELETE /sessions/{id} returned {status}"));
     }
     Ok(())
 }
 
-pub async fn delete_session(app: &axum::Router, id: uuid::Uuid) {
-    try_delete_session(app, id)
+pub async fn delete_session(app: &axum::Router, id: uuid::Uuid, token: &str) {
+    try_delete_session(app, id, token)
         .await
         .unwrap_or_else(|e| panic!("{e}"));
 }
 
-pub async fn send_message(app: &axum::Router, id: uuid::Uuid, content: &str) -> serde_json::Value {
-    let body = serde_json::json!({ "content": content }).to_string();
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("/sessions/{id}/messages"))
-        .header("content-type", "application/json")
-        .body(Body::from(body))
-        .unwrap();
-
-    let resp = app.clone().oneshot(req).await.unwrap();
+pub async fn send_message(
+    app: &axum::Router,
+    id: uuid::Uuid,
+    content: &str,
+    token: &str,
+) -> serde_json::Value {
+    let body = serde_json::json!({ "content": content });
+    let (status, value) = authed(
+        app,
+        "POST",
+        &format!("/sessions/{id}/messages"),
+        token,
+        Some(body),
+    )
+    .await;
     assert_eq!(
-        resp.status(),
+        status,
         axum::http::StatusCode::OK,
         "send_message returned non-200 for session {id}"
     );
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
+    value
 }
 
 pub async fn send_message_status(
     app: &axum::Router,
     id: uuid::Uuid,
     content: &str,
+    token: &str,
 ) -> axum::http::StatusCode {
-    let body = serde_json::json!({ "content": content }).to_string();
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("/sessions/{id}/messages"))
-        .header("content-type", "application/json")
-        .body(Body::from(body))
-        .unwrap();
-
-    app.clone().oneshot(req).await.unwrap().status()
+    let body = serde_json::json!({ "content": content });
+    let (status, _) = authed(
+        app,
+        "POST",
+        &format!("/sessions/{id}/messages"),
+        token,
+        Some(body),
+    )
+    .await;
+    status
 }
 
 pub async fn send_message_stream(
     app: &axum::Router,
     id: uuid::Uuid,
     content: &str,
+    token: &str,
 ) -> Vec<serde_json::Value> {
     let body = serde_json::json!({ "content": content }).to_string();
     let req = Request::builder()
         .method("POST")
         .uri(format!("/sessions/{id}/messages/stream"))
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
         .body(Body::from(body))
         .unwrap();
 
@@ -280,47 +353,52 @@ pub fn parse_sse_message_events(body: &[u8]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-pub async fn get_message_history(app: &axum::Router, id: uuid::Uuid) -> serde_json::Value {
-    let req = Request::builder()
-        .method("GET")
-        .uri(format!("/sessions/{id}/messages"))
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+pub async fn get_message_history(
+    app: &axum::Router,
+    id: uuid::Uuid,
+    token: &str,
+) -> serde_json::Value {
+    let (status, value) = authed(
+        app,
+        "GET",
+        &format!("/sessions/{id}/messages"),
+        token,
+        None,
+    )
+    .await;
     assert_eq!(
         status,
         axum::http::StatusCode::OK,
-        "GET /sessions/{id}/messages failed: {}",
-        String::from_utf8_lossy(&bytes)
+        "GET /sessions/{id}/messages failed"
     );
-    serde_json::from_slice(&bytes).unwrap()
+    value
 }
 
 pub async fn get_message_history_status(
     app: &axum::Router,
     id: uuid::Uuid,
+    token: &str,
 ) -> axum::http::StatusCode {
-    let req = Request::builder()
-        .method("GET")
-        .uri(format!("/sessions/{id}/messages"))
-        .body(Body::empty())
-        .unwrap();
-
-    app.clone().oneshot(req).await.unwrap().status()
+    let (status, _) = authed(
+        app,
+        "GET",
+        &format!("/sessions/{id}/messages"),
+        token,
+        None,
+    )
+    .await;
+    status
 }
 
-pub async fn clear_message_history(app: &axum::Router, id: uuid::Uuid) {
-    let req = Request::builder()
-        .method("DELETE")
-        .uri(format!("/sessions/{id}/messages"))
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
+pub async fn clear_message_history(app: &axum::Router, id: uuid::Uuid, token: &str) {
+    let (status, _) = authed(
+        app,
+        "DELETE",
+        &format!("/sessions/{id}/messages"),
+        token,
+        None,
+    )
+    .await;
     assert_eq!(
         status,
         axum::http::StatusCode::NO_CONTENT,
@@ -331,14 +409,17 @@ pub async fn clear_message_history(app: &axum::Router, id: uuid::Uuid) {
 pub async fn clear_message_history_status(
     app: &axum::Router,
     id: uuid::Uuid,
+    token: &str,
 ) -> axum::http::StatusCode {
-    let req = Request::builder()
-        .method("DELETE")
-        .uri(format!("/sessions/{id}/messages"))
-        .body(Body::empty())
-        .unwrap();
-
-    app.clone().oneshot(req).await.unwrap().status()
+    let (status, _) = authed(
+        app,
+        "DELETE",
+        &format!("/sessions/{id}/messages"),
+        token,
+        None,
+    )
+    .await;
+    status
 }
 
 // ── Text extraction ───────────────────────────────────────────────────────────
@@ -372,15 +453,17 @@ pub fn extract_text(outputs: &serde_json::Value) -> String {
 pub struct SessionGuard {
     pub app: axum::Router,
     pub id: uuid::Uuid,
+    pub token: String,
 }
 
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         let app = self.app.clone();
         let id = self.id;
+        let token = self.token.clone();
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
-                if let Err(e) = try_delete_session(&app, id).await {
+                if let Err(e) = try_delete_session(&app, id, &token).await {
                     eprintln!("SessionGuard: cleanup of {id} failed: {e}");
                 }
             });

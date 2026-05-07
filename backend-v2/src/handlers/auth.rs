@@ -20,9 +20,9 @@ pub async fn signup(
     let password_hash = hash_password(&payload.password)?;
     let id = Uuid::new_v4();
 
-    let user = state
+    let (user, _personal_project) = state
         .repository
-        .create_user(NewUser {
+        .create_user_with_personal_project(NewUser {
             id,
             username: payload.username,
             password_hash,
