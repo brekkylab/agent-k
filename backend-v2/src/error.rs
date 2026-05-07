@@ -1,7 +1,6 @@
+use axum::{Json, http::StatusCode};
 use schemars::JsonSchema;
 use serde::Serialize;
-
-use axum::{Json, http::StatusCode};
 
 pub type ApiError = (StatusCode, Json<AppError>);
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -24,5 +23,21 @@ impl AppError {
 
     pub fn not_found(msg: impl Into<String>) -> ApiError {
         (StatusCode::NOT_FOUND, Json(Self::new(msg)))
+    }
+
+    pub fn unauthorized(msg: impl Into<String>) -> ApiError {
+        (StatusCode::UNAUTHORIZED, Json(Self::new(msg)))
+    }
+
+    pub fn forbidden(msg: impl Into<String>) -> ApiError {
+        (StatusCode::FORBIDDEN, Json(Self::new(msg)))
+    }
+
+    pub fn bad_request(msg: impl Into<String>) -> ApiError {
+        (StatusCode::BAD_REQUEST, Json(Self::new(msg)))
+    }
+
+    pub fn conflict(msg: impl Into<String>) -> ApiError {
+        (StatusCode::CONFLICT, Json(Self::new(msg)))
     }
 }

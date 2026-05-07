@@ -1,18 +1,18 @@
+#[path = "common/mod.rs"]
+mod common;
+
 use std::sync::Arc;
 
+use agent_k_backend::{repository, router::get_router, state::AppState};
 use aide::openapi::OpenApi;
-use ailoy::lang_model::LangModelProvider;
+use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use common::test_jwt_config;
 use http_body_util::BodyExt;
-use tower::ServiceExt;
-
-use agent_k_backend::repository;
-use agent_k_backend::router::get_router;
-use agent_k_backend::state::AppState;
-use ailoy::agent::default_provider_mut;
 use speedwagon::{Store, build_tools};
 use tokio::sync::RwLock;
+use tower::ServiceExt;
 
 fn json_request(method: &str, uri: &str, body: Option<&str>) -> Request<Body> {
     let builder = Request::builder()
@@ -94,7 +94,7 @@ async fn test_ingest_message_purge_cycle() {
 
     let store_path = std::env::temp_dir().join(format!("speedwagon-e2e-{}", uuid::Uuid::new_v4()));
     let store = Arc::new(RwLock::new(
-        Store::new(&store_path).expect("test store init"),
+        Store::new(store_path).expect("test store init"),
     ));
 
     {
@@ -110,7 +110,7 @@ async fn test_ingest_message_purge_cycle() {
     let repo = repository::create_repository("sqlite::memory:")
         .await
         .expect("test repo init");
-    let state = Arc::new(AppState::new(repo, store));
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
     let app = get_router(state).finish_api(&mut OpenApi::default());
 
     // ── Ingest two documents via HTTP multipart ──────────────────────────────

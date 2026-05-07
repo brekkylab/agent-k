@@ -16,7 +16,7 @@ use common::{
     SessionGuard, clear_message_history, clear_message_history_status, extract_text,
     get_message_history, get_message_history_status, make_app_with_repo, make_app_with_state,
     make_repo, make_test_store, post_session, send_message, send_message_status, setup_provider,
-    try_delete_session,
+    test_jwt_config, try_delete_session,
 };
 use uuid::Uuid;
 
@@ -168,7 +168,7 @@ async fn unknown_session_returns_404() {
 #[tokio::test]
 async fn get_messages_returns_empty_for_new_session() {
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store));
+    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -201,7 +201,7 @@ async fn get_messages_returns_persisted_messages_in_order() {
     use ailoy::message::{Message, Part, Role};
 
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store));
+    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -246,7 +246,7 @@ async fn clear_messages_removes_persisted_messages() {
     use ailoy::message::{Message, Part, Role};
 
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store));
+    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -282,7 +282,7 @@ async fn clear_messages_does_not_delete_session() {
     use ailoy::message::{Message, Part, Role};
 
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store));
+    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();
@@ -309,7 +309,7 @@ async fn can_append_messages_after_clear() {
     use ailoy::message::{Message, Part, Role};
 
     let store = make_test_store();
-    let state = Arc::new(AppState::new(make_repo().await, store));
+    let state = Arc::new(AppState::new(make_repo().await, store, test_jwt_config()));
     let app = make_app_with_state(state.clone());
 
     let id = Uuid::new_v4();

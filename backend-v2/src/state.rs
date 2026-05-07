@@ -6,20 +6,22 @@ use speedwagon::SharedStore;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::repository::AppRepository;
+use crate::{auth::JwtConfig, repository::AppRepository};
 
 pub struct AppState {
     agents: DashMap<Uuid, Arc<Mutex<Agent>>>,
     pub repository: AppRepository,
     pub store: SharedStore,
+    pub jwt: JwtConfig,
 }
 
 impl AppState {
-    pub fn new(repository: AppRepository, store: SharedStore) -> Self {
+    pub fn new(repository: AppRepository, store: SharedStore, jwt: JwtConfig) -> Self {
         Self {
             agents: DashMap::new(),
             repository,
             store,
+            jwt,
         }
     }
 
