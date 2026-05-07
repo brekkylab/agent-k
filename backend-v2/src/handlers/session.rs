@@ -1,5 +1,6 @@
 use std::{convert::Infallible, sync::Arc};
 
+use aide::NoApi;
 use ailoy::{
     agent::{Agent, AgentBuilder, AgentCard},
     message::{Message, MessageOutput, Part, Role},
@@ -270,7 +271,9 @@ pub async fn send_message_stream(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(payload): Json<SendMessageRequest>,
-) -> ApiResult<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>> + Send + 'static>> {
+) -> ApiResult<
+    NoApi<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>> + Send + 'static>>,
+> {
     let agent_arc = resolve_agent(&state, id).await?;
     let repo = state.repository.clone();
     let prev_len = agent_arc.lock().await.get_history().len();
@@ -306,5 +309,5 @@ pub async fn send_message_stream(
         yield Ok(Event::default().event("done").data("[DONE]"));
     };
 
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+    Ok(NoApi(Sse::new(stream).keep_alive(KeepAlive::default())))
 }
