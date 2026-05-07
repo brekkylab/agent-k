@@ -48,10 +48,9 @@ pub async fn make_repo() -> repository::AppRepository {
 /// Create a SharedStore + ToolSet backed by a temporary directory.
 pub fn make_test_store() -> speedwagon::SharedStore {
     let store_path = std::env::temp_dir().join(format!("speedwagon-test-{}", uuid::Uuid::new_v4()));
-    let store = Arc::new(RwLock::new(
+    Arc::new(RwLock::new(
         Store::new(&store_path).expect("test store init"),
-    ));
-    store
+    ))
 }
 
 /// Build an app from an already-constructed repository.
@@ -318,25 +317,18 @@ pub async fn ingest_document(
 
 /// Ingest multiple files and return the full BatchIngestResponse.
 pub async fn ingest_documents(app: &axum::Router, files: &[(&str, &[u8])]) -> serde_json::Value {
-    let (boundary, body) = build_multipart_body(files);
-
-    let req = Request::builder()
-        .method("POST")
-        .uri("/documents")
-        .header(
-            "content-type",
-            format!("multipart/form-data; boundary={boundary}"),
-        )
-        .body(Body::from(body))
-        .unwrap();
-
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
+    post_documents(app, files).await.1
 }
 
 /// Ingest files and also return the HTTP status code.
 pub async fn ingest_documents_with_status(
+    app: &axum::Router,
+    files: &[(&str, &[u8])],
+) -> (axum::http::StatusCode, serde_json::Value) {
+    post_documents(app, files).await
+}
+
+async fn post_documents(
     app: &axum::Router,
     files: &[(&str, &[u8])],
 ) -> (axum::http::StatusCode, serde_json::Value) {

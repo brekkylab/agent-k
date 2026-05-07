@@ -7,7 +7,7 @@ mod searcher;
 mod translator;
 
 use std::{
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -46,6 +46,14 @@ pub struct PurgeFailure {
 }
 
 pub type SharedStore = Arc<RwLock<Store>>;
+
+fn remove_ingest_artifact(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("failed to clean up ingest artifact {:?}: {e}", path),
+    }
+}
 
 /// Speedwagon store layout:
 ///
@@ -131,7 +139,7 @@ impl Store {
 
         let mut succeeded = Vec::with_capacity(items.len());
         let mut failed = Vec::new();
-        let mut to_index: Vec<(Uuid, String)> = Vec::new(); // (id, content)
+        let mut to_index: Vec<(usize, Uuid, String)> = Vec::new(); // (input index, id, content)
 
         for (idx, (bytes, filetype)) in items.iter().enumerate() {
             let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, bytes);
@@ -155,15 +163,14 @@ impl Store {
                             }
                             new_origin = Some(origin_path.clone());
                         }
-                        translator::translate(&origin_path, &corpus_path)
-                            .map_err(|e| e.to_string())
+                        translator::translate(&origin_path, &corpus_path).map_err(|e| e.to_string())
                     }
                 };
 
                 if let Err(e) = ok {
-                    let _ = fs::remove_file(&corpus_path);
+                    remove_ingest_artifact(&corpus_path);
                     if let Some(origin) = &new_origin {
-                        let _ = fs::remove_file(origin);
+                        remove_ingest_artifact(origin);
                     }
                     failed.push(IngestFailure {
                         index: idx,
@@ -179,10 +186,10 @@ impl Store {
                 }
                 Ok(false) => match fs::read_to_string(&corpus_path) {
                     Ok(content) => {
-                        to_index.push((id, content));
+                        to_index.push((idx, id, content));
                     }
                     Err(e) => {
-                        let _ = fs::remove_file(&corpus_path);
+                        remove_ingest_artifact(&corpus_path);
                         failed.push(IngestFailure {
                             index: idx,
                             error: e.to_string(),
@@ -199,19 +206,14 @@ impl Store {
         }
 
         let mut docs: Vec<(String, String, String)> = Vec::with_capacity(to_index.len());
-        let mut title_failed_ids: Vec<Uuid> = Vec::new();
-        for (id, content) in to_index {
+        for (idx, id, content) in to_index {
             match parser::get_title(&content).await {
                 Ok(title) => docs.push((id.to_string(), title, content)),
                 Err(e) => {
                     let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
-                    let _ = fs::remove_file(&corpus_path);
-                    title_failed_ids.push(id);
+                    remove_ingest_artifact(&corpus_path);
                     failed.push(IngestFailure {
-                        index: items
-                            .iter()
-                            .position(|(b, _)| Uuid::new_v5(&Uuid::NAMESPACE_OID, b) == id)
-                            .unwrap_or(0),
+                        index: idx,
                         error: e.to_string(),
                     });
                 }
