@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::{
     auth::{Role, hash_password, validate_password, verify_password},
     error::{ApiResult, AppError},
-    model::user::{LoginRequest, LoginResponse, SignupRequest, UserResponse},
+    model::{LoginRequest, LoginResponse, SignupRequest, UserResponse},
     repository::{NewUser, RepositoryError},
     state::AppState,
 };

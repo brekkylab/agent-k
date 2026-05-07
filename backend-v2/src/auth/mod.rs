@@ -1,8 +1,8 @@
-pub mod bootstrap;
-pub mod jwt;
-pub mod middleware;
-pub mod password;
-pub mod role;
+mod bootstrap;
+mod jwt;
+mod middleware;
+mod password;
+mod role;
 
 pub use bootstrap::bootstrap_admin_if_needed;
 pub use jwt::JwtConfig;

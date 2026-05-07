@@ -8,7 +8,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::auth::role::Role;
+use crate::auth::Role;
 
 const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
 

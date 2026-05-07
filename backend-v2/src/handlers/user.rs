@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     auth::{AuthUser, Role, hash_password, validate_password, verify_password},
     error::{ApiResult, AppError},
-    model::user::{
+    model::{
         AdminCreateUserRequest, AdminUpdateUserRequest, UpdateMeRequest, UserListQuery,
         UserListResponse, UserResponse,
     },

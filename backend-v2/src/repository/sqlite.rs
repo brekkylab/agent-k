@@ -4,7 +4,7 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
-    auth::role::Role,
+    auth::Role,
     repository::{DbSession, DbUser, NewUser, RepositoryError, RepositoryResult, UpdateUser},
 };
 
@@ -323,7 +323,7 @@ mod tests {
 
     use super::SqliteRepository;
     use crate::{
-        auth::role::Role as UserRole,
+        auth::Role as UserRole,
         repository::{NewUser, UpdateUser},
     };
 

@@ -1,7 +1,6 @@
+use agent_k_backend::{auth, repository};
 use clap::{Parser, Subcommand};
 use uuid::Uuid;
-
-use agent_k_backend::{auth, repository};
 
 #[derive(Parser)]
 #[command(name = "agent-k-backend", about = "Agent-K backend server")]
