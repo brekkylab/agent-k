@@ -1,3 +1,5 @@
+import argparse
+import json
 import sys
 from io import BytesIO
 import logging
@@ -7,7 +9,24 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 logging.getLogger("docling").setLevel(logging.CRITICAL)
 
 
-def build_converter():
+DEFAULT_OPTIONS = {
+    "do_ocr": False,
+    "do_table_structure": True,
+    "do_cell_matching": True,
+    "table_structure_mode": "accurate",
+    "do_picture_classification": False,
+    "do_picture_description": False,
+    "do_chart_extraction": False,
+    "do_code_enrichment": False,
+    "do_formula_enrichment": False,
+    "generate_page_images": False,
+    "generate_picture_images": False,
+    "num_threads": 4,
+    "device": "auto",
+}
+
+
+def build_converter(opts: dict):
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import (
         PdfPipelineOptions,
@@ -16,20 +35,23 @@ def build_converter():
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
     pipeline_options = PdfPipelineOptions(
-        do_ocr=False,
-        do_table_structure=True,
+        do_ocr=opts["do_ocr"],
+        do_table_structure=opts["do_table_structure"],
         table_structure_options=TableStructureOptions(
-            do_cell_matching=True,
-            mode="accurate",
+            do_cell_matching=opts["do_cell_matching"],
+            mode=opts["table_structure_mode"],
         ),
-        accelerator_options={"num_threads": 4, "device": "auto"},
-        do_picture_classification=False,
-        do_picture_description=False,
-        do_chart_extraction=False,
-        do_code_enrichment=False,
-        do_formula_enrichment=False,
-        generate_page_images=False,
-        generate_picture_images=False,
+        accelerator_options={
+            "num_threads": opts["num_threads"],
+            "device": opts["device"],
+        },
+        do_picture_classification=opts["do_picture_classification"],
+        do_picture_description=opts["do_picture_description"],
+        do_chart_extraction=opts["do_chart_extraction"],
+        do_code_enrichment=opts["do_code_enrichment"],
+        do_formula_enrichment=opts["do_formula_enrichment"],
+        generate_page_images=opts["generate_page_images"],
+        generate_picture_images=opts["generate_picture_images"],
     )
     return DocumentConverter(
         format_options={
@@ -38,14 +60,14 @@ def build_converter():
     )
 
 
-def run_docling(stream: BytesIO = None) -> str:
+def run_docling(stream: BytesIO, opts: dict) -> str:
     from docling.document_converter import DocumentStream
 
     stream = DocumentStream(
         name="target.pdf",
         stream=stream,
     )
-    return build_converter().convert(stream).document.export_to_markdown()
+    return build_converter(opts).convert(stream).document.export_to_markdown()
 
 
 def validate_pdf(data: bytes) -> None:
@@ -57,10 +79,36 @@ def validate_pdf(data: bytes) -> None:
         sys.exit("error: PDF EOF marker not found")
 
 
+def parse_options(raw: str | None) -> dict:
+    if not raw:
+        return dict(DEFAULT_OPTIONS)
+    try:
+        provided = json.loads(raw)
+    except json.JSONDecodeError as e:
+        sys.exit(f"error: --options is not valid JSON: {e}")
+    if not isinstance(provided, dict):
+        sys.exit("error: --options must be a JSON object")
+    merged = dict(DEFAULT_OPTIONS)
+    unknown = set(provided) - set(DEFAULT_OPTIONS)
+    if unknown:
+        sys.exit(f"error: unknown option keys: {sorted(unknown)}")
+    merged.update(provided)
+    return merged
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Convert a PDF on stdin to Markdown on stdout.")
+    parser.add_argument(
+        "--options",
+        help="JSON object with pipeline options. Missing keys fall back to defaults.",
+        default=None,
+    )
+    args = parser.parse_args()
+    opts = parse_options(args.options)
+
     data = sys.stdin.buffer.read()
     validate_pdf(data)
-    markdown = run_docling(BytesIO(data))
+    markdown = run_docling(BytesIO(data), opts)
     print(markdown)
 
 

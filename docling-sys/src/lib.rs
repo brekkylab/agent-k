@@ -17,6 +17,7 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 
 use anyhow::{Context, anyhow};
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -45,8 +46,69 @@ pub fn override_bundle_dir(path: impl Into<PathBuf>) {
     let _ = BUNDLE_DIR_OVERRIDE.set(path.into());
 }
 
+/// TableFormer extraction mode. `Accurate` trades speed for quality.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TableStructureMode {
+    Fast,
+    Accurate,
+}
+
+/// Hardware device for model inference. Mirrors docling's `AcceleratorDevice`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AcceleratorDevice {
+    Auto,
+    Cpu,
+    Cuda,
+    Mps,
+    Xpu,
+}
+
+/// Options forwarded to the `PdfPipelineOptions` constructor on the Python
+/// side. Defaults match the previously-hardcoded behaviour.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PdfOptions {
+    pub do_ocr: bool,
+    pub do_table_structure: bool,
+    pub do_cell_matching: bool,
+    pub table_structure_mode: TableStructureMode,
+    pub do_picture_classification: bool,
+    pub do_picture_description: bool,
+    pub do_chart_extraction: bool,
+    pub do_code_enrichment: bool,
+    pub do_formula_enrichment: bool,
+    pub generate_page_images: bool,
+    pub generate_picture_images: bool,
+    pub num_threads: u32,
+    pub device: AcceleratorDevice,
+}
+
+impl Default for PdfOptions {
+    fn default() -> Self {
+        Self {
+            do_ocr: false,
+            do_table_structure: true,
+            do_cell_matching: true,
+            table_structure_mode: TableStructureMode::Accurate,
+            do_picture_classification: false,
+            do_picture_description: false,
+            do_chart_extraction: false,
+            do_code_enrichment: false,
+            do_formula_enrichment: false,
+            generate_page_images: false,
+            generate_picture_images: false,
+            num_threads: 4,
+            device: AcceleratorDevice::Auto,
+        }
+    }
+}
+
 /// Convert PDF bytes to Markdown.
-pub async fn convert_pdf_to_md(pdf_bytes: &[u8]) -> anyhow::Result<String> {
+pub async fn convert_pdf_to_md(
+    pdf_bytes: &[u8],
+    options: &PdfOptions,
+) -> anyhow::Result<String> {
     let dir = bundle_dir()
         .ok_or_else(|| anyhow!("docling-sys was built without a bundle (skip-bundle)"))?;
     let exe = dir.join(if cfg!(windows) {
@@ -55,7 +117,12 @@ pub async fn convert_pdf_to_md(pdf_bytes: &[u8]) -> anyhow::Result<String> {
         "convert_pdf_to_md"
     });
 
+    let options_json =
+        serde_json::to_string(options).context("serialize PdfOptions")?;
+
     let mut child = Command::new(&exe)
+        .arg("--options")
+        .arg(&options_json)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -80,9 +147,12 @@ pub async fn convert_pdf_to_md(pdf_bytes: &[u8]) -> anyhow::Result<String> {
 }
 
 /// Read a file from disk and convert it to Markdown.
-pub async fn convert_pdf_file(path: impl AsRef<Path>) -> anyhow::Result<String> {
+pub async fn convert_pdf_file(
+    path: impl AsRef<Path>,
+    options: &PdfOptions,
+) -> anyhow::Result<String> {
     let bytes = tokio::fs::read(path.as_ref())
         .await
         .with_context(|| format!("failed to read {}", path.as_ref().display()))?;
-    convert_pdf_to_md(&bytes).await
+    convert_pdf_to_md(&bytes, options).await
 }

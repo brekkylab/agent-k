@@ -5,10 +5,6 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Command;
 
-// Bump this when build.rs args/logic change in a way that should invalidate
-// the cached bundle even if Python inputs are byte-identical.
-const BUILD_VERSION: u32 = 1;
-
 const PYINSTALLER_ARGS: &[&str] = &[
     "convert_pdf_to_md.py",
     "--onedir",
@@ -33,6 +29,7 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let inputs = [
+        crate_dir.join("build.rs"),
         python_dir.join("pyproject.toml"),
         python_dir.join("uv.lock"),
         python_dir.join("convert_pdf_to_md.py"),
@@ -40,7 +37,6 @@ fn main() {
     for path in &inputs {
         println!("cargo:rerun-if-changed={}", path.display());
     }
-    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=DOCLING_SYS_SKIP_BUNDLE");
 
     let dist_root = out_dir.join("dist");
@@ -63,8 +59,10 @@ fn main() {
         return;
     }
 
+    let cpu_only = cfg!(feature = "cpu");
+
     let stamp_path = out_dir.join(".bundle-stamp");
-    let current_hash = match input_hash(&inputs) {
+    let current_hash = match input_hash(&inputs, cpu_only) {
         Ok(h) => h,
         Err(err) => fail(&format!("hash inputs: {err}")),
     };
@@ -84,15 +82,12 @@ fn main() {
         fail("`uv` not found in PATH. Install via https://docs.astral.sh/uv/#installation");
     }
 
-    run(
-        Command::new("uv")
-            .arg("sync")
-            .arg("--project")
-            .arg(&python_dir)
-            .arg("--extra")
-            .arg("cpu"),
-        "uv sync",
-    );
+    let mut sync_cmd = Command::new("uv");
+    sync_cmd.arg("sync").arg("--project").arg(&python_dir);
+    if cpu_only {
+        sync_cmd.arg("--extra").arg("cpu");
+    }
+    run(&mut sync_cmd, "uv sync");
 
     let venv_bin = python_dir.join(".venv").join(if cfg!(windows) {
         "Scripts"
@@ -144,12 +139,9 @@ fn main() {
     println!("cargo:rustc-env=DOCLING_BUNDLE_DIR={}", bundle_dir.display());
 }
 
-fn input_hash(paths: &[PathBuf]) -> std::io::Result<String> {
+fn input_hash(paths: &[PathBuf], cpu_only: bool) -> std::io::Result<String> {
     let mut hasher = DefaultHasher::new();
-    BUILD_VERSION.hash(&mut hasher);
-    for arg in PYINSTALLER_ARGS {
-        arg.hash(&mut hasher);
-    }
+    cpu_only.hash(&mut hasher);
     for path in paths {
         let bytes = fs::read(path)?;
         path.file_name().unwrap().to_string_lossy().hash(&mut hasher);

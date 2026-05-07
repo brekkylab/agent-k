@@ -16,6 +16,12 @@ To install a CPU-only torch wheel excluding NVIDIA dependencies for environments
 uv sync --dev --extra cpu
 ```
 
+When building via the parent `docling-sys` Rust crate, enable the `cpu` cargo feature to use this CPU-only wheel automatically:
+
+```bash
+cargo build -p docling-sys --features cpu
+```
+
 ### Test
 To check if the execution environment is properly configured, try running it as follows.
 
