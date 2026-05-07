@@ -40,4 +40,8 @@ impl AppError {
     pub fn conflict(msg: impl Into<String>) -> ApiError {
         (StatusCode::CONFLICT, Json(Self::new(msg)))
     }
+
+    pub fn locked(msg: impl Into<String>) -> ApiError {
+        (StatusCode::LOCKED, Json(Self::new(msg)))
+    }
 }

@@ -32,7 +32,7 @@ pub async fn bootstrap_admin_if_needed(repo: &AppRepository) {
             };
 
             match repo
-                .create_user(NewUser {
+                .create_user_with_personal_project(NewUser {
                     id: Uuid::new_v4(),
                     username: u.clone(),
                     password_hash,
@@ -42,8 +42,11 @@ pub async fn bootstrap_admin_if_needed(repo: &AppRepository) {
                 })
                 .await
             {
-                Ok(user) => {
-                    tracing::info!(id = %user.id, username = %u, "bootstrap admin user created from env");
+                Ok((user, project)) => {
+                    tracing::info!(
+                        id = %user.id, username = %u, project_id = %project.id,
+                        "bootstrap admin user created from env"
+                    );
                 }
                 Err(e) => {
                     tracing::error!("failed to create bootstrap admin: {e}");

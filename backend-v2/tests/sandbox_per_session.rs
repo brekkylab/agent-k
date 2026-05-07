@@ -12,9 +12,9 @@ use std::{path::Path, sync::Arc};
 
 use agent_k_backend::state::AppState;
 use common::{
-    delete_session, extract_text, extract_text_from_slice, make_app_with_state, make_repo,
-    make_test_store, post_session, send_message, send_message_stream, setup_provider,
-    test_jwt_config,
+    delete_session, extract_text, extract_text_from_slice, get_personal_project, login, make_repo,
+    make_test_store, post_session_authed, send_message, send_message_stream, setup_provider,
+    signup, test_jwt_config,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -38,10 +38,17 @@ async fn two_sessions_get_isolated_sandboxes() {
     setup_provider().await;
 
     let state = make_state().await;
-    let app = make_app_with_state(state.clone());
+    let app = common::make_app_with_state(state.clone());
 
-    let id1 = post_session(&app).await;
-    let id2 = post_session(&app).await;
+    // Use a single user for both sessions
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+
+    let id1 = post_session_authed(&app, &token, project_id).await;
+    let id2 = post_session_authed(&app, &token, project_id).await;
     assert_ne!(id1, id2, "two sessions must have different ids");
 
     let (re1, re2) = {
@@ -68,8 +75,8 @@ async fn two_sessions_get_isolated_sandboxes() {
         "session 2 must not be able to read a file written in session 1's sandbox"
     );
 
-    delete_session(&app, id1).await;
-    delete_session(&app, id2).await;
+    delete_session(&app, id1, &token).await;
+    delete_session(&app, id2, &token).await;
 
     // remove_persisted is idempotent.
     ailoy::runenv::remove_persisted("session-doesnotexist")
@@ -89,9 +96,14 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     setup_provider().await;
 
     let state = make_state().await;
-    let app = make_app_with_state(state.clone());
+    let app = common::make_app_with_state(state.clone());
 
-    let id = post_session(&app).await;
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+    let id = post_session_authed(&app, &token, project_id).await;
 
     // Ask the agent to write a sentinel value and read it back.
     let outputs = send_message(
@@ -99,6 +111,7 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
         id,
         "Run the following bash command exactly and report its output: \
          echo 'sandbox_ok' > /workspace/probe.txt && cat /workspace/probe.txt",
+        &token,
     )
     .await;
 
@@ -123,7 +136,7 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     );
     drop(agent);
 
-    delete_session(&app, id).await;
+    delete_session(&app, id, &token).await;
 }
 
 // ── streaming tests ───────────────────────────────────────────────────────────
@@ -132,25 +145,27 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
 /// Does not require microsandbox or an API key.
 #[tokio::test]
 async fn stream_returns_404_for_unknown_session() {
-    use axum::{body::Body, http::Request};
-    use tower::ServiceExt;
-
     dotenvy::dotenv().ok();
     setup_provider().await;
 
     let state = make_state().await;
-    let app = make_app_with_state(state);
+    let app = common::make_app_with_state(state);
+
+    // Create a user to get a valid token
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
 
     let fake_id = uuid::Uuid::new_v4();
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("/sessions/{fake_id}/messages/stream"))
-        .header("content-type", "application/json")
-        .body(Body::from(r#"{"content":"hi"}"#))
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    let (status, _) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{fake_id}/messages/stream"),
+        &token,
+        Some(serde_json::json!({ "content": "hi" })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
 }
 
 /// The streaming endpoint emits `event: message` SSE blocks and ends with
@@ -165,9 +180,14 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
     setup_provider().await;
 
     let state = make_state().await;
-    let app = make_app_with_state(state.clone());
+    let app = common::make_app_with_state(state.clone());
 
-    let id = post_session(&app).await;
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+    let id = post_session_authed(&app, &token, project_id).await;
 
     let events = send_message_stream(
         &app,
@@ -175,6 +195,7 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
         "Run the following bash command exactly and report its output: \
          echo 'sandbox_ok' > /workspace/probe_stream.txt \
          && cat /workspace/probe_stream.txt",
+        &token,
     )
     .await;
 
@@ -204,5 +225,5 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
     );
     drop(agent);
 
-    delete_session(&app, id).await;
+    delete_session(&app, id, &token).await;
 }
