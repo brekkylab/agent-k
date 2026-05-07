@@ -23,7 +23,7 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 #[derive(Parser)]
 #[command(
     name = "reflect-agent",
-    about = "Single lead agent with bash + python + web_search tools (verify/reflect gates land in follow-up PRs)"
+    about = "Single lead agent with bash + python + web_search tools and a post-hoc verify gate"
 )]
 struct Cli {
     /// Language model id, e.g. `openai/gpt-4o-mini`,

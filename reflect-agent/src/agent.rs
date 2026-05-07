@@ -46,8 +46,8 @@ pub async fn build_agent(model: &str) -> Result<Agent> {
 }
 
 /// Register the three default builtin tools on `provider.tools`. Mutates
-/// in place so the caller can layer additional tools (e.g. subagents in a
-/// future PR) before handing the provider to the builder.
+/// in place so the caller can layer additional tools before handing the
+/// provider to the builder.
 fn attach_default_tools(provider: &mut AgentProvider) {
     let mut tools = std::mem::take(&mut provider.tools);
     tools = tools.bash().python_repl().web_search();
@@ -56,12 +56,8 @@ fn attach_default_tools(provider: &mut AgentProvider) {
 
 /// Stream one user turn, collect every [`MessageOutput`] the agent emits,
 /// and run the post-hoc verify pass on the slice of history that this turn
-/// just appended.
-///
-/// This is the Stage A entry point for the verify gate: the agent has
-/// already finished and produced a response by the time the report is
-/// built. Stage B (a future PR) will move signal evaluation between turns
-/// via an ailoy-side hook so the same checks can intercept tool results.
+/// just appended. The agent has already produced its response by the time
+/// the report is built; the gate only flags issues, it never intercepts.
 pub async fn run_with_verify(
     agent: &mut Agent,
     query: Message,

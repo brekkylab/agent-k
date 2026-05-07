@@ -1,14 +1,11 @@
-//! Post-hoc verify reporter (Stage A).
+//! Post-hoc verify reporter.
 //!
 //! Inspects an agent's history *after* a `run` finishes and reports
 //! deterministic signals that suggest something went wrong. No LLM calls.
-//! No agent behaviour change — this stage only flags issues; the agent
-//! has already responded by the time the report is built.
-//!
-//! Stage B (a future PR) is expected to add an ailoy-side hook so the
-//! same signal logic can run between turns and actually intercept tool
-//! results before the next LLM call. The signal functions in this module
-//! are written to be reusable from that callback unchanged.
+//! No agent behaviour change — the gate only flags issues; the agent
+//! has already responded by the time the report is built. The signal
+//! functions are pure over `&[Message]`, so they remain reusable from
+//! any cut of history.
 //!
 //! ## Signals
 //!
@@ -23,6 +20,7 @@
 //! system prompts (Cowork, Devin, Claude Code).
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::LazyLock;
 
 use ailoy::{
@@ -33,9 +31,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use regex::Regex;
 use serde::Serialize;
 
-/// Knobs for the verify pass. Only the loop threshold is exposed today;
-/// future signals (e.g. a `bash_stderr_dominant` ratio) will land here too,
-/// keeping the policy surface in one place.
+/// Knobs for the verify pass.
 #[derive(Clone, Debug)]
 pub struct VerifyConfig {
     /// Number of identical `(tool_name, args)` calls that triggers
@@ -58,8 +54,7 @@ impl Default for VerifyConfig {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Issue {
     /// A tool call returned an empty value (empty object / array / string,
-    /// or `null`). The follow-up Stage B will be able to substitute a
-    /// fallback hint here; Stage A only reports.
+    /// or `null`).
     EmptyResult { tool: String },
 
     /// The same `(tool_name, args)` was invoked at least `count` times in
@@ -104,37 +99,33 @@ impl VerifyReport {
     /// Render the report as a short multi-line string suitable for stderr.
     /// Returns an empty string when no issues were found.
     pub fn format(&self) -> String {
-        if self.issues.is_empty() {
-            return String::new();
-        }
-        let mut out = String::new();
-        for issue in &self.issues {
-            out.push_str("- ");
-            out.push_str(&format_issue(issue));
-            out.push('\n');
-        }
-        out
+        self.issues.iter().map(|i| format!("- {i}\n")).collect()
     }
 }
 
-fn format_issue(issue: &Issue) -> String {
-    match issue {
-        Issue::EmptyResult { tool } => format!("empty result from `{tool}`"),
-        Issue::LoopDetected {
-            tool,
-            count,
-            threshold,
-        } => format!("`{tool}` invoked {count} times with identical args (threshold {threshold})"),
-        Issue::UnverifiedCitation { citation } => {
-            format!("citation not found in tool log: `{citation}`")
-        }
-        Issue::BashFailure { reason } => match reason {
-            BashFailureReason::NonZeroExit { exit_code } => {
-                format!("bash exited with code {exit_code}")
+impl fmt::Display for Issue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Issue::EmptyResult { tool } => write!(f, "empty result from `{tool}`"),
+            Issue::LoopDetected {
+                tool,
+                count,
+                threshold,
+            } => write!(
+                f,
+                "`{tool}` invoked {count} times with identical args (threshold {threshold})"
+            ),
+            Issue::UnverifiedCitation { citation } => {
+                write!(f, "citation not found in tool log: `{citation}`")
             }
-            BashFailureReason::TimedOut => "bash timed out".to_string(),
-            BashFailureReason::ValidationError => "bash received invalid arguments".to_string(),
-        },
+            Issue::BashFailure { reason } => match reason {
+                BashFailureReason::NonZeroExit { exit_code } => {
+                    write!(f, "bash exited with code {exit_code}")
+                }
+                BashFailureReason::TimedOut => write!(f, "bash timed out"),
+                BashFailureReason::ValidationError => write!(f, "bash received invalid arguments"),
+            },
+        }
     }
 }
 
