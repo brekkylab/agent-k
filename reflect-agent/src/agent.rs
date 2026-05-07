@@ -13,8 +13,14 @@
 //! Construction is split in two so the verify gate (Phase 1) and reflect
 //! gate (Phase 2) can be layered on top without changing the call site.
 
-use ailoy::agent::{Agent, AgentBuilder, AgentProvider, default_provider_mut};
+use ailoy::{
+    agent::{Agent, AgentBuilder, AgentProvider, default_provider_mut},
+    message::{Message, MessageOutput},
+};
 use anyhow::Result;
+use futures::StreamExt as _;
+
+use crate::verify::{VerifyConfig, VerifyReport, verify_run};
 
 /// Default model. Anthropic Haiku — fast, cheap, suitable for an interactive lead.
 pub const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5-20251001";
@@ -40,12 +46,34 @@ pub async fn build_agent(model: &str) -> Result<Agent> {
 }
 
 /// Register the three default builtin tools on `provider.tools`. Mutates
-/// in place so the caller can layer additional tools (e.g. subagents in a
-/// future PR) before handing the provider to the builder.
+/// in place so the caller can layer additional tools before handing the
+/// provider to the builder.
 fn attach_default_tools(provider: &mut AgentProvider) {
     let mut tools = std::mem::take(&mut provider.tools);
     tools = tools.bash().python_repl().web_search();
     provider.tools = tools;
+}
+
+/// Stream one user turn, collect every [`MessageOutput`] the agent emits,
+/// and run the post-hoc verify pass on the slice of history that this turn
+/// just appended. The agent has already produced its response by the time
+/// the report is built; the gate only flags issues, it never intercepts.
+pub async fn run_with_verify(
+    agent: &mut Agent,
+    query: Message,
+    config: &VerifyConfig,
+) -> Result<(Vec<MessageOutput>, VerifyReport)> {
+    let history_before = agent.get_history().len();
+
+    let mut outputs = Vec::new();
+    let mut stream = agent.run(query);
+    while let Some(item) = stream.next().await {
+        outputs.push(item?);
+    }
+    drop(stream);
+
+    let report = verify_run(&agent.get_history()[history_before..], config);
+    Ok((outputs, report))
 }
 
 #[cfg(test)]
