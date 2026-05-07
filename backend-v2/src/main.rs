@@ -1,17 +1,21 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+mod cli;
 
-use agent_k_backend::{repository, router, state::AppState};
-use aide::axum::ApiRouter;
-use aide::openapi::{Info, OpenApi};
-use aide::scalar::Scalar;
-use ailoy::agent::default_provider_mut;
-use ailoy::lang_model::LangModelProvider;
-use axum::Extension;
-use axum::response::IntoResponse;
+use std::{path::PathBuf, sync::Arc};
+
+use agent_k_backend::{auth, repository, router, state::AppState};
+use aide::{
+    axum::ApiRouter,
+    openapi::{Info, OpenApi},
+    scalar::Scalar,
+};
+use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
+use axum::{Extension, response::IntoResponse};
+use clap::Parser;
 use speedwagon::{Store, build_tools};
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
+
+use crate::cli::{Cli, Command};
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -25,7 +29,37 @@ async fn main() -> std::io::Result<()> {
         )
         .init();
 
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Command::CreateAdmin {
+            username,
+            password,
+            display_name,
+        }) => {
+            cli::run_create_admin(username, password, display_name).await;
+            return Ok(());
+        }
+        None | Some(Command::Serve) => {
+            run_server().await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_server() -> std::io::Result<()> {
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+
+    let jwt_secret = std::env::var("AGENT_K_JWT_SECRET").unwrap_or_else(|_| {
+        tracing::warn!("AGENT_K_JWT_SECRET not set — using insecure fallback secret");
+        "jwtsecret".to_string()
+    });
+    let jwt_expiry = std::env::var("JWT_EXPIRY_SECONDS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(604_800); // 7 days
+    let jwt = auth::JwtConfig::new(&jwt_secret, jwt_expiry);
 
     aide::generate::on_error(|error| {
         tracing::warn!("aide schema error: {error}");
@@ -50,12 +84,13 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("failed to initialise repository");
 
+    auth::bootstrap_admin_if_needed(&repo).await;
+
     let store_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
     let store = Arc::new(RwLock::new(
         Store::new(store_path).expect("speedwagon store init"),
     ));
 
-    // Register API keys with the global provider (needed by Agent::try_with_tools)
     {
         let mut provider = default_provider_mut().await;
 
@@ -78,7 +113,7 @@ async fn main() -> std::io::Result<()> {
         provider.tools = build_tools(store.clone());
     }
 
-    let app_state = Arc::new(AppState::new(repo, store));
+    let app_state = Arc::new(AppState::new(repo, store, jwt));
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)
         .merge(

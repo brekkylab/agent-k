@@ -1,14 +1,14 @@
 mod sqlite;
 
-pub use sqlite::SqliteRepository;
-
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+pub use sqlite::SqliteRepository;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::auth::Role;
 
 const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
 
@@ -16,6 +16,9 @@ const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
 pub enum RepositoryError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+
+    #[error("migration error: {0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
 
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
@@ -25,6 +28,9 @@ pub enum RepositoryError {
 
     #[error("invalid data: {0}")]
     InvalidData(String),
+
+    #[error("unique constraint violation on {0}")]
+    UniqueViolation(String),
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;
@@ -34,6 +40,34 @@ pub struct DbSession {
     pub id: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DbUser {
+    pub id: Uuid,
+    pub username: String,
+    pub password_hash: String,
+    pub role: Role,
+    pub display_name: Option<String>,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+pub struct NewUser {
+    pub id: Uuid,
+    pub username: String,
+    pub password_hash: String,
+    pub role: Role,
+    pub display_name: Option<String>,
+    pub is_active: bool,
+}
+
+pub struct UpdateUser {
+    pub display_name: Option<String>,
+    pub password_hash: Option<String>,
+    pub role: Option<Role>,
+    pub is_active: Option<bool>,
 }
 
 pub type AppRepository = Arc<SqliteRepository>;
@@ -54,14 +88,15 @@ pub async fn create_repository(db_url: &str) -> RepositoryResult<AppRepository> 
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .busy_timeout(Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5))
+        .synchronous(SqliteSynchronous::Normal);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
         .await?;
 
-    let repo = SqliteRepository::new(pool);
-    repo.migrate().await?;
-    Ok(Arc::new(repo))
+    sqlx::migrate!("./migrations").run(&pool).await?;
+
+    Ok(Arc::new(SqliteRepository::new(pool)))
 }
