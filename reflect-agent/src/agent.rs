@@ -48,13 +48,6 @@ fn attach_default_tools(provider: &mut AgentProvider) {
     provider.tools = tools;
 }
 
-/// Internal: name accessor used by the CLI banner. Kept so the constant has
-/// exactly one canonical reference site.
-#[allow(dead_code)]
-pub(crate) fn default_model_name() -> &'static str {
-    DEFAULT_MODEL
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
