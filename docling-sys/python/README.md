@@ -16,11 +16,17 @@ To install a CPU-only torch wheel excluding NVIDIA dependencies for environments
 uv sync --dev --extra cpu
 ```
 
+When building via the parent `docling-sys` Rust crate, enable the `cpu` cargo feature to use this CPU-only wheel automatically:
+
+```bash
+cargo build -p docling-sys --features cpu
+```
+
 ### Test
 To check if the execution environment is properly configured, try running it as follows.
 
 ```bash
-uv run convert_pdf_to_md.py < input.pdf > output.md
+uv run run_docling.py < input.pdf > output.md
 ```
 
 ## Build binary
@@ -32,20 +38,20 @@ Build the binary using pyinstaller, after preparation of execution environment
 
 ### Test
 ```bash
-dist/convert_pdf_to_md/convert_pdf_to_md < input.pdf > output.md
+dist/run_docling/run_docling < input.pdf > output.md
 ```
 
 ### Deploy
-After the build, you will have the following result `dist/convert_pdf_to_md`.
+After the build, you will have the following result `dist/run_docling`.
 
-The executable file `convert_pdf_to_md` and the directory `_internal` inside `dist/convert_pdf_to_md` are essential for executing the built binary.  
+The executable file `run_docling` and the directory `_internal` inside `dist/run_docling` are essential for executing the built binary.  
 Therefore, they must be included together when deploying.
 
 ```
 .
 |____dist
-| |____convert_pdf_to_md
-| | |____convert_pdf_to_md
+| |____run_docling
+| | |____run_docling
 | | |_____internal
 | | | |____...
 ```

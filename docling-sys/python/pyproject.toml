@@ -1,5 +1,5 @@
 [project]
-name = "convert_pdf_to_md"
+name = "run_docling"
 version = "0.1.0"
 description = "Convert PDF to markdown"
 readme = "README.md"
