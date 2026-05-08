@@ -90,11 +90,24 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             auth_required,
         ));
 
+    let document_routes = ApiRouter::new()
+        .api_route(
+            "/documents",
+            get(handlers::list_documents)
+                .post(handlers::ingest_document)
+                .delete(handlers::purge_documents),
+        )
+        .api_route(
+            "/documents/{id}",
+            get(handlers::get_document).delete(handlers::purge_document),
+        );
+
     ApiRouter::new()
         .merge(auth_routes)
         .merge(me_routes)
         .merge(admin_routes)
         .merge(project_routes)
         .merge(session_routes)
+        .merge(document_routes)
         .with_state(state)
 }

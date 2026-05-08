@@ -6,11 +6,12 @@ use std::sync::Arc;
 use agent_k_backend::{repository, router::get_router, state::AppState};
 use aide::openapi::OpenApi;
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
+use axum::http::StatusCode;
 use common::{
-    extract_text, get_personal_project, login, post_session_authed, send_message, signup,
-    test_jwt_config,
+    bulk_purge_documents, extract_text, get_personal_project, ingest_documents, list_documents,
+    login, post_session_authed, send_message, signup, test_jwt_config,
 };
-use speedwagon::{FileType, Store, build_tools};
+use speedwagon::{Store, build_tools};
 use tokio::sync::RwLock;
 
 #[tokio::test]
@@ -33,21 +34,35 @@ async fn test_ingest_message_purge_cycle() {
         provider.tools = build_tools(store.clone());
     }
 
-    let test_content = b"The capital of Freedonia is Glorkville. This is a unique fact.";
-    let doc_id = store
-        .write()
-        .await
-        .ingest(test_content.iter().copied(), FileType::MD)
-        .await
-        .expect("ingest failed");
-
     let repo = repository::create_repository("sqlite::memory:")
         .await
         .expect("test repo init");
-    let state = Arc::new(AppState::new(repo, store.clone(), test_jwt_config()));
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
     let app = get_router(state).finish_api(&mut OpenApi::default());
 
-    // Create a user and session
+    // ── Ingest two documents via multipart ───────────────────────────────────
+    let batch = ingest_documents(
+        &app,
+        &[
+            (
+                "freedonia.md",
+                b"The capital of Freedonia is Glorkville. This is a unique fact." as &[u8],
+            ),
+            (
+                "zorbax.md",
+                b"The largest ocean on planet Zorbax is the Shimmer Sea. It covers 40% of the surface." as &[u8],
+            ),
+        ],
+    )
+    .await;
+    let succeeded = batch["succeeded"].as_array().unwrap();
+    assert_eq!(succeeded.len(), 2, "both documents should ingest");
+    let doc_ids: Vec<&str> = succeeded
+        .iter()
+        .map(|d| d["id"].as_str().unwrap())
+        .collect();
+
+    // ── Create user and session ──────────────────────────────────────────────
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
@@ -55,6 +70,7 @@ async fn test_ingest_message_purge_cycle() {
     let project_id = project["id"].as_str().unwrap();
     let session_id = post_session_authed(&app, &token, project_id).await;
 
+    // ── Question about document 1 (Freedonia) ────────────────────────────────
     let outputs = send_message(
         &app,
         session_id,
@@ -62,32 +78,37 @@ async fn test_ingest_message_purge_cycle() {
         &token,
     )
     .await;
-    let arr = outputs.as_array().expect("response must be an array");
-
-    assert!(!arr.is_empty(), "messages should not be empty");
-
-    let has_assistant = arr.iter().any(|o| {
-        o.get("message")
-            .and_then(|m| m.get("role"))
-            .and_then(|r| r.as_str())
-            == Some("assistant")
-    });
-    assert!(
-        has_assistant,
-        "should contain at least one assistant message"
-    );
-
     let text = extract_text(&outputs);
-    assert!(!text.is_empty(), "assistant text should not be empty");
     assert!(
         text.contains("Glorkville"),
-        "response should mention 'Glorkville' from the ingested document, got: {text}",
+        "response should mention 'Glorkville', got: {text}",
     );
 
-    // Purge the document
-    store.write().await.purge(doc_id).expect("purge failed");
+    // ── Question about document 2 (Zorbax) ───────────────────────────────────
+    let outputs = send_message(
+        &app,
+        session_id,
+        "What is the largest ocean on planet Zorbax?",
+        &token,
+    )
+    .await;
+    let text = extract_text(&outputs);
+    assert!(
+        text.contains("Shimmer Sea"),
+        "response should mention 'Shimmer Sea', got: {text}",
+    );
 
-    // Send same message after purge
+    // ── Bulk purge both documents ─────────────────────────────────────────────
+    let (purge_status, purge_resp) = bulk_purge_documents(&app, &doc_ids).await;
+    assert_eq!(purge_status, StatusCode::OK);
+    let purged = purge_resp["purged"].as_array().unwrap();
+    assert_eq!(purged.len(), 2, "both documents should be purged");
+
+    // ── Verify documents are gone ────────────────────────────────────────────
+    let docs = list_documents(&app).await;
+    assert!(docs.is_empty(), "document list should be empty after purge");
+
+    // ── Post-purge question (agent should still respond, just without KB) ────
     let outputs = send_message(
         &app,
         session_id,
@@ -98,6 +119,6 @@ async fn test_ingest_message_purge_cycle() {
     let post_purge_text = extract_text(&outputs);
     assert!(
         !post_purge_text.is_empty(),
-        "post-purge response should not be empty"
+        "post-purge response should not be empty",
     );
 }
