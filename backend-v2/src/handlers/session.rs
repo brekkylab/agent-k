@@ -134,12 +134,21 @@ pub async fn create_session(
         persist: true,
         ..Default::default()
     };
-    let sandbox = Sandbox::new(cfg)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    let agent = build_agent(sandbox)
-        .await
-        .map_err(|e| AppError::internal(e))?;
+    let sandbox = match Sandbox::new(cfg).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = state.repository.delete_session(session.id).await;
+            return Err(AppError::internal(e.to_string()));
+        }
+    };
+    let agent = match build_agent(sandbox).await {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = ailoy::runenv::remove_persisted(&sandbox_name).await;
+            let _ = state.repository.delete_session(session.id).await;
+            return Err(AppError::internal(e));
+        }
+    };
     state.insert_agent(session.id, agent);
 
     tracing::info!(id = %session.id, sandbox = %sandbox_name, "session created");
@@ -217,6 +226,14 @@ pub async fn update_session(
     Ok(Json(SessionResponse::from(updated)))
 }
 
+pub(crate) async fn cleanup_session_resources(state: &Arc<AppState>, session_id: Uuid) {
+    state.remove_agent(&session_id);
+    let sandbox_name = sandbox_name_for(&session_id);
+    if let Err(e) = ailoy::runenv::remove_persisted(&sandbox_name).await {
+        tracing::warn!(%session_id, "failed to remove persisted sandbox: {e}");
+    }
+}
+
 /// DELETE /sessions/{session_id} — creator only
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
@@ -242,15 +259,7 @@ pub async fn delete_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let agent_arc = state.remove_agent(&session_id);
-    if let Some(arc) = agent_arc {
-        drop(arc);
-    }
-
-    let sandbox_name = sandbox_name_for(&session_id);
-    if let Err(e) = ailoy::runenv::remove_persisted(&sandbox_name).await {
-        tracing::warn!(%session_id, "failed to remove persisted sandbox: {e}");
-    }
+    cleanup_session_resources(&state, session_id).await;
 
     tracing::info!(%session_id, "session deleted");
     Ok(StatusCode::NO_CONTENT)

@@ -226,6 +226,22 @@ impl SqliteRepository {
         })
     }
 
+    pub async fn list_all_sessions_in_project(
+        &self,
+        project_id: Uuid,
+    ) -> RepositoryResult<Vec<DbSession>> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, creator_id, share_mode, created_at, updated_at \
+             FROM sessions WHERE project_id = ? \
+             ORDER BY created_at DESC",
+        )
+        .bind(project_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(Self::row_to_db_session).collect()
+    }
+
     pub async fn delete_session(&self, id: Uuid) -> RepositoryResult<bool> {
         let result = sqlx::query("DELETE FROM sessions WHERE id = ?;")
             .bind(id.to_string())

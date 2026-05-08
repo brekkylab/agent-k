@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
+    handlers::session::cleanup_session_resources,
     model::{
         AddMemberRequest, CreateProjectRequest, ProjectListResponse, ProjectMemberListResponse,
         ProjectMemberResponse, ProjectResponse, UpdateProjectRequest,
@@ -100,6 +101,17 @@ pub async fn delete_project(
     Path(project_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     require_owner(&state, auth_user.id, project_id).await?;
+
+    // Clean up agent + sandbox for every session before the DB cascade removes them.
+    let sessions = state
+        .repository
+        .list_all_sessions_in_project(project_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    for session in sessions {
+        cleanup_session_resources(&state, session.id).await;
+    }
 
     state
         .repository

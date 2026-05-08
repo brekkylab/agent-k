@@ -249,6 +249,110 @@ async fn project_delete_cascades_sessions() {
     );
 }
 
+// ── project_delete_cleans_up_agents_in_state ─────────────────────────────────
+// Requires microsandbox (HTTP create_session creates a real sandbox).
+
+#[tokio::test]
+#[ignore = "requires microsandbox"]
+async fn project_delete_cleans_up_agents_in_state() {
+    use std::sync::Arc;
+
+    dotenvy::dotenv().ok();
+    common::setup_provider().await;
+
+    let repo = common::make_repo().await;
+    let store = common::make_test_store();
+    let state = Arc::new(agent_k_backend::state::AppState::new(
+        repo,
+        store,
+        common::test_jwt_config(),
+    ));
+    let app = common::make_app_with_state(state.clone());
+
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+
+    // Create session via HTTP — this registers an agent in AppState.
+    let session_id = common::post_session_authed(&app, &token, project_id).await;
+    assert!(
+        state.get_agent(&session_id).is_some(),
+        "agent must be in state after session creation"
+    );
+
+    // Delete the project — should also clean up the agent.
+    let (status, body) = common::authed(
+        &app,
+        "DELETE",
+        &format!("/projects/{project_id}"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NO_CONTENT,
+        "delete failed: {body}"
+    );
+
+    assert!(
+        state.get_agent(&session_id).is_none(),
+        "agent must be removed from state after project deletion"
+    );
+}
+
+// ── list_all_sessions_in_project returns sessions from all members ────────────
+
+#[tokio::test]
+async fn list_all_sessions_in_project_includes_private_sessions_from_members() {
+    use std::sync::Arc;
+
+    let repo = common::make_repo().await;
+    let store = common::make_test_store();
+    let state = Arc::new(agent_k_backend::state::AppState::new(
+        repo.clone(),
+        store,
+        common::test_jwt_config(),
+    ));
+    let app = common::make_app_with_state(state);
+
+    let alice_info = common::signup(&app, "alice", "password123").await;
+    let alice_token = common::login(&app, "alice", "password123").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_id = uuid::Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let alice_id = uuid::Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+
+    let bob_info = common::signup(&app, "bob", "password123").await;
+    let bob_id = uuid::Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
+    common::add_member(&app, &alice_token, &project_id.to_string(), "bob").await;
+
+    // Seed two private sessions: one for alice, one for bob.
+    let _alice_session = repo.create_session(project_id, alice_id).await.unwrap();
+    let _bob_session = repo.create_session(project_id, bob_id).await.unwrap();
+
+    // The internal method must return both sessions regardless of creator.
+    let all_sessions = repo.list_all_sessions_in_project(project_id).await.unwrap();
+    assert_eq!(
+        all_sessions.len(),
+        2,
+        "expected 2 sessions (alice + bob), got {}",
+        all_sessions.len()
+    );
+
+    // The user-filtered method with alice's id must NOT see bob's private session.
+    let alice_view = repo
+        .list_sessions_in_project(project_id, alice_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        alice_view.len(),
+        1,
+        "alice should only see her own private session, got {}",
+        alice_view.len()
+    );
+}
+
 // ── owner_leave_is_blocked ────────────────────────────────────────────────────
 
 #[tokio::test]
