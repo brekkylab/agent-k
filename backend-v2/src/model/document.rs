@@ -1,7 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use speedwagon::Document;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct DocumentResponse {
@@ -55,5 +54,5 @@ pub struct BatchPurgeResponse {
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BulkPurgeRequest {
-    pub ids: Vec<Uuid>,
+    pub ids: Vec<String>,
 }

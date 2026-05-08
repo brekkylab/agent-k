@@ -72,7 +72,11 @@ pub async fn ingest_document(
     let mut filenames: Vec<String> = Vec::new();
     let mut failed: Vec<FailedItem> = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?
+    {
         if field.name() != Some("file") {
             continue;
         }
@@ -80,7 +84,7 @@ pub async fn ingest_document(
         let bytes = field
             .bytes()
             .await
-            .map_err(|e| AppError::internal(format!("failed to read upload: {e}")))?;
+            .map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?;
 
         match parse_filetype(&filename) {
             Ok(filetype) => {
@@ -167,19 +171,27 @@ pub async fn purge_documents(
         ));
     }
 
+    let mut ids = Vec::with_capacity(payload.ids.len());
+    let mut failed = Vec::new();
+    for raw_id in payload.ids {
+        match Uuid::parse_str(&raw_id) {
+            Ok(id) => ids.push(id),
+            Err(_) => failed.push(FailedItem {
+                name: raw_id,
+                error: "invalid document id".into(),
+            }),
+        }
+    }
+
     let mut store = state.store.write().await;
-    let result = store.purge_many(payload.ids);
+    let result = store.purge_many(ids);
     drop(store);
 
     let purged: Vec<String> = result.purged.iter().map(|id| id.to_string()).collect();
-    let failed: Vec<FailedItem> = result
-        .failed
-        .into_iter()
-        .map(|f| FailedItem {
-            name: f.id.to_string(),
-            error: f.error,
-        })
-        .collect();
+    failed.extend(result.failed.into_iter().map(|f| FailedItem {
+        name: f.id.to_string(),
+        error: f.error,
+    }));
 
     for id in &purged {
         tracing::info!(%id, "document purged");

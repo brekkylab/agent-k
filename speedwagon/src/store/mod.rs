@@ -139,13 +139,14 @@ impl Store {
 
         let mut succeeded = Vec::with_capacity(items.len());
         let mut failed = Vec::new();
-        let mut to_index: Vec<(usize, Uuid, String)> = Vec::new(); // (input index, id, content)
+        let mut to_index: Vec<(usize, Uuid, String, bool)> = Vec::new(); // (input index, id, content, new_corpus)
 
         for (idx, (bytes, filetype)) in items.iter().enumerate() {
             let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, bytes);
             let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
+            let new_corpus = !corpus_path.exists();
 
-            if !corpus_path.exists() {
+            if new_corpus {
                 let mut new_origin: Option<PathBuf> = None;
 
                 let ok = match filetype {
@@ -168,7 +169,9 @@ impl Store {
                 };
 
                 if let Err(e) = ok {
-                    remove_ingest_artifact(&corpus_path);
+                    if new_corpus {
+                        remove_ingest_artifact(&corpus_path);
+                    }
                     if let Some(origin) = &new_origin {
                         remove_ingest_artifact(origin);
                     }
@@ -186,10 +189,12 @@ impl Store {
                 }
                 Ok(false) => match fs::read_to_string(&corpus_path) {
                     Ok(content) => {
-                        to_index.push((idx, id, content));
+                        to_index.push((idx, id, content, new_corpus));
                     }
                     Err(e) => {
-                        remove_ingest_artifact(&corpus_path);
+                        if new_corpus {
+                            remove_ingest_artifact(&corpus_path);
+                        }
                         failed.push(IngestFailure {
                             index: idx,
                             error: e.to_string(),
@@ -206,12 +211,14 @@ impl Store {
         }
 
         let mut docs: Vec<(String, String, String)> = Vec::with_capacity(to_index.len());
-        for (idx, id, content) in to_index {
+        for (idx, id, content, new_corpus) in to_index {
             match parser::get_title(&content).await {
                 Ok(title) => docs.push((id.to_string(), title, content)),
                 Err(e) => {
                     let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
-                    remove_ingest_artifact(&corpus_path);
+                    if new_corpus {
+                        remove_ingest_artifact(&corpus_path);
+                    }
                     failed.push(IngestFailure {
                         index: idx,
                         error: e.to_string(),
@@ -360,6 +367,30 @@ mod tests {
     use knowledge_base_examples::{Cached, DocSet as _, FinanceBench};
 
     use super::*;
+
+    #[tokio::test]
+    async fn ingest_many_preserves_existing_corpus_when_corpus_read_fails() {
+        let tempdir = tempfile::tempdir().expect("failed to create tempdir");
+        let mut store = Store::new(tempdir.path()).expect("failed to create store");
+
+        let bytes = b"same input bytes";
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, bytes);
+        let corpus_path = tempdir.path().join("corpus").join(format!("{id}.md"));
+        let invalid_utf8 = [0xff, 0xfe, 0xfd];
+        fs::write(&corpus_path, invalid_utf8).expect("failed to seed existing corpus");
+
+        let result = store
+            .ingest_many([(bytes.to_vec(), FileType::MD)])
+            .await
+            .expect("ingest_many should report per-item failure");
+
+        assert!(result.succeeded.is_empty());
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(
+            fs::read(&corpus_path).expect("existing corpus should remain"),
+            invalid_utf8
+        );
+    }
 
     #[tokio::test]
     #[ignore = "requires network access & docling"]

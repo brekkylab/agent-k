@@ -6,6 +6,8 @@ use common::{
     bulk_purge_documents, get_document, ingest_document, ingest_documents_with_status,
     list_documents, make_app_with_repo, make_repo, purge_document,
 };
+use http_body_util::BodyExt;
+use tower::ServiceExt;
 
 #[tokio::test]
 async fn list_documents_empty_initially() {
@@ -192,6 +194,46 @@ async fn ingest_no_file_field_returns_400() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn ingest_malformed_multipart_after_valid_file_returns_400() {
+    let repo = make_repo().await;
+    let app = make_app_with_repo(repo);
+
+    let boundary = "----testboundary";
+    let body = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"file\"; filename=\"good.md\"\r\n\
+         Content-Type: text/markdown\r\n\r\n\
+         # Good Document\r\n\
+         --{boundary}\r\n\
+         Content-Disposition: form-data; name=\"file\"; filename=\"bad.md\"\r\n\
+         Content-Type: text/markdown\r\n\r\n\
+         # Missing closing boundary"
+    );
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/documents")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("multipart error"),
+        "unexpected error body: {body}"
+    );
+}
+
 // ── Bulk purge tests ─────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -232,6 +274,32 @@ async fn bulk_purge_partial_failure() {
     assert_eq!(purged.len(), 1);
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0]["name"].as_str().unwrap(), fake_id);
+}
+
+#[tokio::test]
+async fn bulk_purge_invalid_id_is_item_failure() {
+    let repo = make_repo().await;
+    let app = make_app_with_repo(repo);
+
+    let doc = ingest_document(&app, "valid.md", b"# Valid\n\nContent.").await;
+    let real_id = doc["id"].as_str().unwrap();
+    let invalid_id = "not-a-uuid";
+
+    let (status, resp) = bulk_purge_documents(&app, &[real_id, invalid_id]).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let purged = resp["purged"].as_array().unwrap();
+    let failed = resp["failed"].as_array().unwrap();
+    assert_eq!(purged.len(), 1);
+    assert_eq!(purged[0].as_str().unwrap(), real_id);
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["name"].as_str().unwrap(), invalid_id);
+    assert!(
+        failed[0]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("invalid document id")
+    );
 }
 
 #[tokio::test]
