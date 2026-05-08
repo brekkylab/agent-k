@@ -1,4 +1,6 @@
+mod description;
 mod document;
+mod helper;
 mod indexer;
 mod parser;
 #[cfg(feature = "internal")]
@@ -73,10 +75,43 @@ pub struct Store {
 pub enum FileType {
     PDF,
     MD,
+    HTML,
+}
+
+impl FileType {
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+        match ext.as_str() {
+            "pdf" => Some(Self::PDF),
+            "md" => Some(Self::MD),
+            "html" | "htm" => Some(Self::HTML),
+            _ => None,
+        }
+    }
+
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let ext = path.extension()?.to_str()?;
+        Self::from_extension(ext)
+    }
+
+    pub fn canonical_extension(&self) -> &'static str {
+        match self {
+            Self::PDF => "pdf",
+            Self::MD => "md",
+            Self::HTML => "html",
+        }
+    }
+
+    pub fn supported_extensions() -> &'static [&'static str] {
+        &["pdf", "html", "htm", "md"]
+    }
 }
 
 impl Store {
     /// Opens an existing store or creates a new one at `root`.
+    /// LLM-backed metadata (ingest's title/purpose, describe) reads from
+    /// ailoy's process-global default provider — populate it once at app
+    /// boot via `ailoy::agent::default_provider_mut`.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(root.join("origin"))?;
@@ -103,12 +138,12 @@ impl Store {
                     fs::write(&corpus_path, &bytes)?;
                 }
                 _ => {
-                    let ext = filetype.to_string();
+                    let ext = filetype.canonical_extension();
                     let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
                     if !origin_path.exists() {
                         fs::write(&origin_path, &bytes)?;
                     }
-                    translator::translate(&origin_path, &corpus_path)?;
+                    translator::translate(filetype, &origin_path, &corpus_path)?;
                 }
             }
         }
@@ -116,9 +151,18 @@ impl Store {
         if !indexer::document_exists(&self.index, &id.to_string())? {
             let content = fs::read_to_string(&corpus_path)
                 .with_context(|| format!("failed to read corpus: {corpus_path:?}"))?;
-            let title = parser::get_title(&content).await?;
+            let (title, purpose) = tokio::try_join!(
+                parser::get_title(&content),
+                parser::get_purpose(&content),
+            )?;
 
-            indexer::add_document(&self.index, &id.to_string(), &title, &content)?;
+            indexer::add_document(
+                &self.index,
+                &id.to_string(),
+                &title,
+                &purpose,
+                &content,
+            )?;
         }
 
         Ok(id)
@@ -152,7 +196,7 @@ impl Store {
                 let ok = match filetype {
                     FileType::MD => fs::write(&corpus_path, bytes).map_err(|e| e.to_string()),
                     _ => {
-                        let ext = filetype.to_string();
+                        let ext = filetype.canonical_extension();
                         let origin_path = self.root.join("origin").join(format!("{id}.{ext}"));
                         if !origin_path.exists() {
                             if let Err(e) = fs::write(&origin_path, bytes) {
@@ -164,7 +208,7 @@ impl Store {
                             }
                             new_origin = Some(origin_path.clone());
                         }
-                        translator::translate(&origin_path, &corpus_path).map_err(|e| e.to_string())
+                        translator::translate(filetype.clone(), &origin_path, &corpus_path).map_err(|e| e.to_string())
                     }
                 };
 
@@ -210,10 +254,10 @@ impl Store {
             }
         }
 
-        let mut docs: Vec<(String, String, String)> = Vec::with_capacity(to_index.len());
+        let mut docs: Vec<(String, String, String, String)> = Vec::with_capacity(to_index.len());
         for (idx, id, content, new_corpus) in to_index {
-            match parser::get_title(&content).await {
-                Ok(title) => docs.push((id.to_string(), title, content)),
+            match tokio::try_join!(parser::get_title(&content), parser::get_purpose(&content)) {
+                Ok((title, purpose)) => docs.push((id.to_string(), title, purpose, content)),
                 Err(e) => {
                     let corpus_path = self.root.join("corpus").join(format!("{id}.md"));
                     if new_corpus {
@@ -228,13 +272,15 @@ impl Store {
         }
 
         if !docs.is_empty() {
-            let refs: Vec<(&str, &str, &str)> = docs
+            let refs: Vec<(&str, &str, &str, &str)> = docs
                 .iter()
-                .map(|(id, title, content)| (id.as_str(), title.as_str(), content.as_str()))
+                .map(|(id, title, purpose, content)| {
+                    (id.as_str(), title.as_str(), purpose.as_str(), content.as_str())
+                })
                 .collect();
             indexer::add_documents(&self.index, &refs)?;
 
-            for (id_str, _, _) in &docs {
+            for (id_str, _, _, _) in &docs {
                 if let Ok(id) = id_str.parse::<Uuid>() {
                     succeeded.push(id);
                 }
@@ -358,6 +404,76 @@ impl Store {
             k,
             context_bytes,
         ))
+    }
+
+    /// One LLM call over every doc's `(title, purpose)` in the index. Input
+    /// is proportional to doc count (~24K chars at N=200), so don't run this
+    /// synchronously on indexing hot paths — use a finalize hook or
+    /// background job. Empty LLM body falls back to a deterministic string.
+    pub async fn describe(
+        &self,
+        kb_name: &str,
+        instruction: Option<&str>,
+    ) -> Result<String> {
+        let docs = indexer::list_documents(&self.index, false)?;
+        if docs.is_empty() {
+            return Ok(String::new());
+        }
+        let pairs: Vec<(&str, &str)> = docs
+            .iter()
+            .map(|d| (d.title.as_str(), d.purpose.as_str()))
+            .collect();
+        description::get_description(kb_name, instruction, &pairs).await
+    }
+}
+
+#[cfg(test)]
+mod filetype_tests {
+    use super::FileType;
+    use std::path::Path;
+
+    #[test]
+    fn filetype_from_extension_maps_supported_extensions() {
+        assert!(matches!(
+            FileType::from_extension("pdf"),
+            Some(FileType::PDF)
+        ));
+        assert!(matches!(
+            FileType::from_extension("PDF"),
+            Some(FileType::PDF)
+        ));
+        assert!(matches!(
+            FileType::from_extension("html"),
+            Some(FileType::HTML)
+        ));
+        assert!(matches!(
+            FileType::from_extension("htm"),
+            Some(FileType::HTML)
+        ));
+        assert!(matches!(FileType::from_extension("md"), Some(FileType::MD)));
+    }
+
+    #[test]
+    fn filetype_from_extension_rejects_unknown_extensions() {
+        assert!(FileType::from_extension("txt").is_none());
+        assert!(FileType::from_extension("").is_none());
+    }
+
+    #[test]
+    fn filetype_from_path_and_canonical_extension() {
+        assert!(matches!(
+            FileType::from_path(Path::new("/tmp/a.PDF")),
+            Some(FileType::PDF)
+        ));
+        assert!(matches!(
+            FileType::from_path(Path::new("/tmp/a.htm")),
+            Some(FileType::HTML)
+        ));
+        assert!(FileType::from_path(Path::new("/tmp/a")).is_none());
+
+        assert_eq!(FileType::PDF.canonical_extension(), "pdf");
+        assert_eq!(FileType::HTML.canonical_extension(), "html");
+        assert_eq!(FileType::MD.canonical_extension(), "md");
     }
 }
 

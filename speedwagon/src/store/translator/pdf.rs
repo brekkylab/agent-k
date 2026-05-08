@@ -1,4 +1,4 @@
-use std::{io::Write as _, path::Path, process::Command};
+use std::{io::Write as _, path::Path, path::PathBuf, process::Command};
 
 use anyhow::{Context as _, Result, bail};
 
@@ -59,19 +59,7 @@ if __name__ == "__main__":
     main()
 "#;
 
-/// Converts an origin file to a markdown file at `corpus_path`, dispatching by extension.
-pub fn translate(origin_path: &Path, corpus_path: &Path) -> Result<()> {
-    let ext = origin_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-    match ext {
-        "pdf" => translate_pdf(origin_path, corpus_path),
-        _ => bail!("unsupported file type: .{ext}"),
-    }
-}
-
-fn translate_pdf(pdf_path: &Path, md_path: &Path) -> Result<()> {
+pub(super) fn translate_pdf(pdf_path: &Path, md_path: &Path) -> Result<()> {
     let venv = docling_venv_path()?;
     ensure_venv(&venv)?;
 
@@ -108,7 +96,7 @@ fn translate_pdf(pdf_path: &Path, md_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn docling_venv_path() -> Result<std::path::PathBuf> {
+fn docling_venv_path() -> Result<PathBuf> {
     Ok(dirs::cache_dir()
         .context("cannot determine cache directory")?
         .join("ailoy")
