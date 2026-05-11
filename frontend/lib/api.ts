@@ -2,7 +2,6 @@ import type {
   ApiProviderProfile,
   ApiAgent,
   ApiSession,
-  ApiSessionMessage,
   ApiSessionToolCall,
   ApiSource,
   ApiSpeedwagon,
@@ -11,7 +10,6 @@ import type {
   CreateProviderProfileRequest,
   UpdateProviderProfileRequest,
   CreateAgentRequest,
-  UpdateAgentRequest,
   CreateSessionRequest,
   UpdateSessionRequest,
   CreateSpeedwagonRequest,
@@ -133,16 +131,6 @@ export async function createAgent(data: CreateAgentRequest): Promise<ApiAgent> {
 
 export async function getAgent(id: string): Promise<ApiAgent> {
   return fetchApi<ApiAgent>(`/agents/${id}`);
-}
-
-export async function updateAgent(
-  id: string,
-  data: UpdateAgentRequest,
-): Promise<ApiAgent> {
-  return fetchApi<ApiAgent>(`/agents/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(data),
-  });
 }
 
 // --- Sessions ---

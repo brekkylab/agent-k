@@ -31,9 +31,3 @@ pub struct AgentResponse {
 pub struct CreateAgentRequest {
     pub spec: AgentSpec,
 }
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct UpdateAgentRequest {
-    pub spec: AgentSpec,
-}

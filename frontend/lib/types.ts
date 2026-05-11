@@ -127,14 +127,6 @@ export interface CreateAgentRequest {
   };
 }
 
-export interface UpdateAgentRequest {
-  spec: {
-    lm: string;
-    instruction?: string;
-    tools?: unknown[];
-  };
-}
-
 export interface CreateSessionRequest {
   agent_id: string;
   provider_profile_id?: string;
@@ -145,6 +137,7 @@ export interface CreateSessionRequest {
 
 export interface UpdateSessionRequest {
   title?: string;
+  agent_id?: string;
   provider_profile_id?: string;
   speedwagon_ids?: string[];
   source_ids?: string[];

@@ -41,6 +41,8 @@ function createApiAdapter(sessionId: string): ChatModelAdapter {
 
       // Track tool calls across events keyed by insertion order
       const toolCalls: Map<string, { toolName: string; args: unknown; result?: unknown }> = new Map();
+      // Counter prevents callId collisions within the same ms (Date.now() alone collides).
+      let callCounter = 0;
 
       // Build the tool-call content parts array from current state
       function buildToolParts() {
@@ -64,7 +66,7 @@ function createApiAdapter(sessionId: string): ChatModelAdapter {
               };
               break;
             case "tool_call": {
-              const callId = `tc_${Date.now()}_${data.tool ?? "unknown"}`;
+              const callId = `tc_${Date.now()}_${callCounter++}_${data.tool ?? "unknown"}`;
               toolCalls.set(callId, { toolName: data.tool ?? "", args: data.args });
               yield {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- assistant-ui lacks public tool-call content-part type

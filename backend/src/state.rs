@@ -73,12 +73,6 @@ impl AppState {
         }
     }
 
-    pub fn invalidate_runtimes_by_agent_id(&self, agent_id: Uuid) {
-        if let Ok(mut cache) = self.runtime_cache.lock() {
-            cache.retain(|_, runtime| runtime.agent_id != agent_id);
-        }
-    }
-
     pub fn invalidate_runtimes_by_provider_profile_id(&self, provider_profile_id: Uuid) {
         if let Ok(mut cache) = self.runtime_cache.lock() {
             cache.retain(|_, runtime| runtime.provider_profile_id != provider_profile_id);
@@ -209,13 +203,19 @@ impl AppState {
         let mut spec = agent.spec;
         spec.instruction = Some(assembled_instruction.clone());
 
-        let runtime = Arc::new(TokioMutex::new(ChatAgent::new(
-            spec,
-            provider_profile.provider,
-            kb_entries,
-            kb_overrides,
-            session_source_paths,
-        )));
+        let runtime = Arc::new(TokioMutex::new(
+            ChatAgent::new(
+                spec,
+                provider_profile.provider,
+                kb_entries,
+                kb_overrides,
+                session_source_paths,
+            )
+            .await
+            .map_err(|e| {
+                RepositoryError::InvalidData(format!("failed to initialize chat runtime: {e}"))
+            })?,
+        ));
 
         // Restore conversation history from DB (last 20 turns = 40 user/assistant messages)
         let recent_messages: Vec<(String, String)> = session
@@ -263,7 +263,7 @@ impl AppState {
             (
                 "OPENAI_API_KEY",
                 "openai-default",
-                LangModelAPISchema::ChatCompletion,
+                LangModelAPISchema::OpenAI,
             ),
             (
                 "ANTHROPIC_API_KEY",
@@ -287,10 +287,15 @@ impl AppState {
 
             let provider = AgentProvider {
                 lm: match schema {
+                    LangModelAPISchema::OpenAI => LangModelProvider::openai(api_key),
                     LangModelAPISchema::Anthropic => LangModelProvider::anthropic(api_key),
                     LangModelAPISchema::Gemini => LangModelProvider::gemini(api_key),
-                    LangModelAPISchema::OpenAI => LangModelProvider::openai(api_key),
-                    _ => panic!("unsupported api schema"),
+                    LangModelAPISchema::ChatCompletion => {
+                        return Err(RepositoryError::InvalidData(format!(
+                            "`{name}` cannot be bootstrapped with ChatCompletion schema; \
+                             create the provider profile via POST /provider-profiles"
+                        )));
+                    }
                 },
                 tools: vec![],
             };

@@ -1,16 +1,17 @@
 use std::{path::PathBuf, sync::Arc};
 
 use ailoy::agent::{AgentProvider, AgentRuntime, AgentSpec};
+use anyhow::Result;
 
 use super::config::AgentConfig;
 use crate::tools::{SearchIndex, ToolConfig, build_tool_set};
 
-pub fn build_agent(
+pub async fn build_agent(
     agent_config: &AgentConfig,
     tools_config: &ToolConfig,
     search_index: &Arc<SearchIndex>,
     target_dirs: Vec<PathBuf>,
-) -> AgentRuntime {
+) -> Result<AgentRuntime> {
     let tool_set = build_tool_set(search_index.clone(), tools_config, target_dirs);
 
     let spec = AgentSpec::new(&agent_config.model_name)
@@ -22,5 +23,5 @@ pub fn build_agent(
         tools: vec![],
     };
 
-    AgentRuntime::new(spec, provider, tool_set)
+    AgentRuntime::new(spec, provider, tool_set).await
 }

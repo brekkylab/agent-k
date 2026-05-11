@@ -1,40 +1,14 @@
-//! Main-agent tool definitions.
-//!
-//! Contains the default tools (`web_search`) and the `read_source`
-//! tool. These are tools used directly by the parent ChatAgent — **not** by
-//! speedwagon sub-agents (which live in `speedwagon/`).
-//!
-//! ## Adding a new tool
-//!
-//! 1. Define `build_X_tool(...) -> Option<(String, ToolRuntime)>` in this module
-//!    (or a new module for complex tools — see `speedwagon/dispatch.rs`).
-//! 2. Add the call to `build_tool_set()` in `chat_agent.rs`.
-//!    Names and runtimes are collected together, so no separate registration step.
-//!
-//! This convention is intentionally simple for the current scale (4 tools).
-//! A trait-based plugin system may replace it when dynamic tool loading is needed.
+//! `read_source` tool — read the raw content of a session source file by ID.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ailoy::agent::ToolAsyncFunc;
+use ailoy::{ToolDescBuilder, ToolRuntime, Value};
+
 use crate::error_value;
 
-use ailoy::agent::ToolFunc;
-use ailoy::{ToolDescBuilder, ToolRuntime, ToolSet, Value, agent::BuiltinToolProvider};
-
 pub const READ_SOURCE_TOOL: &str = "read_source";
-
-// ---------------------------------------------------------------------------
-// Default tool set (web_search)
-// ---------------------------------------------------------------------------
-
-pub fn build_default_tool_set() -> ToolSet {
-    ToolSet::new().with_builtin(&BuiltinToolProvider::WebSearch {})
-}
-
-// ---------------------------------------------------------------------------
-// read_source tool
-// ---------------------------------------------------------------------------
 
 /// Build the `read_source` tool from a list of (source_id, source_name, file_path) tuples.
 /// Returns `None` if source_paths is empty.
@@ -46,7 +20,10 @@ pub fn build_read_source_tool(
     }
     let desc = read_source_desc(&source_paths);
     let func = read_source_func(source_paths);
-    Some((READ_SOURCE_TOOL.to_string(), ToolRuntime::new(desc, func)))
+    Some((
+        READ_SOURCE_TOOL.to_string(),
+        ToolRuntime::new_async(desc, func),
+    ))
 }
 
 fn read_source_desc(source_paths: &[(String, String, PathBuf)]) -> ailoy::ToolDesc {
@@ -84,7 +61,7 @@ fn read_source_desc(source_paths: &[(String, String, PathBuf)]) -> ailoy::ToolDe
         .build()
 }
 
-fn read_source_func(source_paths: Vec<(String, String, PathBuf)>) -> Arc<ToolFunc> {
+fn read_source_func(source_paths: Vec<(String, String, PathBuf)>) -> Arc<ToolAsyncFunc> {
     Arc::new(move |args: Value| {
         let source_paths = source_paths.clone();
         Box::pin(async move {

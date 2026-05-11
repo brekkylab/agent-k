@@ -20,10 +20,10 @@ use crate::models::{
     CreateProviderProfileRequest, CreateSessionRequest, CreateSpeedwagonRequest, ErrorResponse,
     ListSessionsQuery, ProviderProfile, ProviderProfileResponse, SessionDetailResponse,
     SessionResponse, SourceResponse, SourceType, SpeedwagonIndexStatus, SpeedwagonResponse,
-    UpdateAgentRequest, UpdateProviderProfileRequest, UpdateSessionRequest,
-    UpdateSpeedwagonRequest,
+    UpdateProviderProfileRequest, UpdateSessionRequest, UpdateSpeedwagonRequest,
 };
 use crate::repository::RepositoryError;
+use crate::services::agent::{self as agent_service};
 use crate::services::session::{self as session_service, SessionError, SseEvent};
 use crate::services::speedwagon::{self as speedwagon_service, SpeedwagonError};
 use crate::state::AppState;
@@ -148,10 +148,10 @@ pub fn router(state: AppState_) -> ApiRouter {
     ApiRouter::new()
         .api_route("/health", get(health))
         .api_route("/agents", get(list_agents).post(create_agent))
-        .api_route(
-            "/agents/{id}",
-            get(get_agent).put(update_agent).delete(delete_agent),
-        )
+        // No PUT on agents: specs are the agent's identity. "Changing" an agent
+        // means POST /agents (find-or-create returns either a matching row or a
+        // new one) followed by PUT /sessions/{id} to relink — the CoW flow.
+        .api_route("/agents/{id}", get(get_agent).delete(delete_agent))
         .api_route(
             "/provider-profiles",
             get(list_provider_profiles).post(create_provider_profile),
@@ -197,12 +197,15 @@ async fn create_agent(
     Json(payload): Json<CreateAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentResponse>), (StatusCode, Json<AppError>)> {
     let CreateAgentRequest { spec } = payload;
-    let agent = state
-        .repository
-        .create_agent(spec)
+    let (agent, created) = agent_service::find_or_create_agent(&state, spec)
         .await
         .map_err(repo_err)?;
-    Ok((StatusCode::CREATED, Json(to_agent_response(&agent))))
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(to_agent_response(&agent))))
 }
 
 async fn list_agents(
@@ -218,26 +221,6 @@ async fn get_agent(
 ) -> Result<Json<AgentResponse>, (StatusCode, Json<AppError>)> {
     match state.repository.get_agent(id).await.map_err(repo_err)? {
         Some(agent) => Ok(Json(to_agent_response(&agent))),
-        None => Err(AppError::not_found("agent not found")),
-    }
-}
-
-async fn update_agent(
-    State(state): State<AppState_>,
-    Path(id): Path<Uuid>,
-    Json(payload): Json<UpdateAgentRequest>,
-) -> Result<Json<AgentResponse>, (StatusCode, Json<AppError>)> {
-    let UpdateAgentRequest { spec } = payload;
-    match state
-        .repository
-        .update_agent(id, spec)
-        .await
-        .map_err(repo_err)?
-    {
-        Some(agent) => {
-            state.invalidate_runtimes_by_agent_id(id);
-            Ok(Json(to_agent_response(&agent)))
-        }
         None => Err(AppError::not_found("agent not found")),
     }
 }
@@ -416,7 +399,7 @@ async fn update_session(
 ) -> Result<Json<SessionResponse>, (StatusCode, Json<AppError>)> {
     let session = session_service::update_session(&state, id, payload)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(session_err)?;
     Ok(Json(SessionResponse::from(&session)))
 }
 
@@ -426,7 +409,7 @@ async fn delete_session(
 ) -> Result<StatusCode, (StatusCode, Json<AppError>)> {
     session_service::delete_session(&state, id)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(session_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1324,69 +1307,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_agent_resets_session_runtime_cache() {
-        let (mock_url, request_counts) = start_mock_chat_completion_server().await;
-        let temp_dir = TempDir::new().expect("temp dir should be created");
-        let app = test_app(&temp_dir).await;
-
-        let agent_id = create_agent(&app).await;
-        let profile_id = create_provider_profile_with_url(
-            &app,
-            "openai-default",
-            "chat_completion",
-            &mock_url,
-            true,
-        )
-        .await;
-
-        let session_body = response_json(
-            post_json(
-                &app,
-                "/sessions",
-                json!({
-                    "agent_id": agent_id,
-                    "provider_profile_id": profile_id
-                }),
-            )
-            .await,
-        )
-        .await;
-        let session_id = session_body["id"]
-            .as_str()
-            .expect("session id must exist")
-            .to_string();
-
-        let (status, _) = stream_user_message(&app, &session_id, "before-update").await;
-        assert_eq!(status, StatusCode::OK);
-
-        let update_resp = put_json(
-            &app,
-            &format!("/agents/{agent_id}"),
-            json!({
-                "spec": {
-                    "lm": "gpt-4.1-mini",
-                    "instruction": null,
-                    "tools": []
-                }
-            }),
-        )
-        .await;
-        assert_eq!(update_resp.status(), StatusCode::OK);
-
-        let (status, _) = stream_user_message(&app, &session_id, "after-update").await;
-        assert_eq!(status, StatusCode::OK);
-
-        let counts = request_counts
-            .lock()
-            .expect("request counts lock should be available")
-            .clone();
-        // After agent update, runtime cache is invalidated and recreated with DB history restore.
-        // turn-1: system(1) + restored-user(1) + streaming-user(1) = 3
-        // turn-2 (after reset): system(1) + restored-history(2) + restored-user(1) + streaming-user(1) = 5
-        assert_eq!(counts, vec![3, 5]);
-    }
-
-    #[tokio::test]
     async fn update_provider_profile_resets_session_runtime_cache() {
         let (mock_url, request_counts) = start_mock_chat_completion_server().await;
         let temp_dir = TempDir::new().expect("temp dir should be created");
@@ -1537,5 +1457,432 @@ mod tests {
         let list_resp = get_req(&app, "/sources").await;
         let list_body = response_json(list_resp).await;
         assert_eq!(list_body.as_array().expect("list should be array").len(), 1);
+    }
+
+    // ===================== find-or-create Agent Tests =====================
+
+    #[tokio::test]
+    async fn find_or_create_same_spec_is_idempotent() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let spec = json!({ "spec": { "lm": "gpt-4.1", "instruction": null, "tools": [] } });
+
+        let resp1 = post_json(&app, "/agents", spec.clone()).await;
+        assert_eq!(resp1.status(), StatusCode::CREATED);
+        let body1 = response_json(resp1).await;
+
+        // Sleep past now_string()'s millisecond resolution so that any accidental
+        // UPDATE on reuse would produce a visibly different updated_at. Without
+        // this gap, a buggy `SET updated_at = excluded.updated_at` could
+        // coincidentally write the same millisecond and hide the regression.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let resp2 = post_json(&app, "/agents", spec.clone()).await;
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let body2 = response_json(resp2).await;
+
+        // Identity: same spec → same agent id
+        assert_eq!(
+            body1["id"], body2["id"],
+            "same spec must return same agent id"
+        );
+
+        // Immutability: reuse must not touch the row. Agents are immutable
+        // snapshots under copy-on-write, so created_at/updated_at are stable.
+        assert_eq!(
+            body1["updated_at"], body2["updated_at"],
+            "reuse must not bump updated_at — agents are immutable under CoW",
+        );
+        assert_eq!(
+            body1["created_at"], body2["created_at"],
+            "created_at must be stable across reuse",
+        );
+
+        // Uniqueness: exactly one row in DB
+        let list = response_json(get_req(&app, "/agents").await).await;
+        assert_eq!(list.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn find_or_create_tools_order_independent() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let resp1 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "tools": ["b", "a"] } }),
+        )
+        .await;
+        assert_eq!(resp1.status(), StatusCode::CREATED);
+        let id1 = response_json(resp1).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "tools": ["a", "b"] } }),
+        )
+        .await;
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let id2 = response_json(resp2).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert_eq!(id1, id2, "tools order must not affect agent identity");
+    }
+
+    #[tokio::test]
+    async fn find_or_create_empty_instruction_variants_match() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let resp1 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "instruction": null, "tools": [] } }),
+        )
+        .await;
+        assert_eq!(resp1.status(), StatusCode::CREATED);
+        let id1 = response_json(resp1).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Some("") should normalize to None
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "instruction": "", "tools": [] } }),
+        )
+        .await;
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let id2 = response_json(resp2).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert_eq!(
+            id1, id2,
+            "null and empty instruction must produce same agent"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_or_create_different_lm_creates_new_agent() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let resp1 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "gpt-4.1", "tools": [] } }),
+        )
+        .await;
+        assert_eq!(resp1.status(), StatusCode::CREATED);
+        let id1 = response_json(resp1).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "claude-opus-4-5", "tools": [] } }),
+        )
+        .await;
+        assert_eq!(resp2.status(), StatusCode::CREATED);
+        let id2 = response_json(resp2).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        assert_ne!(id1, id2, "different lm must create a new agent");
+    }
+
+    /// Agent-swap contract covers two invariants at once:
+    ///   (a) DB pointer: `sessions.agent_id` updates to the new agent (response reflects it).
+    ///   (b) Runtime: the per-session runtime cache is invalidated and rebuilt with the new
+    ///       agent's spec, and prior turns are replayed from DB into the fresh runtime.
+    ///
+    /// (b) was previously covered by `update_agent_resets_session_runtime_cache` (deleted when
+    /// agents became immutable under copy-on-write). Under CoW, the same invariant now lives on
+    /// the agent-swap path — swapping `agent_id` is the only way to "change" an agent. Keeping
+    /// (a) and (b) in one test mirrors the "swap == invalidate + restore" contract stated in the
+    /// PR body, and ensures a future refactor that updates the DB row but forgets
+    /// `invalidate_session_runtime(id)` fails loudly instead of silently serving stale specs.
+    ///
+    /// Mirrors the request-count shape used by `update_provider_profile_resets_session_runtime_cache`.
+    #[tokio::test]
+    async fn update_session_agent_id_resets_runtime_and_restores_history() {
+        let (mock_url, request_counts) = start_mock_chat_completion_server().await;
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        // Two distinct agent specs → two agent rows under CoW.
+        let agent_id1 = create_agent(&app).await;
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "claude-opus-4-5", "tools": [] } }),
+        )
+        .await;
+        let agent_id2 =
+            Uuid::parse_str(response_json(resp2).await["id"].as_str().expect("agent id")).unwrap();
+        assert_ne!(agent_id1, agent_id2);
+
+        // Single mock provider profile shared across both agents — the swap exercises the
+        // agent-side invalidation path in isolation (provider stays identical).
+        let profile_id = create_provider_profile_with_url(
+            &app,
+            "openai-default",
+            "chat_completion",
+            &mock_url,
+            true,
+        )
+        .await;
+
+        let session_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id1, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+        let session_id = Uuid::parse_str(session_body["id"].as_str().expect("session id")).unwrap();
+        assert_eq!(
+            session_body["agent_id"].as_str().unwrap(),
+            agent_id1.to_string(),
+            "session must initially point at agent1"
+        );
+
+        // turn-1: establish baseline under agent1. Populates DB history that the post-swap
+        // runtime must replay.
+        let (status1, _) = stream_user_message(&app, &session_id.to_string(), "turn-1").await;
+        assert_eq!(status1, StatusCode::OK);
+
+        // (a) DB pointer: relink to agent2
+        let update_resp = put_json(
+            &app,
+            &format!("/sessions/{session_id}"),
+            json!({ "agent_id": agent_id2 }),
+        )
+        .await;
+        assert_eq!(update_resp.status(), StatusCode::OK);
+        let updated = response_json(update_resp).await;
+        assert_eq!(
+            updated["agent_id"].as_str().unwrap(),
+            agent_id2.to_string(),
+            "response must reflect the relink to agent2",
+        );
+
+        // turn-2: drives the cached runtime. If `invalidate_session_runtime` was skipped,
+        // the cached agent1 runtime would serve this turn without replaying DB history,
+        // producing `[3, 3]` instead of `[3, 5]`.
+        let (status2, _) = stream_user_message(&app, &session_id.to_string(), "turn-2").await;
+        assert_eq!(status2, StatusCode::OK);
+
+        // (b) Runtime reset + history restore — observable via LLM call shape:
+        //   turn-1:              system(1) + restored-user(1) + streaming-user(1)            = 3
+        //   turn-2 (post-swap):  system(1) + restored-history(user+assistant=2)
+        //                        + restored-user(1) + streaming-user(1)                       = 5
+        let counts = request_counts
+            .lock()
+            .expect("request counts lock should be available")
+            .clone();
+        assert_eq!(
+            counts,
+            vec![3, 5],
+            "agent-swap must invalidate the session runtime and replay DB history on the next turn",
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_session_cascade_deletes_orphaned_agent() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        // Create agent + profile + session
+        let agent_id = create_agent(&app).await;
+        let profile_id =
+            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
+
+        let session_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+        let session_id = Uuid::parse_str(session_body["id"].as_str().expect("session id")).unwrap();
+
+        // Delete the only session → agent should be deleted too
+        let del_resp = delete_req(&app, &format!("/sessions/{session_id}")).await;
+        assert_eq!(del_resp.status(), StatusCode::NO_CONTENT);
+
+        let agent_resp = get_req(&app, &format!("/agents/{agent_id}")).await;
+        assert_eq!(agent_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_session_keeps_agent_when_other_sessions_exist() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let agent_id = create_agent(&app).await;
+        let profile_id =
+            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
+
+        // Create two sessions for the same agent
+        let session1_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+        let session1_id =
+            Uuid::parse_str(session1_body["id"].as_str().expect("session id")).unwrap();
+
+        let _session2_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+
+        // Delete session1 only → agent must still exist
+        let del_resp = delete_req(&app, &format!("/sessions/{session1_id}")).await;
+        assert_eq!(del_resp.status(), StatusCode::NO_CONTENT);
+
+        let agent_resp = get_req(&app, &format!("/agents/{agent_id}")).await;
+        assert_eq!(agent_resp.status(), StatusCode::OK);
+    }
+
+    // ===================== Update-Session Orphan Cleanup (CoW Symmetry) =====================
+
+    /// When `PUT /sessions/{id}` swaps agent_id on the session's *only* session,
+    /// the previous agent becomes an orphan and must be deleted — symmetric with
+    /// `delete_session_cascade_deletes_orphaned_agent`.
+    #[tokio::test]
+    async fn update_session_agent_swap_cascade_deletes_orphaned_previous_agent() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let agent_id1 = create_agent(&app).await;
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "claude-opus-4-5", "tools": [] } }),
+        )
+        .await;
+        let agent_id2 =
+            Uuid::parse_str(response_json(resp2).await["id"].as_str().expect("agent id")).unwrap();
+        assert_ne!(agent_id1, agent_id2);
+
+        let profile_id =
+            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
+
+        let session_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id1, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+        let session_id = Uuid::parse_str(session_body["id"].as_str().expect("session id")).unwrap();
+
+        // Swap to agent2 — this is the only session pointing at agent1, so agent1 is orphaned.
+        let update_resp = put_json(
+            &app,
+            &format!("/sessions/{session_id}"),
+            json!({ "agent_id": agent_id2 }),
+        )
+        .await;
+        assert_eq!(update_resp.status(), StatusCode::OK);
+
+        // agent1 was orphaned by the swap → must be deleted.
+        let agent1_resp = get_req(&app, &format!("/agents/{agent_id1}")).await;
+        assert_eq!(
+            agent1_resp.status(),
+            StatusCode::NOT_FOUND,
+            "previous agent should have been cleaned up after pointer swap"
+        );
+
+        // agent2 still has a session → must remain.
+        let agent2_resp = get_req(&app, &format!("/agents/{agent_id2}")).await;
+        assert_eq!(agent2_resp.status(), StatusCode::OK);
+    }
+
+    /// When another session still references the previous agent, the swap must
+    /// NOT delete that agent.
+    #[tokio::test]
+    async fn update_session_agent_swap_keeps_previous_agent_when_other_sessions_exist() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let app = test_app(&temp_dir).await;
+
+        let agent_id1 = create_agent(&app).await;
+        let resp2 = post_json(
+            &app,
+            "/agents",
+            json!({ "spec": { "lm": "claude-opus-4-5", "tools": [] } }),
+        )
+        .await;
+        let agent_id2 =
+            Uuid::parse_str(response_json(resp2).await["id"].as_str().expect("agent id")).unwrap();
+
+        let profile_id =
+            create_provider_profile(&app, "openai-default", "chat_completion", true).await;
+
+        // Two sessions both pointing at agent1.
+        let session1_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id1, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+        let session1_id =
+            Uuid::parse_str(session1_body["id"].as_str().expect("session id")).unwrap();
+
+        let _session2_body = response_json(
+            post_json(
+                &app,
+                "/sessions",
+                json!({ "agent_id": agent_id1, "provider_profile_id": profile_id }),
+            )
+            .await,
+        )
+        .await;
+
+        // Swap session1 to agent2. agent1 is still referenced by session2.
+        let update_resp = put_json(
+            &app,
+            &format!("/sessions/{session1_id}"),
+            json!({ "agent_id": agent_id2 }),
+        )
+        .await;
+        assert_eq!(update_resp.status(), StatusCode::OK);
+
+        // agent1 must still exist — session2 depends on it.
+        let agent1_resp = get_req(&app, &format!("/agents/{agent_id1}")).await;
+        assert_eq!(agent1_resp.status(), StatusCode::OK);
     }
 }

@@ -9,7 +9,7 @@ import { IndexStatusBanner } from "@/components/chat/index-status-banner";
 import { ModelSelector } from "@/components/chat/model-selector";
 import { useAppStore } from "@/lib/store";
 import { toast } from "sonner";
-import { getSession, getAgent, updateAgent, updateSession } from "@/lib/api";
+import { getSession, getAgent, createAgent, updateSession } from "@/lib/api";
 import type { ProviderName } from "@/lib/constants";
 
 interface ChatViewProps {
@@ -52,6 +52,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
   // Mid-session 모델 변경 핸들러
   const handleModelChange = useCallback(
     async (provider: ProviderName, model: string, profileId: string) => {
+      if (!currentAgentId) return;
+
       const prevProvider = selectedProvider;
       const prevModel = selectedModel;
       const prevProfileId = currentProfileId;
@@ -60,14 +62,31 @@ export function ChatView({ sessionId }: ChatViewProps) {
       setSelectedModel(provider, model, profileId);
 
       try {
-        // 1. Agent 모델 변경
-        if (currentAgentId) {
-          await updateAgent(currentAgentId, { spec: { lm: model, tools: [] } });
+        // 1. 현재 Agent spec을 로드해 instruction/tools를 보존한 채
+        //    lm만 덮어써서 새 Agent를 구한다 (copy-on-write).
+        //    동일 spec이라면 백엔드 UNIQUE 제약이 기존 Agent를 그대로 반환한다.
+        const currentAgent = await getAgent(currentAgentId);
+        const agent = await createAgent({
+          spec: { ...currentAgent.spec, lm: model },
+        });
+
+        // 2. Session에 새 Agent 연결 (agent_id 변경된 경우) + Provider 변경 시 provider_profile_id도 업데이트
+        const sessionUpdate: { agent_id?: string; provider_profile_id?: string } = {};
+        if (agent.id !== currentAgentId) {
+          sessionUpdate.agent_id = agent.id;
+        }
+        if (profileId !== currentProfileId) {
+          sessionUpdate.provider_profile_id = profileId;
+        }
+        if (Object.keys(sessionUpdate).length > 0) {
+          await updateSession(sessionId, sessionUpdate);
         }
 
-        // 2. Provider가 변경된 경우 Session의 provider_profile_id 업데이트
-        if (profileId !== currentProfileId) {
-          await updateSession(sessionId, { provider_profile_id: profileId });
+        // Update local state only after successful backend call
+        if (sessionUpdate.agent_id) {
+          setCurrentAgentId(agent.id);
+        }
+        if (sessionUpdate.provider_profile_id) {
           setCurrentProfileId(profileId);
         }
       } catch {

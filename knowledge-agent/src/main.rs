@@ -104,7 +104,8 @@ async fn main() -> Result<()> {
         &app_config.tool,
         &search_index,
         target_dirs.clone(),
-    );
+    )
+    .await?;
 
     // 7. Launch TUI
     run_tui(app_config, agent, search_index, target_dirs).await?;

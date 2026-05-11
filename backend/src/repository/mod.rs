@@ -20,6 +20,33 @@ pub use sqlite::SqliteRepository;
 
 const DEFAULT_DATABASE_URL: &str = "sqlite://./data/app.db";
 
+/// Normalize an AgentSpec for deterministic JSON comparison.
+///
+/// Rules applied:
+/// - `tools`: alphabetical sort + dedup (order-independent matching)
+/// - `instruction`: trim whitespace; empty string → None (unifies Some(""), Some("  "), None)
+/// - `lm`: preserved as-is (controlled by frontend constants)
+///
+/// NOTE: This output is the sole basis of Agent identity (enforced by
+/// `UNIQUE(spec_json)` in SQLite). Determinism depends on serde_json preserving
+/// struct field order (guaranteed for `#[derive(Serialize)]`).
+///
+/// **STANDING REVIEW TRIGGER**: Review this function on every ailoy version bump.
+/// If `ailoy::AgentSpec` adds, removes, or reorders fields — especially
+/// floating-point, HashMap-like, or otherwise non-deterministic types — the
+/// UNIQUE constraint can silently permit duplicates. Tracked in
+/// `.omc/plans/open-questions.md`.
+pub fn normalize_spec(spec: &AgentSpec) -> RepositoryResult<String> {
+    let mut normalized = spec.clone();
+    normalized.tools.sort();
+    normalized.tools.dedup();
+    normalized.instruction = normalized
+        .instruction
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    serde_json::to_string(&normalized).map_err(RepositoryError::from)
+}
+
 #[derive(Debug, Error)]
 pub enum RepositoryError {
     #[error("database error: {0}")]
@@ -39,10 +66,9 @@ pub type RepositoryResult<T> = Result<T, RepositoryError>;
 
 #[async_trait]
 pub trait Repository: Send + Sync {
-    async fn create_agent(&self, spec: AgentSpec) -> RepositoryResult<Agent>;
+    async fn create_agent(&self, spec: AgentSpec) -> RepositoryResult<(Agent, bool)>;
     async fn list_agents(&self) -> RepositoryResult<Vec<Agent>>;
     async fn get_agent(&self, id: Uuid) -> RepositoryResult<Option<Agent>>;
-    async fn update_agent(&self, id: Uuid, spec: AgentSpec) -> RepositoryResult<Option<Agent>>;
     async fn delete_agent(&self, id: Uuid) -> RepositoryResult<bool>;
     async fn has_sessions_for_agent(&self, agent_id: Uuid) -> RepositoryResult<bool>;
 
@@ -95,14 +121,25 @@ pub trait Repository: Send + Sync {
         role: MessageRole,
         content: String,
     ) -> RepositoryResult<Option<SessionMessage>>;
+    /// Atomically update a session's fields.
+    ///
+    /// Returns `Option<(Session, Option<Uuid>)>`:
+    /// - Outer `None` → session not found
+    /// - Inner `Option<Uuid>` → previous `agent_id` when the caller actually
+    ///   changed `agent_id` to a new value; `None` otherwise (no agent swap
+    ///   happened, or the new id matched the existing one).
+    ///
+    /// The previous id lets the service layer clean up orphaned agents
+    /// symmetrically with `delete_session` (CoW pointer-swap cleanup).
     async fn update_session_atomic(
         &self,
         id: Uuid,
         title: Option<String>,
+        agent_id: Option<Uuid>,
         provider_profile_id: Option<Uuid>,
         speedwagon_ids: Option<Vec<Uuid>>,
         source_ids: Option<Vec<Uuid>>,
-    ) -> RepositoryResult<Option<Session>>;
+    ) -> RepositoryResult<Option<(Session, Option<Uuid>)>>;
 
     // --- Source ---
     async fn create_source(
