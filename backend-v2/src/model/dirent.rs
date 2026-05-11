@@ -11,7 +11,7 @@ pub enum DirentKind {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct DirentEntry {
+pub struct Dirent {
     pub path: String, // relative path from project uploads root
     pub kind: DirentKind,
     pub bytes: Option<u64>,                 // None for directories
@@ -40,7 +40,7 @@ pub struct UploadResponse {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ListResponse {
     pub project_id: Uuid,
-    pub entries: Vec<DirentEntry>,
+    pub entries: Vec<Dirent>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -16,7 +16,7 @@ use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
     model::{
-        DirentEntry, DirentKind, FailedFile, ListQuery, ListResponse, UploadResponse, UploadedFile,
+        Dirent, DirentKind, FailedFile, ListQuery, ListResponse, UploadResponse, UploadedFile,
     },
     state::AppState,
 };
@@ -195,7 +195,7 @@ pub async fn list(
     }
 
     let recursive = query.recursive.unwrap_or(true);
-    let mut entries: Vec<DirentEntry> = Vec::new();
+    let mut entries: Vec<Dirent> = Vec::new();
     let mut queue: Vec<PathBuf> = vec![uploads_root.clone()];
 
     while let Some(dir) = queue.pop() {
@@ -253,7 +253,7 @@ pub async fn list(
                     .map(|p| rel.starts_with(p))
                     .unwrap_or(true)
                 {
-                    entries.push(DirentEntry {
+                    entries.push(Dirent {
                         path: rel,
                         kind: DirentKind::Dir,
                         bytes: None,
@@ -267,7 +267,7 @@ pub async fn list(
                 .unwrap_or(true)
             {
                 let modified_at = meta.modified().ok().map(DateTime::<Utc>::from);
-                entries.push(DirentEntry {
+                entries.push(Dirent {
                     path: rel,
                     kind: DirentKind::File,
                     bytes: Some(meta.len()),
