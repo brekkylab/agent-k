@@ -113,6 +113,14 @@ pub async fn delete_project(
         cleanup_session_resources(&state, session.id).await;
     }
 
+    // Remove project uploads directory (best-effort — ignore NotFound)
+    let project_dir = state.data_root.join("projects").join(project_id.to_string());
+    if let Err(e) = tokio::fs::remove_dir_all(&project_dir).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(id = %project_id, "failed to remove project dir: {e}");
+        }
+    }
+
     state
         .repository
         .delete_project(project_id)
