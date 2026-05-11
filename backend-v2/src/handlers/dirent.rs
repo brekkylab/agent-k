@@ -136,27 +136,31 @@ pub async fn upload(
             continue;
         }
 
-        // Create parent dirs
-        if let Some(parent) = host_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| AppError::internal(format!("failed to create directory: {e}")))?;
-        }
+        // Create parent dirs (Fix C1 + I1: use uploads_root-based tmp_path)
+        tokio::fs::create_dir_all(host_path.parent().unwrap())
+            .await
+            .map_err(|e| AppError::internal(format!("failed to create dirs: {e}")))?;
 
         // Atomic write: write to temp file then rename
-        let tmp_path = host_path.with_extension(format!("{}.tmp", Uuid::new_v4().simple()));
+        // Fix I1: temp file lives in uploads_root to avoid with_extension side-effect
+        let tmp_path = uploads_root.join(format!(".tmp.{}", Uuid::new_v4().simple()));
         tokio::fs::write(&tmp_path, &data)
             .await
-            .map_err(|e| AppError::internal(format!("failed to write file: {e}")))?;
-        tokio::fs::rename(&tmp_path, &host_path)
-            .await
-            .map_err(|e| AppError::internal(format!("failed to finalize file: {e}")))?;
+            .map_err(|e| AppError::internal(format!("failed to write temp file: {e}")))?;
+        // Fix C1: clean up temp file if rename fails
+        if let Err(e) = tokio::fs::rename(&tmp_path, &host_path).await {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(AppError::internal(format!("failed to finalize file: {e}")));
+        }
 
         succeeded.push(UploadedFile {
             path: filename,
             bytes: data.len() as u64,
         });
     }
+
+    // Fix m1: trace successful uploads
+    tracing::info!(project = %project_id, count = %succeeded.len(), "dirents uploaded");
 
     Ok(Json(UploadResponse {
         project_id,
@@ -189,12 +193,13 @@ pub async fn list(
         .join(project_id.to_string())
         .join("uploads");
 
-    // 3. Return empty response if directory doesn't exist
-    if !uploads_root.exists() {
-        return Ok(Json(ListResponse {
-            project_id,
-            entries: Vec::new(),
-        }));
+    // 3. Return empty response if directory doesn't exist (Fix I2: async metadata check)
+    match tokio::fs::metadata(&uploads_root).await {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Json(ListResponse { project_id, entries: vec![] }));
+        }
+        Err(e) => return Err(AppError::internal(e.to_string())),
+        Ok(_) => {}
     }
 
     // 4. BFS directory walk
@@ -217,11 +222,13 @@ pub async fn list(
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
 
-            // Apply prefix filter
-            if let Some(prefix) = &query.prefix {
-                if !rel.starts_with(prefix.as_str()) {
-                    continue;
-                }
+            // Fix I3: check file type without following symlinks; skip symlinks entirely
+            let ftype = match entry.file_type().await {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ftype.is_symlink() {
+                continue; // never follow symlinks
             }
 
             let meta = match entry.metadata().await {
@@ -229,27 +236,35 @@ pub async fn list(
                 Err(_) => continue,
             };
 
-            if meta.is_dir() {
-                entries.push(DirentEntry {
-                    path: rel,
-                    kind: DirentKind::Dir,
-                    bytes: None,
-                    modified_at: None,
-                });
+            // Fix m4: separate recurse decision from prefix filter
+            if ftype.is_dir() {
+                // Always recurse when recursive=true (needed to find matching children below)
                 if recursive {
                     queue.push(entry_path);
                 }
+                // Only include this dir in entries if its path matches the prefix
+                if query.prefix.as_deref().map(|p| rel.starts_with(p)).unwrap_or(true) {
+                    entries.push(DirentEntry {
+                        path: rel,
+                        kind: DirentKind::Dir,
+                        bytes: None,
+                        modified_at: None,
+                    });
+                }
             } else {
-                let modified_at = meta
-                    .modified()
-                    .ok()
-                    .map(|st| DateTime::<Utc>::from(st));
-                entries.push(DirentEntry {
-                    path: rel,
-                    kind: DirentKind::File,
-                    bytes: Some(meta.len()),
-                    modified_at,
-                });
+                // Files only included if they match the prefix
+                if query.prefix.as_deref().map(|p| rel.starts_with(p)).unwrap_or(true) {
+                    let modified_at = meta
+                        .modified()
+                        .ok()
+                        .map(|st| DateTime::<Utc>::from(st));
+                    entries.push(DirentEntry {
+                        path: rel,
+                        kind: DirentKind::File,
+                        bytes: Some(meta.len()),
+                        modified_at,
+                    });
+                }
             }
         }
     }
@@ -314,11 +329,11 @@ pub async fn get_file(
         .first_or_octet_stream()
         .to_string();
 
-    // 8. Build response
+    // 8. Build response (Fix I5: propagate builder error instead of unwrap)
     Ok(axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, content_type)
         .body(axum::body::Body::from(bytes))
-        .unwrap())
+        .map_err(|e| AppError::internal(format!("failed to build response: {e}")))?)
 }
 
 /// DELETE /projects/{project_id}/dirents/{*path}
@@ -367,6 +382,9 @@ pub async fn delete_path(
             .await
             .map_err(|e| AppError::internal(format!("failed to remove file: {e}")))?;
     }
+
+    // Fix m1: trace deletion
+    tracing::info!(project = %project_id, path = %path_str, "dirent deleted");
 
     Ok(StatusCode::NO_CONTENT)
 }
