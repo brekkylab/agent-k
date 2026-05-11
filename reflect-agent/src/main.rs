@@ -15,14 +15,15 @@ use ailoy::{
 };
 use anyhow::Result;
 use clap::Parser;
-use futures::StreamExt;
-use reflect_agent::{DEFAULT_MODEL, build_agent, register_provider_from_env};
+use reflect_agent::{
+    DEFAULT_MODEL, VerifyConfig, build_agent, register_provider_from_env, run_with_verify,
+};
 use rustyline::{DefaultEditor, error::ReadlineError};
 
 #[derive(Parser)]
 #[command(
     name = "reflect-agent",
-    about = "Single lead agent with bash + python + web_search tools (verify/reflect gates land in follow-up PRs)"
+    about = "Single lead agent with bash + python + web_search tools and a post-hoc verify gate"
 )]
 struct Cli {
     /// Language model id, e.g. `openai/gpt-4o-mini`,
@@ -87,13 +88,15 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Stream one user turn and print assistant text + tool-call markers.
+/// Stream one user turn, print assistant text + tool-call markers, and
+/// emit the verify report to stderr only when at least one issue was
+/// flagged (otherwise stderr stays clean).
 async fn run_query(agent: &mut ailoy::agent::Agent, input: &str) -> Result<()> {
     let query = Message::new(Role::User).with_contents([Part::text(input)]);
-    let mut stream = agent.run(query);
+    let config = VerifyConfig::default();
+    let (outputs, report) = run_with_verify(agent, query, &config).await?;
 
-    while let Some(output) = stream.next().await {
-        let output = output?;
+    for output in &outputs {
         let msg = &output.message;
         if msg.role != Role::Assistant {
             continue;
@@ -114,5 +117,10 @@ async fn run_query(agent: &mut ailoy::agent::Agent, input: &str) -> Result<()> {
         }
     }
     println!();
+
+    if !report.is_empty() {
+        eprintln!("\n─── verify gate findings ───");
+        eprint!("{}", report.format());
+    }
     Ok(())
 }
