@@ -63,9 +63,12 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/projects/{project_id}/sessions",
             get(handlers::list_sessions).post(handlers::create_session),
         )
-        .api_route(
+        .route(
             "/projects/{project_id}/dirents",
-            post(handlers::upload).get(handlers::list),
+            axum::routing::post(handlers::upload)
+                .get(handlers::list)
+                // Override Axum's 2 MB default; actual per-file limit enforced in handler
+                .layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .route(
             "/projects/{project_id}/dirents/{*path}",

@@ -113,19 +113,19 @@ pub async fn delete_project(
         cleanup_session_resources(&state, session.id).await;
     }
 
-    // Remove project uploads directory (best-effort — ignore NotFound)
+    state
+        .repository
+        .delete_project(project_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    // Best-effort cleanup after DB delete; ignore NotFound (project may never have had uploads)
     let project_dir = state.data_root.join("projects").join(project_id.to_string());
     if let Err(e) = tokio::fs::remove_dir_all(&project_dir).await {
         if e.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(id = %project_id, "failed to remove project dir: {e}");
         }
     }
-
-    state
-        .repository
-        .delete_project(project_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
 
     tracing::info!(id = %project_id, "project deleted");
     Ok(StatusCode::NO_CONTENT)
