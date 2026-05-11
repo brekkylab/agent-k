@@ -227,6 +227,161 @@ async fn only_creator_can_change_share_mode() {
     );
 }
 
+// ── owner_can_access_member_private_session ───────────────────────────────────
+
+#[tokio::test]
+async fn owner_can_access_member_private_session() {
+    let (app, repo) = make_app_and_repo().await;
+
+    let alice_info = common::signup(&app, "alice", "password123").await;
+    let alice_token = common::login(&app, "alice", "password123").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_id_str = alice_project["id"].as_str().unwrap();
+    let project_id = uuid::Uuid::parse_str(project_id_str).unwrap();
+    let _ = alice_info;
+
+    let bob_info = common::signup(&app, "bob", "password123").await;
+    let bob_id = uuid::Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
+    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+
+    // bob creates a private session
+    let session = repo.create_session(project_id, bob_id).await.unwrap();
+    let session_id = session.id;
+
+    // alice (owner) can GET bob's private session
+    let (status, _) = common::authed(
+        &app,
+        "GET",
+        &format!("/sessions/{session_id}"),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "owner must be able to access any session including private ones"
+    );
+
+    // alice can also DELETE bob's private session (ghost cleanup scenario)
+    let (status, _) = common::authed(
+        &app,
+        "DELETE",
+        &format!("/sessions/{session_id}"),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NO_CONTENT,
+        "owner must be able to delete any session"
+    );
+}
+
+// ── removed_member_loses_session_access ───────────────────────────────────────
+
+#[tokio::test]
+async fn removed_member_loses_session_access() {
+    let (app, repo) = make_app_and_repo().await;
+
+    let alice_info = common::signup(&app, "alice", "password123").await;
+    let alice_token = common::login(&app, "alice", "password123").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_id_str = alice_project["id"].as_str().unwrap();
+    let project_id = uuid::Uuid::parse_str(project_id_str).unwrap();
+    let _ = alice_info;
+
+    let bob_info = common::signup(&app, "bob", "password123").await;
+    let bob_token = common::login(&app, "bob", "password123").await;
+    let bob_id = uuid::Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
+    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+
+    // bob creates a session while still a member
+    let session = repo.create_session(project_id, bob_id).await.unwrap();
+    let session_id = session.id;
+
+    // bob can access his session while still a member
+    let (status, _) = common::authed(
+        &app,
+        "GET",
+        &format!("/sessions/{session_id}"),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "bob should access his session while still a member"
+    );
+
+    // alice removes bob
+    let (status, _) = common::authed(
+        &app,
+        "DELETE",
+        &format!("/projects/{project_id_str}/members/{bob_id}"),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "remove member failed");
+
+    // bob can no longer access his session after being removed
+    let (status, _) = common::authed(
+        &app,
+        "GET",
+        &format!("/sessions/{session_id}"),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NOT_FOUND,
+        "removed member must not access sessions in the project"
+    );
+}
+
+// ── owner_sees_all_sessions_in_project_list ───────────────────────────────────
+
+#[tokio::test]
+async fn owner_sees_all_sessions_in_project_list() {
+    let (app, repo) = make_app_and_repo().await;
+
+    let alice_info = common::signup(&app, "alice", "password123").await;
+    let alice_token = common::login(&app, "alice", "password123").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_id_str = alice_project["id"].as_str().unwrap();
+    let project_id = uuid::Uuid::parse_str(project_id_str).unwrap();
+    let alice_id = uuid::Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+
+    let bob_info = common::signup(&app, "bob", "password123").await;
+    let bob_id = uuid::Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
+    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+
+    // alice and bob each create a private session
+    repo.create_session(project_id, alice_id).await.unwrap();
+    repo.create_session(project_id, bob_id).await.unwrap();
+
+    // alice (owner) must see both, including bob's private session
+    let (status, body) = common::authed(
+        &app,
+        "GET",
+        &format!("/projects/{project_id_str}/sessions"),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "list failed: {body}");
+    let items = body["items"].as_array().expect("items array");
+    assert_eq!(
+        items.len(),
+        2,
+        "owner must see all sessions including private ones from members, got: {body}"
+    );
+}
+
 // ── private_session_not_in_project_list ──────────────────────────────────────
 
 #[tokio::test]

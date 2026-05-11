@@ -340,16 +340,28 @@ async fn list_all_sessions_in_project_includes_private_sessions_from_members() {
         all_sessions.len()
     );
 
-    // The user-filtered method with alice's id must NOT see bob's private session.
+    // alice is the owner, so list_sessions_in_project also returns all sessions for her.
     let alice_view = repo
         .list_sessions_in_project(project_id, alice_id)
         .await
         .unwrap();
     assert_eq!(
         alice_view.len(),
-        1,
-        "alice should only see her own private session, got {}",
+        2,
+        "owner should see all sessions via the user-filtered method too, got {}",
         alice_view.len()
+    );
+
+    // bob is a regular member — he should only see his own private session.
+    let bob_view = repo
+        .list_sessions_in_project(project_id, bob_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        bob_view.len(),
+        1,
+        "member should only see their own private session, got {}",
+        bob_view.len()
     );
 }
 

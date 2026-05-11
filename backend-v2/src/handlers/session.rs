@@ -197,7 +197,7 @@ pub async fn get_session(
     Ok(Json(SessionResponse::from(session)))
 }
 
-/// PATCH /sessions/{session_id} — share_mode change (creator only)
+/// PATCH /sessions/{session_id} — share_mode change (creator or project owner)
 pub async fn update_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
@@ -211,9 +211,9 @@ pub async fn update_session(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    if !matches!(access, SessionAccess::Creator) {
+    if !matches!(access, SessionAccess::Admin) {
         return Err(AppError::forbidden(
-            "only the session creator can change sharing",
+            "only admins can change sharing",
         ));
     }
 
@@ -234,7 +234,7 @@ pub(crate) async fn cleanup_session_resources(state: &Arc<AppState>, session_id:
     }
 }
 
-/// DELETE /sessions/{session_id} — creator only
+/// DELETE /sessions/{session_id} — creator or project owner
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
@@ -247,9 +247,9 @@ pub async fn delete_session(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    if !matches!(access, SessionAccess::Creator) {
+    if !matches!(access, SessionAccess::Admin) {
         return Err(AppError::forbidden(
-            "only the session creator can delete this session",
+            "only admins can delete this session",
         ));
     }
 
@@ -289,7 +289,7 @@ pub async fn get_message_history(
     Ok(Json(messages))
 }
 
-/// DELETE /sessions/{session_id}/messages — creator only
+/// DELETE /sessions/{session_id}/messages — creator or project owner
 pub async fn clear_message_history(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
@@ -302,9 +302,9 @@ pub async fn clear_message_history(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    if !matches!(access, SessionAccess::Creator) {
+    if !matches!(access, SessionAccess::Admin) {
         return Err(AppError::forbidden(
-            "only the session creator can clear history",
+            "only admins can clear history",
         ));
     }
 

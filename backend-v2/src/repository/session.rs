@@ -37,7 +37,7 @@ impl ShareMode {
 
 #[derive(Debug, Clone)]
 pub enum SessionAccess {
-    Creator,
+    Admin, // Session Creator or Project Owner
     ChatMember,
     ReadOnlyMember,
 }
@@ -135,10 +135,11 @@ impl SqliteRepository {
         let row = sqlx::query(
             "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.created_at, s.updated_at,
                     CASE
-                        WHEN s.creator_id = ?1 THEN 'creator'
-                        WHEN (p.owner_id = ?1 OR pm.user_id IS NOT NULL)
+                        WHEN p.owner_id = ?1 THEN 'admin'
+                        WHEN s.creator_id = ?1 AND pm.user_id IS NOT NULL THEN 'admin'
+                        WHEN pm.user_id IS NOT NULL
                              AND s.share_mode = 'shared_chat' THEN 'chat_member'
-                        WHEN (p.owner_id = ?1 OR pm.user_id IS NOT NULL)
+                        WHEN pm.user_id IS NOT NULL
                              AND s.share_mode = 'shared_readonly' THEN 'readonly_member'
                         ELSE NULL
                     END AS access_level
@@ -157,7 +158,7 @@ impl SqliteRepository {
 
         let access_level: Option<String> = row.get("access_level");
         let access = match access_level.as_deref() {
-            Some("creator") => SessionAccess::Creator,
+            Some("admin") => SessionAccess::Admin,
             Some("chat_member") => SessionAccess::ChatMember,
             Some("readonly_member") => SessionAccess::ReadOnlyMember,
             _ => return Ok(None),
@@ -180,14 +181,11 @@ impl SqliteRepository {
              JOIN projects p ON p.id = s.project_id
              WHERE s.project_id = ?1
                AND (
-                   s.creator_id = ?2
+                   p.owner_id = ?2
                    OR (
-                       s.share_mode != 'private'
-                       AND (
-                           p.owner_id = ?2
-                           OR EXISTS (SELECT 1 FROM project_members pm
-                                      WHERE pm.project_id = ?1 AND pm.user_id = ?2)
-                       )
+                       EXISTS (SELECT 1 FROM project_members pm
+                               WHERE pm.project_id = ?1 AND pm.user_id = ?2)
+                       AND (s.creator_id = ?2 OR s.share_mode != 'private')
                    )
                )
              ORDER BY s.created_at DESC",
