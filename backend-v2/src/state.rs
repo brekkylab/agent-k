@@ -26,7 +26,9 @@ impl AppState {
     ) -> Self {
         let max_upload_bytes = std::env::var("AGENT_K_MAX_UPLOAD_BYTES")
             .ok()
-            .and_then(|v| v.parse().ok())
+            .and_then(|v| {
+                v.parse().map_err(|_| tracing::warn!("invalid AGENT_K_MAX_UPLOAD_BYTES value '{v}', using default")).ok()
+            })
             .unwrap_or(50 * 1024 * 1024);
         Self {
             agents: DashMap::new(),
