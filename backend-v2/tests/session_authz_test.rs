@@ -2,12 +2,16 @@
 mod common;
 
 use std::sync::Arc;
-use tempfile::TempDir;
 
 use axum::http::StatusCode;
+use tempfile::TempDir;
 
 // Helper: build an app and repo together so we can seed sessions via the repo.
-async fn make_app_and_repo() -> (axum::Router, agent_k_backend::repository::AppRepository, TempDir) {
+async fn make_app_and_repo() -> (
+    axum::Router,
+    agent_k_backend::repository::AppRepository,
+    TempDir,
+) {
     let tmp = TempDir::new().unwrap();
     let repo = common::make_repo().await;
     let store = common::make_test_store();

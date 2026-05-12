@@ -321,7 +321,11 @@ async fn deactivated_user_with_valid_token_gets_403() {
 
     // Token works before deactivation.
     let (status, _) = common::authed(&app, "GET", "/me", &user_token, None).await;
-    assert_eq!(status, StatusCode::OK, "token should work before deactivation");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "token should work before deactivation"
+    );
 
     // Admin deactivates the user.
     let (_, list) = common::authed(&app, "GET", "/admin/users", &admin_token, None).await;

@@ -172,7 +172,8 @@ pub async fn upload(
                         });
                         continue 'files;
                     }
-                    if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut tmp_file, &chunk).await {
+                    if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut tmp_file, &chunk).await
+                    {
                         drop(tmp_file);
                         let _ = tokio::fs::remove_file(&tmp_path).await;
                         failed.push(FailedFile {
