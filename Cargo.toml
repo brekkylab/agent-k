@@ -1,9 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "agent-k",
-    "backend-v2",
-    "docling-sys",
+    "./agent-k",
+    "./backend-v2",
+    "./docling-sys",
+    "./reflect-agent",
 ]
 
 [workspace.dependencies]

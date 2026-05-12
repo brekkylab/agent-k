@@ -148,10 +148,39 @@ pub async fn get_user_admin(
 
 pub async fn update_user_admin(
     State(state): State<Arc<AppState>>,
-    Extension(_auth): Extension<AuthUser>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
     Json(payload): Json<AdminUpdateUserRequest>,
 ) -> ApiResult<Json<UserResponse>> {
+    let removes_admin_access = matches!(&payload.role, Some(r) if *r != Role::Admin)
+        || matches!(payload.is_active, Some(false));
+
+    if auth.id == id {
+        if removes_admin_access {
+            return Err(AppError::bad_request(
+                "cannot remove your own admin access",
+            ));
+        }
+    } else if removes_admin_access {
+        // Prevent demoting or deactivating the last active admin.
+        let target = state
+            .repository
+            .get_user_by_id(id)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?
+            .ok_or_else(|| AppError::not_found("user not found"))?;
+        if target.role == Role::Admin && target.is_active {
+            let count = state
+                .repository
+                .count_admins()
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            if count <= 1 {
+                return Err(AppError::bad_request("cannot remove the last active admin"));
+            }
+        }
+    }
+
     let new_password_hash = payload
         .password
         .as_deref()

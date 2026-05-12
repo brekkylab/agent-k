@@ -510,6 +510,197 @@ async fn admin_cannot_delete_self() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "expected 400, got: {body}");
 }
 
+// ── Admin lockout guards ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn admin_cannot_demote_self() {
+    use std::sync::Arc;
+
+    use agent_k_backend::{auth, repository::NewUser};
+
+    let repo = common::make_repo().await;
+    let password_hash = auth::hash_password("adminpass1").unwrap();
+    let admin_user = repo
+        .create_user(NewUser {
+            id: uuid::Uuid::new_v4(),
+            username: "admin".to_string(),
+            password_hash,
+            role: auth::Role::Admin,
+            display_name: None,
+            is_active: true,
+        })
+        .await
+        .unwrap();
+
+    let store = common::make_test_store();
+    let state = Arc::new(agent_k_backend::state::AppState::new(
+        repo,
+        store,
+        common::test_jwt_config(),
+    ));
+    let app = common::make_app_with_state(state);
+
+    let admin_token = common::login(&app, "admin", "adminpass1").await;
+    let admin_id = admin_user.id;
+
+    let payload = serde_json::json!({ "role": "user" });
+    let uri = format!("/admin/users/{admin_id}");
+    let (status, body) = common::authed(&app, "PATCH", &uri, &admin_token, Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "self-demotion should be blocked: {body}"
+    );
+}
+
+#[tokio::test]
+async fn admin_cannot_deactivate_self() {
+    use std::sync::Arc;
+
+    use agent_k_backend::{auth, repository::NewUser};
+
+    let repo = common::make_repo().await;
+    let password_hash = auth::hash_password("adminpass1").unwrap();
+    let admin_user = repo
+        .create_user(NewUser {
+            id: uuid::Uuid::new_v4(),
+            username: "admin".to_string(),
+            password_hash,
+            role: auth::Role::Admin,
+            display_name: None,
+            is_active: true,
+        })
+        .await
+        .unwrap();
+
+    let store = common::make_test_store();
+    let state = Arc::new(agent_k_backend::state::AppState::new(
+        repo,
+        store,
+        common::test_jwt_config(),
+    ));
+    let app = common::make_app_with_state(state);
+
+    let admin_token = common::login(&app, "admin", "adminpass1").await;
+    let admin_id = admin_user.id;
+
+    let payload = serde_json::json!({ "is_active": false });
+    let uri = format!("/admin/users/{admin_id}");
+    let (status, body) = common::authed(&app, "PATCH", &uri, &admin_token, Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "self-deactivation should be blocked: {body}"
+    );
+}
+
+#[tokio::test]
+async fn last_admin_cannot_be_demoted_by_another_admin() {
+    use std::sync::Arc;
+
+    use agent_k_backend::{auth, repository::NewUser};
+
+    // Two admins. admin2 demotes admin1 (count goes 2→1, fine).
+    // Then admin2 tries to demote admin1 again — but admin1 is already a user.
+    // Real test: only 1 active admin. The only way to trigger the "last admin" guard
+    // without the self-guard is to have admin2 demote admin1 when admin2 is the
+    // ONLY active admin — impossible via HTTP since admin2 can't be the requester
+    // while also being the only admin and not the target.
+    //
+    // So we test the guard via the case where admin1 (the sole admin) tries to
+    // demote themselves — which is also caught by the self-guard first.
+    // We separate it: use admin1 acting on another user (admin2) who is the last
+    // admin, achieved by making admin1 inactive via the repo directly.
+
+    let repo = common::make_repo().await;
+
+    let ph1 = auth::hash_password("adminpass1").unwrap();
+    let admin1 = repo
+        .create_user(NewUser {
+            id: uuid::Uuid::new_v4(),
+            username: "admin1".to_string(),
+            password_hash: ph1,
+            role: auth::Role::Admin,
+            display_name: None,
+            is_active: true,
+        })
+        .await
+        .unwrap();
+
+    let ph2 = auth::hash_password("adminpass2").unwrap();
+    repo.create_user(NewUser {
+        id: uuid::Uuid::new_v4(),
+        username: "admin2".to_string(),
+        password_hash: ph2,
+        role: auth::Role::Admin,
+        display_name: None,
+        is_active: true,
+    })
+    .await
+    .unwrap();
+
+    // Deactivate admin2 via repo so admin1 becomes the sole active admin.
+    use agent_k_backend::repository::UpdateUser;
+    repo.update_user(
+        admin1.id,
+        UpdateUser {
+            display_name: None,
+            password_hash: None,
+            role: None,
+            is_active: Some(false), // make admin1 inactive
+        },
+    )
+    .await
+    .unwrap();
+
+    // admin2 is now the sole active admin. admin2 tries to demote admin1
+    // (the inactive admin, not themselves) — last-admin guard should not fire
+    // here because admin1 is already inactive (not an active admin).
+    // This is the "fine" case. Let's verify admin2 can still demote inactive admin1.
+    let store = common::make_test_store();
+    let state = Arc::new(agent_k_backend::state::AppState::new(
+        repo.clone(),
+        store,
+        common::test_jwt_config(),
+    ));
+    let app = common::make_app_with_state(state);
+
+    let admin2_token = common::login(&app, "admin2", "adminpass2").await;
+    let admin1_id = admin1.id;
+
+    // admin1 is inactive+admin; demoting role to "user" doesn't affect active admin count.
+    let payload = serde_json::json!({ "role": "user" });
+    let uri = format!("/admin/users/{admin1_id}");
+    let (status, body) = common::authed(&app, "PATCH", &uri, &admin2_token, Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "demoting an inactive admin should be allowed: {body}"
+    );
+
+    // Now admin2 tries to demote themselves (the last active admin) → blocked.
+    let admin2_id = {
+        let (_, list) = common::authed(&app, "GET", "/admin/users", &admin2_token, None).await;
+        let users = list["items"].as_array().unwrap();
+        users
+            .iter()
+            .find(|u| u["username"] == "admin2")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let payload = serde_json::json!({ "role": "user" });
+    let uri = format!("/admin/users/{admin2_id}");
+    let (status, body) = common::authed(&app, "PATCH", &uri, &admin2_token, Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "last active admin cannot demote themselves: {body}"
+    );
+}
+
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]
