@@ -81,7 +81,10 @@ async fn upload_files(
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
 }
 
 async fn list_dirents(
@@ -113,7 +116,13 @@ async fn get_file_raw(
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
     (status, bytes)
 }
 
@@ -162,13 +171,7 @@ async fn path_traversal_in_upload_goes_to_failed() {
     let project = common::get_personal_project(&app, &token).await;
     let pid = project["id"].as_str().unwrap();
 
-    let (status, body) = upload_files(
-        &app,
-        &token,
-        pid,
-        &[("../escape.txt", b"malicious")],
-    )
-    .await;
+    let (status, body) = upload_files(&app, &token, pid, &[("../escape.txt", b"malicious")]).await;
     assert_eq!(status, axum::http::StatusCode::OK, "{body}");
     assert_eq!(body["succeeded"].as_array().unwrap().len(), 0);
     let failed = body["failed"].as_array().unwrap();
@@ -254,7 +257,11 @@ async fn delete_directory_is_recursive() {
         &app,
         &token,
         pid,
-        &[("src/a.rs", b"a"), ("src/b.rs", b"b"), ("root.txt", b"keep")],
+        &[
+            ("src/a.rs", b"a"),
+            ("src/b.rs", b"b"),
+            ("root.txt", b"keep"),
+        ],
     )
     .await;
 
@@ -301,11 +308,19 @@ async fn non_member_gets_403_on_all_endpoints() {
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN, "GET list should be 403");
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::FORBIDDEN,
+        "GET list should be 403"
+    );
 
     // GET file
     let (s, _) = get_file_raw(&app, &stranger_token, pid, "secret.txt").await;
-    assert_eq!(s, axum::http::StatusCode::FORBIDDEN, "GET file should be 403");
+    assert_eq!(
+        s,
+        axum::http::StatusCode::FORBIDDEN,
+        "GET file should be 403"
+    );
 
     // DELETE
     let (s, _) = common::authed(
@@ -333,10 +348,7 @@ async fn list_prefix_filter_uses_path_component_boundary() {
         &app,
         &token,
         pid,
-        &[
-            ("src/foo.rs", b"foo"),
-            ("src2/bar.rs", b"bar"),
-        ],
+        &[("src/foo.rs", b"foo"), ("src2/bar.rs", b"bar")],
     )
     .await;
 
