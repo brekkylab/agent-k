@@ -89,7 +89,7 @@ pub async fn upload(
     let mut succeeded: Vec<UploadedFile> = Vec::new();
     let mut failed: Vec<FailedFile> = Vec::new();
 
-    while let Some(mut field) = multipart
+    'files: while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?
@@ -116,41 +116,6 @@ pub async fn upload(
             }
         };
 
-        // Read chunk-by-chunk; reject after max_bytes without buffering the whole file.
-        let mut data = Vec::<u8>::new();
-        let mut over_limit = false;
-        loop {
-            match field
-                .chunk()
-                .await
-                .map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?
-            {
-                Some(chunk) => {
-                    data.extend_from_slice(&chunk);
-                    if data.len() > max_bytes {
-                        over_limit = true;
-                        // Drain the rest so the multipart stream stays parseable.
-                        loop {
-                            match field.chunk().await {
-                                Ok(Some(_)) => {}
-                                Ok(None) => break,
-                                Err(_) => break,
-                            }
-                        }
-                        break;
-                    }
-                }
-                None => break,
-            }
-        }
-        if over_limit {
-            failed.push(FailedFile {
-                path: filename,
-                error: format!("file exceeds maximum size ({max_bytes} bytes)"),
-            });
-            continue;
-        }
-
         let parent = match host_path.parent() {
             Some(p) => p,
             None => {
@@ -169,19 +134,62 @@ pub async fn upload(
             continue;
         }
 
-        // Atomic write: temp in uploads_root for guaranteed same-fs rename.
+        // Atomic write: stream chunks directly to temp file; track byte_count for size limit.
         let tmp_path = uploads_root.join(format!(".tmp.{}", Uuid::new_v4().simple()));
-        if let Err(e) = tokio::fs::write(&tmp_path, &data).await {
-            failed.push(FailedFile {
-                path: filename,
-                error: format!("failed to write temp file: {e}"),
-            });
-            continue;
+        let mut tmp_file = match tokio::fs::File::create(&tmp_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                failed.push(FailedFile {
+                    path: filename,
+                    error: format!("failed to create temp file: {e}"),
+                });
+                continue;
+            }
+        };
+
+        let mut byte_count: u64 = 0;
+        loop {
+            match field
+                .chunk()
+                .await
+                .map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?
+            {
+                Some(chunk) => {
+                    byte_count += chunk.len() as u64;
+                    if byte_count > max_bytes as u64 {
+                        // Drain the rest so the multipart stream stays parseable.
+                        loop {
+                            match field.chunk().await {
+                                Ok(Some(_)) => {}
+                                _ => break,
+                            }
+                        }
+                        drop(tmp_file);
+                        let _ = tokio::fs::remove_file(&tmp_path).await;
+                        failed.push(FailedFile {
+                            path: filename,
+                            error: format!("file exceeds maximum size ({max_bytes} bytes)"),
+                        });
+                        continue 'files;
+                    }
+                    if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut tmp_file, &chunk).await {
+                        drop(tmp_file);
+                        let _ = tokio::fs::remove_file(&tmp_path).await;
+                        failed.push(FailedFile {
+                            path: filename,
+                            error: format!("failed to write chunk: {e}"),
+                        });
+                        continue 'files;
+                    }
+                }
+                None => break,
+            }
         }
-        let byte_count = data.len() as u64;
+        drop(tmp_file);
+
         if let Err(e) = tokio::fs::rename(&tmp_path, &host_path).await {
-            if let Err(e) = tokio::fs::remove_file(&tmp_path).await {
-                tracing::warn!(path = %tmp_path.display(), "failed to remove orphaned temp file: {e}");
+            if let Err(rm_e) = tokio::fs::remove_file(&tmp_path).await {
+                tracing::warn!(path = %tmp_path.display(), "failed to remove orphaned temp file: {rm_e}");
             }
             failed.push(FailedFile {
                 path: filename,
