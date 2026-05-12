@@ -352,38 +352,24 @@ pub async fn get_file(
 
     let host_path = safe_join(&uploads_root, &path_str).map_err(|e| AppError::bad_request(e))?;
 
-    // Open with O_NOFOLLOW so a symlink swap between stat and open is impossible.
-    let path = host_path.clone();
-    let open_result = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
-        use std::io::Read;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&path)?;
-        if file.metadata()?.is_dir() {
-            return Err(std::io::Error::from(std::io::ErrorKind::IsADirectory));
+    // symlink_metadata does not follow symlinks; reject symlinks to prevent escape
+    let meta = tokio::fs::symlink_metadata(&host_path).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AppError::not_found("file not found")
+        } else {
+            AppError::internal(e.to_string())
         }
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)?;
-        Ok(buf)
-    })
-    .await
-    .map_err(|e| AppError::internal(e.to_string()))?;
+    })?;
+    if meta.is_symlink() {
+        return Err(AppError::not_found("file not found"));
+    }
+    if meta.is_dir() {
+        return Err(AppError::bad_request("path is a directory"));
+    }
 
-    let bytes = match open_result {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AppError::not_found("file not found"));
-        }
-        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
-            return Err(AppError::not_found("file not found"));
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::IsADirectory => {
-            return Err(AppError::bad_request("path is a directory"));
-        }
-        Err(e) => return Err(AppError::internal(e.to_string())),
-    };
+    let bytes = tokio::fs::read(&host_path)
+        .await
+        .map_err(|e| AppError::internal(format!("failed to read file: {e}")))?;
 
     let content_type = mime_guess::from_path(&host_path)
         .first_or_octet_stream()
