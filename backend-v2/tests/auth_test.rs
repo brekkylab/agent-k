@@ -243,66 +243,9 @@ async fn admin_endpoints_reject_non_admin() {
 
 // ── Admin: user management ────────────────────────────────────────────────────
 
-#[allow(dead_code)]
-async fn setup_admin(_app: &axum::Router) -> (serde_json::Value, String) {
-    // Create admin via repository directly for speed
-    use agent_k_backend::{auth, repository::NewUser};
-
-    // We create via the public API: signup then manually promote (not ideal but works for tests)
-    // Instead, create via repo. But we can't easily get the repo here.
-    // Use the signup + direct DB approach... actually let's just use the create-admin via repo.
-    // For simplicity, sign up and then create admin via admin API (chicken-and-egg problem).
-    // Workaround: sign up a "bootstrap" admin via repository pre-seeded state.
-    // Actually, let's just create the admin using signup but override role in DB.
-    // Better: make a helper that creates an admin via repo directly.
-
-    // The cleanest way is to expose repo from make_app, but that changes the API.
-    // For now, we'll build the app state manually so we can access the repo.
-    let repo = common::make_repo().await;
-
-    let password_hash = auth::hash_password("adminpass1").unwrap();
-    let admin_user = repo
-        .create_user(NewUser {
-            id: uuid::Uuid::new_v4(),
-            username: "admin".to_string(),
-            password_hash,
-            role: auth::Role::Admin,
-            display_name: Some("Admin".to_string()),
-            is_active: true,
-        })
-        .await
-        .unwrap();
-
-    let app = common::make_app_with_repo(repo);
-
-    let token = common::login(&app, "admin", "adminpass1").await;
-
-    (
-        serde_json::json!({ "id": admin_user.id.to_string(), "username": "admin" }),
-        token,
-    )
-}
-
 #[tokio::test]
 async fn admin_can_create_and_list_users() {
-    use agent_k_backend::{auth, repository::NewUser};
-
-    let repo = common::make_repo().await;
-    let password_hash = auth::hash_password("adminpass1").unwrap();
-    repo.create_user(NewUser {
-        id: uuid::Uuid::new_v4(),
-        username: "admin".to_string(),
-        password_hash,
-        role: auth::Role::Admin,
-        display_name: None,
-        is_active: true,
-    })
-    .await
-    .unwrap();
-
-    let app = common::make_app_with_repo(repo);
-
-    let admin_token = common::login(&app, "admin", "adminpass1").await;
+    let (app, admin_token, _admin_id) = common::make_admin_app().await;
 
     // Create a user via admin API
     let payload = serde_json::json!({
@@ -324,24 +267,7 @@ async fn admin_can_create_and_list_users() {
 
 #[tokio::test]
 async fn admin_can_update_user_role() {
-    use agent_k_backend::{auth, repository::NewUser};
-
-    let repo = common::make_repo().await;
-    let password_hash = auth::hash_password("adminpass1").unwrap();
-    repo.create_user(NewUser {
-        id: uuid::Uuid::new_v4(),
-        username: "admin".to_string(),
-        password_hash,
-        role: auth::Role::Admin,
-        display_name: None,
-        is_active: true,
-    })
-    .await
-    .unwrap();
-
-    let app = common::make_app_with_repo(repo);
-
-    let admin_token = common::login(&app, "admin", "adminpass1").await;
+    let (app, admin_token, _admin_id) = common::make_admin_app().await;
 
     // Create regular user via signup
     let user_info = common::signup(&app, "regularuser", "password123").await;
@@ -357,24 +283,7 @@ async fn admin_can_update_user_role() {
 
 #[tokio::test]
 async fn admin_can_deactivate_user() {
-    use agent_k_backend::{auth, repository::NewUser};
-
-    let repo = common::make_repo().await;
-    let password_hash = auth::hash_password("adminpass1").unwrap();
-    repo.create_user(NewUser {
-        id: uuid::Uuid::new_v4(),
-        username: "admin".to_string(),
-        password_hash,
-        role: auth::Role::Admin,
-        display_name: None,
-        is_active: true,
-    })
-    .await
-    .unwrap();
-
-    let app = common::make_app_with_repo(repo);
-
-    let admin_token = common::login(&app, "admin", "adminpass1").await;
+    let (app, admin_token, _admin_id) = common::make_admin_app().await;
 
     common::signup(&app, "victim", "password123").await;
 
@@ -400,26 +309,53 @@ async fn admin_can_deactivate_user() {
     assert_eq!(login_status, StatusCode::FORBIDDEN);
 }
 
+/// A valid JWT for a deactivated user must be rejected by the middleware (403).
+/// The middleware calls get_user_by_id on every request and checks is_active.
+#[tokio::test]
+async fn deactivated_user_with_valid_token_gets_403() {
+    let (app, admin_token, _) = common::make_admin_app().await;
+
+    // Sign up a regular user and get their token before deactivation.
+    common::signup(&app, "willbedeactivated", "Password123!").await;
+    let user_token = common::login(&app, "willbedeactivated", "Password123!").await;
+
+    // Token works before deactivation.
+    let (status, _) = common::authed(&app, "GET", "/me", &user_token, None).await;
+    assert_eq!(status, StatusCode::OK, "token should work before deactivation");
+
+    // Admin deactivates the user.
+    let (_, list) = common::authed(&app, "GET", "/admin/users", &admin_token, None).await;
+    let user_id = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["username"] == "willbedeactivated")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, _) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/admin/users/{user_id}"),
+        &admin_token,
+        Some(serde_json::json!({ "is_active": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "deactivation failed");
+
+    // Existing token is now rejected with 403.
+    let (status, _) = common::authed(&app, "GET", "/me", &user_token, None).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "deactivated user must not access API with a previously valid token"
+    );
+}
+
 #[tokio::test]
 async fn admin_can_delete_user() {
-    use agent_k_backend::{auth, repository::NewUser};
-
-    let repo = common::make_repo().await;
-    let password_hash = auth::hash_password("adminpass1").unwrap();
-    repo.create_user(NewUser {
-        id: uuid::Uuid::new_v4(),
-        username: "admin".to_string(),
-        password_hash,
-        role: auth::Role::Admin,
-        display_name: None,
-        is_active: true,
-    })
-    .await
-    .unwrap();
-
-    let app = common::make_app_with_repo(repo);
-
-    let admin_token = common::login(&app, "admin", "adminpass1").await;
+    let (app, admin_token, _admin_id) = common::make_admin_app().await;
 
     let user_info = common::signup(&app, "todelete", "password123").await;
     let user_id = user_info["id"].as_str().unwrap();
@@ -435,26 +371,7 @@ async fn admin_can_delete_user() {
 
 #[tokio::test]
 async fn admin_cannot_delete_self() {
-    use agent_k_backend::{auth, repository::NewUser};
-
-    let repo = common::make_repo().await;
-    let password_hash = auth::hash_password("adminpass1").unwrap();
-    let admin_user = repo
-        .create_user(NewUser {
-            id: uuid::Uuid::new_v4(),
-            username: "admin".to_string(),
-            password_hash,
-            role: auth::Role::Admin,
-            display_name: None,
-            is_active: true,
-        })
-        .await
-        .unwrap();
-
-    let app = common::make_app_with_repo(repo);
-
-    let admin_token = common::login(&app, "admin", "adminpass1").await;
-    let admin_id = admin_user.id;
+    let (app, admin_token, admin_id) = common::make_admin_app().await;
 
     let uri = format!("/admin/users/{admin_id}");
     let (status, body) = common::authed(&app, "DELETE", &uri, &admin_token, None).await;
@@ -465,26 +382,7 @@ async fn admin_cannot_delete_self() {
 
 #[tokio::test]
 async fn admin_cannot_demote_self() {
-    use agent_k_backend::{auth, repository::NewUser};
-
-    let repo = common::make_repo().await;
-    let password_hash = auth::hash_password("adminpass1").unwrap();
-    let admin_user = repo
-        .create_user(NewUser {
-            id: uuid::Uuid::new_v4(),
-            username: "admin".to_string(),
-            password_hash,
-            role: auth::Role::Admin,
-            display_name: None,
-            is_active: true,
-        })
-        .await
-        .unwrap();
-
-    let app = common::make_app_with_repo(repo);
-
-    let admin_token = common::login(&app, "admin", "adminpass1").await;
-    let admin_id = admin_user.id;
+    let (app, admin_token, admin_id) = common::make_admin_app().await;
 
     let payload = serde_json::json!({ "role": "user" });
     let uri = format!("/admin/users/{admin_id}");
@@ -498,26 +396,7 @@ async fn admin_cannot_demote_self() {
 
 #[tokio::test]
 async fn admin_cannot_deactivate_self() {
-    use agent_k_backend::{auth, repository::NewUser};
-
-    let repo = common::make_repo().await;
-    let password_hash = auth::hash_password("adminpass1").unwrap();
-    let admin_user = repo
-        .create_user(NewUser {
-            id: uuid::Uuid::new_v4(),
-            username: "admin".to_string(),
-            password_hash,
-            role: auth::Role::Admin,
-            display_name: None,
-            is_active: true,
-        })
-        .await
-        .unwrap();
-
-    let app = common::make_app_with_repo(repo);
-
-    let admin_token = common::login(&app, "admin", "adminpass1").await;
-    let admin_id = admin_user.id;
+    let (app, admin_token, admin_id) = common::make_admin_app().await;
 
     let payload = serde_json::json!({ "is_active": false });
     let uri = format!("/admin/users/{admin_id}");
