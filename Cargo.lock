@@ -139,7 +139,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=01454ea3692d12c7f41afb799986ecf7059406ec#01454ea3692d12c7f41afb799986ecf7059406ec"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=9c56469be1d88e401d70450dd6fe2d0cc0dce45c#9c56469be1d88e401d70450dd6fe2d0cc0dce45c"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -148,7 +148,6 @@ dependencies = [
  "dedent",
  "derive_builder",
  "dirs 6.0.0",
- "dotenvy",
  "encoding_rs",
  "fancy-regex",
  "flate2",
