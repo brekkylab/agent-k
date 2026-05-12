@@ -580,15 +580,25 @@ pub async fn upload_dirents(
         .method("POST")
         .uri(format!("/projects/{project_id}/dirents"))
         .header("authorization", format!("Bearer {token}"))
-        .header("content-type", format!("multipart/form-data; boundary={boundary}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
         .body(Body::from(body))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK, "dirent upload failed");
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::OK,
+        "dirent upload failed"
+    );
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(
-        value["failed"].as_array().map(|a| a.is_empty()).unwrap_or(false),
+        value["failed"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false),
         "dirent upload had failures: {value}"
     );
     value

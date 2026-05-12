@@ -246,8 +246,6 @@ async fn admin_endpoints_reject_non_admin() {
 #[allow(dead_code)]
 async fn setup_admin(_app: &axum::Router) -> (serde_json::Value, String) {
     // Create admin via repository directly for speed
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     // We create via the public API: signup then manually promote (not ideal but works for tests)
@@ -261,7 +259,6 @@ async fn setup_admin(_app: &axum::Router) -> (serde_json::Value, String) {
     // The cleanest way is to expose repo from make_app, but that changes the API.
     // For now, we'll build the app state manually so we can access the repo.
     let repo = common::make_repo().await;
-    let jwt = common::test_jwt_config();
 
     let password_hash = auth::hash_password("adminpass1").unwrap();
     let admin_user = repo
@@ -276,15 +273,7 @@ async fn setup_admin(_app: &axum::Router) -> (serde_json::Value, String) {
         .await
         .unwrap();
 
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        jwt.clone(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let token = common::login(&app, "admin", "adminpass1").await;
 
@@ -296,8 +285,6 @@ async fn setup_admin(_app: &axum::Router) -> (serde_json::Value, String) {
 
 #[tokio::test]
 async fn admin_can_create_and_list_users() {
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     let repo = common::make_repo().await;
@@ -313,15 +300,7 @@ async fn admin_can_create_and_list_users() {
     .await
     .unwrap();
 
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        common::test_jwt_config(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let admin_token = common::login(&app, "admin", "adminpass1").await;
 
@@ -345,8 +324,6 @@ async fn admin_can_create_and_list_users() {
 
 #[tokio::test]
 async fn admin_can_update_user_role() {
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     let repo = common::make_repo().await;
@@ -362,15 +339,7 @@ async fn admin_can_update_user_role() {
     .await
     .unwrap();
 
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        common::test_jwt_config(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let admin_token = common::login(&app, "admin", "adminpass1").await;
 
@@ -388,8 +357,6 @@ async fn admin_can_update_user_role() {
 
 #[tokio::test]
 async fn admin_can_deactivate_user() {
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     let repo = common::make_repo().await;
@@ -405,15 +372,7 @@ async fn admin_can_deactivate_user() {
     .await
     .unwrap();
 
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        common::test_jwt_config(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let admin_token = common::login(&app, "admin", "adminpass1").await;
 
@@ -443,8 +402,6 @@ async fn admin_can_deactivate_user() {
 
 #[tokio::test]
 async fn admin_can_delete_user() {
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     let repo = common::make_repo().await;
@@ -460,15 +417,7 @@ async fn admin_can_delete_user() {
     .await
     .unwrap();
 
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        common::test_jwt_config(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let admin_token = common::login(&app, "admin", "adminpass1").await;
 
@@ -486,8 +435,6 @@ async fn admin_can_delete_user() {
 
 #[tokio::test]
 async fn admin_cannot_delete_self() {
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     let repo = common::make_repo().await;
@@ -504,15 +451,7 @@ async fn admin_cannot_delete_self() {
         .await
         .unwrap();
 
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-auth-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        common::test_jwt_config(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let admin_token = common::login(&app, "admin", "adminpass1").await;
     let admin_id = admin_user.id;
@@ -526,8 +465,6 @@ async fn admin_cannot_delete_self() {
 
 #[tokio::test]
 async fn admin_cannot_demote_self() {
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     let repo = common::make_repo().await;
@@ -544,13 +481,7 @@ async fn admin_cannot_demote_self() {
         .await
         .unwrap();
 
-    let store = common::make_test_store();
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        common::test_jwt_config(),
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let admin_token = common::login(&app, "admin", "adminpass1").await;
     let admin_id = admin_user.id;
@@ -567,8 +498,6 @@ async fn admin_cannot_demote_self() {
 
 #[tokio::test]
 async fn admin_cannot_deactivate_self() {
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     let repo = common::make_repo().await;
@@ -585,13 +514,7 @@ async fn admin_cannot_deactivate_self() {
         .await
         .unwrap();
 
-    let store = common::make_test_store();
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        common::test_jwt_config(),
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let admin_token = common::login(&app, "admin", "adminpass1").await;
     let admin_id = admin_user.id;
@@ -608,8 +531,6 @@ async fn admin_cannot_deactivate_self() {
 
 #[tokio::test]
 async fn last_admin_cannot_be_demoted_by_another_admin() {
-    use std::sync::Arc;
-
     use agent_k_backend::{auth, repository::NewUser};
 
     // Two admins. admin2 demotes admin1 (count goes 2→1, fine).
@@ -669,13 +590,7 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
     // (the inactive admin, not themselves) — last-admin guard should not fire
     // here because admin1 is already inactive (not an active admin).
     // This is the "fine" case. Let's verify admin2 can still demote inactive admin1.
-    let store = common::make_test_store();
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo.clone(),
-        store,
-        common::test_jwt_config(),
-    ));
-    let app = common::make_app_with_state(state);
+    let app = common::make_app_with_repo(repo);
 
     let admin2_token = common::login(&app, "admin2", "adminpass2").await;
     let admin1_id = admin1.id;
@@ -694,10 +609,7 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
     let admin2_id = {
         let (_, list) = common::authed(&app, "GET", "/admin/users", &admin2_token, None).await;
         let users = list["items"].as_array().unwrap();
-        users
-            .iter()
-            .find(|u| u["username"] == "admin2")
-            .unwrap()["id"]
+        users.iter().find(|u| u["username"] == "admin2").unwrap()["id"]
             .as_str()
             .unwrap()
             .to_string()
