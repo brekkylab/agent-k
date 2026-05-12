@@ -259,6 +259,76 @@ pub async fn delete_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// POST /sessions/{session_id}/fork
+pub async fn fork_session(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(source_session_id): Path<Uuid>,
+) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
+    let (source, _access) = state
+        .repository
+        .get_session_with_authz(source_session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    // Hold agent lock for entire fork — prevents send_message from running concurrently.
+    // If agent is absent from cache, sandbox is already stopped.
+    let _agent_guard = if let Some(arc) = state.get_agent(&source_session_id) {
+        Some(
+            arc.try_lock_owned()
+                .map_err(|_| AppError::locked("session is currently in use"))?,
+        )
+    } else {
+        None
+    };
+
+    let new_id = Uuid::new_v4();
+
+    let new_session = state
+        .repository
+        .fork_session(source_session_id, new_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let source_cfg = SandboxConfig {
+        name: Some(sandbox_name_for(&source_session_id)),
+        persist: true,
+        ..Default::default()
+    };
+    let source_sandbox = Sandbox::new(source_cfg)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let new_sandbox_name = sandbox_name_for(&new_id);
+    let new_cfg = SandboxConfig {
+        name: Some(new_sandbox_name.clone()),
+        persist: true,
+        ..Default::default()
+    };
+
+    match source_sandbox.fork(new_cfg).await {
+        Ok(_) => {
+            tracing::info!(
+                source = %source_session_id,
+                fork = %new_id,
+                sandbox = %new_sandbox_name,
+                project = %source.project_id,
+                "session forked",
+            );
+            Ok((
+                StatusCode::CREATED,
+                Json(SessionResponse::from(new_session)),
+            ))
+        }
+        Err(e) => {
+            let _ = state.repository.delete_session(new_id).await;
+            let _ = ailoy::runenv::remove_persisted(&new_sandbox_name).await;
+            Err(AppError::internal(format!("sandbox fork failed: {e}")))
+        }
+    }
+}
+
 // ── Messages ──────────────────────────────────────────────────────────────────
 
 /// GET /sessions/{session_id}/messages
