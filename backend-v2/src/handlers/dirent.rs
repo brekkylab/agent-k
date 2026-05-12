@@ -77,15 +77,11 @@ pub async fn upload(
         .await
         .map_err(|e| AppError::internal(format!("failed to create uploads directory: {e}")))?;
 
-    let max_bytes: usize = std::env::var("AGENT_K_MAX_UPLOAD_BYTES")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50 * 1024 * 1024);
-
+    let max_bytes = state.max_upload_bytes;
     let mut succeeded: Vec<UploadedFile> = Vec::new();
     let mut failed: Vec<FailedFile> = Vec::new();
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?
@@ -112,19 +108,31 @@ pub async fn upload(
             }
         };
 
-        let data = field
-            .bytes()
-            .await
-            .map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?;
-
-        if data.len() > max_bytes {
+        // Read chunk-by-chunk; reject after max_bytes without buffering the whole file.
+        let mut data = Vec::<u8>::new();
+        let mut over_limit = false;
+        loop {
+            match field
+                .chunk()
+                .await
+                .map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?
+            {
+                Some(chunk) => {
+                    data.extend_from_slice(&chunk);
+                    if data.len() > max_bytes {
+                        over_limit = true;
+                        // Drain the rest so the multipart stream stays parseable.
+                        while field.chunk().await.ok().flatten().is_some() {}
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        if over_limit {
             failed.push(FailedFile {
                 path: filename,
-                error: format!(
-                    "file exceeds maximum size ({} bytes > {} bytes)",
-                    data.len(),
-                    max_bytes
-                ),
+                error: format!("file exceeds maximum size ({max_bytes} bytes)"),
             });
             continue;
         }
@@ -136,19 +144,28 @@ pub async fn upload(
             .await
             .map_err(|e| AppError::internal(format!("failed to create dirs: {e}")))?;
 
-        // Atomic write: temp in uploads_root for guaranteed same-fs rename
+        // Atomic write: temp in uploads_root for guaranteed same-fs rename.
         let tmp_path = uploads_root.join(format!(".tmp.{}", Uuid::new_v4().simple()));
-        tokio::fs::write(&tmp_path, &data)
-            .await
-            .map_err(|e| AppError::internal(format!("failed to write temp file: {e}")))?;
+        if let Err(e) = tokio::fs::write(&tmp_path, &data).await {
+            failed.push(FailedFile {
+                path: filename,
+                error: format!("failed to write temp file: {e}"),
+            });
+            continue;
+        }
+        let byte_count = data.len() as u64;
         if let Err(e) = tokio::fs::rename(&tmp_path, &host_path).await {
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(AppError::internal(format!("failed to finalize file: {e}")));
+            failed.push(FailedFile {
+                path: filename,
+                error: format!("failed to finalize file: {e}"),
+            });
+            continue;
         }
 
         succeeded.push(UploadedFile {
             path: filename,
-            bytes: data.len() as u64,
+            bytes: byte_count,
         });
     }
 
