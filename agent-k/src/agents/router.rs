@@ -33,39 +33,69 @@ pub struct RouterDecision {
     pub reason: Option<String>,
 }
 
+const ROUTER_MAX_RETRIES: usize = 2;
+
 pub async fn run_gpt_router_agent(user_input: impl Into<String>) -> anyhow::Result<RouterDecision> {
-    let mut agent = AgentBuilder::new("openai/gpt-4o-mini")
+    run_router_agent("openai/gpt-4o-mini", user_input).await
+}
+
+pub async fn run_claude_router_agent(
+    user_input: impl Into<String>,
+) -> anyhow::Result<RouterDecision> {
+    run_router_agent("anthropic/claude-haiku-4-5", user_input).await
+}
+
+async fn run_router_agent(
+    model: &str,
+    user_input: impl Into<String>,
+) -> anyhow::Result<RouterDecision> {
+    let mut agent = AgentBuilder::new(model)
         .instruction(ROUTER_INSTRUCTION)
         .build()?;
-    let query = Message::new(Role::User).with_contents([Part::text(user_input)]);
-    let mut stream = agent.run(query);
-    while let Some(event) = stream.next().await {
-        let _ = event?;
+
+    let mut next_message = Some(Message::new(Role::User).with_contents([Part::text(user_input)]));
+    let mut last_err = String::from("no attempts made");
+
+    for _ in 0..ROUTER_MAX_RETRIES {
+        let msg = next_message
+            .take()
+            .expect("next_message set before each iteration");
+        let mut stream = agent.run(msg);
+        while let Some(event) = stream.next().await {
+            let _ = event?;
+        }
+        drop(stream);
+
+        let last = agent
+            .get_history()
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Assistant)
+            .ok_or_else(|| anyhow::anyhow!("router produced no assistant message"))?;
+
+        let raw = last
+            .contents
+            .iter()
+            .filter_map(|p| p.as_text())
+            .collect::<Vec<_>>()
+            .join("");
+
+        let mut it = serde_json::Deserializer::from_str(&raw).into_iter::<RouterDecision>();
+        last_err = match it.next() {
+            Some(Ok(d)) => return Ok(d),
+            Some(Err(e)) => {
+                format!("JSON parse failed: {e}")
+            }
+            None => "response had no JSON object".to_string(),
+        };
+
+        next_message = Some(Message::new(Role::User).with_contents([Part::text(format!(
+            "Your previous response is not valid JSON. Respond again.\n\n{last_err}."
+        ))]));
     }
-    drop(stream);
-
-    let last = agent
-        .get_history()
-        .iter()
-        .rev()
-        .find(|m| m.role == Role::Assistant)
-        .ok_or_else(|| anyhow::anyhow!("router produced no assistant message"))?;
-
-    let raw = last
-        .contents
-        .iter()
-        .filter_map(|p| p.as_text())
-        .collect::<Vec<_>>()
-        .join("");
-
-    let mut it = serde_json::Deserializer::from_str(&raw).into_iter::<RouterDecision>();
-    match it.next() {
-        Some(Ok(d)) => Ok(d),
-        Some(Err(e)) => Err(anyhow::anyhow!("router JSON parse failed: {e}; raw: {raw}")),
-        None => Err(anyhow::anyhow!("router response had no JSON object: {raw}")),
-    }
+    Ok(RouterDecision {
+        agent: "minerva".to_string(),
+        reason: Some(format!("fallback: {last_err}")),
+    })
 }
 
-pub async fn run_claude_router_agent(_: impl Into<String>) -> anyhow::Result<RouterDecision> {
-    todo!()
-}
