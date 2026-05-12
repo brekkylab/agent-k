@@ -197,6 +197,36 @@ async fn agent_can_read_uploaded_files_from_workspace_uploads() {
 
 // ── streaming tests ───────────────────────────────────────────────────────────
 
+/// Sending a non-streaming message to a non-existent session must return 404.
+/// Does not require microsandbox or an API key.
+#[tokio::test]
+async fn send_message_to_unknown_session_returns_404() {
+    dotenvy::dotenv().ok();
+    setup_provider().await;
+
+    let state = make_state().await;
+    let app = common::make_app_with_state(state);
+
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+
+    let fake_id = uuid::Uuid::new_v4();
+    let (status, _) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{fake_id}/messages"),
+        &token,
+        Some(serde_json::json!({ "content": "hi" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NOT_FOUND,
+        "non-streaming message to unknown session must return 404"
+    );
+}
+
 /// Sending a stream request to a non-existent session must return 404.
 /// Does not require microsandbox or an API key.
 #[tokio::test]
