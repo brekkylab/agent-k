@@ -6,6 +6,10 @@ edition = "2024"
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "session"
+path = "src/bin/session.rs"
+
 [features]
 internal = ["dep:knowledge-base-examples"]
 
@@ -13,6 +17,7 @@ internal = ["dep:knowledge-base-examples"]
 ailoy = { workspace = true }
 anyhow = "1"
 dirs = "6"
+dotenvy = "0.15"
 futures = "0.3"
 html-to-markdown-rs = "3.4.0-rc.2"
 indexmap = "2"
@@ -24,7 +29,7 @@ serde_json = "1"
 strum = { version = "0.27", features = ["derive"] }
 tantivy = "0.22"
 tempfile = "3"
-tokio = { version = "1", features = ["process", "io-util", "rt", "fs"] }
+tokio = { version = "1", features = ["process", "io-util", "rt", "rt-multi-thread", "macros", "fs"] }
 tokio-stream = "0.1"
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v5"] }

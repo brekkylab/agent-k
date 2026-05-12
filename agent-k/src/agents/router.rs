@@ -27,7 +27,7 @@ Respond with EXACTLY one JSON object, and nothing else (no prose, no markdown, n
 
 #[derive(Debug, Deserialize)]
 pub struct RouterDecision {
-    pub choice: String,
+    pub agent: String,
 
     #[serde(default)]
     pub reason: Option<String>,

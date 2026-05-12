@@ -26,6 +26,7 @@ dependencies = [
  "ailoy",
  "anyhow",
  "dirs 6.0.0",
+ "dotenvy",
  "futures",
  "html-to-markdown-rs",
  "indexmap 2.14.0",
