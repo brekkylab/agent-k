@@ -53,17 +53,29 @@ fn assistant_text(text: &str) -> Message {
 fn full_failure_trajectory() -> Vec<Message> {
     vec![
         // (1) Three identical greps that all return nothing.
-        assistant_call("c1", "bash", to_value!({"cmd": "grep -E 'BAD' /tmp/log.txt"})),
+        assistant_call(
+            "c1",
+            "bash",
+            to_value!({"cmd": "grep -E 'BAD' /tmp/log.txt"}),
+        ),
         tool_result(
             "c1",
             to_value!({"stdout": "", "stderr": "", "exit_code": 0, "timed_out": false}),
         ),
-        assistant_call("c2", "bash", to_value!({"cmd": "grep -E 'BAD' /tmp/log.txt"})),
+        assistant_call(
+            "c2",
+            "bash",
+            to_value!({"cmd": "grep -E 'BAD' /tmp/log.txt"}),
+        ),
         tool_result(
             "c2",
             to_value!({"stdout": "", "stderr": "", "exit_code": 0, "timed_out": false}),
         ),
-        assistant_call("c3", "bash", to_value!({"cmd": "grep -E 'BAD' /tmp/log.txt"})),
+        assistant_call(
+            "c3",
+            "bash",
+            to_value!({"cmd": "grep -E 'BAD' /tmp/log.txt"}),
+        ),
         tool_result(
             "c3",
             to_value!({"stdout": "", "stderr": "", "exit_code": 0, "timed_out": false}),
@@ -140,11 +152,7 @@ fn demo_task_clean_run_produces_no_issues() {
     // Compact happy path: one bash that returns content, one Python REPL
     // that uses the same timestamp, and a final response that cites it.
     let history = vec![
-        assistant_call(
-            "c1",
-            "bash",
-            to_value!({"cmd": "head /tmp/log.txt"}),
-        ),
+        assistant_call("c1", "bash", to_value!({"cmd": "head /tmp/log.txt"})),
         tool_result(
             "c1",
             to_value!({
@@ -154,15 +162,8 @@ fn demo_task_clean_run_produces_no_issues() {
                 "timed_out": false
             }),
         ),
-        assistant_call(
-            "c2",
-            "python_repl",
-            to_value!({"code": "print('plot ok')"}),
-        ),
-        tool_result(
-            "c2",
-            to_value!({"output": "plot ok"}),
-        ),
+        assistant_call("c2", "python_repl", to_value!({"code": "print('plot ok')"})),
+        tool_result("c2", to_value!({"output": "plot ok"})),
         assistant_text(
             "Found 2024-01-15T10:30:00 metric=42 in the log. Plot rendered successfully.",
         ),
@@ -192,7 +193,7 @@ async fn demo_task_end_to_end_pipeline() {
     use reflect_agent::{build_agent, register_provider_from_env, run_with_verify};
 
     dotenvy::dotenv().ok();
-    register_provider_from_env(&mut *default_provider_mut().await);
+    register_provider_from_env(&mut default_provider_mut());
 
     // Pick whichever provider is registered. Anthropic preferred for
     // determinism on tool calls; OpenAI is the fallback.

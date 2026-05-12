@@ -1,54 +1,33 @@
 //! Single registration site for ailoy `LangModelProvider` entries from
-//! environment variables. Mirrors `speedwagon::register_provider_from_env`
-//! (kept duplicated for now to avoid pulling speedwagon's full dependency
-//! tree just for a 12-line helper).
+//! environment variables.
+//!
+//! Note that `ailoy::agent::AgentProvider::new()` already populates the
+//! default provider from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` /
+//! `GEMINI_API_KEY`, so this helper is largely redundant for the standard
+//! patterns. It is kept on the public surface so callers can re-register
+//! after mutating env, and to mirror the helper of the same name in
+//! sibling crates.
 
-use ailoy::{
-    agent::AgentProvider,
-    lang_model::{LangModelAPISchema, LangModelProviderElem},
-};
-use url::Url;
+use ailoy::{agent::AgentProvider, lang_model::LangModelProvider};
 
 /// Read the conventional API-key environment variables and register matching
 /// glob patterns on `provider.models`. Missing keys are silently skipped, so
-/// callers can register only the providers they actually have credentials for.
-///
-/// Patterns and URLs match the helper constructors that ailoy used to expose
-/// (`model_openai`, `model_claude`, `model_gemini`) before they were removed
-/// in the post-#391 registry refactor.
+/// callers can register only the providers they actually have credentials
+/// for. Idempotent — re-registering a pattern overwrites the previous entry.
 pub fn register_provider_from_env(provider: &mut AgentProvider) {
     if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        provider.models.insert(
-            "openai/*".into(),
-            LangModelProviderElem::API {
-                schema: LangModelAPISchema::OpenAI,
-                url: Url::parse("https://api.openai.com/v1/responses").unwrap(),
-                api_key: Some(key),
-                max_tokens: None,
-            },
-        );
+        provider
+            .models
+            .insert("openai/*".into(), LangModelProvider::openai(key));
     }
     if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        provider.models.insert(
-            "anthropic/claude-*".into(),
-            LangModelProviderElem::API {
-                schema: LangModelAPISchema::Anthropic,
-                url: Url::parse("https://api.anthropic.com/v1/messages").unwrap(),
-                api_key: Some(key),
-                max_tokens: None,
-            },
-        );
+        provider
+            .models
+            .insert("anthropic/*".into(), LangModelProvider::anthropic(key));
     }
     if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-        provider.models.insert(
-            "google/gemini-*".into(),
-            LangModelProviderElem::API {
-                schema: LangModelAPISchema::Gemini,
-                url: Url::parse("https://generativelanguage.googleapis.com/v1beta/models/")
-                    .unwrap(),
-                api_key: Some(key),
-                max_tokens: None,
-            },
-        );
+        provider
+            .models
+            .insert("gemini/*".into(), LangModelProvider::gemini(key));
     }
 }

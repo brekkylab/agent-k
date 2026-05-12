@@ -166,7 +166,7 @@ pub async fn reflect_call(
     draft_answer: &str,
     verify_hints: &[String],
 ) -> Result<ReflectVerdict> {
-    let model: LangModel = provider.models.make_runtime(model_id)?;
+    let model: LangModel = provider.models.provide(model_id)?;
     let user_text = if verify_hints.is_empty() {
         format!("Draft answer to verify:\n\n{}", draft_answer)
     } else {
