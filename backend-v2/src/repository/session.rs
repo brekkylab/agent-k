@@ -240,6 +240,55 @@ impl SqliteRepository {
         rows.into_iter().map(Self::row_to_db_session).collect()
     }
 
+    pub async fn fork_session(
+        &self,
+        source_id: Uuid,
+        new_id: Uuid,
+        new_creator_id: Uuid,
+    ) -> RepositoryResult<DbSession> {
+        let source = self.get_session(source_id).await?.ok_or_else(|| {
+            crate::repository::RepositoryError::InvalidData(format!(
+                "source session {source_id} not found"
+            ))
+        })?;
+
+        let now = Self::now_string();
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', ?, ?);",
+        )
+        .bind(new_id.to_string())
+        .bind(source.project_id.to_string())
+        .bind(new_creator_id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO session_messages (session_id, message_json, created_at) \
+             SELECT ?, message_json, created_at \
+             FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
+        )
+        .bind(new_id.to_string())
+        .bind(source_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(DbSession {
+            id: new_id,
+            project_id: source.project_id,
+            creator_id: new_creator_id,
+            share_mode: ShareMode::Private,
+            created_at: Self::parse_timestamp(now.clone(), "sessions.created_at")?,
+            updated_at: Self::parse_timestamp(now, "sessions.updated_at")?,
+        })
+    }
+
     pub async fn delete_session(&self, id: Uuid) -> RepositoryResult<bool> {
         let result = sqlx::query("DELETE FROM sessions WHERE id = ?;")
             .bind(id.to_string())

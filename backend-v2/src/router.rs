@@ -81,6 +81,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
                 .post(handlers::send_message)
                 .delete(handlers::clear_message_history),
         )
+        .api_route("/sessions/{session_id}/fork", post(handlers::fork_session))
         .api_route(
             "/sessions/{session_id}/messages/stream",
             post(handlers::send_message_stream),
