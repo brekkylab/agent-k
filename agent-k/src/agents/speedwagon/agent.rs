@@ -1,5 +1,10 @@
 use ailoy::agent::{AgentCard, AgentSpec};
 
+use super::tool::{
+    get_calculate_tool_desc, get_find_in_document_tool_desc, get_read_document_tool_desc,
+    get_search_document_tool_desc,
+};
+
 pub const SYSTEM_PROMPT: &str = r#"You are an expert research assistant. Your task is to answer questions by systematically searching through a document corpus using the provided tools. Think step by step.
 
 # Strategy
@@ -70,10 +75,10 @@ impl Default for SpeedwagonSpec {
             spec: AgentSpec::new("openai/gpt-5.4-mini")
                 .instruction(SYSTEM_PROMPT)
                 .tools([
-                    "search_document",
-                    "find_in_document",
-                    "read_document",
-                    "calculate",
+                    get_search_document_tool_desc(),
+                    get_find_in_document_tool_desc(),
+                    get_read_document_tool_desc(),
+                    get_calculate_tool_desc(),
                 ]),
         }
     }

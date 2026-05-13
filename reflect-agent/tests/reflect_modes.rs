@@ -54,15 +54,14 @@ fn pick_model() -> Option<&'static str> {
 }
 
 fn build_query() -> Message {
-    Message::new(Role::User).with_contents([Part::text(
-        PROMPT_TEMPLATE.replace("{log}", LOG_FIXTURE),
-    )])
+    Message::new(Role::User)
+        .with_contents([Part::text(PROMPT_TEMPLATE.replace("{log}", LOG_FIXTURE))])
 }
 
 async fn boot() -> Option<&'static str> {
     dotenvy::dotenv().ok();
     let model = pick_model()?;
-    register_provider_from_env(&mut *default_provider_mut().await);
+    register_provider_from_env(&mut default_provider_mut());
     Some(model)
 }
 
@@ -107,7 +106,7 @@ async fn forced_mode_runs_through_with_reflect_verdicts() {
         return;
     };
 
-    let provider: AgentProvider = default_provider().await.clone();
+    let provider: AgentProvider = default_provider().clone();
     let mut agent = build_agent_with_mode(model, ReflectMode::Forced)
         .await
         .expect("build agent");

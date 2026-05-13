@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use agent_k::knowledge_base::FileType;
 use aide::NoApi;
 use axum::{
     Json,
@@ -8,7 +9,6 @@ use axum::{
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
-use speedwagon::FileType;
 use uuid::Uuid;
 
 use crate::{

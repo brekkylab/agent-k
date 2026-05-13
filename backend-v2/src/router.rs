@@ -4,6 +4,7 @@ use aide::axum::{
     ApiRouter,
     routing::{delete, get, post},
 };
+use axum::handler::Handler;
 
 use crate::{
     auth::{admin_required, auth_required},
@@ -62,6 +63,16 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .api_route(
             "/projects/{project_id}/sessions",
             get(handlers::list_sessions).post(handlers::create_session),
+        )
+        .api_route(
+            "/projects/{project_id}/dirents",
+            // Body limit disabled only for upload; GET list has no body.
+            post(handlers::upload.layer(axum::extract::DefaultBodyLimit::disable()))
+                .get(handlers::list),
+        )
+        .api_route(
+            "/projects/{project_id}/dirents/{*path}",
+            get(handlers::get_file).delete(handlers::delete_path),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

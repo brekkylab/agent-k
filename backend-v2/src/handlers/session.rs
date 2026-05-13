@@ -1,10 +1,11 @@
 use std::{convert::Infallible, sync::Arc};
 
+use agent_k::agents::SpeedwagonSpec;
 use aide::NoApi;
 use ailoy::{
     agent::{Agent, AgentBuilder, AgentCard},
     message::{Message, MessageOutput, Part, Role},
-    runenv::{Sandbox, SandboxConfig},
+    runenv::{Sandbox, SandboxConfig, VolumeMount},
 };
 use axum::{
     Json,
@@ -13,7 +14,6 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures_util::StreamExt;
-use speedwagon::SpeedwagonSpec;
 use uuid::Uuid;
 
 use crate::{
@@ -34,6 +34,36 @@ fn sandbox_name_for(id: &Uuid) -> String {
     format!("session-{}", &s[..12])
 }
 
+async fn build_sandbox(
+    state: &Arc<AppState>,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<Sandbox, String> {
+    let uploads_host = state
+        .data_root
+        .join("projects")
+        .join(project_id.to_string())
+        .join("uploads");
+    tokio::fs::create_dir_all(&uploads_host)
+        .await
+        .map_err(|e| format!("failed to create uploads dir: {e}"))?;
+
+    let volumes = vec![VolumeMount::Bind {
+        host: uploads_host,
+        guest: "/workspace/.uploads".to_string(),
+        readonly: true,
+    }];
+
+    let sandbox_name = sandbox_name_for(&session_id);
+    let cfg = SandboxConfig {
+        name: Some(sandbox_name),
+        persist: true,
+        volumes,
+        ..Default::default()
+    };
+    Sandbox::new(cfg).await.map_err(|e| e.to_string())
+}
+
 async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
     let sw_card = AgentCard {
         name: "speedwagon".into(),
@@ -50,25 +80,30 @@ async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
         .instruction(concat!(
             "You are a versatile assistant with access to code execution tools ",
             "(bash, python), web search, and a knowledge base (speedwagon). ",
+            "Your working directory is /workspace, which is read-write — you can freely ",
+            "create, edit, and delete files there for intermediate work, scripts, and results. ",
+            "Project files uploaded by the user are available read-only at /workspace/.uploads/. ",
+            "Use `ls /workspace/.uploads` to see what files are available, and ",
+            "`cat /workspace/.uploads/<path>` to read them. ",
+            "To modify or analyse uploaded files, copy them into /workspace first. ",
+            "New uploads appear in /workspace/.uploads immediately without restarting. ",
             "You MUST use the speedwagon tool to search the document corpus ",
             "before answering ANY factual question — even if you think you already know the answer. ",
-            "The corpus contains authoritative information that may differ from your training data. ",
             "Use bash and python tools for computation, data analysis, and code execution tasks. ",
             "Only skip tools for greetings or casual conversation.",
         ))
-        .tool("bash")
-        .tool("python_repl")
-        .tool("web_search")
+        .system_tools()
+        .web_search_tool()
         .runenv(sandbox)
         .subagent(sw_spec)
         .build()
-        .await
         .map_err(|e| e.to_string())
 }
 
 async fn resolve_agent_for(
     state: &Arc<AppState>,
     session_id: Uuid,
+    project_id: Uuid,
 ) -> ApiResult<Arc<tokio::sync::Mutex<Agent>>> {
     if let Some(arc) = state.get_agent(&session_id) {
         return Ok(arc);
@@ -80,15 +115,9 @@ async fn resolve_agent_for(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let sandbox_name = sandbox_name_for(&session_id);
-    let cfg = SandboxConfig {
-        name: Some(sandbox_name),
-        persist: true,
-        ..Default::default()
-    };
-    let sandbox = Sandbox::new(cfg)
+    let sandbox = build_sandbox(state, project_id, session_id)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(|e| AppError::internal(e))?;
 
     let mut agent = build_agent(sandbox)
         .await
@@ -129,16 +158,11 @@ pub async fn create_session(
         .map_err(|e| AppError::internal(e.to_string()))?;
 
     let sandbox_name = sandbox_name_for(&session.id);
-    let cfg = SandboxConfig {
-        name: Some(sandbox_name.clone()),
-        persist: true,
-        ..Default::default()
-    };
-    let sandbox = match Sandbox::new(cfg).await {
+    let sandbox = match build_sandbox(&state, project_id, session.id).await {
         Ok(s) => s,
         Err(e) => {
             let _ = state.repository.delete_session(session.id).await;
-            return Err(AppError::internal(e.to_string()));
+            return Err(AppError::internal(e));
         }
     };
     let agent = match build_agent(sandbox).await {
@@ -212,9 +236,7 @@ pub async fn update_session(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Admin) {
-        return Err(AppError::forbidden(
-            "only admins can change sharing",
-        ));
+        return Err(AppError::forbidden("only admins can change sharing"));
     }
 
     let updated = state
@@ -248,9 +270,7 @@ pub async fn delete_session(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Admin) {
-        return Err(AppError::forbidden(
-            "only admins can delete this session",
-        ));
+        return Err(AppError::forbidden("only admins can delete this session"));
     }
 
     state
@@ -303,9 +323,7 @@ pub async fn clear_message_history(
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
     if !matches!(access, SessionAccess::Admin) {
-        return Err(AppError::forbidden(
-            "only admins can clear history",
-        ));
+        return Err(AppError::forbidden("only admins can clear history"));
     }
 
     // Acquire agent lock before clearing so concurrent sends can't re-persist old messages.
@@ -347,7 +365,7 @@ pub async fn send_message(
         return Err(AppError::forbidden("read-only access to this session"));
     }
 
-    let agent_arc = resolve_agent_for(&state, session.id).await?;
+    let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
 
     let mut agent = agent_arc
         .try_lock()
@@ -393,7 +411,7 @@ pub async fn send_message_stream(
         return Err(AppError::forbidden("read-only access to this session"));
     }
 
-    let agent_arc = resolve_agent_for(&state, session.id).await?;
+    let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
 
     // Acquire OwnedMutexGuard — held for entire SSE stream lifetime.
     // Returns 423 immediately if another request holds the lock.

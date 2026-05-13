@@ -1,12 +1,12 @@
 use ailoy::{
     datatype::Value,
-    message::ToolDescBuilder,
     to_value,
-    tool::{ToolFactory, ToolFunc},
+    tool::{ToolDesc, ToolDescBuilder, ToolFunc},
+    tool_func,
 };
 use uuid::Uuid;
 
-use crate::store::{FindResult, SharedStore};
+use crate::knowledge_base::{FindResult, SharedStore};
 
 fn result_to_value(result: &FindResult) -> Value {
     let matches: Vec<Value> = result
@@ -36,8 +36,8 @@ fn result_to_value(result: &FindResult) -> Value {
     })
 }
 
-pub fn build_find_in_document_tool(store: SharedStore) -> ToolFactory {
-    let desc = ToolDescBuilder::new("find_in_document")
+pub fn get_find_in_document_tool_desc() -> ToolDesc {
+    ToolDescBuilder::new("find_in_document")
         .description(concat!(
             "Find occurrences of a query within a document. Matching is line-oriented and ",
             "case-insensitive; one match is reported per matching line. ",
@@ -118,46 +118,43 @@ pub fn build_find_in_document_tool(store: SharedStore) -> ToolFactory {
                 }
             }
         }))
-        .build();
+        .build()
+}
 
-    let func = ToolFunc::new(move |args: Value| {
-        let store = store.clone();
-        async move {
-            let id_str = match args.pointer("/id").and_then(|v: &Value| v.as_str()) {
-                Some(s) => s.to_string(),
-                None => return to_value!({"error": "missing required parameter: id"}),
-            };
-            let id = match Uuid::parse_str(&id_str) {
-                Ok(id) => id,
-                Err(_) => return to_value!({"error": "invalid document ID"}),
-            };
-            let pattern = match args.pointer("/pattern").and_then(|v: &Value| v.as_str()) {
-                Some(q) => q.to_string(),
-                None => return to_value!({"error": "missing required parameter: pattern"}),
-            };
-            let cursor = args
-                .pointer("/cursor")
-                .and_then(|v: &Value| v.as_integer())
-                .unwrap_or(0)
-                .max(0) as usize;
-            let k = args
-                .pointer("/k")
-                .and_then(|v: &Value| v.as_integer())
-                .unwrap_or(10)
-                .max(1) as usize;
-            let context_bytes = args
-                .pointer("/context_bytes")
-                .and_then(|v: &Value| v.as_integer())
-                .unwrap_or(256)
-                .max(0) as usize;
+pub fn get_find_in_document_tool_func(store: SharedStore) -> ToolFunc {
+    tool_func!(async |args: Value| -> Value with [store = store.clone()] {
+        let id_str = match args.pointer("/id").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => return to_value!({"error": "missing required parameter: id"}),
+        };
+        let id = match Uuid::parse_str(&id_str) {
+            Ok(id) => id,
+            Err(_) => return to_value!({"error": "invalid document ID"}),
+        };
+        let pattern = match args.pointer("/pattern").and_then(|v| v.as_str()) {
+            Some(q) => q.to_string(),
+            None => return to_value!({"error": "missing required parameter: pattern"}),
+        };
+        let cursor = args
+            .pointer("/cursor")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(0)
+            .max(0) as usize;
+        let k = args
+            .pointer("/k")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(10)
+            .max(1) as usize;
+        let context_bytes = args
+            .pointer("/context_bytes")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(256)
+            .max(0) as usize;
 
-            let guard = store.read().await;
-            match guard.find(id, &pattern, cursor, k, context_bytes) {
-                Some(result) => result_to_value(&result),
-                None => to_value!({"error": format!("document not found: {id_str}")}),
-            }
+        let guard = store.read().await;
+        match guard.find(id, &pattern, cursor, k, context_bytes) {
+            Some(result) => result_to_value(&result),
+            None => to_value!({"error": format!("document not found: {id_str}")}),
         }
-    });
-
-    ToolFactory::simple(desc, func)
+    })
 }

@@ -2,16 +2,21 @@ mod cli;
 
 use std::{path::PathBuf, sync::Arc};
 
+use agent_k::{
+    agents::{
+        get_calculate_tool_func, get_find_in_document_tool_func, get_search_document_tool_func,
+    },
+    knowledge_base::Store,
+};
 use agent_k_backend::{auth, repository, router, state::AppState};
 use aide::{
     axum::ApiRouter,
     openapi::{Info, OpenApi},
     scalar::Scalar,
 };
-use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
+use ailoy::agent::default_provider_mut;
 use axum::{Extension, response::IntoResponse};
 use clap::Parser;
-use speedwagon::{Store, build_tools};
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -92,28 +97,27 @@ async fn run_server() -> std::io::Result<()> {
     ));
 
     {
-        let mut provider = default_provider_mut().await;
-
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            provider
-                .models
-                .insert("openai/*".into(), LangModelProvider::openai(key));
-        }
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            provider
-                .models
-                .insert("anthropic/*".into(), LangModelProvider::anthropic(key));
-        }
-        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-            provider
-                .models
-                .insert("google/*".into(), LangModelProvider::gemini(key));
-        }
-
-        provider.tools = build_tools(store.clone());
+        let mut provider = default_provider_mut();
+        provider
+            .tools
+            .insert_func("calculate", get_calculate_tool_func());
+        provider.tools.insert_func(
+            "search_document",
+            get_search_document_tool_func(store.clone()),
+        );
+        provider.tools.insert_func(
+            "find_in_document",
+            get_find_in_document_tool_func(store.clone()),
+        );
     }
 
-    let app_state = Arc::new(AppState::new(repo, store, jwt));
+    let data_root = std::env::var("AGENT_K_DATA_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data"));
+
+    tracing::info!("data root: {}", data_root.display());
+
+    let app_state = Arc::new(AppState::new(repo, store, jwt, data_root));
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)
         .merge(

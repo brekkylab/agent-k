@@ -81,7 +81,7 @@ pub(super) trait HelperAgent {
         Self::Output: From<String>,
     {
         let chosen_model = {
-            let provider = ailoy::agent::default_provider().await;
+            let provider = ailoy::agent::default_provider();
             Self::MODELS
                 .iter()
                 .copied()
@@ -104,7 +104,7 @@ pub(super) trait HelperAgent {
         };
 
         let spec = AgentSpec::new(model).instruction(Self::INSTRUCTION);
-        let mut agent = Agent::try_new(spec).await?;
+        let mut agent = Agent::try_new(spec)?;
         let query = Self::build_query(&input);
 
         let mut text_parts: Vec<String> = Vec::new();

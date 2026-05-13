@@ -157,7 +157,7 @@ mod tests {
         // Empty store → describe short-circuits before any LLM call,
         // so this runs without OPENAI_API_KEY.
         let tmp = tempfile::tempdir().expect("tempdir");
-        let store = crate::store::Store::new(tmp.path()).expect("open store");
+        let store = crate::knowledge_base::Store::new(tmp.path()).expect("open store");
         let result = store
             .describe("kb-empty", None)
             .await
@@ -174,8 +174,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path();
         let index_dir = root.join("index");
-        let index = crate::store::indexer::open_or_create(&index_dir).expect("open index");
-        crate::store::indexer::add_document(
+        let index = crate::knowledge_base::indexer::open_or_create(&index_dir).expect("open index");
+        crate::knowledge_base::indexer::add_document(
             &index,
             "doc1",
             "Apple FY2021 10-K",
@@ -183,7 +183,7 @@ mod tests {
             "body 1",
         )
         .expect("add doc1");
-        crate::store::indexer::add_document(
+        crate::knowledge_base::indexer::add_document(
             &index,
             "doc2",
             "Walmart FY2023 10-K",
@@ -198,14 +198,7 @@ mod tests {
         std::fs::create_dir_all(root.join("origin")).unwrap();
         std::fs::create_dir_all(root.join("corpus")).unwrap();
 
-        // Populate ailoy's process-global default provider for this test
-        // through the same helper main.rs uses, so the env-key → glob-pattern
-        // mapping has a single source of truth.
-        dotenvy::dotenv().ok();
-        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY required for this test");
-        crate::register_provider_from_env(&mut *ailoy::agent::default_provider_mut().await);
-
-        let store = crate::store::Store::new(root).expect("open store");
+        let store = crate::knowledge_base::Store::new(root).expect("open store");
         let description = store
             .describe("finance", Some("public-company financial filings"))
             .await

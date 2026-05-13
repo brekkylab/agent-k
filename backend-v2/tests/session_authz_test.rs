@@ -9,10 +9,12 @@ use axum::http::StatusCode;
 async fn make_app_and_repo() -> (axum::Router, agent_k_backend::repository::AppRepository) {
     let repo = common::make_repo().await;
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-authz-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo.clone(),
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
     (app, repo)
@@ -325,7 +327,11 @@ async fn removed_member_loses_session_access() {
         None,
     )
     .await;
-    assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "remove member failed");
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NO_CONTENT,
+        "remove member failed"
+    );
 
     // bob can no longer access his session after being removed
     let (status, _) = common::authed(

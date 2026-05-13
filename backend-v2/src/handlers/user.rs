@@ -157,9 +157,7 @@ pub async fn update_user_admin(
 
     if auth.id == id {
         if removes_admin_access {
-            return Err(AppError::bad_request(
-                "cannot remove your own admin access",
-            ));
+            return Err(AppError::bad_request("cannot remove your own admin access"));
         }
     } else if removes_admin_access {
         // Prevent demoting or deactivating the last active admin.
