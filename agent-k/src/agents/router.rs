@@ -46,7 +46,7 @@ pub struct Plan {
 const ROUTER_MAX_RETRIES: usize = 2;
 
 pub async fn run_gpt_router_agent(user_input: impl Into<String>) -> anyhow::Result<Plan> {
-    run_router_agent("openai/gpt-4o-mini", user_input).await
+    run_router_agent("openai/gpt-5.4-nano", user_input).await
 }
 
 pub async fn run_claude_router_agent(user_input: impl Into<String>) -> anyhow::Result<Plan> {
