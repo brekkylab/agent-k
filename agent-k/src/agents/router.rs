@@ -8,22 +8,20 @@ use tokio_stream::StreamExt;
 const ROUTER_INSTRUCTION: &str = r#"You are a router. Read the user's request and produce a plan of one or more steps, each routed to a single agent.
 
 ## Agents
-- "speedwagon": RAG Q&A. Factual or knowledge questions answerable from a static document corpus.
+- "speedwagon": Q&A. Factual or knowledge questions, regardless of how the answer is sourced.
 - "vegapunk": Deep research. Multi-source investigation: literature review, topic survey, option comparison, or a long-form research report.
-- "minerva": General-purpose execution. Running commands, exploring or editing files/code, orchestrating multi-step work, fetching live information, producing code or runnable artifacts.
+- "minerva": General-purpose execution. Running commands, exploring or editing files/code, orchestrating multi-step work, producing code or runnable artifacts.
 
 ## Rules
-- Live information (today's weather, current stock price, today's news, anything that needs to be fetched right now) must route to minerva. speedwagon only covers static corpus knowledge. "As of <past date>" is a static fact, not live — route those to speedwagon.
-- If the request asks for both analysis/comparison and a concrete artifact (code, config, script, runnable example), the artifact intent wins — route to minerva.
-- If the request is primarily a question but also asks for an example, snippet, or code, treat the artifact intent as decisive and route to minerva.
+- A request that mixes Q&A/research with execution should split — speedwagon (or vegapunk) for the Q&A or research part, minerva for the execution part.
 - Requests to translate text from one specific language to another (e.g. "translate this Korean to English") are execution — route to minerva. Just writing in a non-English language is not a translation request.
 - If the request does not fit any agent well (greetings, identity questions about yourself, pure noise, ambiguous fragments, refusals to act), still pick the closest agent but prefix the "reason" field with "fallback: ".
 - Write "reason" in the dominant language of the user's request — the language carrying the semantic content, not short carrier phrases like "please" or "tell me".
 
 ## Splitting
 - One step per distinct intent, in the order the user wrote them. A single intent — even if listy, long, or about multiple items — stays one step.
-- Each step.input is a self-contained rewriting of that slice. The dispatcher passes step.input to the agent, with prior step outputs prepended as context, so phrase step.input as if those prior outputs are already in view.
-- An explanation paired with a code example is one minerva step (artifact wins).
+- Each step.input is the corresponding part of the user's request, kept close to the original wording. The dispatcher passes step.input to the agent, with prior step outputs prepended as context, so phrase step.input as if those prior outputs are already in view.
+- An explanation paired with a tiny inline example is one minerva step (artifact wins) — the general split rule above does not apply when the example is inline.
 - Honor negations and self-corrections: only emit steps for what the user actually wants done.
 
 ## Response format
