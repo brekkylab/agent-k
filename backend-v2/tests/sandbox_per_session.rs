@@ -14,14 +14,20 @@ use agent_k_backend::state::AppState;
 use common::{
     delete_session, extract_text, extract_text_from_slice, get_personal_project, login, make_repo,
     make_test_store, post_session_authed, send_message, send_message_stream, setup_provider,
-    signup, test_jwt_config,
+    signup, test_jwt_config, upload_dirents,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 async fn make_state() -> Arc<AppState> {
     let store = make_test_store();
-    Arc::new(AppState::new(make_repo().await, store, test_jwt_config()))
+    let data_root = std::env::temp_dir().join(format!("agent-k-sandbox-{}", uuid::Uuid::new_v4()));
+    Arc::new(AppState::new(
+        make_repo().await,
+        store,
+        test_jwt_config(),
+        data_root,
+    ))
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -137,6 +143,56 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     drop(agent);
 
     delete_session(&app, id, &token).await;
+}
+
+/// Files uploaded via the dirent API must be readable by the agent inside the
+/// session sandbox at `/workspace/.uploads/<path>`.
+///
+/// Flow: upload file → create session → ask agent to cat the file → verify content.
+///
+/// Requires: microsandbox runtime + ANTHROPIC_API_KEY (real value).
+#[tokio::test]
+#[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
+async fn agent_can_read_uploaded_files_from_workspace_uploads() {
+    dotenvy::dotenv().ok();
+    setup_provider().await;
+
+    let state = make_state().await;
+    let app = common::make_app_with_state(state.clone());
+
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+
+    // Upload a file with a known sentinel value before the session is created.
+    upload_dirents(
+        &app,
+        &token,
+        project_id,
+        &[("context.txt", b"SENTINEL_UPLOAD_OK")],
+    )
+    .await;
+
+    // Create a session — this mounts uploads_root at /workspace/.uploads (readonly).
+    let session_id = post_session_authed(&app, &token, project_id).await;
+
+    let outputs = send_message(
+        &app,
+        session_id,
+        "Run this bash command exactly and report the output: cat /workspace/.uploads/context.txt",
+        &token,
+    )
+    .await;
+
+    let text = extract_text(&outputs);
+    assert!(
+        text.contains("SENTINEL_UPLOAD_OK"),
+        "expected agent to read 'SENTINEL_UPLOAD_OK' from /workspace/.uploads/context.txt, got: {text:?}"
+    );
+
+    delete_session(&app, session_id, &token).await;
 }
 
 // ── streaming tests ───────────────────────────────────────────────────────────

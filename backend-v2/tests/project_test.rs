@@ -184,10 +184,12 @@ async fn project_delete_cascades_sessions() {
     // an AI provider (the HTTP create-session handler tries to build an agent).
     let repo = common::make_repo().await;
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-proj-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo.clone(),
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
 
@@ -262,10 +264,12 @@ async fn project_delete_cleans_up_agents_in_state() {
 
     let repo = common::make_repo().await;
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-proj-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo,
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state.clone());
 
@@ -310,10 +314,12 @@ async fn list_all_sessions_in_project_includes_private_sessions_from_members() {
 
     let repo = common::make_repo().await;
     let store = common::make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-proj-{}", uuid::Uuid::new_v4()));
     let state = Arc::new(agent_k_backend::state::AppState::new(
         repo.clone(),
         store,
         common::test_jwt_config(),
+        data_root,
     ));
     let app = common::make_app_with_state(state);
 

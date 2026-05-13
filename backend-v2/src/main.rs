@@ -111,7 +111,13 @@ async fn run_server() -> std::io::Result<()> {
         );
     }
 
-    let app_state = Arc::new(AppState::new(repo, store, jwt));
+    let data_root = std::env::var("AGENT_K_DATA_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data"));
+
+    tracing::info!("data root: {}", data_root.display());
+
+    let app_state = Arc::new(AppState::new(repo, store, jwt, data_root));
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)
         .merge(

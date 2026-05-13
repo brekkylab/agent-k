@@ -55,7 +55,8 @@ pub fn make_test_store() -> agent_k::knowledge_base::SharedStore {
 
 pub fn make_app_with_repo(repo: repository::AppRepository) -> axum::Router {
     let store = make_test_store();
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
+    let data_root = std::env::temp_dir().join(format!("agent-k-test-{}", uuid::Uuid::new_v4()));
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
     make_app_with_state(state)
 }
 
@@ -563,6 +564,44 @@ pub fn extract_text_from_slice(outputs: &[serde_json::Value]) -> String {
 
 pub fn extract_text(outputs: &serde_json::Value) -> String {
     extract_text_from_slice(outputs.as_array().map(Vec::as_slice).unwrap_or(&[]))
+}
+
+// ── Dirent helpers ───────────────────────────────────────────────────────────
+
+/// Upload files to a project's dirent store and assert all succeeded.
+pub async fn upload_dirents(
+    app: &axum::Router,
+    token: &str,
+    project_id: &str,
+    files: &[(&str, &[u8])],
+) -> serde_json::Value {
+    let (boundary, body) = build_multipart_body(files);
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/projects/{project_id}/dirents"))
+        .header("authorization", format!("Bearer {token}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::OK,
+        "dirent upload failed"
+    );
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        value["failed"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false),
+        "dirent upload had failures: {value}"
+    );
+    value
 }
 
 // ── SessionGuard ──────────────────────────────────────────────────────────────

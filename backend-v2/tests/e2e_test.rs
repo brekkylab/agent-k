@@ -37,7 +37,8 @@ async fn test_ingest_message_purge_cycle() {
     let repo = repository::create_repository("sqlite::memory:")
         .await
         .expect("test repo init");
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config()));
+    let data_root = std::env::temp_dir().join(format!("agent-k-e2e-{}", uuid::Uuid::new_v4()));
+    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
     let app = get_router(state).finish_api(&mut OpenApi::default());
 
     // ── Ingest two documents via multipart ───────────────────────────────────

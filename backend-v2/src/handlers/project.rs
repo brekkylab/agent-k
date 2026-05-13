@@ -119,6 +119,17 @@ pub async fn delete_project(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
+    // Best-effort cleanup after DB delete; ignore NotFound (project may never have had uploads)
+    let project_dir = state
+        .data_root
+        .join("projects")
+        .join(project_id.to_string());
+    if let Err(e) = tokio::fs::remove_dir_all(&project_dir).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(id = %project_id, "failed to remove project dir: {e}");
+        }
+    }
+
     tracing::info!(id = %project_id, "project deleted");
     Ok(StatusCode::NO_CONTENT)
 }
