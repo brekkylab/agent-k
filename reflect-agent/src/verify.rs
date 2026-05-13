@@ -575,7 +575,7 @@ fn is_valid_iso_timestamp(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ailoy::{message::ToolDescBuilder, to_value};
+    use ailoy::{to_value, tool::ToolDescBuilder};
 
     // ── helpers ───────────────────────────────────────────────────────────
 
@@ -604,7 +604,10 @@ mod tests {
     fn collect_tool_log_pairs_calls_and_results() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "ls"})),
-            tool_message("c1", to_value!({"stdout": "a\n", "stderr": "", "exit_code": 0})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "a\n", "stderr": "", "exit_code": 0}),
+            ),
         ];
         let log = collect_tool_log(&history);
         assert_eq!(log.len(), 1);
@@ -621,7 +624,10 @@ mod tests {
             tool_message("c2", to_value!({"output": "y"})),
         ];
         let log = collect_tool_log(&history);
-        assert_eq!(log.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["bash", "python_repl"]);
+        assert_eq!(
+            log.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["bash", "python_repl"]
+        );
     }
 
     // ── empty result ──────────────────────────────────────────────────────
@@ -665,7 +671,10 @@ mod tests {
         ];
         let report = verify_run(&history, &VerifyConfig::default());
         assert!(
-            report.issues.iter().any(|i| matches!(i, Issue::LoopDetected { count: 3, .. })),
+            report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::LoopDetected { count: 3, .. })),
             "expected loop detected, got: {:?}",
             report.issues
         );
@@ -682,7 +691,12 @@ mod tests {
             tool_message("c3", to_value!({"stdout": "z", "exit_code": 0})),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
-        assert!(!report.issues.iter().any(|i| matches!(i, Issue::LoopDetected { .. })));
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::LoopDetected { .. }))
+        );
     }
 
     #[test]
@@ -695,7 +709,12 @@ mod tests {
         ];
         let cfg = VerifyConfig { loop_threshold: 2 };
         let report = verify_run(&history, &cfg);
-        assert!(report.issues.iter().any(|i| matches!(i, Issue::LoopDetected { count: 2, .. })));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::LoopDetected { count: 2, .. }))
+        );
     }
 
     // ── bash failure ──────────────────────────────────────────────────────
@@ -704,12 +723,17 @@ mod tests {
     fn bash_nonzero_exit_is_flagged() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "false"})),
-            tool_message("c1", to_value!({"stdout": "", "stderr": "", "exit_code": 1, "timed_out": false})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "", "stderr": "", "exit_code": 1, "timed_out": false}),
+            ),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
         assert!(report.issues.iter().any(|i| matches!(
             i,
-            Issue::BashFailure { reason: BashFailureReason::NonZeroExit { exit_code: 1 } }
+            Issue::BashFailure {
+                reason: BashFailureReason::NonZeroExit { exit_code: 1 }
+            }
         )));
     }
 
@@ -717,12 +741,17 @@ mod tests {
     fn bash_timeout_is_flagged() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "sleep 999"})),
-            tool_message("c1", to_value!({"stdout": "", "stderr": "", "exit_code": 0, "timed_out": true})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "", "stderr": "", "exit_code": 0, "timed_out": true}),
+            ),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
         assert!(report.issues.iter().any(|i| matches!(
             i,
-            Issue::BashFailure { reason: BashFailureReason::TimedOut }
+            Issue::BashFailure {
+                reason: BashFailureReason::TimedOut
+            }
         )));
     }
 
@@ -730,12 +759,17 @@ mod tests {
     fn bash_validation_error_is_flagged() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({})),
-            tool_message("c1", to_value!({"stdout": "", "stderr": "missing required parameter: cmd", "exit_code": -1, "phase": "validation"})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "", "stderr": "missing required parameter: cmd", "exit_code": -1, "phase": "validation"}),
+            ),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
         assert!(report.issues.iter().any(|i| matches!(
             i,
-            Issue::BashFailure { reason: BashFailureReason::ValidationError }
+            Issue::BashFailure {
+                reason: BashFailureReason::ValidationError
+            }
         )));
     }
 
@@ -743,10 +777,18 @@ mod tests {
     fn bash_success_is_not_flagged() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "echo ok"})),
-            tool_message("c1", to_value!({"stdout": "ok\n", "stderr": "", "exit_code": 0, "timed_out": false})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "ok\n", "stderr": "", "exit_code": 0, "timed_out": false}),
+            ),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
-        assert!(!report.issues.iter().any(|i| matches!(i, Issue::BashFailure { .. })));
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::BashFailure { .. }))
+        );
     }
 
     // ── citation grep ─────────────────────────────────────────────────────
@@ -754,7 +796,11 @@ mod tests {
     #[test]
     fn citation_appearing_in_tool_log_is_not_flagged() {
         let history = [
-            assistant_with_call("c1", "bash", to_value!({"cmd": "grep T 2024-01-15T10:30:00 log.txt"})),
+            assistant_with_call(
+                "c1",
+                "bash",
+                to_value!({"cmd": "grep T 2024-01-15T10:30:00 log.txt"}),
+            ),
             tool_message(
                 "c1",
                 to_value!({"stdout": "2024-01-15T10:30:00 metric=42", "exit_code": 0}),
@@ -762,7 +808,12 @@ mod tests {
             assistant_text("Found 2024-01-15T10:30:00 with metric=42."),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
-        assert!(!report.issues.iter().any(|i| matches!(i, Issue::UnverifiedCitation { .. })));
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i, Issue::UnverifiedCitation { .. }))
+        );
     }
 
     #[test]
@@ -860,7 +911,10 @@ mod tests {
     fn invalid_calendar_date_is_not_flagged_as_citation() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "head log.txt"})),
-            tool_message("c1", to_value!({"stdout": "build at 2024-01-15", "exit_code": 0})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "build at 2024-01-15", "exit_code": 0}),
+            ),
             assistant_text("Saw the spike at 2024-13-45T10:30:00."),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
@@ -884,7 +938,10 @@ mod tests {
     fn timestamp_precise_citation_matches_date_only_haystack() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "head log.txt"})),
-            tool_message("c1", to_value!({"stdout": "build started 2024-01-15", "exit_code": 0})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "build started 2024-01-15", "exit_code": 0}),
+            ),
             assistant_text("The spike happened at 2024-01-15T10:30:00."),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
@@ -905,7 +962,10 @@ mod tests {
     fn timestamp_date_citation_matches_precise_haystack() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "head log.txt"})),
-            tool_message("c1", to_value!({"stdout": "2024-01-15T10:30:00 metric=42", "exit_code": 0})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "2024-01-15T10:30:00 metric=42", "exit_code": 0}),
+            ),
             assistant_text("Found a record on 2024-01-15."),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
@@ -923,7 +983,10 @@ mod tests {
     fn timestamp_fabricated_is_still_flagged() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "head log.txt"})),
-            tool_message("c1", to_value!({"stdout": "build started 2024-01-15", "exit_code": 0})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "build started 2024-01-15", "exit_code": 0}),
+            ),
             // 2099 is not in the haystack at any granularity.
             assistant_text("The spike happened at 2099-12-31T23:59:59."),
         ];
@@ -943,7 +1006,11 @@ mod tests {
     #[test]
     fn url_trailing_slash_is_tolerated() {
         let history = [
-            assistant_with_call("c1", "bash", to_value!({"cmd": "curl https://example.com/foo"})),
+            assistant_with_call(
+                "c1",
+                "bash",
+                to_value!({"cmd": "curl https://example.com/foo"}),
+            ),
             tool_message("c1", to_value!({"stdout": "ok", "exit_code": 0})),
             // Cited with trailing slash, tool-log uses bare form.
             assistant_text("See https://example.com/foo/ for details."),
@@ -964,7 +1031,11 @@ mod tests {
     #[test]
     fn url_http_https_swap_is_tolerated() {
         let history = [
-            assistant_with_call("c1", "bash", to_value!({"cmd": "curl http://example.com/foo"})),
+            assistant_with_call(
+                "c1",
+                "bash",
+                to_value!({"cmd": "curl http://example.com/foo"}),
+            ),
             tool_message("c1", to_value!({"stdout": "ok", "exit_code": 0})),
             assistant_text("See https://example.com/foo for details."),
         ];
@@ -986,7 +1057,10 @@ mod tests {
     fn path_leading_tilde_is_normalized() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "cat foo.txt"})),
-            tool_message("c1", to_value!({"stdout": "wrote to foo.txt", "exit_code": 0})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "wrote to foo.txt", "exit_code": 0}),
+            ),
             assistant_text("Result is in ~/foo.txt."),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
@@ -1009,7 +1083,10 @@ mod tests {
     fn path_absolute_vs_bare_is_not_normalized() {
         let history = [
             assistant_with_call("c1", "bash", to_value!({"cmd": "echo hi"})),
-            tool_message("c1", to_value!({"stdout": "see tmp/foo.txt", "exit_code": 0})),
+            tool_message(
+                "c1",
+                to_value!({"stdout": "see tmp/foo.txt", "exit_code": 0}),
+            ),
             assistant_text("Result is in /tmp/foo.txt."),
         ];
         let report = verify_run(&history, &VerifyConfig::default());
@@ -1035,7 +1112,9 @@ mod tests {
     fn format_renders_each_issue_on_its_own_line() {
         let report = VerifyReport {
             issues: vec![
-                Issue::EmptyResult { tool: "bash".into() },
+                Issue::EmptyResult {
+                    tool: "bash".into(),
+                },
                 Issue::BashFailure {
                     reason: BashFailureReason::NonZeroExit { exit_code: 1 },
                 },

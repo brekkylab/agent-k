@@ -5,7 +5,7 @@ use knowledge_base_examples::{Cached, DocSet as _, FinanceBench};
 
 use super::{FileType, Store};
 
-#[derive(Debug, Clone, clap::ValueEnum, strum::Display)]
+#[derive(Debug, Clone, strum::Display)]
 #[strum(serialize_all = "kebab-case")]
 pub enum PresetKind {
     FinanceBench,

@@ -1,5 +1,6 @@
 use std::{convert::Infallible, sync::Arc};
 
+use agent_k::agents::SpeedwagonSpec;
 use aide::NoApi;
 use ailoy::{
     agent::{Agent, AgentBuilder, AgentCard},
@@ -13,7 +14,6 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
 };
 use futures_util::StreamExt;
-use speedwagon::SpeedwagonSpec;
 use uuid::Uuid;
 
 use crate::{
@@ -92,13 +92,11 @@ async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
             "Use bash and python tools for computation, data analysis, and code execution tasks. ",
             "Only skip tools for greetings or casual conversation.",
         ))
-        .tool("bash")
-        .tool("python_repl")
-        .tool("web_search")
+        .system_tools()
+        .web_search_tool()
         .runenv(sandbox)
         .subagent(sw_spec)
         .build()
-        .await
         .map_err(|e| e.to_string())
 }
 

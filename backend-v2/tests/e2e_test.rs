@@ -3,6 +3,7 @@ mod common;
 
 use std::sync::Arc;
 
+use agent_k::{agents::build_tools, knowledge_base::Store};
 use agent_k_backend::{repository, router::get_router, state::AppState};
 use aide::openapi::OpenApi;
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
@@ -11,7 +12,6 @@ use common::{
     bulk_purge_documents, extract_text, get_personal_project, ingest_documents, list_documents,
     login, post_session_authed, send_message, signup, test_jwt_config,
 };
-use speedwagon::{Store, build_tools};
 use tokio::sync::RwLock;
 
 #[tokio::test]
@@ -19,13 +19,13 @@ use tokio::sync::RwLock;
 async fn test_ingest_message_purge_cycle() {
     dotenvy::dotenv().ok();
 
-    let store_path = std::env::temp_dir().join(format!("speedwagon-e2e-{}", uuid::Uuid::new_v4()));
+    let store_path = std::env::temp_dir().join(format!("agent-k-e2e-{}", uuid::Uuid::new_v4()));
     let store = Arc::new(RwLock::new(
         Store::new(store_path).expect("test store init"),
     ));
 
     {
-        let mut provider = default_provider_mut().await;
+        let mut provider = default_provider_mut();
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
             provider
                 .models

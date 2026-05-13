@@ -6,16 +6,16 @@
 //! - `web_search` — DuckDuckGo / Yandex aggregator
 //!
 //! Tools run on the agent's [`ailoy::runenv::RunEnv`]. The default is
-//! [`ailoy::runenv::Local`] (host-native execution); when the `sandbox`
-//! feature is enabled, the caller may pass an [`Arc<Sandbox>`] wrapper
-//! through the builder.
+//! [`ailoy::runenv::Local`] (host-native execution).
 //!
 //! Construction is split in two so the verify gate and reflect gate can
 //! be layered on top without changing the call site.
 
 use ailoy::{
-    agent::{Agent, AgentBuilder, AgentProvider, default_provider_mut},
+    agent::{Agent, AgentBuilder, AgentProvider, default_provider},
     message::{Message, MessageOutput, Part, Role},
+    to_value,
+    tool::{ToolDesc, ToolDescBuilder},
 };
 use anyhow::Result;
 use futures::StreamExt as _;
@@ -34,25 +34,90 @@ pub const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5-20251001";
 /// `model` follows ailoy's `<provider>/<model-id>` convention (e.g.
 /// `"anthropic/claude-haiku-4-5-20251001"`, `"openai/gpt-4o-mini"`).
 pub async fn build_agent(model: &str) -> Result<Agent> {
-    let mut provider = default_provider_mut().await.clone();
-    attach_default_tools(&mut provider);
-
+    let provider = default_provider().clone();
     AgentBuilder::new(model)
         .provider(provider)
-        .tool("bash")
-        .tool("python_repl")
-        .tool("web_search")
+        .tool(bash_tool_desc())
+        .tool(python_repl_tool_desc())
+        .tool(web_search_tool_desc())
         .build()
-        .await
 }
 
-/// Register the three default builtin tools on `provider.tools`. Mutates
-/// in place so the caller can layer additional tools before handing the
-/// provider to the builder.
-fn attach_default_tools(provider: &mut AgentProvider) {
-    let mut tools = std::mem::take(&mut provider.tools);
-    tools = tools.bash().python_repl().web_search();
-    provider.tools = tools;
+/// `ToolDesc` for the built-in `bash` tool. Schema mirrors ailoy's internal
+/// `get_bash_tool_desc` (which is `pub(crate)` inside ailoy and not directly
+/// accessible from downstream crates).
+fn bash_tool_desc() -> ToolDesc {
+    ToolDescBuilder::new("bash")
+        .description("Execute a shell command and return stdout/stderr/exit_code.")
+        .parameters(to_value!({
+            "type": "object",
+            "properties": {
+                "cmd": {
+                    "type": "string",
+                    "description": "Shell command to execute (interpreted by sh -c)"
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "Timeout in seconds. 0 or omitted means no timeout."
+                }
+            },
+            "required": ["cmd"]
+        }))
+        .build()
+}
+
+/// `ToolDesc` for the built-in `python_repl` tool. Schema mirrors ailoy's
+/// internal `get_python_repl_tool_desc`.
+fn python_repl_tool_desc() -> ToolDesc {
+    ToolDescBuilder::new("python_repl")
+        .description(
+            "Execute a Python script and return stdout/stderr. \
+             Use `pip_install` to install packages before execution.",
+        )
+        .parameters(to_value!({
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Python code to execute"
+                },
+                "pip_install": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Packages to install before running (e.g. 'numpy>=1.24')."
+                }
+            },
+            "required": ["code"]
+        }))
+        .build()
+}
+
+/// `ToolDesc` for the built-in `web_search` tool. Schema mirrors ailoy's
+/// internal `get_web_search_tool_desc`.
+fn web_search_tool_desc() -> ToolDesc {
+    ToolDescBuilder::new("web_search")
+        .description(
+            "Search the web using multiple search engines simultaneously. \
+             Returns aggregated and deduplicated results ranked by how many \
+             engines returned them. Use this tool to find current information, \
+             facts, documentation, news, or any web-accessible content.",
+        )
+        .parameters(to_value!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query string"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return. Default: 10. Max: 30.",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        }))
+        .build()
 }
 
 /// Stream one user turn, collect every [`MessageOutput`] the agent emits,
@@ -217,26 +282,14 @@ fn last_assistant_text(history: &[Message]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ailoy::tool::ToolProvider;
 
-    /// `attach_default_tools` should add three [`ailoy::tool::ToolProviderElem`] entries.
-    /// We don't introspect the concrete elements (private to ailoy's enum), so the
-    /// check is by count via the public `iter()` interface.
+    /// The three built-in tool descs we ship to the LLM should keep their
+    /// canonical names — these are the lookup keys against the provider's
+    /// pre-registered builtin tools.
     #[test]
-    fn attach_default_tools_adds_three_entries() {
-        let mut provider = AgentProvider::new();
-        attach_default_tools(&mut provider);
-        assert_eq!(provider.tools.iter().count(), 3);
-    }
-
-    /// Sanity: starting from a populated provider, `attach_default_tools` keeps
-    /// the existing entries (it appends, doesn't replace).
-    #[test]
-    fn attach_default_tools_appends_to_existing() {
-        let mut provider = AgentProvider::new();
-        provider.tools = ToolProvider::new().bash();
-        attach_default_tools(&mut provider);
-        // 1 (initial bash) + 3 (default tools) = 4
-        assert_eq!(provider.tools.iter().count(), 4);
+    fn tool_descs_have_canonical_names() {
+        assert_eq!(bash_tool_desc().name, "bash");
+        assert_eq!(python_repl_tool_desc().name, "python_repl");
+        assert_eq!(web_search_tool_desc().name, "web_search");
     }
 }

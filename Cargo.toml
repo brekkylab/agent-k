@@ -1,12 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
+    "./agent-k",
     "./backend-v2",
     "./docling-sys",
     "./reflect-agent",
-    "./speedwagon",
 ]
 
 [workspace.dependencies]
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "85de52a8d54359b73b9921129bd27cb68fc8bd2c", features = ["sandbox"] }
-speedwagon = { path = "./speedwagon", default-features = false }
+agent-k = { path = "./agent-k" }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "9c56469be1d88e401d70450dd6fe2d0cc0dce45c", features = ["sandbox"] }

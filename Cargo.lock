@@ -20,9 +20,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-k"
+version = "0.1.0"
+dependencies = [
+ "ailoy",
+ "anyhow",
+ "dirs 6.0.0",
+ "dotenvy",
+ "futures",
+ "html-to-markdown-rs",
+ "indexmap 2.14.0",
+ "knowledge-base-examples",
+ "log",
+ "regex",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "tantivy",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "agent-k-backend"
 version = "0.1.0"
 dependencies = [
+ "agent-k",
  "aide",
  "ailoy",
  "argon2",
@@ -42,7 +68,6 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "speedwagon",
  "sqlx",
  "tempfile",
  "thiserror 2.0.18",
@@ -115,7 +140,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=85de52a8d54359b73b9921129bd27cb68fc8bd2c#85de52a8d54359b73b9921129bd27cb68fc8bd2c"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=9c56469be1d88e401d70450dd6fe2d0cc0dce45c#9c56469be1d88e401d70450dd6fe2d0cc0dce45c"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -124,6 +149,7 @@ dependencies = [
  "dedent",
  "derive_builder",
  "dirs 6.0.0",
+ "encoding_rs",
  "fancy-regex",
  "flate2",
  "futures",
@@ -131,6 +157,7 @@ dependencies = [
  "hex",
  "image",
  "indexmap 2.14.0",
+ "infer",
  "log",
  "microsandbox",
  "ordered-float 5.3.0",
@@ -1286,16 +1313,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bstr"
-version = "1.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63044e1ae8e69f3b5a92c736ca6269b8d12fa7efe39bf34ddb06d102cf0e2cab"
-dependencies = [
- "memchr",
- "serde",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1407,6 +1424,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"
 dependencies = [
  "nom",
+]
+
+[[package]]
+name = "cfb"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d38f2da7a0a2c4ccf0065be06397cc26a81f4e528be095826eee9d4adbb8c60f"
+dependencies = [
+ "byteorder",
+ "fnv",
+ "uuid",
 ]
 
 [[package]]
@@ -2905,19 +2933,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
-name = "globset"
-version = "0.4.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3"
-dependencies = [
- "aho-corasick",
- "bstr",
- "log",
- "regex-automata",
- "regex-syntax",
-]
-
-[[package]]
 name = "group"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3618,22 +3633,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ignore"
-version = "0.4.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3d782a365a015e0f5c04902246139249abf769125006fbe7649e2ee88169b4a"
-dependencies = [
- "crossbeam-deque",
- "globset",
- "log",
- "memchr",
- "regex-automata",
- "same-file",
- "walkdir",
- "winapi-util",
-]
-
-[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3700,6 +3699,15 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "infer"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc150e5ce2330295b8616ce0e3f53250e53af31759a9dbedad1621ba29151847"
+dependencies = [
+ "cfb",
 ]
 
 [[package]]
@@ -6908,37 +6916,6 @@ checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "speedwagon"
-version = "0.1.0"
-dependencies = [
- "ailoy",
- "anyhow",
- "chrono",
- "clap",
- "dirs 6.0.0",
- "dotenvy",
- "futures",
- "globset",
- "html-to-markdown-rs",
- "ignore",
- "indexmap 2.14.0",
- "knowledge-base-examples",
- "log",
- "rand 0.8.6",
- "regex",
- "reqwest 0.12.28",
- "rustyline",
- "serde",
- "serde_json",
- "strum 0.27.2",
- "tantivy",
- "tempfile",
- "tokio",
- "url",
- "uuid",
 ]
 
 [[package]]

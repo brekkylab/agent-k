@@ -3,19 +3,19 @@
 
 use std::sync::Arc;
 
+use agent_k::knowledge_base::Store;
 use agent_k_backend::{auth::JwtConfig, repository, router, state::AppState};
 use aide::openapi::OpenApi;
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider, tool::ToolProvider};
 use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
-use speedwagon::Store;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 // ── Provider setup ────────────────────────────────────────────────────────────
 
 pub async fn setup_provider() {
-    let mut provider = default_provider_mut().await;
+    let mut provider = default_provider_mut();
     if let Ok(key) = std::env::var("OPENAI_API_KEY") {
         provider
             .models
@@ -31,7 +31,7 @@ pub async fn setup_provider() {
             .models
             .insert("google/*".into(), LangModelProvider::gemini(key));
     }
-    provider.tools = ToolProvider::new().bash().python_repl().web_search();
+    provider.tools = ToolProvider::new();
 }
 
 // ── App / state creation ──────────────────────────────────────────────────────
@@ -46,8 +46,8 @@ pub async fn make_repo() -> repository::AppRepository {
         .unwrap()
 }
 
-pub fn make_test_store() -> speedwagon::SharedStore {
-    let store_path = std::env::temp_dir().join(format!("speedwagon-test-{}", uuid::Uuid::new_v4()));
+pub fn make_test_store() -> agent_k::knowledge_base::SharedStore {
+    let store_path = std::env::temp_dir().join(format!("agent-k-test-{}", uuid::Uuid::new_v4()));
     Arc::new(RwLock::new(
         Store::new(store_path).expect("test store init"),
     ))
