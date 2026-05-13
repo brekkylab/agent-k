@@ -296,9 +296,13 @@ pub async fn fork_session(
         persist: true,
         ..Default::default()
     };
-    let source_sandbox = Sandbox::new(source_cfg)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let source_sandbox = match Sandbox::new(source_cfg).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = state.repository.delete_session(new_id).await;
+            return Err(AppError::internal(e.to_string()));
+        }
+    };
 
     let new_sandbox_name = sandbox_name_for(&new_id);
     let new_cfg = SandboxConfig {
