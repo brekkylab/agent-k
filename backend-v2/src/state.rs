@@ -1,8 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
+use agent_k::knowledge_base::SharedStore;
 use ailoy::agent::Agent;
 use dashmap::DashMap;
-use speedwagon::SharedStore;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 

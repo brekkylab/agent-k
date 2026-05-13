@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let mode = ReflectMode::parse(&cli.reflect_mode)?;
 
-    register_provider_from_env(&mut *default_provider_mut().await);
+    register_provider_from_env(&mut default_provider_mut());
 
     let mut agent = build_agent_with_mode(&cli.model, mode).await?;
 
@@ -160,7 +160,7 @@ async fn run_query(
             print_verify_report(&report);
         }
         ReflectMode::Forced => {
-            let provider: AgentProvider = default_provider().await.clone();
+            let provider: AgentProvider = default_provider().clone();
             let outcome = run_with_forced_reflect(
                 agent,
                 query,

@@ -1,14 +1,13 @@
 use ailoy::{
-    datatype::Value,
-    message::ToolDescBuilder,
     to_value,
-    tool::{ToolFactory, ToolFunc},
+    tool::{ToolDesc, ToolDescBuilder, ToolFunc},
+    tool_func,
 };
 
-// ── Public entry point ─────────────────────────────────────────────────
+// ── Public entry points ────────────────────────────────────────────────
 
-pub fn build_calculate_tool() -> ToolFactory {
-    let desc = ToolDescBuilder::new("calculate")
+pub fn get_calculate_tool_desc() -> ToolDesc {
+    ToolDescBuilder::new("calculate")
         .description(
             "Evaluate a mathematical expression and return the numeric result. \
              Supports: +, -, *, /, %, ^ (power), parentheses, \
@@ -29,20 +28,19 @@ pub fn build_calculate_tool() -> ToolFactory {
             },
             "required": ["expression"]
         }))
-        .build();
+        .build()
+}
 
-    let func = ToolFunc::new(move |args: Value| async move {
-        let expression = match args.pointer("/expression").and_then(|v: &Value| v.as_str()) {
-            Some(e) => e.to_string(),
-            None => return to_value!({"error": "missing required parameter: expression"}),
-        };
-        match calculate(&expression) {
-            Ok(result) => to_value!({"result": result, "expression": expression}),
-            Err(e) => to_value!({"error": e, "expression": expression}),
+pub fn get_calculate_tool_func() -> ToolFunc {
+    tool_func!(|args: Value| -> Value {
+        match args.pointer("/expression").and_then(|v| v.as_str()) {
+            None => to_value!({"error": "missing required parameter: expression"}),
+            Some(expression) => match calculate(expression) {
+                Ok(result) => to_value!({"result": result, "expression": expression}),
+                Err(e) => to_value!({"error": e, "expression": expression}),
+            },
         }
-    });
-
-    ToolFactory::simple(desc, func)
+    })
 }
 
 // ── Core evaluator ─────────────────────────────────────────────────────

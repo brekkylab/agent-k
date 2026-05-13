@@ -1,6 +1,6 @@
+use agent_k::knowledge_base::Document;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use speedwagon::Document;
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct DocumentResponse {

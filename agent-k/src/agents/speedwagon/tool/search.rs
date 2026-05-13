@@ -1,11 +1,11 @@
 use ailoy::{
     datatype::Value,
-    message::ToolDescBuilder,
     to_value,
-    tool::{ToolFactory, ToolFunc},
+    tool::{ToolDesc, ToolDescBuilder, ToolFunc},
+    tool_func,
 };
 
-use crate::store::{SearchPage, SharedStore};
+use crate::knowledge_base::{SearchPage, SharedStore};
 
 fn result_to_value(page: &SearchPage) -> Value {
     let results: Vec<Value> = page
@@ -24,8 +24,8 @@ fn result_to_value(page: &SearchPage) -> Value {
     Value::Array(results)
 }
 
-pub fn make_search_document_tool(store: SharedStore) -> ToolFactory {
-    let desc = ToolDescBuilder::new("search_document")
+pub fn get_search_document_tool_desc() -> ToolDesc {
+    ToolDescBuilder::new("search_document")
         .description(concat!(
             "Search for relevant documents for a given query. ",
             "Results are ranked by relevance score. ",
@@ -50,7 +50,8 @@ pub fn make_search_document_tool(store: SharedStore) -> ToolFactory {
                 }
             },
             "required": ["query"]
-        })).returns(to_value!({
+        }))
+        .returns(to_value!({
             "type": "array",
             "items": {
                 "type": "object",
@@ -78,35 +79,30 @@ pub fn make_search_document_tool(store: SharedStore) -> ToolFactory {
                 }
             }
         }))
-        .build();
+        .build()
+}
 
-    let func = ToolFunc::new(move |args: Value| {
-        let store = store.clone();
-        async move {
-            let query = match args.pointer("/query").and_then(|v: &Value| v.as_str()) {
-                Some(q) => q.to_string(),
-                None => {
-                    return to_value!({"error": "missing required parameter: query"});
-                }
-            };
-            let page = args
-                .pointer("/page")
-                .and_then(|v: &Value| v.as_integer())
-                .unwrap_or(0)
-                .max(0) as u32;
-            let page_size = args
-                .pointer("/page_size")
-                .and_then(|v: &Value| v.as_integer())
-                .unwrap_or(10)
-                .max(1) as u32;
+pub fn get_search_document_tool_func(store: SharedStore) -> ToolFunc {
+    tool_func!(async |args: Value| -> Value with [store = store.clone()] {
+        let query = match args.pointer("/query").and_then(|v| v.as_str()) {
+            Some(q) => q.to_string(),
+            None => return to_value!({"error": "missing required parameter: query"}),
+        };
+        let page = args
+            .pointer("/page")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(0)
+            .max(0) as u32;
+        let page_size = args
+            .pointer("/page_size")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(10)
+            .max(1) as u32;
 
-            let guard = store.read().await;
-            match guard.search(&query, page, page_size) {
-                Ok(output) => result_to_value(&output),
-                Err(e) => to_value!({"error": e.to_string()}),
-            }
+        let guard = store.read().await;
+        match guard.search(&query, page, page_size) {
+            Ok(output) => result_to_value(&output),
+            Err(e) => to_value!({"error": e.to_string()}),
         }
-    });
-
-    ToolFactory::simple(desc, func)
+    })
 }

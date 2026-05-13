@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tantivy::{Index, TantivyDocument, collector::TopDocs, schema::OwnedValue};
 
-use crate::store::Document;
+use crate::knowledge_base::Document;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -137,7 +137,12 @@ mod tests {
                 "",
                 "quarterly revenue increased by 20%",
             ),
-            ("doc2", "Product Launch", "", "new product features announced"),
+            (
+                "doc2",
+                "Product Launch",
+                "",
+                "new product features announced",
+            ),
         ]);
         let page = search_page(&index, "revenue", 0, 10).unwrap();
         assert_eq!(page.results.len(), 1);
