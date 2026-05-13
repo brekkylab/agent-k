@@ -172,18 +172,22 @@ async fn route_and_run(user_input: &str) -> anyhow::Result<Session> {
     };
 
     // Run each step in order. Prior step outputs are prepended to subsequent
-    // step inputs so dependent intents can reference them.
+    // step inputs so dependent intents can reference them. For single-step
+    // plans, forward the user's original input as-is to preserve their
+    // phrasing instead of using the router's paraphrase.
+    let single_step = plan.steps.len() == 1;
     let mut accumulated: Vec<String> = Vec::with_capacity(plan.steps.len());
     for (i, step) in plan.steps.iter().enumerate() {
+        let step_input = if single_step { user_input } else { &step.input };
         let prompt = if accumulated.is_empty() {
-            step.input.clone()
+            step_input.to_string()
         } else {
             let mut s = String::from("Previous step results (chronological):\n");
             for (j, prev) in accumulated.iter().enumerate() {
                 s.push_str(&format!("[step {}] {}\n\n", j + 1, prev));
             }
             s.push_str("---\nCurrent step: ");
-            s.push_str(&step.input);
+            s.push_str(step_input);
             s
         };
 
@@ -191,7 +195,7 @@ async fn route_and_run(user_input: &str) -> anyhow::Result<Session> {
             "[step {} • {}] {}",
             i + 1,
             step.agent,
-            cap_for_echo(&step.input)
+            cap_for_echo(step_input)
         );
 
         // Reuse the head session for matching steps; otherwise spin up a
