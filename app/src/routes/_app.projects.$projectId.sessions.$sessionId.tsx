@@ -208,12 +208,16 @@ function MessageBubble({
   const isAi = message.senderId === 'ai';
   const isSelf = message.senderId === currentUserId;
   const user = users.find((u) => u.id === message.senderId);
-  const userName = user?.name ?? message.senderId;
+  const fallbackUser = !user && !isAi
+    ? { id: message.senderId, name: isSelf ? '나' : 'Member', roleLabel: 'Member', avatar: isSelf ? '나' : 'M', color: 'var(--cw-ink-3)' }
+    : null;
+  const displayUser = user ?? fallbackUser;
+  const userName = displayUser?.name ?? (isSelf ? '나' : 'Member');
   const isStreaming = message.status === 'streaming';
 
   return (
     <article className={`cw-message ${isAi ? 'is-ai' : isSelf ? 'is-self' : 'is-other'}`}>
-      {isAi ? <span className="cw-ai-chip">CW</span> : (user && <Avatar user={user} />)}
+      {isAi ? <span className="cw-ai-chip">CW</span> : (displayUser && <Avatar user={displayUser} />)}
       <div className="cw-message-body">
         <div className="cw-message-meta">
           <b>{isSelf ? `${userName.split(' ')[0]} · 나` : isAi ? 'AI' : userName.split(' ')[0]}</b>
