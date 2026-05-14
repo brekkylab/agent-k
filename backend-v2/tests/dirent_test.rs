@@ -42,32 +42,13 @@ async fn make_state_with_dir_and_max_bytes(max_bytes: usize) -> (Arc<AppState>, 
     (Arc::new(state), tmp)
 }
 
-fn multipart_body(files: &[(&str, &[u8])]) -> (String, Vec<u8>) {
-    let boundary = "----direnttestboundary";
-    let mut body = Vec::new();
-    for (filename, content) in files {
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(
-            format!(
-                "Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\
-                 Content-Type: application/octet-stream\r\n\r\n"
-            )
-            .as_bytes(),
-        );
-        body.extend_from_slice(content);
-        body.extend_from_slice(b"\r\n");
-    }
-    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    (boundary.to_string(), body)
-}
-
 async fn upload_files(
     app: &axum::Router,
     token: &str,
     project_id: &str,
     files: &[(&str, &[u8])],
 ) -> (axum::http::StatusCode, serde_json::Value) {
-    let (boundary, body) = multipart_body(files);
+    let (boundary, body) = common::build_multipart_body(files);
     let req = Request::builder()
         .method("POST")
         .uri(format!("/projects/{project_id}/dirents"))

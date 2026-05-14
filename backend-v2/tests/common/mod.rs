@@ -64,6 +64,28 @@ pub fn make_app_with_state(state: Arc<AppState>) -> axum::Router {
     router::get_router(state).finish_api(&mut OpenApi::default())
 }
 
+/// Creates an in-memory repo seeded with a single admin user, builds the app,
+/// and logs in as that admin. Returns (app, admin_token, admin_id).
+pub async fn make_admin_app() -> (axum::Router, String, uuid::Uuid) {
+    use agent_k_backend::{auth, repository::NewUser};
+    let repo = make_repo().await;
+    let admin_id = uuid::Uuid::new_v4();
+    let password_hash = auth::hash_password("adminpass1").unwrap();
+    repo.create_user(NewUser {
+        id: admin_id,
+        username: "admin".to_string(),
+        password_hash,
+        role: auth::Role::Admin,
+        display_name: None,
+        is_active: true,
+    })
+    .await
+    .unwrap();
+    let app = make_app_with_repo(repo);
+    let token = login(&app, "admin", "adminpass1").await;
+    (app, token, admin_id)
+}
+
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
 pub async fn signup_status(
@@ -420,7 +442,7 @@ pub async fn list_documents(app: &axum::Router) -> Vec<serde_json::Value> {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-fn build_multipart_body(files: &[(&str, &[u8])]) -> (String, Vec<u8>) {
+pub fn build_multipart_body(files: &[(&str, &[u8])]) -> (String, Vec<u8>) {
     let boundary = "----testboundary";
     let mut body = Vec::new();
     for (filename, content) in files {
