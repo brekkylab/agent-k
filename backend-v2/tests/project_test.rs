@@ -178,20 +178,7 @@ async fn member_cannot_invite() {
 
 #[tokio::test]
 async fn project_delete_cascades_sessions() {
-    use std::sync::Arc;
-
-    // Build app with direct repo access so we can seed a session without
-    // an AI provider (the HTTP create-session handler tries to build an agent).
-    let repo = common::make_repo().await;
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-proj-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo.clone(),
-        store,
-        common::test_jwt_config(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state);
+    let (app, repo, _state) = common::make_app_repo_state().await;
 
     // alice signs up — personal project is auto-created
     let alice_info = common::signup(&app, "alice", "password123").await;
@@ -252,26 +239,13 @@ async fn project_delete_cascades_sessions() {
 }
 
 // ── project_delete_cleans_up_agents_in_state ─────────────────────────────────
-// Requires microsandbox (HTTP create_session creates a real sandbox).
 
 #[tokio::test]
-#[ignore = "requires microsandbox"]
 async fn project_delete_cleans_up_agents_in_state() {
-    use std::sync::Arc;
-
     dotenvy::dotenv().ok();
     common::setup_provider().await;
 
-    let repo = common::make_repo().await;
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-proj-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo,
-        store,
-        common::test_jwt_config(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state.clone());
+    let (app, _repo, state) = common::make_app_repo_state().await;
 
     common::signup(&app, "alice", "password123").await;
     let token = common::login(&app, "alice", "password123").await;
@@ -294,11 +268,7 @@ async fn project_delete_cleans_up_agents_in_state() {
         None,
     )
     .await;
-    assert_eq!(
-        status,
-        axum::http::StatusCode::NO_CONTENT,
-        "delete failed: {body}"
-    );
+    assert_eq!(status, StatusCode::NO_CONTENT, "delete failed: {body}");
 
     assert!(
         state.get_agent(&session_id).is_none(),
@@ -306,68 +276,57 @@ async fn project_delete_cleans_up_agents_in_state() {
     );
 }
 
-// ── list_all_sessions_in_project returns sessions from all members ────────────
+// ── member_sees_own_sessions_in_project_list_but_not_others ──────────────────
 
 #[tokio::test]
-async fn list_all_sessions_in_project_includes_private_sessions_from_members() {
-    use std::sync::Arc;
-
-    let repo = common::make_repo().await;
-    let store = common::make_test_store();
-    let data_root = std::env::temp_dir().join(format!("agent-k-proj-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(agent_k_backend::state::AppState::new(
-        repo.clone(),
-        store,
-        common::test_jwt_config(),
-        data_root,
-    ));
-    let app = common::make_app_with_state(state);
+async fn member_sees_own_sessions_in_project_list_but_not_others() {
+    let (app, repo, _state) = common::make_app_repo_state().await;
 
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id = uuid::Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let project_id_str = alice_project["id"].as_str().unwrap();
+    let project_id = uuid::Uuid::parse_str(project_id_str).unwrap();
     let alice_id = uuid::Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     let bob_info = common::signup(&app, "bob", "password123").await;
+    let bob_token = common::login(&app, "bob", "password123").await;
     let bob_id = uuid::Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
-    common::add_member(&app, &alice_token, &project_id.to_string(), "bob").await;
+    common::add_member(&app, &alice_token, project_id_str, "bob").await;
 
-    // Seed two private sessions: one for alice, one for bob.
-    let _alice_session = repo.create_session(project_id, alice_id).await.unwrap();
-    let _bob_session = repo.create_session(project_id, bob_id).await.unwrap();
+    repo.create_session(project_id, alice_id).await.unwrap();
+    repo.create_session(project_id, bob_id).await.unwrap();
 
-    // The internal method must return both sessions regardless of creator.
-    let all_sessions = repo.list_all_sessions_in_project(project_id).await.unwrap();
+    // Owner sees all sessions including private ones from members.
+    let (status, body) = common::authed(
+        &app,
+        "GET",
+        &format!("/projects/{project_id_str}/sessions"),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "list failed: {body}");
     assert_eq!(
-        all_sessions.len(),
+        body["items"].as_array().unwrap().len(),
         2,
-        "expected 2 sessions (alice + bob), got {}",
-        all_sessions.len()
+        "owner must see all sessions: {body}"
     );
 
-    // alice is the owner, so list_sessions_in_project also returns all sessions for her.
-    let alice_view = repo
-        .list_sessions_in_project(project_id, alice_id)
-        .await
-        .unwrap();
+    // Member sees only their own private session, not other members'.
+    let (status, body) = common::authed(
+        &app,
+        "GET",
+        &format!("/projects/{project_id_str}/sessions"),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "list failed: {body}");
     assert_eq!(
-        alice_view.len(),
-        2,
-        "owner should see all sessions via the user-filtered method too, got {}",
-        alice_view.len()
-    );
-
-    // bob is a regular member — he should only see his own private session.
-    let bob_view = repo
-        .list_sessions_in_project(project_id, bob_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        bob_view.len(),
+        body["items"].as_array().unwrap().len(),
         1,
-        "member should only see their own private session, got {}",
-        bob_view.len()
+        "member must see only their own private session: {body}"
     );
 }
 

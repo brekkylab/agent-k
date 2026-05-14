@@ -1,9 +1,8 @@
-//! Integration tests for per-session sandbox isolation and bash-tool execution.
+//! Integration tests for per-session sandbox isolation, bash-tool execution, and streaming.
 //!
-//! All tests are `#[ignore]` by default because they require microsandbox
-//! (auto-downloaded on first run) and/or a real ANTHROPIC_API_KEY.
+//! Tests tagged `#[ignore]` require microsandbox + a real ANTHROPIC_API_KEY.
 //!
-//! Run all: `cargo test --test sandbox_per_session -- --ignored`
+//! Run all: `cargo test --test session_sandbox_test -- --ignored`
 
 #[path = "common/mod.rs"]
 mod common;
@@ -30,23 +29,17 @@ async fn make_state() -> Arc<AppState> {
     ))
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+// ── sandbox isolation ─────────────────────────────────────────────────────────
 
 /// Two sessions must each get their own sandbox: a file written in session 1
 /// must not be readable in session 2.
-///
-/// Requires: microsandbox runtime.
-/// Does NOT require a real API key (agent.run() is never called here).
 #[tokio::test]
-#[ignore = "requires microsandbox; boots two VMs"]
 async fn two_sessions_get_isolated_sandboxes() {
     dotenvy::dotenv().ok();
     setup_provider().await;
 
-    let state = make_state().await;
-    let app = common::make_app_with_state(state.clone());
+    let (app, _repo, state) = common::make_app_repo_state().await;
 
-    // Use a single user for both sessions
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
@@ -60,7 +53,6 @@ async fn two_sessions_get_isolated_sandboxes() {
     let (re1, re2) = {
         let a1 = state.get_agent(&id1).expect("session 1 not found");
         let a2 = state.get_agent(&id2).expect("session 2 not found");
-        // Agents are not running now, so try_lock succeeds.
         let guard1 = a1.try_lock().expect("agent 1 locked unexpectedly");
         let guard2 = a2.try_lock().expect("agent 2 locked unexpectedly");
         (guard1.state.runenv.clone(), guard2.state.runenv.clone())
@@ -84,19 +76,19 @@ async fn two_sessions_get_isolated_sandboxes() {
     delete_session(&app, id1, &token).await;
     delete_session(&app, id2, &token).await;
 
-    // remove_persisted is idempotent.
     ailoy::runenv::remove_persisted("session-doesnotexist")
         .await
         .expect("remove_persisted must be idempotent");
 }
 
+// ── bash tool ─────────────────────────────────────────────────────────────────
+
 /// The agent uses the bash tool to write a file inside the session sandbox,
-/// then reads it back.  Verifies that the bash tool is wired to the sandbox
-/// and that the agent's response reflects the file contents.
+/// then reads it back.
 ///
 /// Requires: microsandbox runtime + ANTHROPIC_API_KEY (real value).
 #[tokio::test]
-#[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
+#[ignore = "requires ANTHROPIC_API_KEY"]
 async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     dotenvy::dotenv().ok();
     setup_provider().await;
@@ -111,7 +103,6 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     let project_id = project["id"].as_str().unwrap();
     let id = post_session_authed(&app, &token, project_id).await;
 
-    // Ask the agent to write a sentinel value and read it back.
     let outputs = send_message(
         &app,
         id,
@@ -127,7 +118,6 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
         "expected 'sandbox_ok' in agent response, got: {text:?}"
     );
 
-    // Verify via runenv directly that the file exists in the sandbox.
     let agent_arc = state.get_agent(&id).unwrap();
     let agent = agent_arc.lock().await;
     let contents = agent
@@ -148,11 +138,9 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
 /// Files uploaded via the dirent API must be readable by the agent inside the
 /// session sandbox at `/workspace/.uploads/<path>`.
 ///
-/// Flow: upload file → create session → ask agent to cat the file → verify content.
-///
 /// Requires: microsandbox runtime + ANTHROPIC_API_KEY (real value).
 #[tokio::test]
-#[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
+#[ignore = "requires ANTHROPIC_API_KEY"]
 async fn agent_can_read_uploaded_files_from_workspace_uploads() {
     dotenvy::dotenv().ok();
     setup_provider().await;
@@ -166,7 +154,6 @@ async fn agent_can_read_uploaded_files_from_workspace_uploads() {
     let project = get_personal_project(&app, &token).await;
     let project_id = project["id"].as_str().unwrap();
 
-    // Upload a file with a known sentinel value before the session is created.
     upload_dirents(
         &app,
         &token,
@@ -175,7 +162,6 @@ async fn agent_can_read_uploaded_files_from_workspace_uploads() {
     )
     .await;
 
-    // Create a session — this mounts uploads_root at /workspace/.uploads (readonly).
     let session_id = post_session_authed(&app, &token, project_id).await;
 
     let outputs = send_message(
@@ -195,10 +181,9 @@ async fn agent_can_read_uploaded_files_from_workspace_uploads() {
     delete_session(&app, session_id, &token).await;
 }
 
-// ── streaming tests ───────────────────────────────────────────────────────────
+// ── streaming ─────────────────────────────────────────────────────────────────
 
 /// Sending a non-streaming message to a non-existent session must return 404.
-/// Does not require microsandbox or an API key.
 #[tokio::test]
 async fn send_message_to_unknown_session_returns_404() {
     dotenvy::dotenv().ok();
@@ -228,7 +213,6 @@ async fn send_message_to_unknown_session_returns_404() {
 }
 
 /// Sending a stream request to a non-existent session must return 404.
-/// Does not require microsandbox or an API key.
 #[tokio::test]
 async fn stream_returns_404_for_unknown_session() {
     dotenvy::dotenv().ok();
@@ -237,7 +221,6 @@ async fn stream_returns_404_for_unknown_session() {
     let state = make_state().await;
     let app = common::make_app_with_state(state);
 
-    // Create a user to get a valid token
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
@@ -255,12 +238,11 @@ async fn stream_returns_404_for_unknown_session() {
 }
 
 /// The streaming endpoint emits `event: message` SSE blocks and ends with
-/// `event: done`.  The agent uses the bash tool to write/read a file in the
-/// sandbox, and the streamed response must contain "sandbox_ok".
+/// `event: done`. The agent uses bash to write/read a file in the sandbox.
 ///
 /// Requires: microsandbox runtime + ANTHROPIC_API_KEY (real value).
 #[tokio::test]
-#[ignore = "requires microsandbox + ANTHROPIC_API_KEY"]
+#[ignore = "requires ANTHROPIC_API_KEY"]
 async fn agent_writes_and_reads_file_via_bash_streaming() {
     dotenvy::dotenv().ok();
     setup_provider().await;
@@ -296,7 +278,6 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
         "expected 'sandbox_ok' in streamed response, got: {text:?}"
     );
 
-    // Verify the file persisted in the sandbox after the stream ended.
     let agent_arc = state.get_agent(&id).unwrap();
     let agent = agent_arc.lock().await;
     let contents = agent
