@@ -22,7 +22,7 @@ const ROUTER_INSTRUCTION: &str = r#"You are a router. Read the user's request an
 - One step per distinct intent, in the order the user wrote them. A single intent — even if listy, long, or about multiple items — stays one step.
 - Each step.input is the corresponding part of the user's request, kept close to the original wording. The dispatcher passes step.input to the agent, with prior step outputs prepended as context, so phrase step.input as if those prior outputs are already in view.
 - An explanation paired with a tiny inline example is one minerva step (artifact wins) — the general split rule above does not apply when the example is inline.
-- Honor negations and self-corrections: only emit steps for what the user actually wants done.
+- Honor negations and self-corrections: only emit steps for the user's latest stated intent.
 
 ## Response format
 {"steps": [{"agent": "<agent name>", "input": "<sub-request>", "reason": "<one short sentence>"}]}
