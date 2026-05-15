@@ -474,6 +474,49 @@ impl SqliteRepository {
         Ok(())
     }
 
+    /// Returns unread counts for a batch of sessions for a given user (eliminates N+1 in list).
+    pub async fn count_unread_batch_for_user(
+        &self,
+        session_ids: &[Uuid],
+        user_id: Uuid,
+    ) -> RepositoryResult<std::collections::HashMap<Uuid, i64>> {
+        if session_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let uid = user_id.to_string();
+        let placeholders = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT sm.session_id, COUNT(*) AS cnt
+             FROM session_messages sm
+             WHERE sm.session_id IN ({placeholders})
+               AND sm.seq > COALESCE(
+                   (SELECT sr.last_read_seq FROM session_reads sr
+                    WHERE sr.session_id = sm.session_id AND sr.user_id = ?),
+                   0
+               )
+             GROUP BY sm.session_id"
+        );
+
+        let mut q = sqlx::query(&sql);
+        for sid in session_ids {
+            q = q.bind(sid.to_string());
+        }
+        q = q.bind(&uid);
+
+        let rows = q.fetch_all(&self.pool).await?;
+
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let sid_str: String = row.get("session_id");
+            let count: i64 = row.get("cnt");
+            if let Ok(sid) = Uuid::parse_str(&sid_str) {
+                map.insert(sid, count);
+            }
+        }
+        Ok(map)
+    }
+
     /// Count messages the user has not yet read in a session.
     pub async fn count_session_unread(
         &self,

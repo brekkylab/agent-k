@@ -204,15 +204,19 @@ pub async fn list_sessions(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let mut items = Vec::with_capacity(sessions.len());
-    for s in sessions {
-        let unread = state
-            .repository
-            .count_session_unread(s.id, auth_user.id)
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        items.push(SessionResponse::from_db(s, unread));
-    }
+    let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
+    let unread_map = state
+        .repository
+        .count_unread_batch_for_user(&session_ids, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    let items: Vec<SessionResponse> = sessions
+        .into_iter()
+        .map(|s| {
+            let unread = unread_map.get(&s.id).copied().unwrap_or(0);
+            SessionResponse::from_db(s, unread)
+        })
+        .collect();
 
     Ok(Json(SessionListResponse { items }))
 }
