@@ -135,13 +135,14 @@ async fn resolve_agent_for(
 
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
-/// POST /projects/{project_id}/sessions
+/// POST /sessions
+/// body must include `project_id`; user must be a member of that project.
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
-    Json(_payload): Json<CreateSessionRequest>,
+    Json(payload): Json<CreateSessionRequest>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
+    let project_id = payload.project_id;
     let is_member = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -179,26 +180,41 @@ pub async fn create_session(
     Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
 }
 
-/// GET /projects/{project_id}/sessions
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct ListSessionsQuery {
+    pub project_id: Option<Uuid>,
+}
+
+/// GET /sessions?project_id=...
+/// `project_id` is optional — omit to list all sessions across projects the user can access.
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    axum::extract::Query(q): axum::extract::Query<ListSessionsQuery>,
 ) -> ApiResult<Json<SessionListResponse>> {
-    let is_member = state
-        .repository
-        .user_in_project(auth_user.id, project_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    if !is_member {
-        return Err(AppError::forbidden("not a member of this project"));
-    }
-
-    let sessions = state
-        .repository
-        .list_sessions_in_project(project_id, auth_user.id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let sessions = match q.project_id {
+        Some(project_id) => {
+            let is_member = state
+                .repository
+                .user_in_project(auth_user.id, project_id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            if !is_member {
+                return Err(AppError::forbidden("not a member of this project"));
+            }
+            state
+                .repository
+                .list_sessions_in_project(project_id, auth_user.id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+        }
+        None => state
+            .repository
+            .list_sessions_for_user(auth_user.id)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    };
 
     Ok(Json(SessionListResponse {
         items: sessions.into_iter().map(SessionResponse::from).collect(),

@@ -61,10 +61,6 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             delete(handlers::remove_member),
         )
         .api_route(
-            "/projects/{project_id}/sessions",
-            get(handlers::list_sessions).post(handlers::create_session),
-        )
-        .api_route(
             "/projects/{project_id}/dirents",
             // Body limit disabled only for upload; GET list has no body.
             post(handlers::upload.layer(axum::extract::DefaultBodyLimit::disable()))
@@ -81,6 +77,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
 
     let session_routes = ApiRouter::new()
         .api_route(
+            "/sessions",
+            get(handlers::list_sessions).post(handlers::create_session),
+        )
+        .api_route(
             "/sessions/{session_id}",
             get(handlers::get_session)
                 .patch(handlers::update_session)
@@ -96,6 +96,44 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .api_route(
             "/sessions/{session_id}/messages/stream",
             post(handlers::send_message_stream),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_required,
+        ));
+
+    let automation_routes = ApiRouter::new()
+        .api_route(
+            "/automations",
+            get(handlers::list_automations).post(handlers::create_automation),
+        )
+        .api_route(
+            "/automations/{automation_id}",
+            get(handlers::get_automation)
+                .patch(handlers::update_automation)
+                .delete(handlers::delete_automation),
+        )
+        .api_route(
+            "/automations/{automation_id}/triggers",
+            get(handlers::list_triggers).post(handlers::create_trigger),
+        )
+        .api_route(
+            "/automations/{automation_id}/triggers/{trigger_id}",
+            get(handlers::get_trigger)
+                .patch(handlers::update_trigger)
+                .delete(handlers::delete_trigger),
+        )
+        .api_route(
+            "/automations/{automation_id}/runs",
+            get(handlers::list_runs),
+        )
+        .api_route(
+            "/automations/{automation_id}/runs/{run_id}",
+            get(handlers::get_run),
+        )
+        .api_route(
+            "/automations/{automation_id}/runs/{run_id}/events",
+            get(handlers::list_run_events),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -120,6 +158,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .merge(admin_routes)
         .merge(project_routes)
         .merge(session_routes)
+        .merge(automation_routes)
         .merge(document_routes)
         .with_state(state)
 }

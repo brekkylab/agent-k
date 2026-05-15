@@ -211,6 +211,33 @@ impl SqliteRepository {
         Ok(Some((Self::row_to_db_session(row)?, access)))
     }
 
+    /// All sessions across every project the user can see (project owner, OR
+    /// member of a project — limited to their own sessions if `share_mode='private'`).
+    /// Mirrors `list_sessions_in_project` without the project_id filter.
+    pub async fn list_sessions_for_user(
+        &self,
+        requesting_user_id: Uuid,
+    ) -> RepositoryResult<Vec<DbSession>> {
+        let uid = requesting_user_id.to_string();
+        let rows = sqlx::query(
+            "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.origin, s.created_at, s.updated_at
+             FROM sessions s
+             JOIN projects p ON p.id = s.project_id
+             WHERE p.owner_id = ?1
+                OR (
+                    EXISTS (SELECT 1 FROM project_members pm
+                            WHERE pm.project_id = s.project_id AND pm.user_id = ?1)
+                    AND (s.creator_id = ?1 OR s.share_mode != 'private')
+                )
+             ORDER BY s.created_at DESC",
+        )
+        .bind(&uid)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(Self::row_to_db_session).collect()
+    }
+
     pub async fn list_sessions_in_project(
         &self,
         project_id: Uuid,

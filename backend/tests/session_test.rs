@@ -344,7 +344,7 @@ async fn owner_sees_all_sessions_in_project_list() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/sessions?project_id={project_id_str}"),
         &alice_token,
         None,
     )
@@ -381,7 +381,7 @@ async fn private_session_not_in_project_list() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/sessions?project_id={project_id_str}"),
         &bob_token,
         None,
     )
@@ -399,7 +399,7 @@ async fn private_session_not_in_project_list() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/sessions?project_id={project_id_str}"),
         &bob_token,
         None,
     )
