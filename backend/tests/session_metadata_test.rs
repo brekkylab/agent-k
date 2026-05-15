@@ -422,6 +422,38 @@ async fn repository_get_first_user_message_text() {
     );
 }
 
+/// get_first_user_message_text returns the user message even when preceded by > 5 non-user messages.
+#[tokio::test]
+async fn get_first_user_message_skips_non_user_messages() {
+    let (app, repo, _state) = common::make_app_repo_state().await;
+
+    let alice_info = common::signup(&app, "alice_fum2", "Password123!").await;
+    let _alice_token = common::login(&app, "alice_fum2", "Password123!").await;
+    let alice_project = common::get_personal_project(&app, &_alice_token).await;
+    let project_id = uuid::Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let alice_id = uuid::Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+
+    let session = repo.create_session(project_id, alice_id).await.unwrap();
+
+    // 6 assistant messages before the first user message
+    let mut messages: Vec<Message> = (0..6)
+        .map(|i| {
+            Message::new(Role::Assistant)
+                .with_contents([Part::text(format!("assistant {i}"))])
+        })
+        .collect();
+    messages.push(Message::new(Role::User).with_contents([Part::text("actual user message")]));
+
+    repo.append_messages(session.id, &messages).await.unwrap();
+
+    let text = repo.get_first_user_message_text(session.id).await.unwrap();
+    assert_eq!(
+        text.as_deref(),
+        Some("actual user message"),
+        "should find user message even after 6 assistant messages: {text:?}"
+    );
+}
+
 /// set_title saves the title and GET /sessions/{id} returns it.
 #[tokio::test]
 async fn set_title_persisted_in_response() {

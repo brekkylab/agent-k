@@ -431,28 +431,25 @@ impl SqliteRepository {
         &self,
         session_id: Uuid,
     ) -> RepositoryResult<Option<String>> {
-        let rows = sqlx::query(
+        let row = sqlx::query(
             "SELECT message_json FROM session_messages \
-             WHERE session_id = ? ORDER BY seq ASC LIMIT 5",
+             WHERE session_id = ? \
+               AND json_extract(message_json, '$.role') = 'user' \
+             ORDER BY seq ASC LIMIT 1",
         )
         .bind(session_id.to_string())
-        .fetch_all(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
 
-        for row in rows {
-            let json: String = row.get("message_json");
-            if let Ok(msg) = serde_json::from_str::<Message>(&json) {
-                if matches!(msg.role, Role::User) {
-                    let text = msg
-                        .contents
-                        .iter()
-                        .find_map(|p| p.as_text())
-                        .map(str::to_string);
-                    return Ok(text);
-                }
-            }
-        }
-        Ok(None)
+        let Some(row) = row else { return Ok(None) };
+        let json: String = row.get("message_json");
+        let msg = serde_json::from_str::<Message>(&json)?;
+        let text = msg
+            .contents
+            .iter()
+            .find_map(|p| p.as_text())
+            .map(str::to_string);
+        Ok(text)
     }
 
     /// Mark all current messages as read for a user. Uses upsert semantics.
