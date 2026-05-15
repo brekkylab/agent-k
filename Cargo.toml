@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "./agent-k",
-    "./backend-v2",
+    "./backend",
     "./docling-sys",
     "./reflect-agent",
 ]
