@@ -4,10 +4,11 @@
 import { useDeferredValue, useRef, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createFolder, listDirents, uploadFile } from '@/api/dirents';
+import { createFolder, deleteDirent, downloadFile, listDirents, uploadFile } from '@/api/dirents';
 import { getProject } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { FileIcon } from '@/components/fileComponents';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EmptyState, IconPocket } from '@/components/uiPrimitives';
 import { useToastStore } from '@/components/Toast';
 import { ApiError } from '@/api/client';
@@ -69,6 +70,37 @@ function FilesPage() {
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'mkdir failed';
       showToast(`폴더 생성 실패: ${msg}`);
+    },
+  });
+
+  const [deleteTarget, setDeleteTarget] = useState<FileAsset | null>(null);
+
+  const downloadMutation = useMutation({
+    mutationFn: (file: FileAsset) => {
+      const segments = file.path.split('/').filter(Boolean);
+      const relative = segments.slice(1).join('/') || segments.join('/');
+      return downloadFile(projectId, relative);
+    },
+    onError: (err) => {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'download failed';
+      showToast(`다운로드 실패: ${msg}`);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (file: FileAsset) => {
+      const segments = file.path.split('/').filter(Boolean);
+      const relative = segments.slice(1).join('/') || segments.join('/');
+      return deleteDirent(projectId, relative);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      showToast('파일이 삭제되었습니다');
+      setDeleteTarget(null);
+    },
+    onError: (err) => {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'delete failed';
+      showToast(`삭제 실패: ${msg}`);
     },
   });
 
@@ -148,14 +180,36 @@ function FilesPage() {
             </label>
           </div>
           {files.length ? files.map((file: FileAsset) => (
-            <button key={file.id} className="cw-file-row">
+            <div
+              key={file.id}
+              className="cw-file-row"
+              role="button"
+              tabIndex={0}
+              onClick={() => downloadMutation.mutate(file)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  downloadMutation.mutate(file);
+                }
+              }}
+              aria-disabled={downloadMutation.isPending}
+              style={{ cursor: 'pointer' }}
+            >
               <FileIcon file={file} />
               <span className="cw-file-main">
                 <span className="name">{file.name}</span>
                 <span className="meta">{file.summary} · {file.updatedAt} · {file.sizeLabel}</span>
               </span>
-              <span className="cw-file-more"><Icon name="more" size={14} /></span>
-            </button>
+              <button
+                type="button"
+                className="cw-file-more"
+                aria-label="파일 삭제"
+                onClick={(e) => { e.stopPropagation(); setDeleteTarget(file); }}
+                style={{ border: 0, background: 'transparent', cursor: 'pointer' }}
+              >
+                <Icon name="trash" size={14} />
+              </button>
+            </div>
           )) : (
             <EmptyState
               title="No files match"
@@ -175,6 +229,17 @@ function FilesPage() {
           </div>
         </section>
       </div>
+      {deleteTarget && (
+        <ConfirmDialog
+          title="파일을 삭제하시겠어요?"
+          body={`${deleteTarget.name} 을(를) 삭제하면 되돌릴 수 없습니다.`}
+          confirmLabel="삭제"
+          destructive
+          pending={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(deleteTarget)}
+          onClose={() => { if (!deleteMutation.isPending) setDeleteTarget(null); }}
+        />
+      )}
     </section>
   );
 }
