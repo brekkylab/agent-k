@@ -291,7 +291,9 @@ async fn fork_inherits_title_and_has_zero_unread() {
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     let source = repo.create_session(project_id, alice_id).await.unwrap();
-    repo.set_session_title(source.id, "Parent title").await.unwrap();
+    repo.set_session_title(source.id, "Parent title")
+        .await
+        .unwrap();
     repo.append_messages(
         source.id,
         &[
@@ -367,10 +369,7 @@ async fn repository_mark_and_count_unread() {
 
     // mark bob as read
     repo.mark_session_read(session.id, bob_id).await.unwrap();
-    let unread_after = repo
-        .count_session_unread(session.id, bob_id)
-        .await
-        .unwrap();
+    let unread_after = repo.count_session_unread(session.id, bob_id).await.unwrap();
     assert_eq!(unread_after, 0, "after mark_read, unread should be 0");
 
     // Append 1 more message
@@ -380,11 +379,11 @@ async fn repository_mark_and_count_unread() {
     )
     .await
     .unwrap();
-    let unread_new = repo
-        .count_session_unread(session.id, bob_id)
-        .await
-        .unwrap();
-    assert_eq!(unread_new, 1, "after new message, bob should see 1 unread again");
+    let unread_new = repo.count_session_unread(session.id, bob_id).await.unwrap();
+    assert_eq!(
+        unread_new, 1,
+        "after new message, bob should see 1 unread again"
+    );
 }
 
 /// get_first_user_message_text returns the text of the first user message.
@@ -401,29 +400,21 @@ async fn repository_get_first_user_message_text() {
     let session = repo.create_session(project_id, alice_id).await.unwrap();
 
     // Empty session → None
-    let text = repo
-        .get_first_user_message_text(session.id)
-        .await
-        .unwrap();
+    let text = repo.get_first_user_message_text(session.id).await.unwrap();
     assert!(text.is_none(), "empty session should return None");
 
     // Append user + assistant
     repo.append_messages(
         session.id,
         &[
-            Message::new(Role::User)
-                .with_contents([Part::text("first user message")]),
-            Message::new(Role::Assistant)
-                .with_contents([Part::text("assistant response")]),
+            Message::new(Role::User).with_contents([Part::text("first user message")]),
+            Message::new(Role::Assistant).with_contents([Part::text("assistant response")]),
         ],
     )
     .await
     .unwrap();
 
-    let text = repo
-        .get_first_user_message_text(session.id)
-        .await
-        .unwrap();
+    let text = repo.get_first_user_message_text(session.id).await.unwrap();
     assert_eq!(
         text.as_deref(),
         Some("first user message"),
@@ -453,7 +444,10 @@ async fn set_session_title_persisted_in_response() {
         None,
     )
     .await;
-    assert!(body["title"].is_null(), "title should be null initially: {body}");
+    assert!(
+        body["title"].is_null(),
+        "title should be null initially: {body}"
+    );
 
     // Set title
     repo.set_session_title(session.id, "My session title")
@@ -488,8 +482,12 @@ async fn set_session_title_does_not_overwrite_existing() {
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
-    repo.set_session_title(session.id, "First title").await.unwrap();
-    repo.set_session_title(session.id, "Second title").await.unwrap();
+    repo.set_session_title(session.id, "First title")
+        .await
+        .unwrap();
+    repo.set_session_title(session.id, "Second title")
+        .await
+        .unwrap();
 
     let (_, body) = common::authed(
         &app,

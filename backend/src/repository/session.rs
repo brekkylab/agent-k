@@ -352,14 +352,12 @@ impl SqliteRepository {
             .await?;
         }
 
-        sqlx::query(
-            "UPDATE sessions SET updated_at = ?, last_message_at = ? WHERE id = ?;",
-        )
-        .bind(&now)
-        .bind(&now)
-        .bind(&sid)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("UPDATE sessions SET updated_at = ?, last_message_at = ? WHERE id = ?;")
+            .bind(&now)
+            .bind(&now)
+            .bind(&sid)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -393,18 +391,12 @@ impl SqliteRepository {
     // ── Session metadata ────────────────────────────────────────────────────────
 
     /// Set title only if not already set (idempotent for concurrent title-gen spawns).
-    pub async fn set_session_title(
-        &self,
-        session_id: Uuid,
-        title: &str,
-    ) -> RepositoryResult<()> {
-        sqlx::query(
-            "UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL",
-        )
-        .bind(title)
-        .bind(session_id.to_string())
-        .execute(&self.pool)
-        .await?;
+    pub async fn set_session_title(&self, session_id: Uuid, title: &str) -> RepositoryResult<()> {
+        sqlx::query("UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL")
+            .bind(title)
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -438,11 +430,7 @@ impl SqliteRepository {
     }
 
     /// Mark all current messages as read for a user. Uses upsert semantics.
-    pub async fn mark_session_read(
-        &self,
-        session_id: Uuid,
-        user_id: Uuid,
-    ) -> RepositoryResult<()> {
+    pub async fn mark_session_read(&self, session_id: Uuid, user_id: Uuid) -> RepositoryResult<()> {
         let now = Self::now_string();
         sqlx::query(
             "INSERT INTO session_reads (session_id, user_id, last_read_seq, updated_at)
