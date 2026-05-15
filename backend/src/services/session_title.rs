@@ -7,19 +7,12 @@ use ailoy::{
 use futures_util::StreamExt;
 
 const TITLE_MODEL: &str = "openai/gpt-5-nano";
-const TITLE_FALLBACK_LEN: usize = 50;
+const TITLE_MAX_LEN: usize = 60;
 const TITLE_TIMEOUT_SECS: u64 = 15;
 
 /// Generate a one-sentence title for a session from the first user message.
-/// Falls back to the first `TITLE_FALLBACK_LEN` characters on any error.
+/// Falls back to the first `TITLE_MAX_LEN` characters of the message on any error.
 pub async fn generate_session_title(first_user_text: &str) -> String {
-    let fallback = || {
-        first_user_text
-            .chars()
-            .take(TITLE_FALLBACK_LEN)
-            .collect::<String>()
-    };
-
     let result: Result<Result<String, String>, _> = tokio::time::timeout(
         Duration::from_secs(TITLE_TIMEOUT_SECS),
         call_llm_for_session_title(first_user_text),
@@ -28,7 +21,7 @@ pub async fn generate_session_title(first_user_text: &str) -> String {
 
     match result {
         Ok(Ok(title)) if !title.trim().is_empty() => sanitize_session_title(&title),
-        _ => fallback(),
+        _ => sanitize_session_title(first_user_text),
     }
 }
 
@@ -64,6 +57,6 @@ fn sanitize_session_title(s: &str) -> String {
         .collect::<String>()
         .trim()
         .chars()
-        .take(60)
+        .take(TITLE_MAX_LEN)
         .collect()
 }
