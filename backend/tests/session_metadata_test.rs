@@ -329,6 +329,56 @@ async fn fork_inherits_title_and_has_zero_unread() {
     );
 }
 
+/// send_message on the first message triggers fire-and-forget LLM title generation.
+/// The title should be stored within a reasonable time after the response returns.
+#[tokio::test]
+async fn send_message_generates_title_via_llm() {
+    dotenvy::dotenv().ok();
+    common::setup_provider().await;
+
+    let (app, _repo, _state) = common::make_app_repo_state().await;
+
+    let username = format!("user_{}", Uuid::new_v4().simple());
+    common::signup(&app, &username, "Password123!").await;
+    let token = common::login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+
+    let session_id = common::post_session_authed(&app, &token, project_id).await;
+
+    // First message triggers fire-and-forget title generation
+    common::send_message(&app, session_id, "What is the capital of France?", &token).await;
+
+    // Poll until title is set (the spawn runs concurrently; give it up to 30s)
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let (_, body) = common::authed(
+            &app,
+            "GET",
+            &format!("/sessions/{session_id}"),
+            &token,
+            None,
+        )
+        .await;
+
+        if !body["title"].is_null() {
+            let title = body["title"].as_str().unwrap();
+            assert!(!title.is_empty(), "generated title should not be empty");
+            assert!(
+                title.len() <= 60,
+                "title should be within 60-char cap: {title:?}"
+            );
+            break;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "title was not generated within 30 seconds"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+}
+
 // ── repository-level unit tests ───────────────────────────────────────────────
 
 /// mark_session_read and count_session_unread work correctly via the repo API.
