@@ -25,13 +25,13 @@ pub struct SessionResponse {
     pub share_mode: ShareMode,
     pub title: Option<String>,
     pub last_message_at: Option<DateTime<Utc>>,
-    pub unread_count: i64,
+    pub unread_count: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl SessionResponse {
-    pub fn from_db(s: DbSession, unread_count: i64) -> Self {
+    pub fn from_db(s: DbSession, unread_count: u64) -> Self {
         Self {
             id: s.id,
             project_id: s.project_id,

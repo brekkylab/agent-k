@@ -483,7 +483,7 @@ impl SqliteRepository {
         &self,
         session_ids: &[Uuid],
         user_id: Uuid,
-    ) -> RepositoryResult<std::collections::HashMap<Uuid, i64>> {
+    ) -> RepositoryResult<std::collections::HashMap<Uuid, u64>> {
         if session_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
@@ -513,7 +513,7 @@ impl SqliteRepository {
         let mut map = std::collections::HashMap::new();
         for row in rows {
             let sid_str: String = row.get("session_id");
-            let count: i64 = row.get("cnt");
+            let count = row.get::<i64, _>("cnt") as u64;
             if let Ok(sid) = Uuid::parse_str(&sid_str) {
                 map.insert(sid, count);
             }
@@ -526,7 +526,7 @@ impl SqliteRepository {
         &self,
         session_id: Uuid,
         user_id: Uuid,
-    ) -> RepositoryResult<i64> {
+    ) -> RepositoryResult<u64> {
         let row = sqlx::query(
             "SELECT COUNT(*) AS cnt FROM session_messages
              WHERE session_id = ?
@@ -542,6 +542,6 @@ impl SqliteRepository {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("cnt"))
+        Ok(row.get::<i64, _>("cnt") as u64)
     }
 }
