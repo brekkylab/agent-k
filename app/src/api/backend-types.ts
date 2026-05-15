@@ -52,6 +52,14 @@ export interface BackendDirent {
   modified_at?: string | null;
 }
 
+export interface BackendUploadedFile { path: string; bytes: number; }
+export interface BackendFailedFile { path: string; error: string; }
+export interface BackendUploadResponse {
+  project_id: string;
+  succeeded: BackendUploadedFile[];
+  failed: BackendFailedFile[];
+}
+
 export type AiloyPart =
   | { type: 'text'; text: string }
   | { type: 'value'; value: unknown }

@@ -1,7 +1,9 @@
 import { ApiError, getBaseUrl, getToken, request } from './client';
-import type { BackendDirent } from './backend-types';
+import type { BackendDirent, BackendUploadResponse } from './backend-types';
 import { toFileAsset } from './transformers';
 import type { FileAsset } from '@/domain/types';
+
+export type UploadResult = BackendUploadResponse;
 
 function encodePath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
@@ -14,11 +16,27 @@ export async function listDirents(projectId: string, projectName: string, recurs
   return res.entries.map((e) => toFileAsset(e, projectId, projectName));
 }
 
-export async function uploadFile(projectId: string, file: File, targetPath: string): Promise<void> {
+export async function uploadFile(projectId: string, file: File, targetPath: string): Promise<UploadResult> {
+  return uploadFiles(projectId, [{ file, targetPath }]);
+}
+
+// Upload many files in a single multipart request. Backend handles each
+// file independently and returns { succeeded, failed } so callers can show
+// partial-failure UI without parsing per-file errors out of a single message.
+export async function uploadFiles(
+  projectId: string,
+  items: Array<{ file: File; targetPath: string }>,
+): Promise<UploadResult> {
   const form = new FormData();
-  const renamed = new File([file], targetPath, { type: file.type });
-  form.append('file', renamed);
-  await request(`/projects/${projectId}/dirents`, { method: 'POST', body: form, isForm: true });
+  for (const { file, targetPath } of items) {
+    const renamed = new File([file], targetPath, { type: file.type });
+    form.append('file', renamed);
+  }
+  return request<UploadResult>(`/projects/${projectId}/dirents`, {
+    method: 'POST',
+    body: form,
+    isForm: true,
+  });
 }
 
 export async function createFolder(projectId: string, folderPath: string): Promise<void> {

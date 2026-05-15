@@ -4,7 +4,7 @@
 import { useDeferredValue, useRef, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createFolder, deleteDirent, downloadFile, listDirents, uploadFile } from '@/api/dirents';
+import { createFolder, deleteDirent, downloadFile, listDirents, uploadFiles, type UploadResult } from '@/api/dirents';
 import { getProject } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { FileIcon } from '@/components/fileComponents';
@@ -46,19 +46,40 @@ function FilesPage() {
   );
 
   const uploadMutation = useMutation({
-    mutationFn: async (file: File) => {
-      const path = activeFolder ? `${activeFolder}/${file.name}` : file.name;
-      await uploadFile(projectId, file, path);
+    mutationFn: async (files: File[]): Promise<UploadResult> => {
+      const items = files.map((file) => ({
+        file,
+        targetPath: activeFolder && activeFolder !== 'General' ? `${activeFolder}/${file.name}` : file.name,
+      }));
+      return uploadFiles(projectId, items);
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
-      showToast('파일이 업로드되었습니다');
+      const ok = result.succeeded.length;
+      const ko = result.failed.length;
+      if (ko === 0) {
+        showToast(ok === 1 ? '파일이 업로드되었습니다' : `${ok}개 파일이 업로드되었습니다`);
+      } else {
+        showToast(
+          `${ok}개 업로드, ${ko}개 실패`,
+          result.failed.map((f) => `${f.path || '(이름 없음)'} — ${f.error}`),
+        );
+      }
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'upload failed';
       showToast(`업로드 실패: ${msg}`);
     },
   });
+
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  // dragenter fires per descendant too — track depth so highlight doesn't flicker.
+  const dragDepthRef = useRef(0);
+
+  function onDropFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+    uploadMutation.mutate(Array.from(fileList));
+  }
 
   const folderMutation = useMutation({
     mutationFn: (name: string) =>
@@ -129,9 +150,9 @@ function FilesPage() {
             ref={fileInputRef}
             type="file"
             hidden
+            multiple
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) uploadMutation.mutate(file);
+              onDropFiles(e.target.files);
               e.target.value = '';
             }}
           />
@@ -219,9 +240,33 @@ function FilesPage() {
               chip={<Icon name="folder" size={16} />}
             />
           )}
-          <div className="cw-dropzone" onClick={openUpload} role="button" tabIndex={0}>
+          <div
+            className={`cw-dropzone${isDraggingOver ? ' is-over' : ''}`}
+            onClick={openUpload}
+            role="button"
+            tabIndex={0}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              dragDepthRef.current += 1;
+              setIsDraggingOver(true);
+            }}
+            onDragOver={(e) => { e.preventDefault(); }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+              if (dragDepthRef.current === 0) setIsDraggingOver(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              dragDepthRef.current = 0;
+              setIsDraggingOver(false);
+              onDropFiles(e.dataTransfer.files);
+            }}
+          >
             <IconPocket tone="add" icon="plus" />
-            <span>파일을 드래그하거나 Upload를 누르세요. 업로드된 파일은 세션에서 ground truth로 선택할 수 있습니다.</span>
+            <span>{isDraggingOver
+              ? '여기에 놓으면 업로드됩니다'
+              : '파일을 드래그하거나 Upload를 누르세요. 업로드된 파일은 세션에서 ground truth로 선택할 수 있습니다.'}</span>
           </div>
           <div className="cw-knowledge">
             <h2><IconPocket tone="content" icon="sparkles" /> Knowledge <small>soon</small></h2>

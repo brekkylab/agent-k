@@ -180,7 +180,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .cw-file-path { align-items: flex-start; flex-direction: column; gap: 10px; }
 }
 
-.cw-toast { position: fixed; bottom: 18px; right: 18px; z-index: 25; display: inline-flex; align-items: center; gap: 8px; max-width: min(360px, calc(100vw - 36px)); border: 1px solid var(--cw-accent-line); background: var(--cw-accent-soft); color: var(--cw-accent-2); border-radius: var(--cw-radius-full); padding: 8px 12px; box-shadow: var(--cw-shadow-popover); font-size: 13px; animation: cw-rise .18s ease both; }
+.cw-toast { position: fixed; bottom: 18px; right: 18px; z-index: 25; display: inline-flex; flex-direction: column; align-items: stretch; gap: 6px; max-width: min(420px, calc(100vw - 36px)); border: 1px solid var(--cw-accent-line); background: var(--cw-accent-soft); color: var(--cw-accent-2); border-radius: var(--cw-radius-lg); padding: 10px 14px; box-shadow: var(--cw-shadow-popover); font-size: 13px; animation: cw-rise .18s ease both; }
+.cw-toast-message { font-weight: 500; }
+.cw-toast-detail { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5; color: color-mix(in oklch, var(--cw-accent-2), transparent 25%); list-style: disc; max-height: 140px; overflow: auto; }
+.cw-toast-detail li + li { margin-top: 2px; }
 .cw-project-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: -14px 0 28px; }
 .cw-empty-state { border: 1px dashed var(--cw-border-hover); background: var(--cw-bg-subtle); border-radius: var(--cw-radius-lg); padding: 18px; color: var(--cw-fg-2); }
 .cw-empty-state b { color: var(--cw-fg-1); }
@@ -427,6 +430,12 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   background: var(--cw-paper-2);
   color: var(--cw-ink-3);
   font-size: 12px;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.cw-dropzone.is-over {
+  border-color: var(--cw-accent);
+  background: var(--cw-accent-soft);
+  color: var(--cw-accent-2);
 }
 .cw-dropzone-icon {
   width: 28px;
