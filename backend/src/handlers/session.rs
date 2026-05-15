@@ -24,6 +24,7 @@ use crate::{
         SessionResponse, UpdateSessionRequest,
     },
     repository::SessionAccess,
+    services::title::generate_title,
     state::AppState,
 };
 
@@ -176,7 +177,10 @@ pub async fn create_session(
     state.insert_agent(session.id, agent);
 
     tracing::info!(id = %session.id, sandbox = %sandbox_name, "session created");
-    Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
+    Ok((
+        StatusCode::CREATED,
+        Json(SessionResponse::from_db(session, 0)),
+    ))
 }
 
 /// GET /projects/{project_id}/sessions
@@ -200,9 +204,17 @@ pub async fn list_sessions(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    Ok(Json(SessionListResponse {
-        items: sessions.into_iter().map(SessionResponse::from).collect(),
-    }))
+    let mut items = Vec::with_capacity(sessions.len());
+    for s in sessions {
+        let unread = state
+            .repository
+            .count_session_unread(s.id, auth_user.id)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
+        items.push(SessionResponse::from_db(s, unread));
+    }
+
+    Ok(Json(SessionListResponse { items }))
 }
 
 /// GET /sessions/{session_id}
@@ -218,7 +230,13 @@ pub async fn get_session(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    Ok(Json(SessionResponse::from(session)))
+    let unread = state
+        .repository
+        .count_session_unread(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(Json(SessionResponse::from_db(session, unread)))
 }
 
 /// PATCH /sessions/{session_id} — share_mode change (creator or project owner)
@@ -245,7 +263,13 @@ pub async fn update_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    Ok(Json(SessionResponse::from(updated)))
+    let unread = state
+        .repository
+        .count_session_unread(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(Json(SessionResponse::from_db(updated, unread)))
 }
 
 pub(crate) async fn cleanup_session_resources(state: &Arc<AppState>, session_id: Uuid) {
@@ -317,6 +341,12 @@ pub async fn fork_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
+    // Mark the forked session as fully read for the creator
+    let _ = state
+        .repository
+        .mark_session_read(new_id, auth_user.id)
+        .await;
+
     let source_cfg = SandboxConfig {
         name: Some(sandbox_name_for(&source_session_id)),
         persist: true,
@@ -348,7 +378,7 @@ pub async fn fork_session(
             );
             Ok((
                 StatusCode::CREATED,
-                Json(SessionResponse::from(new_session)),
+                Json(SessionResponse::from_db(new_session, 0)),
             ))
         }
         Err(e) => {
@@ -379,6 +409,12 @@ pub async fn get_message_history(
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+
+    // Auto-mark all messages as read for this user
+    let _ = state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await;
 
     Ok(Json(messages))
 }
@@ -439,6 +475,7 @@ pub async fn send_message(
         return Err(AppError::forbidden("read-only access to this session"));
     }
 
+    let need_title = session.title.is_none();
     let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
 
     let mut agent = agent_arc
@@ -461,6 +498,23 @@ pub async fn send_message(
         .append_messages(session_id, &new_messages)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+
+    // Auto-mark sender as having read all messages
+    let _ = state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await;
+
+    // Fire-and-forget title generation on first message
+    if need_title {
+        let repo = state.repository.clone();
+        if let Ok(Some(text)) = repo.get_first_user_message_text(session_id).await {
+            tokio::spawn(async move {
+                let title = generate_title(&text).await;
+                let _ = repo.set_session_title(session_id, &title).await;
+            });
+        }
+    }
 
     Ok(Json(outputs))
 }
@@ -497,6 +551,8 @@ pub async fn send_message_stream(
     let prev_len = guard.get_history().len();
     let repo = state.repository.clone();
     let content = payload.content;
+    let need_title = session.title.is_none();
+    let sender_id = auth_user.id;
 
     let stream = async_stream::stream! {
         let mut agent = guard;  // OwnedMutexGuard moved in — lock held for stream lifetime
@@ -534,6 +590,20 @@ pub async fn send_message_stream(
 
         if let Err(e) = repo.append_messages(session_id, &new_msgs).await {
             tracing::error!(%session_id, "failed to persist messages: {e}");
+        }
+
+        // Auto-mark sender as having read
+        let _ = repo.mark_session_read(session_id, sender_id).await;
+
+        // Fire-and-forget title generation on first message
+        if need_title {
+            let repo2 = repo.clone();
+            if let Ok(Some(text)) = repo.get_first_user_message_text(session_id).await {
+                tokio::spawn(async move {
+                    let title = generate_title(&text).await;
+                    let _ = repo2.set_session_title(session_id, &title).await;
+                });
+            }
         }
 
         yield Ok(Event::default().event("done").data("[DONE]"));
