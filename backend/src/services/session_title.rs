@@ -64,6 +64,6 @@ fn sanitize_session_title(s: &str) -> String {
         .collect::<String>()
         .trim()
         .chars()
-        .take(80)
+        .take(60)
         .collect()
 }
