@@ -207,7 +207,7 @@ impl SqliteRepository {
                        AND (s.creator_id = ?2 OR s.share_mode != 'private')
                    )
                )
-             ORDER BY s.created_at DESC",
+             ORDER BY COALESCE(s.last_message_at, s.created_at) DESC",
         )
         .bind(&pid)
         .bind(&uid)
