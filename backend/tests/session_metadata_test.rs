@@ -470,6 +470,70 @@ async fn set_title_persisted_in_response() {
     );
 }
 
+/// After clear_message_history: last_message_at is null, unread_count is 0.
+#[tokio::test]
+async fn clear_message_history_resets_metadata() {
+    let (app, repo, _state) = common::make_app_repo_state().await;
+
+    let alice_info = common::signup(&app, "alice_clr", "Password123!").await;
+    let alice_token = common::login(&app, "alice_clr", "Password123!").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_id = uuid::Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let alice_id = uuid::Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+
+    let session = repo.create_session(project_id, alice_id).await.unwrap();
+
+    repo.append_messages(
+        session.id,
+        &[
+            Message::new(Role::User).with_contents([Part::text("hello")]),
+            Message::new(Role::Assistant).with_contents([Part::text("hi")]),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Mark read so session_reads has a row
+    repo.mark_session_read(session.id, alice_id).await.unwrap();
+
+    // Pre-condition: last_message_at is set
+    let (_, before) = common::authed(
+        &app,
+        "GET",
+        &format!("/sessions/{}", session.id),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert!(
+        !before["last_message_at"].is_null(),
+        "last_message_at should be set before clear: {before}"
+    );
+
+    // Clear via HTTP API
+    common::clear_message_history(&app, session.id, &alice_token).await;
+
+    // Post-condition: last_message_at is null, unread_count is 0
+    let (status, after) = common::authed(
+        &app,
+        "GET",
+        &format!("/sessions/{}", session.id),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "GET failed: {after}");
+    assert!(
+        after["last_message_at"].is_null(),
+        "last_message_at should be null after clear: {after}"
+    );
+    assert_eq!(
+        after["unread_count"].as_i64(),
+        Some(0),
+        "unread_count should be 0 after clear: {after}"
+    );
+}
+
 /// set_title is a no-op if title is already set.
 #[tokio::test]
 async fn set_title_does_not_overwrite_existing() {

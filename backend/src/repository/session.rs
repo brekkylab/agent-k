@@ -363,10 +363,29 @@ impl SqliteRepository {
     }
 
     pub async fn clear_messages(&self, session_id: Uuid) -> RepositoryResult<()> {
+        let sid = session_id.to_string();
+        let now = Self::now_string();
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("DELETE FROM session_messages WHERE session_id = ?;")
-            .bind(session_id.to_string())
-            .execute(&self.pool)
+            .bind(&sid)
+            .execute(&mut *tx)
             .await?;
+
+        sqlx::query(
+            "UPDATE sessions SET last_message_at = NULL, title = NULL, updated_at = ? WHERE id = ?;",
+        )
+        .bind(&now)
+        .bind(&sid)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("DELETE FROM session_reads WHERE session_id = ?;")
+            .bind(&sid)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
