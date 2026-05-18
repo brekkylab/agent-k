@@ -33,7 +33,9 @@ async fn handle_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<WsEven
     loop {
         match rx.recv().await {
             Ok(event) => {
-                let Ok(json) = serde_json::to_string(&event) else { continue };
+                let Ok(json) = serde_json::to_string(&event) else {
+                    continue;
+                };
                 if socket.send(Message::Text(json.into())).await.is_err() {
                     break;
                 }
