@@ -10,6 +10,17 @@ button { cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--cw-accent-line); outline-offset: 2px; }
 
 .cw-icon { display: inline-block; vertical-align: -3px; flex: 0 0 auto; color: currentColor; }
+
+.cw-typing-caret::after {
+  content: '▎';
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--cw-fg-3);
+  animation: cw-caret-blink 0.85s steps(1) infinite;
+}
+@keyframes cw-caret-blink {
+  50% { opacity: 0; }
+}
 .cw-loading { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: var(--cw-space-3); color: var(--cw-fg-3); }
 .cw-loading img { width: 36px; height: 36px; animation: cw-enter .32s ease both; }
 

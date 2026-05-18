@@ -16,6 +16,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { canAdministerSession } from '@/lib/permissions';
 import { ApiError } from '@/api/client';
+import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
 export function Sidebar() {
@@ -187,7 +188,7 @@ export function Sidebar() {
                   ) : (
                     <IconPocket tone="trust" icon="message-square" compact />
                   )}
-                  <span>{session.title}</span>
+                  <SessionTitleText title={session.title} />
                   {session.isAutoAppend && <span className="auto-dot">●</span>}
                   {canDelete && (
                     <span style={{ marginLeft: 'auto' }}>

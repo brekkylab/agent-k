@@ -15,6 +15,7 @@ import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { useAuthStore } from '@/stores/auth';
 import { canAdministerSession } from '@/lib/permissions';
 import { ApiError } from '@/api/client';
+import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectId/')({
@@ -174,7 +175,7 @@ function SessionCard({
       <div className="cw-session-card-head">
         <span className="cw-session-card-title">
           <IntentIcon intent={session.intent} force />
-          <span>{session.title}</span>
+          <SessionTitleText title={session.title} />
         </span>
         <span className="cw-session-right">
           {isUnread && (
