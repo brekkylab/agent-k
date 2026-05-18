@@ -1,7 +1,7 @@
 // Reusable confirm dialog using Cowork DS .cw-dialog primitives.
 // Destructive variant tints the confirm button using the brick destructive token.
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Icon } from './Icon';
 
 interface ConfirmDialogProps {
@@ -32,8 +32,23 @@ export function ConfirmDialog({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, pending]);
 
+  // Track where mousedown started so a drag (e.g. selecting body text) that
+  // ends on the backdrop doesn't close the dialog.
+  const downOnBackdropRef = useRef(false);
+
   return (
-    <div className="cw-dialog-backdrop" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget && !pending) onClose(); }}>
+    <div
+      className="cw-dialog-backdrop"
+      role="dialog"
+      aria-modal="true"
+      onMouseDown={(e) => { downOnBackdropRef.current = e.target === e.currentTarget; }}
+      onClick={(e) => {
+        const wasDownOnBackdrop = downOnBackdropRef.current;
+        downOnBackdropRef.current = false;
+        if (!wasDownOnBackdrop) return;
+        if (e.target === e.currentTarget && !pending) onClose();
+      }}
+    >
       <div className="cw-dialog">
         <button className="cw-close" onClick={onClose} aria-label="close" disabled={pending}>
           <Icon name="x" />

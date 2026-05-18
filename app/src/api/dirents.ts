@@ -16,6 +16,15 @@ export async function listDirents(projectId: string, projectName: string, recurs
   return res.entries.map((e) => toFileAsset(e, projectId, projectName));
 }
 
+// Raw entries — preferred for tree navigation in the Files page where
+// the unmodified backend path is needed for both display and mutations.
+export async function listDirentsRaw(projectId: string, recursive = true): Promise<BackendDirent[]> {
+  const res = await request<{ entries: BackendDirent[] }>(
+    `/projects/${projectId}/dirents?recursive=${recursive}`,
+  );
+  return res.entries;
+}
+
 export async function uploadFile(projectId: string, file: File, targetPath: string): Promise<UploadResult> {
   return uploadFiles(projectId, [{ file, targetPath }]);
 }

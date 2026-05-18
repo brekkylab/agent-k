@@ -92,7 +92,126 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-live { display: inline-flex; align-items: center; gap: 8px; color: var(--cw-ok); font-size: 13px; }
 .cw-live span { width: 8px; height: 8px; border-radius: 999px; background: var(--cw-ok); animation: cw-ping 1s steps(2, start) infinite; }
 
-.cw-files-page { width: min(1084px, calc(100% - 80px)); }
+/* Files page takes the full main area — both width and height. Each ancestor
+   in the chain gets flex:1 + min-height:0 so the file body can scroll its own
+   content while the surrounding chrome stays put. */
+.cw-files-page { width: 100%; max-width: none; margin: 0; padding: 24px 28px 28px;
+  display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.cw-files-page .cw-page-head { margin-bottom: 16px; padding-bottom: 16px; }
+.cw-files-page .cw-file-browser { flex: 1; min-height: 0; }
+.cw-files-page .cw-file-pane { display: flex; flex-direction: column; min-height: 0; }
+.cw-files-page .cw-file-body { flex: 1; min-height: 0; overflow: auto;
+  user-select: none; -webkit-user-select: none; }
+/* Bulk toolbar — rendered inline in the file-pane-head, replacing the
+   breadcrumb when selection is active. Same visual width and height as the
+   breadcrumb so the header chrome doesn't jump. */
+.cw-bulk-toolbar { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; background: transparent; padding: 0; }
+.cw-bulk-toolbar-inline { animation: cw-enter .16s ease both; }
+.cw-bulk-count { font-weight: 600; color: var(--cw-ink); font-size: 13px; margin-right: 4px; }
+.cw-bulk-toolbar .cw-btn-secondary { min-height: 28px; padding: 4px 10px; font-size: 12px; }
+.cw-bulk-toolbar .cw-btn-destructive { color: var(--cw-destructive); border-color: color-mix(in oklch, var(--cw-destructive), transparent 50%); }
+.cw-bulk-toolbar .cw-btn-destructive:hover { background: color-mix(in oklch, var(--cw-destructive), white 90%); }
+.cw-bulk-clear { margin-left: auto; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-ink-3); cursor: pointer; }
+.cw-bulk-clear:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
+
+/* Rubber-band marquee overlay (rendered at document level via fixed position). */
+.cw-marquee { position: fixed; z-index: 50; pointer-events: none; border: 1px solid var(--cw-accent); background: color-mix(in oklch, var(--cw-accent), transparent 80%); border-radius: 2px; }
+
+/* List row trash button — appears on hover/focus/selection. */
+.cw-file-row { position: relative; }
+.cw-file-row .cw-file-more { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--cw-ink-4); cursor: pointer; opacity: 0; transition: opacity 120ms, background 120ms, color 120ms; }
+.cw-file-row:hover .cw-file-more,
+.cw-file-row.is-selected .cw-file-more,
+.cw-file-row:focus-within .cw-file-more { opacity: 1; }
+.cw-file-row .cw-file-more:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
+.cw-file-row .cw-file-main { padding-right: 36px; }
+
+/* Tint the grid card's icon container by file type. The legacy
+   .cw-file-pdf / -sheet / -image / -doc / -folder rules already set
+   color tokens; we just reuse them on .cw-grid-card-icon. */
+.cw-grid-card-icon.cw-file-pdf { background: color-mix(in oklch, var(--cw-cozy-rose) 14%, var(--cw-paper)); color: var(--cw-cozy-rose); }
+.cw-grid-card-icon.cw-file-sheet { background: color-mix(in oklch, var(--cw-cozy-sage) 14%, var(--cw-paper)); color: var(--cw-cozy-sage); }
+.cw-grid-card-icon.cw-file-image { background: color-mix(in oklch, var(--cw-cozy-plum) 14%, var(--cw-paper)); color: var(--cw-cozy-plum); }
+.cw-grid-card-icon.cw-file-doc { background: color-mix(in oklch, var(--cw-cozy-clay) 14%, var(--cw-paper)); color: var(--cw-cozy-clay); }
+.cw-grid-card-icon.cw-file-code { background: color-mix(in oklch, var(--cw-cozy-teal) 14%, var(--cw-paper)); color: var(--cw-cozy-teal); }
+.cw-grid-card-icon.cw-file-archive { background: color-mix(in oklch, var(--cw-cozy-mustard) 16%, var(--cw-paper)); color: oklch(0.5 0.1 95); }
+.cw-grid-card-icon.cw-file-video { background: color-mix(in oklch, var(--cw-cozy-clay) 16%, var(--cw-paper)); color: var(--cw-cozy-clay); }
+.cw-grid-card-icon.cw-file-audio { background: color-mix(in oklch, var(--cw-cozy-honey) 18%, var(--cw-paper)); color: oklch(0.55 0.13 75); }
+.cw-grid-card-icon.cw-file-file { background: var(--cw-paper-3); color: var(--cw-ink-3); }
+
+/* Same tints on list view pockets so list and grid stay in sync. */
+.cw-pocket.cw-file-code { background: color-mix(in oklch, var(--cw-cozy-teal) 14%, var(--cw-paper)); color: var(--cw-cozy-teal); }
+.cw-pocket.cw-file-archive { background: color-mix(in oklch, var(--cw-cozy-mustard) 16%, var(--cw-paper)); color: oklch(0.5 0.1 95); }
+.cw-pocket.cw-file-video { background: color-mix(in oklch, var(--cw-cozy-clay) 16%, var(--cw-paper)); color: var(--cw-cozy-clay); }
+.cw-pocket.cw-file-audio { background: color-mix(in oklch, var(--cw-cozy-honey) 18%, var(--cw-paper)); color: oklch(0.55 0.13 75); }
+.cw-file-pane { display: flex; flex-direction: column; min-width: 0; background: var(--cw-paper); }
+.cw-file-pane-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--cw-line); background: var(--cw-paper-2); }
+.cw-breadcrumb { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 13px; color: var(--cw-ink-3); }
+.cw-breadcrumb b { color: var(--cw-ink); font-weight: 600; }
+.cw-breadcrumb button { background: transparent; border: 0; padding: 3px 6px; border-radius: var(--cw-radius-sm); color: var(--cw-ink-3); font-size: 13px; cursor: pointer; }
+.cw-breadcrumb button:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
+.cw-breadcrumb-sep { display: inline-flex; align-items: center; color: var(--cw-ink-4); }
+.cw-file-pane-tools { display: inline-flex; align-items: center; gap: 8px; }
+.cw-files-search { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--cw-line); border-radius: var(--cw-radius-full); background: var(--cw-paper); color: var(--cw-ink-3); }
+.cw-files-search input { border: 0; outline: 0; background: transparent; min-width: 180px; font-size: 12.5px; color: var(--cw-ink); }
+.cw-view-toggle { display: inline-flex; border: 1px solid var(--cw-line); border-radius: var(--cw-radius-md); overflow: hidden; }
+.cw-view-toggle button { border: 0; background: transparent; padding: 6px 9px; color: var(--cw-ink-3); cursor: pointer; display: inline-flex; align-items: center; transition: background 120ms, color 120ms; }
+.cw-view-toggle button:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
+.cw-view-toggle button.is-active { background: var(--cw-ink); color: var(--cw-paper); }
+.cw-file-body { min-height: 380px; padding: 14px 16px; transition: background 120ms; }
+.cw-file-body.is-over { background: color-mix(in oklch, var(--cw-accent-soft) 60%, var(--cw-paper)); outline: 2px dashed var(--cw-accent); outline-offset: -10px; }
+
+/* Sidebar folder tree — namespaced separately to avoid cascade collisions
+   with the legacy .cw-folder-tree rules elsewhere in this stylesheet. */
+.cw-sidebar-tree { display: flex; flex-direction: column; gap: 1px; padding: 10px 8px; background: var(--cw-paper-2); border-right: 1px solid var(--cw-line); overflow: auto; }
+.cw-sidebar-tree .cw-tree-row { display: flex; align-items: center; gap: 4px; min-height: 28px; width: 100%; padding: 0 6px 0 8px; border-radius: var(--cw-radius-sm); color: var(--cw-ink-2); }
+.cw-sidebar-tree .cw-tree-row.is-active { background: var(--cw-paper-3); color: var(--cw-ink); }
+.cw-sidebar-tree .cw-tree-root { padding: 6px 8px; font-size: 12px; font-weight: 600; color: var(--cw-ink-3); border: 0; background: transparent; width: 100%; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; min-height: 30px; border-radius: var(--cw-radius-sm); margin-bottom: 4px; }
+.cw-sidebar-tree .cw-tree-root:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
+.cw-sidebar-tree .cw-tree-root.is-active { background: var(--cw-paper-3); color: var(--cw-ink); }
+.cw-sidebar-tree .cw-tree-chevron { width: 18px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--cw-ink-4); cursor: pointer; padding: 0; border-radius: var(--cw-radius-sm); flex: 0 0 auto; }
+.cw-sidebar-tree .cw-tree-chevron:hover { color: var(--cw-ink-2); background: var(--cw-paper-3); }
+.cw-sidebar-tree .cw-tree-label { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 4px 6px; text-align: left; font-size: 12.5px; color: inherit; cursor: pointer; border-radius: var(--cw-radius-sm); }
+.cw-sidebar-tree .cw-tree-label:hover { background: var(--cw-paper-3); }
+.cw-sidebar-tree .cw-tree-label > span:not(.cw-tree-count) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-sidebar-tree .cw-tree-count { font-family: var(--cw-font-mono); font-size: 10.5px; color: var(--cw-ink-4); margin-left: auto; flex: 0 0 auto; }
+
+/* List view rows */
+.cw-file-table { display: flex; flex-direction: column; gap: 1px; }
+/* Selected list row — subtle fill + bold name. No stripe, no border colour. */
+.cw-file-row.is-selected {
+  background: var(--cw-selected-bg);
+  border-color: transparent;
+}
+.cw-file-row.is-selected:hover { background: var(--cw-selected-bg-2); }
+.cw-file-row.is-selected .name { color: var(--cw-ink); font-weight: 500; }
+.cw-file-row.is-selected .meta { color: var(--cw-ink-3); }
+
+/* Grid view cards */
+.cw-grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.cw-grid-card { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 10px 12px; border: 1px solid var(--cw-line); border-radius: 12px; background: var(--cw-paper-2); cursor: pointer; transition: border-color 120ms, background 120ms, transform 120ms; }
+.cw-grid-card:hover { border-color: var(--cw-paper-4); background: var(--cw-paper); transform: translateY(-1px); }
+/* Selected grid card — subtle fill, accent border, faint outer ring.
+   The border does the heavy lifting; the fill and ring are quiet so a row of
+   selected cards doesn't visually scream. */
+/* Same visual language as list row: subtle fill + bold name.
+   Keep the card's default border so the carded surface still reads as carded. */
+.cw-grid-card.is-selected {
+  background: var(--cw-selected-bg);
+}
+.cw-grid-card.is-selected:hover { background: var(--cw-selected-bg-2); }
+.cw-grid-card.is-selected .cw-grid-card-name { color: var(--cw-ink); font-weight: 600; }
+.cw-grid-card.is-selected .cw-grid-card-meta { color: var(--cw-ink-3); }
+.cw-grid-card:focus-visible { outline: 2px solid var(--cw-accent-line); outline-offset: 2px; }
+.cw-grid-card-icon { width: 56px; height: 56px; display: inline-grid; place-items: center; border-radius: 12px; background: color-mix(in oklch, var(--cw-cozy-honey) 14%, var(--cw-paper)); color: oklch(0.5 0.13 75); }
+.cw-grid-card-name { font-size: 12.5px; font-weight: 500; color: var(--cw-ink); text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-grid-card-meta { font-size: 10.5px; color: var(--cw-ink-4); font-family: var(--cw-font-mono); }
+.cw-grid-card-more { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--cw-ink-4); cursor: pointer; opacity: 0; transition: opacity 120ms, background 120ms, color 120ms; }
+.cw-grid-card:hover .cw-grid-card-more,
+.cw-grid-card.is-selected .cw-grid-card-more,
+.cw-grid-card:focus-within .cw-grid-card-more { opacity: 1; }
+.cw-grid-card-more:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
+
 .cw-page-head > div:last-child { display: flex; gap: 8px; align-items: center; }
 .cw-file-browser { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 480px; border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); overflow: hidden; background: var(--cw-bg-subtle); }
 .cw-folder-tree { border-right: 1px solid var(--cw-border); padding: 18px 12px; }
@@ -149,8 +268,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-artifact-preview section p { margin: 5px 0; font-size: 12px; }
 
 .cw-dialog-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: oklch(0.18 0.01 60 / .26); }
-.cw-dialog { position: relative; width: min(520px, calc(100vw - 32px)); border: 1px solid var(--cw-border); border-radius: var(--cw-radius-xl); background: var(--cw-bg); box-shadow: var(--cw-shadow-popover); padding: 22px; animation: cw-enter .22s ease both; }
-.cw-close { position: absolute; top: 12px; right: 12px; border: 0; background: transparent; }
+.cw-dialog { position: relative; width: min(440px, calc(100vw - 32px)); border: 1px solid var(--cw-border); border-radius: var(--cw-radius-xl); background: var(--cw-bg); box-shadow: var(--cw-shadow-popover); padding: 24px; animation: cw-enter .22s ease both; }
+.cw-close { position: absolute; top: 12px; right: 12px; border: 0; background: transparent; padding: 4px; border-radius: var(--cw-radius-sm); color: var(--cw-ink-4); cursor: pointer; }
+.cw-close:hover { color: var(--cw-ink); background: var(--cw-paper-3); }
+.cw-dialog .cw-field span { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--cw-ink-3); font-weight: 500; }
+.cw-dialog .cw-field input { font-size: 14px; min-height: 40px; }
+.cw-dialog .cw-field input:focus-visible { outline: 2px solid var(--cw-accent-line); outline-offset: 0; border-color: var(--cw-accent-line); }
+.cw-dialog .cw-field input[aria-invalid="true"] { border-color: color-mix(in oklch, var(--cw-destructive), transparent 40%); }
+.cw-dialog-warn { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 7px 12px; border-radius: var(--cw-radius-md); background: color-mix(in oklch, var(--cw-destructive), white 92%); border: 1px solid color-mix(in oklch, var(--cw-destructive), transparent 65%); color: oklch(0.42 0.14 25); font-size: 12.5px; line-height: 1.4; }
 .cw-intent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
 .cw-intent-grid button { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; text-align: left; border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); background: var(--cw-bg-subtle); padding: 12px; }
 .cw-intent-grid button span:last-child { grid-column: 2; color: var(--cw-fg-3); font-size: 12px; }

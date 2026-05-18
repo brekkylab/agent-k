@@ -5,15 +5,18 @@ export type IconName =
   | 'message-square' | 'file-text' | 'file' | 'sheet' | 'image' | 'search' | 'plus'
   | 'send' | 'sparkles' | 'check' | 'chevron' | 'zap' | 'calendar' | 'artifact'
   | 'shield' | 'x' | 'arrow-left' | 'analysis' | 'brainstorm' | 'writing'
-  | 'recap' | 'general' | 'more' | 'upload' | 'trash' | 'download';
+  | 'recap' | 'general' | 'more' | 'upload' | 'trash' | 'download'
+  | 'list' | 'grid' | 'chevron-right'
+  | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio';
 
 type PreviewIconName =
   | 'lock' | 'eye' | 'message-square' | 'messages-square' | 'clipboard-list'
   | 'lightbulb' | 'pencil' | 'home' | 'folder' | 'folder-open' | 'users'
-  | 'settings' | 'plus' | 'chevron-down' | 'more-horizontal' | 'check'
+  | 'settings' | 'plus' | 'chevron-down' | 'chevron-right' | 'more-horizontal' | 'check'
   | 'x' | 'arrow-left' | 'send' | 'search' | 'file-text' | 'file-spreadsheet'
   | 'file' | 'image' | 'sparkles' | 'shield-check' | 'zap' | 'calendar'
-  | 'trash-2' | 'download';
+  | 'trash-2' | 'download' | 'list' | 'grid-3x3'
+  | 'file-code' | 'file-archive' | 'file-video' | 'file-audio';
 
 const previewIconPath: Record<PreviewIconName, string> = {
   lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -46,6 +49,14 @@ const previewIconPath: Record<PreviewIconName, string> = {
   calendar: '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>',
   'trash-2': '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  list: '<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>',
+  'grid-3x3': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  /* Lucide file family. file-text and file-spreadsheet already exist above. */
+  'file-code': '<path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M5 12V4a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H7.5"/><path d="m10 13-3 3 3 3"/><path d="m14 13 3 3-3 3"/>',
+  'file-archive': '<path d="M10 12v-1"/><path d="M10 18v-2"/><path d="M10 7V6"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h2.5"/><circle cx="10" cy="20" r="2"/>',
+  'file-video': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m10 11 5 3-5 3z"/>',
+  'file-audio': '<path d="M17.5 22h.5a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M2 17v-3a4 4 0 0 1 8 0v3"/><circle cx="9" cy="17" r="1"/><circle cx="3" cy="17" r="1"/>',
 };
 
 const iconAlias: Record<IconName, PreviewIconName> = {
@@ -82,6 +93,16 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   upload: 'plus',
   trash: 'trash-2',
   download: 'download',
+  list: 'list',
+  grid: 'grid-3x3',
+  'chevron-right': 'chevron-right',
+  /* PDF doesn't have its own Lucide glyph — reuse file-text and let colour
+     (cw-file-pdf rose tint) carry the type signal. */
+  'file-pdf': 'file-text',
+  'file-code': 'file-code',
+  'file-archive': 'file-archive',
+  'file-video': 'file-video',
+  'file-audio': 'file-audio',
 };
 
 export function Icon({ name, size = 16, className = '', strokeWidth = 2, style, ...props }: SVGProps<SVGSVGElement> & { name: IconName; size?: number }) {

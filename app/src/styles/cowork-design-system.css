@@ -35,6 +35,15 @@
   --cw-accent-soft:  oklch(0.950 0.012 215);  /* accent pill bg */
   --cw-accent-line:  oklch(0.850 0.020 215);  /* accent pill border */
 
+  /* ── Selection — multi-select rows / cards (Files, future lists) ──────
+     Subtle wash on top of paper — the "selected" signal lives in the
+     border / left-stripe / ring rather than in a saturated fill, matching
+     Drive / OneDrive behavior. Hue stays in the accent family. */
+  --cw-selected-bg:     oklch(0.955 0.018 215);   /* +3% lightness gap, low chroma */
+  --cw-selected-bg-2:   oklch(0.945 0.022 215);   /* selected + hover, barely deeper */
+  --cw-selected-border: var(--cw-accent);
+  --cw-selected-ring:   color-mix(in oklch, var(--cw-accent), transparent 86%);
+
   /* ── Signals (muted) ─────────────────────────────────────────────────── */
   --cw-ok:           oklch(0.55 0.08 145);
   --cw-warn:         oklch(0.70 0.12 75);
