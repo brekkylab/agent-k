@@ -20,15 +20,17 @@ use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
     model::{
-        CreateSessionRequest, SendMessageRequest, SendMessageResponse, SessionListResponse,
-        SessionResponse, UpdateSessionRequest,
+        CreateSessionRequest, MessageSender, SendMessageRequest, SendMessageResponse,
+        SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
+        UpdateSessionRequest,
     },
-    repository::SessionAccess,
+    repository::{DbSenderKind, NewSessionMessage, SessionAccess},
     services::session_title::generate_session_title,
     state::AppState,
 };
 
 const DEFAULT_MODEL: &str = "openai/gpt-5.4-mini";
+const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 
 fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
@@ -101,6 +103,28 @@ async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Attribute each message in the persistence slice to a sender.
+///
+/// The slice from `agent.get_history()[prev_len..]` only contains depth-0
+/// messages: all Role::Assistant/Tool/System originate from the top-level agent.
+/// If subagent internal turns are ever surfaced, this function will need to
+/// track depth and subagent name separately.
+fn classify_senders(
+    msgs: &[Message],
+    user_id: Uuid,
+) -> Vec<(DbSenderKind, Option<String>, Option<Uuid>)> {
+    msgs.iter()
+        .map(|m| match m.role {
+            Role::User => (DbSenderKind::User, None, Some(user_id)),
+            Role::System | Role::Assistant | Role::Tool => (
+                DbSenderKind::Agent,
+                Some(TOP_LEVEL_AGENT_NAME.to_string()),
+                None,
+            ),
+        })
+        .collect()
+}
+
 async fn resolve_agent_for(
     state: &Arc<AppState>,
     session_id: Uuid,
@@ -110,11 +134,12 @@ async fn resolve_agent_for(
         return Ok(arc);
     }
 
-    let history = state
+    let rows = state
         .repository
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+    let history: Vec<Message> = rows.into_iter().map(|r| r.message).collect();
 
     let sandbox = build_sandbox(state, project_id, session_id)
         .await
@@ -400,19 +425,37 @@ pub async fn get_message_history(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Path(session_id): Path<Uuid>,
-) -> ApiResult<Json<Vec<Message>>> {
-    let _ = state
+) -> ApiResult<Json<SessionMessageListResponse>> {
+    let (session, _access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    let messages = state
+    let rows = state
         .repository
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let items = rows
+        .into_iter()
+        .map(|r| SessionMessageResponse {
+            message: r.message,
+            sender: match r.sender_kind {
+                DbSenderKind::User => MessageSender::User {
+                    user_id: r.sender_user_id.unwrap_or(session.creator_id),
+                },
+                DbSenderKind::Agent => MessageSender::Agent {
+                    name: r
+                        .sender_name
+                        .unwrap_or_else(|| TOP_LEVEL_AGENT_NAME.to_string()),
+                },
+            },
+            created_at: r.created_at,
+        })
+        .collect();
 
     // Auto-mark all messages as read for this user
     let _ = state
@@ -420,7 +463,7 @@ pub async fn get_message_history(
         .mark_session_read(session_id, auth_user.id)
         .await;
 
-    Ok(Json(messages))
+    Ok(Json(SessionMessageListResponse { items }))
 }
 
 /// DELETE /sessions/{session_id}/messages — creator or project owner
@@ -520,9 +563,21 @@ pub async fn send_message(
     let new_messages = agent.get_history()[prev_len..].to_vec();
     drop(agent);
 
+    let senders = classify_senders(&new_messages, auth_user.id);
+    let to_persist: Vec<NewSessionMessage> = new_messages
+        .into_iter()
+        .zip(senders)
+        .map(|(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+            message,
+            sender_kind,
+            sender_name,
+            sender_user_id,
+        })
+        .collect();
+
     state
         .repository
-        .append_messages(session_id, &new_messages)
+        .append_messages(session_id, &to_persist)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
@@ -628,7 +683,19 @@ pub async fn send_message_stream(
         let new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);  // Release OwnedMutexGuard
 
-        if let Err(e) = repo.append_messages(session_id, &new_msgs).await {
+        let senders = classify_senders(&new_msgs, sender_id);
+        let to_persist: Vec<NewSessionMessage> = new_msgs
+            .into_iter()
+            .zip(senders)
+            .map(|(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+                message,
+                sender_kind,
+                sender_name,
+                sender_user_id,
+            })
+            .collect();
+
+        if let Err(e) = repo.append_messages(session_id, &to_persist).await {
             tracing::error!(%session_id, "failed to persist messages: {e}");
         }
 

@@ -37,12 +37,24 @@ export interface Session {
   isAutoAppend?: boolean;
 }
 
+export type MessageSender =
+  | { kind: 'user'; userId: UserId }
+  | { kind: 'agent'; name: string };
+
+export interface ToolCallInvocation {
+  id: string;
+  name: string;
+  arguments?: unknown;
+  result?: string;
+}
+
 export interface Message {
   id: string;
   sessionId: SessionId;
-  senderId: UserId;
+  sender: MessageSender;
   createdAt: string;
   body: string;
+  toolCalls?: ToolCallInvocation[];
   citations?: FileAsset['id'][];
   status?: 'sent' | 'streaming' | 'done';
 }

@@ -4,7 +4,12 @@
 use std::sync::Arc;
 
 use agent_k::knowledge_base::Store;
-use agent_k_backend::{auth::JwtConfig, repository, router, state::AppState};
+use agent_k_backend::{
+    auth::JwtConfig,
+    repository::{self, DbSenderKind, NewSessionMessage},
+    router,
+    state::AppState,
+};
 use aide::openapi::OpenApi;
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider, tool::ToolProvider};
 use axum::{body::Body, http::Request};
@@ -401,6 +406,20 @@ pub fn parse_sse_events_by_type(body: &[u8], target_event: &str) -> Vec<String> 
             } else {
                 None
             }
+        })
+        .collect()
+}
+
+/// Converts `&[Message]` to `Vec<NewSessionMessage>` for use in tests.
+/// Applies role-based sender attribution matching classify_senders in the handler.
+pub fn to_new_msgs(msgs: &[ailoy::message::Message]) -> Vec<NewSessionMessage> {
+    msgs.iter()
+        .map(|m| {
+            let (sender_kind, sender_name, sender_user_id) = match m.role {
+                ailoy::message::Role::User => (DbSenderKind::User, None, None),
+                _ => (DbSenderKind::Agent, Some("agent-k".to_string()), None),
+            };
+            NewSessionMessage { message: m.clone(), sender_kind, sender_name, sender_user_id }
         })
         .collect()
 }

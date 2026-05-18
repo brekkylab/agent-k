@@ -6,6 +6,7 @@ mod common;
 use std::sync::Arc;
 
 use agent_k_backend::{repository, state::AppState};
+use ailoy::message::{Message, Part, Role};
 use common::{
     SessionGuard, authed, clear_message_history, clear_message_history_status, get_message_history,
     get_message_history_status, login, make_app_with_repo, make_app_with_state, make_repo,
@@ -28,7 +29,6 @@ async fn session_persists_and_restores_history_across_restart() {
 
     // Instance 1: create session, seed messages, then drop (simulates restart).
     let (session_id, token) = {
-        use ailoy::message::{Message, Part, Role};
         let repo = repository::create_repository(&db_url).await.unwrap();
         let app = make_app_with_repo(repo.clone());
         let username = format!("user_{}", uuid::Uuid::new_v4().simple());
@@ -39,10 +39,10 @@ async fn session_persists_and_restores_history_across_restart() {
         let id = post_session_authed(&app, &token, &project_id).await;
         repo.append_messages(
             id,
-            &[
+            &common::to_new_msgs(&[
                 Message::new(Role::User).with_contents([Part::text("hello")]),
                 Message::new(Role::Assistant).with_contents([Part::text("world")]),
-            ],
+            ]),
         )
         .await
         .unwrap();
@@ -61,10 +61,10 @@ async fn session_persists_and_restores_history_across_restart() {
 
     // History must be restored from DB after restart.
     let messages = get_message_history(&app, session_id, &token).await;
-    let arr = messages.as_array().expect("messages must be a JSON array");
+    let arr = messages["items"].as_array().expect("items must be a JSON array");
     assert_eq!(arr.len(), 2, "both seeded messages must survive restart");
-    assert_eq!(arr[0]["role"].as_str().unwrap(), "user");
-    assert_eq!(arr[1]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(arr[0]["message"]["role"].as_str().unwrap(), "user");
+    assert_eq!(arr[1]["message"]["role"].as_str().unwrap(), "assistant");
 
     // Session must be lazy-created (non-404) when a new message arrives.
     let status = send_message_status(&app, session_id, "follow-up", &token).await;
@@ -130,7 +130,7 @@ async fn get_messages_returns_empty_for_new_session() {
     let messages = get_message_history(&app, session.id, &token).await;
     assert_eq!(
         messages,
-        serde_json::json!([]),
+        serde_json::json!({"items": []}),
         "new session must have empty message history"
     );
 }
@@ -184,17 +184,17 @@ async fn get_messages_returns_persisted_messages_in_order() {
         ];
         state
             .repository
-            .append_messages(session.id, &msgs)
+            .append_messages(session.id, &common::to_new_msgs(&msgs))
             .await
             .unwrap();
     }
 
     let body = get_message_history(&app, session.id, &token).await;
-    let arr = body.as_array().expect("response must be a JSON array");
+    let arr = body["items"].as_array().expect("items must be a JSON array");
     assert_eq!(arr.len(), 2, "must return exactly two messages");
 
-    let role0 = arr[0]["role"].as_str().unwrap_or("");
-    let role1 = arr[1]["role"].as_str().unwrap_or("");
+    let role0 = arr[0]["message"]["role"].as_str().unwrap_or("");
+    let role1 = arr[1]["message"]["role"].as_str().unwrap_or("");
     assert_eq!(role0, "user");
     assert_eq!(role1, "assistant");
 }
@@ -250,14 +250,14 @@ async fn clear_messages_removes_persisted_messages() {
         ];
         state
             .repository
-            .append_messages(session.id, &msgs)
+            .append_messages(session.id, &common::to_new_msgs(&msgs))
             .await
             .unwrap();
     }
 
     let before = get_message_history(&app, session.id, &token).await;
     assert_eq!(
-        before.as_array().unwrap().len(),
+        before["items"].as_array().unwrap().len(),
         2,
         "expected two messages before clear"
     );
@@ -267,7 +267,7 @@ async fn clear_messages_removes_persisted_messages() {
     let after = get_message_history(&app, session.id, &token).await;
     assert_eq!(
         after,
-        serde_json::json!([]),
+        serde_json::json!({"items": []}),
         "message history must be empty after clear"
     );
 }
@@ -301,7 +301,7 @@ async fn clear_messages_does_not_delete_session() {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("ping")])];
         state
             .repository
-            .append_messages(session.id, &msgs)
+            .append_messages(session.id, &common::to_new_msgs(&msgs))
             .await
             .unwrap();
     }
@@ -345,7 +345,7 @@ async fn can_append_messages_after_clear() {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("old")])];
         state
             .repository
-            .append_messages(session.id, &msgs)
+            .append_messages(session.id, &common::to_new_msgs(&msgs))
             .await
             .unwrap();
     }
@@ -356,16 +356,16 @@ async fn can_append_messages_after_clear() {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("new")])];
         state
             .repository
-            .append_messages(session.id, &msgs)
+            .append_messages(session.id, &common::to_new_msgs(&msgs))
             .await
             .unwrap();
     }
 
     let body = get_message_history(&app, session.id, &token).await;
-    let arr = body.as_array().unwrap();
+    let arr = body["items"].as_array().unwrap();
     assert_eq!(arr.len(), 1, "only the new message must remain");
 
-    let text = arr[0]["contents"][0]["text"].as_str().unwrap_or("");
+    let text = arr[0]["message"]["contents"][0]["text"].as_str().unwrap_or("");
     assert_eq!(text, "new");
 }
 
@@ -396,10 +396,11 @@ async fn clear_messages_also_clears_in_memory_agent_history() {
     };
 
     {
-        use ailoy::message::{Message, Part, Role};
         repo.append_messages(
             id,
-            &[Message::new(Role::User).with_contents([Part::text("should be cleared")])],
+            &common::to_new_msgs(&[
+                Message::new(Role::User).with_contents([Part::text("should be cleared")]),
+            ]),
         )
         .await
         .unwrap();

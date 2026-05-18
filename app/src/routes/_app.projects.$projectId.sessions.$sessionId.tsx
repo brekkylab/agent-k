@@ -13,7 +13,9 @@ import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { shareMeta } from '@/domain/metadata';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
-import type { Message, ShareMode } from '@/domain/types';
+import { AI_USER } from '@/api/transformers';
+import { formatMessageTime } from '@/lib/formatMessageTime';
+import type { Message, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
 
 export const Route = createFileRoute('/_app/projects/$projectId/sessions/$sessionId')({
@@ -31,7 +33,7 @@ function SessionPage() {
   const members = useQuery({ queryKey: ['members', projectId], queryFn: () => listMembers(projectId) });
   const history = useQuery({
     queryKey: ['messages', sessionId],
-    queryFn: () => listMessages(sessionId, session.data?.creatorId ?? currentUser?.id ?? 'user'),
+    queryFn: () => listMessages(sessionId),
     enabled: Boolean(session.data && currentUser),
   });
 
@@ -62,11 +64,12 @@ function SessionPage() {
     if (!text || streaming) return;
     setComposerText('');
 
+    const nowIso = new Date().toISOString();
     const userMsg: Message = {
       id: `live-user-${Date.now()}`,
       sessionId,
-      senderId: currentUser?.id ?? 'user',
-      createdAt: '방금 전',
+      sender: { kind: 'user', userId: currentUser?.id ?? 'user' },
+      createdAt: nowIso,
       body: text,
       status: 'done',
     };
@@ -74,8 +77,8 @@ function SessionPage() {
     setLiveMessages((prev) => [...prev, userMsg, {
       id: aiId,
       sessionId,
-      senderId: 'ai',
-      createdAt: '응답 중',
+      sender: { kind: 'agent', name: 'agent-k' },
+      createdAt: nowIso,
       body: '',
       status: 'streaming',
     }]);
@@ -120,7 +123,7 @@ function SessionPage() {
   const sess = session.data;
   const userList = members.data ?? [];
   const creator = userList.find((u) => u.id === sess?.creatorId);
-  const aiUser = { id: 'ai', name: 'Cowork', roleLabel: 'Agent', avatar: 'CW', color: 'var(--cw-ink)' };
+  const usersForRender: User[] = [...userList, AI_USER];
 
   return (
     <div className="cw-session-layout cw-page-enter">
@@ -131,7 +134,7 @@ function SessionPage() {
             <p>
               {creator && <>Started by <Avatar user={creator} small /> {creator.name} · </>}
               {sess?.references.length ?? 0} files ·{' '}
-              <Avatar user={aiUser} small /> Cowork Default
+              <Avatar user={AI_USER} small /> Cowork Default
             </p>
           </div>
           <div className="cw-session-head-actions">
@@ -147,7 +150,7 @@ function SessionPage() {
             <MessageBubble
               key={msg.id}
               message={msg}
-              users={[...userList, aiUser]}
+              users={usersForRender}
               currentUserId={currentUser?.id ?? ''}
             />
           ))}
@@ -211,33 +214,46 @@ function MessageBubble({
   currentUserId,
 }: {
   message: Message;
-  users: Array<{ id: string; name: string; color: string; avatar: string; roleLabel: string }>;
+  users: User[];
   currentUserId: string;
 }) {
-  const isAi = message.senderId === 'ai';
-  const isSelf = message.senderId === currentUserId;
-  const user = users.find((u) => u.id === message.senderId);
-  const fallbackUser = !user && !isAi
-    ? { id: message.senderId, name: isSelf ? '나' : 'Member', roleLabel: 'Member', avatar: isSelf ? '나' : 'M', color: 'var(--cw-ink-3)' }
-    : null;
-  const displayUser = user ?? fallbackUser;
-  const userName = displayUser?.name ?? (isSelf ? '나' : 'Member');
+  const isAi = message.sender.kind === 'agent';
+  const isSelf = message.sender.kind === 'user' && message.sender.userId === currentUserId;
+
+  const displayUser: User = isAi
+    ? (users.find((u) => u.id === 'ai') ?? AI_USER)
+    : (users.find((u) => u.id === (message.sender as { userId: string }).userId)
+      ?? { id: 'unknown', name: 'Member', roleLabel: 'Member', avatar: 'M', color: 'var(--cw-ink-3)' });
+
   const isStreaming = message.status === 'streaming';
+  const timeLabel = formatMessageTime(message.createdAt);
+  const agentLabel = isAi ? (message.sender as { name: string }).name : null;
 
   return (
     <article className={`cw-message ${isAi ? 'is-ai' : isSelf ? 'is-self' : 'is-other'}`}>
-      {isAi ? <span className="cw-ai-chip">CW</span> : (displayUser && <Avatar user={displayUser} />)}
+      {isAi ? <span className="cw-ai-chip">CW</span> : <Avatar user={displayUser} />}
       <div className="cw-message-body">
         <div className="cw-message-meta">
-          <b>{isSelf ? `${userName.split(' ')[0]} · 나` : isAi ? 'AI' : userName.split(' ')[0]}</b>
-          {isAi && <span>Cowork Default</span>}
-          <time>{message.createdAt}</time>
+          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · 나` : isAi ? 'AI' : displayUser.name.split(' ')[0]}</b>
+          {agentLabel && <span>{agentLabel}</span>}
+          <time dateTime={message.createdAt}>{timeLabel}</time>
         </div>
         <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
           {isAi
             ? <><MarkdownRenderer text={message.body} />{isStreaming && <span className="cw-thinking-cursor" />}</>
-            : message.body.split('\n').map((line, i) => <p key={`${message.id}-${i}`}>{line || ' '}</p>)}
+            : message.body.split('\n').map((line, i) => <p key={`${message.id}-${i}`}>{line || ' '}</p>)}
         </div>
+        {isAi && message.toolCalls?.map((tc) => (
+          <details key={tc.id} className="cw-toolcall">
+            <summary>🔧 {tc.name}{tc.result === undefined ? ' · 실행 중…' : ''}</summary>
+            {tc.arguments !== undefined && (
+              <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
+                ? tc.arguments
+                : JSON.stringify(tc.arguments, null, 2)}</pre>
+            )}
+            {tc.result !== undefined && <pre className="cw-toolcall-result">{tc.result}</pre>}
+          </details>
+        ))}
         {isAi && message.status === 'done' && (
           <div className="cw-ai-actions">
             <button>Copy</button>

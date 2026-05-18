@@ -1,11 +1,11 @@
 import { request, streamSse } from './client';
-import type { AiloyMessage, AiloyPart, MessageOutput } from './backend-types';
-import { aiMessageText, toMessage } from './transformers';
+import type { AiloyMessage, AiloyPart, MessageOutput, SessionMessageList } from './backend-types';
+import { aiMessageText, collapseToolMessages } from './transformers';
 import type { Message } from '@/domain/types';
 
-export async function listMessages(sessionId: string, fallbackSender: string): Promise<Message[]> {
-  const raw = await request<AiloyMessage[]>(`/sessions/${sessionId}/messages`);
-  return raw.map((m, idx) => toMessage(m, sessionId, idx, fallbackSender));
+export async function listMessages(sessionId: string): Promise<Message[]> {
+  const raw = await request<SessionMessageList>(`/sessions/${sessionId}/messages`);
+  return collapseToolMessages(raw.items, sessionId);
 }
 
 export async function sendMessage(sessionId: string, content: string): Promise<MessageOutput[]> {

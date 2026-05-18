@@ -42,7 +42,7 @@ def now(offset: int = 0) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=offset)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def message(role: str, text: str) -> str:
+def message_json(role: str, text: str) -> str:
     return json.dumps({"role": role, "contents": [{"type": "text", "text": text}]}, ensure_ascii=False)
 
 
@@ -192,14 +192,24 @@ def seed_rows(db: Path) -> None:
         "INSERT INTO sessions (id, project_id, creator_id, share_mode, title, last_message_at, last_message_snippet, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         sessions,
     )
+    # (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id)
+    def user_msg(session_id: str, text: str, creator_id: str, t: str):
+        return (session_id, message_json("user", text), t, "user", None, creator_id)
+
+    def agent_msg(session_id: str, text: str, t: str):
+        return (session_id, message_json("assistant", text), t, "agent", "agent-k", None)
+
     messages = [
-        (SESSION_Q2, message("user", "Q2 시장 보고를 어디서 시작하면 좋을까? Files → Market research에 자료가 정리되어 있어."), ts(30)),
-        (SESSION_Q2, message("assistant", "수요 측 갱신 압박부터 보고, 경쟁사 스캔과 교차 검증하면 좋을 것 같아요. SMB 갱신 사이클이 18% 단축됐다는 신호가 가장 강합니다."), ts(31)),
-        (SESSION_DECISION, message("user", "오늘 결정된 내용을 board memo에 붙일 수 있게 누적해줘."), ts(32)),
-        (SESSION_DECISION, message("assistant", "현재 결정 스레드는 SMB retention을 최우선으로 두는 방향입니다. 메모 v3에 'market evidence for SMB retention priority' 슬롯을 채울 준비가 됐어요."), ts(33)),
-        (SESSION_GTM, message("user", "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어."), ts(34)),
+        user_msg(SESSION_Q2, "Q2 시장 보고를 어디서 시작하면 좋을까? Files → Market research에 자료가 정리되어 있어.", OLIVE_ID, ts(30)),
+        agent_msg(SESSION_Q2, "수요 측 갱신 압박부터 보고, 경쟁사 스캔과 교차 검증하면 좋을 것 같아요. SMB 갱신 사이클이 18% 단축됐다는 신호가 가장 강합니다.", ts(31)),
+        user_msg(SESSION_DECISION, "오늘 결정된 내용을 board memo에 붙일 수 있게 누적해줘.", OLIVE_ID, ts(32)),
+        agent_msg(SESSION_DECISION, "현재 결정 스레드는 SMB retention을 최우선으로 두는 방향입니다. 메모 v3에 'market evidence for SMB retention priority' 슬롯을 채울 준비가 됐어요.", ts(33)),
+        user_msg(SESSION_GTM, "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어.", MILO_ID, ts(34)),
     ]
-    conn.executemany("INSERT INTO session_messages (session_id, message_json, created_at) VALUES (?, ?, ?)", messages)
+    conn.executemany(
+        "INSERT INTO session_messages (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id) VALUES (?, ?, ?, ?, ?, ?)",
+        messages,
+    )
     conn.commit()
     conn.close()
 

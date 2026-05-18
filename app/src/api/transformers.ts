@@ -1,8 +1,8 @@
 // Map raw backend payloads to the app-live domain types used in views.
 // Default values for missing metadata (intent, references, etc.) are filled here.
 
-import type { FileAsset, Message, Project, Session, User } from '@/domain/types';
-import type { AiloyMessage, AiloyPart, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser } from './backend-types';
+import type { FileAsset, Message, MessageSender, Project, Session, ToolCallInvocation, User } from '@/domain/types';
+import type { AiloyPart, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser, SessionMessageItem } from './backend-types';
 
 const USER_COLOR_TOKENS = [
   'var(--cw-cozy-clay)',
@@ -109,17 +109,59 @@ export function aiMessageText(contents: AiloyPart[] | undefined): string {
   return extractText(contents);
 }
 
-export function toMessage(ailoy: AiloyMessage, sessionId: string, index: number, fallbackSender: string): Message {
-  const role = ailoy.role;
-  const isAssistant = role === 'assistant' || role === 'tool';
+export function toMessageItem(
+  item: SessionMessageItem,
+  sessionId: string,
+  idx: number,
+): Message {
+  const a = item.message;
+  const sender: MessageSender = item.sender.kind === 'user'
+    ? { kind: 'user', userId: item.sender.user_id }
+    : { kind: 'agent', name: item.sender.name };
+
+  const toolCalls: ToolCallInvocation[] | undefined =
+    a.role === 'assistant' && a.tool_calls?.length
+      ? a.tool_calls.map((tc) => ({
+          id: tc.id,
+          name: tc.function?.name ?? 'tool',
+          arguments: tc.function?.arguments,
+        }))
+      : undefined;
+
   return {
-    id: ailoy.id || `${sessionId}-h-${index}`,
+    id: a.id || `${sessionId}-h-${idx}`,
     sessionId,
-    senderId: isAssistant ? 'ai' : fallbackSender,
-    createdAt: '이전 대화',
-    body: extractText(ailoy.contents) || (role === 'tool' ? '[tool result]' : ''),
+    sender,
+    createdAt: item.created_at,
+    body: extractText(a.contents),
+    toolCalls,
     status: 'done',
   };
+}
+
+export function collapseToolMessages(
+  items: SessionMessageItem[],
+  sessionId: string,
+): Message[] {
+  const toolBodies = new Map<string, string>();
+  for (const it of items) {
+    if (it.message.role === 'tool' && it.message.id) {
+      toolBodies.set(it.message.id, extractText(it.message.contents) || '[tool result]');
+    }
+  }
+  return items
+    .map((it, idx) => ({ it, idx }))
+    .filter(({ it }) => it.message.role !== 'tool')
+    .map(({ it, idx }) => {
+      const msg = toMessageItem(it, sessionId, idx);
+      if (msg.toolCalls) {
+        msg.toolCalls = msg.toolCalls.map((tc) => ({
+          ...tc,
+          result: toolBodies.get(tc.id),
+        }));
+      }
+      return msg;
+    });
 }
 
 export function toFileAsset(entry: BackendDirent, projectId: string, projectName: string): FileAsset {
