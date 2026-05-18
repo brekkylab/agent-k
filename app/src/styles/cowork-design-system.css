@@ -1,0 +1,423 @@
+/* Webfonts — Pretendard (KR+EN body) + JetBrains Mono (code). */
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap");
+
+/* ============================================================================
+   Cowork for Teams — Foundation CSS
+   Aesthetic direction:
+     • Paper-warm neutrals (yellow-tinted, ~60–75°), not cool grays.
+     • Warm ink for text (~60°).
+     • ONE deep slate-teal accent (~215°) used sparingly — active states,
+       "shared chat" indicator, focus rings.
+     • Cozy member-identity hues live inside avatars and icon-pocket
+       backgrounds only; the page itself is restrained.
+   ============================================================================ */
+
+:root {
+  /* ── Paper (warm off-white surfaces) ─────────────────────────────────── */
+  --cw-paper:        oklch(0.984 0.006 75);   /* main page bg — soft cream */
+  --cw-paper-2:      oklch(0.970 0.008 75);   /* card / pane bg, sidebar */
+  --cw-paper-3:      oklch(0.950 0.010 75);   /* hover, inset, chip */
+  --cw-paper-4:      oklch(0.920 0.012 75);   /* divider hover, deeper inset */
+
+  --cw-line:         oklch(0.900 0.010 75);   /* default border */
+  --cw-line-soft:    oklch(0.940 0.008 75);   /* soft divider */
+
+  /* ── Ink (warm dark text) ────────────────────────────────────────────── */
+  --cw-ink:          oklch(0.180 0.010 60);   /* primary text, primary button */
+  --cw-ink-2:        oklch(0.360 0.010 60);   /* secondary text */
+  --cw-ink-3:        oklch(0.550 0.008 60);   /* tertiary, hints */
+  --cw-ink-4:        oklch(0.700 0.006 60);   /* placeholder, disabled */
+
+  /* ── Accent — single deep slate-teal ─────────────────────────────────── */
+  --cw-accent:       oklch(0.420 0.060 215);  /* active marker, shared_chat ink */
+  --cw-accent-2:     oklch(0.320 0.050 215);  /* hover / pressed accent */
+  --cw-accent-soft:  oklch(0.950 0.012 215);  /* accent pill bg */
+  --cw-accent-line:  oklch(0.850 0.020 215);  /* accent pill border */
+
+  /* ── Selection — multi-select rows / cards (Files, future lists) ──────
+     Subtle wash on top of paper — the "selected" signal lives in the
+     border / left-stripe / ring rather than in a saturated fill, matching
+     Drive / OneDrive behavior. Hue stays in the accent family. */
+  --cw-selected-bg:     oklch(0.955 0.018 215);   /* +3% lightness gap, low chroma */
+  --cw-selected-bg-2:   oklch(0.945 0.022 215);   /* selected + hover, barely deeper */
+  --cw-selected-border: var(--cw-accent);
+  --cw-selected-ring:   color-mix(in oklch, var(--cw-accent), transparent 86%);
+
+  /* ── Signals (muted) ─────────────────────────────────────────────────── */
+  --cw-ok:           oklch(0.55 0.08 145);
+  --cw-warn:         oklch(0.70 0.12 75);
+  --cw-destructive:  oklch(0.560 0.150 25);   /* muted brick red, less saturated */
+
+  /* Warn surfaces (used for read-only banners, advisory notices) */
+  --cw-warn-bg:      oklch(0.975 0.025 85);
+  --cw-warn-border:  oklch(0.910 0.060 85);
+  --cw-warn-fg:      oklch(0.470 0.080 65);
+
+  /* ── Cozy palette — member identity + icon pockets ───────────────────── */
+  --cw-cozy-clay:    oklch(0.62 0.115 40);    /* terracotta / brick */
+  --cw-cozy-honey:   oklch(0.70 0.130 75);    /* warm amber */
+  --cw-cozy-mustard: oklch(0.68 0.105 95);    /* dusty mustard */
+  --cw-cozy-sage:    oklch(0.62 0.065 150);   /* sage green */
+  --cw-cozy-teal:    oklch(0.58 0.065 210);   /* dusty teal */
+  --cw-cozy-plum:    oklch(0.55 0.075 340);   /* muted plum */
+  --cw-cozy-rose:    oklch(0.62 0.090 18);    /* dusty rose */
+
+  /* Semantic icon tints (Lucide stroke + soft pocket bg) */
+  --cw-icon-private:    var(--cw-cozy-clay);
+  --cw-icon-readonly:   var(--cw-cozy-teal);
+  --cw-icon-shared:     var(--cw-cozy-sage);
+  --cw-icon-general:    var(--cw-cozy-clay);
+  --cw-icon-analysis:   var(--cw-cozy-teal);
+  --cw-icon-brainstorm: var(--cw-cozy-honey);
+  --cw-icon-writing:    var(--cw-cozy-plum);
+  --cw-icon-recap:      var(--cw-cozy-sage);
+
+  /* ── Legacy neutral scale (kept for cards that hardcoded it) ─────────── */
+  --cw-neutral-0:    oklch(1     0 0);
+  --cw-neutral-50:   var(--cw-paper);
+  --cw-neutral-100:  var(--cw-paper-3);
+  --cw-neutral-200:  var(--cw-line);
+  --cw-neutral-300:  var(--cw-paper-4);
+  --cw-neutral-400:  var(--cw-ink-4);
+  --cw-neutral-500:  var(--cw-ink-3);
+  --cw-neutral-600:  var(--cw-ink-2);
+  --cw-neutral-700:  var(--cw-ink-2);
+  --cw-neutral-800:  var(--cw-ink);
+  --cw-neutral-900:  var(--cw-ink);
+  --cw-neutral-950:  oklch(0.10 0.010 60);
+
+  /* Legacy sky / emerald — preserved for inherited callers, but new code
+     should use semantic share-mode aliases below. */
+  --cw-sky-50:       oklch(0.977 0.013 236);
+  --cw-sky-200:      oklch(0.901 0.058 230);
+  --cw-sky-600:      oklch(0.588 0.158 241);
+  --cw-emerald-50:   oklch(0.979 0.021 166);
+  --cw-emerald-200:  oklch(0.905 0.093 165);
+  --cw-emerald-400:  oklch(0.765 0.177 163);
+  --cw-emerald-500:  oklch(0.696 0.17  163);
+  --cw-emerald-600:  oklch(0.596 0.145 163);
+  --cw-amber-50:     var(--cw-warn-bg);
+  --cw-amber-200:    var(--cw-warn-border);
+  --cw-amber-500:    var(--cw-warn);
+  --cw-amber-700:    var(--cw-warn-fg);
+
+  /* ── Semantic role aliases (use these in components) ─────────────────── */
+  --cw-bg:                 var(--cw-paper);
+  --cw-bg-subtle:          var(--cw-paper-2);    /* sidebar, page chrome */
+  --cw-bg-muted:           var(--cw-paper-3);    /* chip bg, hover */
+  --cw-bg-elevated:        var(--cw-paper);      /* dialogs, popovers, AI bubble */
+
+  --cw-fg-1:               var(--cw-ink);
+  --cw-fg-2:               var(--cw-ink-2);
+  --cw-fg-3:               var(--cw-ink-3);
+  --cw-fg-4:               var(--cw-ink-4);
+  --cw-fg-on-primary:      var(--cw-paper);
+  --cw-fg-on-dark:         var(--cw-paper);
+
+  --cw-border:             var(--cw-line);
+  --cw-border-hover:       var(--cw-paper-4);
+  --cw-border-strong:      var(--cw-paper-4);
+  --cw-ring:               var(--cw-ink-3);
+
+  --cw-primary:            var(--cw-ink);
+  --cw-primary-hover:      oklch(0.10 0.01 60);
+  --cw-secondary:          var(--cw-paper-3);
+  --cw-secondary-fg:       var(--cw-ink);
+
+  --cw-active-bg:          var(--cw-paper-3);
+  --cw-active-fg:          var(--cw-ink);
+  --cw-active-mark:        var(--cw-accent);     /* swatch / left-bar marker */
+
+  /* Share-mode pills — each mode gets its own soft tint.
+     Private = brick/rose (red-leaning, 25°), Read-only = clay (warm orange,
+     45°), Shared chat = slate-teal accent (215°). Three distinct hubs. */
+  --cw-share-private-bg:       oklch(0.965 0.020 25);
+  --cw-share-private-border:   oklch(0.870 0.065 25);
+  --cw-share-private-fg:       oklch(0.475 0.115 25);
+
+  --cw-share-readonly-bg:      oklch(0.965 0.018 45);
+  --cw-share-readonly-border:  oklch(0.880 0.045 45);
+  --cw-share-readonly-fg:      oklch(0.490 0.085 45);
+
+  --cw-share-chat-bg:          var(--cw-accent-soft);
+  --cw-share-chat-border:      var(--cw-accent-line);
+  --cw-share-chat-fg:          var(--cw-accent-2);
+
+  --cw-live-ping:              var(--cw-ok);
+  --cw-live-dot:               var(--cw-ok);
+
+  /* ── Radii ───────────────────────────────────────────────────────────── */
+  --cw-radius-sm:     4px;       /* button, chip */
+  --cw-radius-md:     6px;        /* nav row */
+  --cw-radius-lg:     8px;        /* card */
+  --cw-radius-xl:    12px;        /* dialog */
+  --cw-radius-full:  9999px;
+  --cw-radius:        8px;        /* default */
+
+  /* ── Shadows (used sparingly) ────────────────────────────────────────── */
+  --cw-shadow-sm:   0 1px 2px oklch(0.18 0.01 60 / 0.04);
+  --cw-shadow-md:   0 4px 6px -1px oklch(0.18 0.01 60 / 0.06), 0 2px 4px -2px oklch(0.18 0.01 60 / 0.04);
+  --cw-shadow-lg:   0 12px 32px oklch(0.18 0.01 60 / 0.12);
+  --cw-shadow-popover: 0 16px 40px oklch(0.18 0.01 60 / 0.14);
+
+  /* ── Spacing scale (4-px grid) ───────────────────────────────────────── */
+  --cw-space-1:  4px;
+  --cw-space-2:  8px;
+  --cw-space-3:  12px;
+  --cw-space-4:  16px;
+  --cw-space-5:  20px;
+  --cw-space-6:  24px;
+  --cw-space-8:  32px;
+  --cw-space-10: 40px;
+
+  /* ── Layout constants ────────────────────────────────────────────────── */
+  --cw-sidebar-w:        200px;
+  --cw-content-max:      1180px;
+  --cw-chat-max:         760px;
+
+  /* ── Type stack ──────────────────────────────────────────────────────── */
+  --cw-font-sans:  "Pretendard Variable", Pretendard,
+                   ui-sans-serif, system-ui, -apple-system, "Apple SD Gothic Neo",
+                   "Segoe UI", "Malgun Gothic", "Noto Sans KR",
+                   "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+                   "Noto Color Emoji", sans-serif;
+  --cw-font-mono:  "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono",
+                   Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+                   monospace;
+
+  /* ── Type sizes ──────────────────────────────────────────────────────── */
+  --cw-text-micro:  10px;
+  --cw-text-tiny:   11px;
+  --cw-text-xs:     12px;
+  --cw-text-sm:     14px;
+  --cw-text-base:   16px;
+  --cw-text-lg:     18px;
+  --cw-text-xl:     22px;
+  --cw-text-2xl:    28px;
+  --cw-text-display: 38px;
+
+  --cw-leading-tight:    1.2;
+  --cw-leading-snug:     1.35;
+  --cw-leading-normal:   1.5;
+  --cw-leading-relaxed:  1.6;
+
+  --cw-tracking-wide:    0.025em;
+  --cw-tracking-wider:   0.05em;
+  --cw-tracking-display: -0.025em;
+}
+
+/* ============================================================================
+   Base
+   ============================================================================ */
+
+html, body {
+  font-family: var(--cw-font-sans);
+  color: var(--cw-fg-1);
+  background: var(--cw-bg);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'ss01', 'cv11';
+}
+
+::selection { background: var(--cw-accent-soft); color: var(--cw-ink); }
+
+/* ============================================================================
+   Type roles — drop-in
+   ============================================================================ */
+
+.cw-display {
+  font-size: var(--cw-text-display);
+  font-weight: 600;
+  letter-spacing: var(--cw-tracking-display);
+  line-height: 1.05;
+  color: var(--cw-fg-1);
+}
+
+.cw-h1 {
+  font-size: var(--cw-text-2xl);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+  color: var(--cw-fg-1);
+}
+
+.cw-h2 {
+  font-size: var(--cw-text-xl);
+  font-weight: 600;
+  color: var(--cw-fg-1);
+  letter-spacing: -0.01em;
+  line-height: var(--cw-leading-snug);
+}
+
+.cw-h3 {
+  font-size: var(--cw-text-base);
+  font-weight: 600;
+  color: var(--cw-fg-1);
+}
+
+.cw-section-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--cw-fg-3);
+}
+
+.cw-body {
+  font-size: var(--cw-text-sm);
+  color: var(--cw-fg-2);
+  line-height: var(--cw-leading-relaxed);
+}
+
+.cw-body-sm {
+  font-size: var(--cw-text-xs);
+  color: var(--cw-fg-3);
+  line-height: var(--cw-leading-relaxed);
+}
+
+.cw-meta {
+  font-size: var(--cw-text-micro);
+  color: var(--cw-fg-4);
+}
+
+.cw-mono {
+  font-family: var(--cw-font-mono);
+  font-size: 0.92em;
+  background: var(--cw-bg-muted);
+  padding: 1px 5px;
+  border-radius: var(--cw-radius-sm);
+  color: var(--cw-fg-2);
+}
+
+/* ============================================================================
+   Component-level conventions
+   ============================================================================ */
+
+.cw-card {
+  background: var(--cw-paper-2);
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-lg);
+  padding: var(--cw-space-4);
+  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+.cw-card:hover {
+  border-color: var(--cw-border-hover);
+  background: var(--cw-paper-2);
+}
+
+.cw-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-full);
+  padding: 3px 10px 3px 8px;
+  font-size: var(--cw-text-tiny);
+  font-weight: 500;
+  background: var(--cw-paper-2);
+  color: var(--cw-fg-2);
+  white-space: nowrap;
+}
+
+.cw-pill--private  { background: var(--cw-share-private-bg);  border-color: var(--cw-share-private-border);  color: var(--cw-share-private-fg); }
+.cw-pill--readonly { background: var(--cw-share-readonly-bg); border-color: var(--cw-share-readonly-border); color: var(--cw-share-readonly-fg); }
+.cw-pill--chat     { background: var(--cw-share-chat-bg);     border-color: var(--cw-share-chat-border);     color: var(--cw-share-chat-fg); }
+
+.cw-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--cw-radius-sm);
+  border: 1px solid var(--cw-border);
+  font-size: 12.5px;
+  font-weight: 500;
+  background: var(--cw-paper-2);
+  color: var(--cw-ink);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.cw-btn:hover  { background: var(--cw-paper-3); border-color: var(--cw-paper-4); }
+.cw-btn:active { transform: translateY(1px); }
+
+.cw-btn--primary {
+  background: var(--cw-ink);
+  color: var(--cw-paper);
+  border-color: var(--cw-ink);
+}
+.cw-btn--primary:hover {
+  background: oklch(0.10 0.01 60);
+  border-color: oklch(0.10 0.01 60);
+}
+
+.cw-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--cw-fg-2);
+}
+.cw-btn--ghost:hover { background: var(--cw-paper-3); color: var(--cw-fg-1); }
+
+.cw-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--cw-radius-sm);
+  border: 1px solid var(--cw-border);
+  background: var(--cw-paper);
+  color: var(--cw-fg-1);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+.cw-input:focus { border-color: var(--cw-ink-3); box-shadow: 0 0 0 3px var(--cw-paper-3); }
+.cw-input::placeholder { color: var(--cw-fg-4); }
+
+/* ── Streaming cursor ──────────────────────────────────────────────────── */
+@keyframes cw-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+.cw-cursor-blink {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background-color: currentColor;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  animation: cw-blink 1s steps(2, start) infinite;
+}
+
+/* ── Live ping ─────────────────────────────────────────────────────────── */
+@keyframes cw-ping {
+  75%, 100% { transform: scale(2); opacity: 0; }
+}
+.cw-ping-dot {
+  position: relative;
+  display: inline-flex;
+  width: 8px;
+  height: 8px;
+}
+.cw-ping-dot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--cw-live-ping);
+  opacity: 0.75;
+  animation: cw-ping 1s cubic-bezier(0,0,0.2,1) infinite;
+}
+.cw-ping-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--cw-live-dot);
+}
