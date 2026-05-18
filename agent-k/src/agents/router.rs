@@ -1,37 +1,65 @@
 use ailoy::{
     agent::AgentBuilder,
+    lang_model::ResponseFormat,
     message::{Message, Part, Role},
+    to_value,
 };
 use serde::Deserialize;
 use tokio_stream::StreamExt;
 
-const ROUTER_INSTRUCTION: &str = r#"You are a router. Read the user's request and produce a plan of one or more steps, each routed to a single agent.
+const ROUTER_INSTRUCTION: &str = r#"Your objective is to choose the most appropriate agent(s) to answer the user's query.
 
-## Agents
-- "speedwagon": Q&A. Factual or knowledge questions, regardless of how the answer is sourced.
-- "vegapunk": Deep research. Multi-source investigation: literature review, topic survey, option comparison, or a long-form research report.
-- "minerva": General-purpose execution. Running commands, exploring or editing files/code, orchestrating multi-step work, producing code or runnable artifacts.
+## Candidate agents
+- `trivial`: A simple agent that has no additional features, just LLM.
+- `rag`: Specialized in answering users' questions. It can use external sources or internal knowledge if needed.
+- `deep_research`: Can create structured reports for given topics.
+- `cowork`: Plans and executes tasks, including exploring/editing files, running code, and producing downloadable artifacts.
 
 ## Rules
-- A request that mixes Q&A/research with execution should split — speedwagon (or vegapunk) for the Q&A or research part, minerva for the execution part.
-- Requests to translate text from one specific language to another (e.g. "translate this Korean to English") are execution — route to minerva. Just writing in a non-English language is not a translation request.
-- If the request does not fit any agent well (greetings, identity questions about yourself, pure noise, ambiguous fragments, refusals to act), still pick the closest agent but prefix the "reason" field with "fallback: ".
-- Write "reason" in the dominant language of the user's request — the language carrying the semantic content, not short carrier phrases like "please" or "tell me".
+Route to `trivial` only for trivial tasks: greetings, pure noise, or refusals to act.
+Route to `rag` for direct questions that can be answered in a single turn.
+If you think searching for materials or references is necessary, always use `rag` instead of `trivial`.
+Do not hesitate to route to `deep_research` when the user expects:
+ - a structured report,
+ - extensive comparison,
+ - literature or research synthesis,
+ - or investigation across many sources or topics.
+`cowork` is the only agent that can control the local file system. Therefore, if access to local files is required, route to `cowork`.
+We believe `cowork` has the most powerful capabilities, including other agent's capabilities. Therefore, tasks that may be difficult for other agents to solve should be routed to `cowork`.
 
-## Splitting
-- One step per distinct intent, in the order the user wrote them. A single intent — even if listy, long, or about multiple items — stays one step.
-- Each step.input is the corresponding part of the user's request, kept close to the original wording. The dispatcher passes step.input to the agent, with prior step outputs prepended as context, so phrase step.input as if those prior outputs are already in view.
-- An explanation paired with a tiny inline example is one minerva step (artifact wins) — the general split rule above does not apply when the example is inline.
-- Honor negations and self-corrections: only emit steps for the user's latest stated intent.
+## Pipelining
+If the user's query involves more than one objective, decompose it into sub-queries and pipeline one agent's result to other agents.
+When pipelining is applied, the downstream agent treats the generated sub-query as the user's input. The preceding agent's input and output are appended to that input as prior context.
+You have to pipeline them only if a pipelining path is available. If none exists, you may find the closest agent.
+Do not pipeline a query that has a single intent, even when it is list-like, lengthy, or asks about multiple items. Assign it to one agent as-is.
+Each sub-query is the corresponding part of the user's request, kept close to the original wording.
+
+Available pipelines are:
+- `rag` → `cowork`
+- `deep_research` → `cowork`
+
+Prefer a single agent whenever possible.
+Pipelines should be rare and only used when the request clearly contains multiple separable objectives that map naturally to different agents.
 
 ## Response format
-{"steps": [{"agent": "<agent name>", "input": "<sub-request>", "reason": "<one short sentence>"}]}
-Respond with exactly one JSON object, and nothing else (no prose, no markdown, no code fence). The "agent" field must be exactly one of the available agents.
+The response should be a single JSON, following below schema.
+If a pipeline is not applied, return an object containing agent and reason.
+
+```
+{"agent": "<selected agent name>"}
+```
+
+If a pipeline is applied, return a list of steps.
+
+```
+{"steps": [{"agent": "<selected agent name>", "query": "..."}, ...]}
+```
 "#;
 
 #[derive(Debug, Deserialize)]
 pub struct Step {
     pub agent: String,
+    #[serde(rename = "query")]
     pub input: String,
 
     #[serde(default)]
@@ -41,6 +69,36 @@ pub struct Step {
 #[derive(Debug, Deserialize)]
 pub struct Plan {
     pub steps: Vec<Step>,
+}
+
+/// Matches the two shapes documented in `ROUTER_INSTRUCTION` → `## Response
+/// format`: a single-agent object, or a `{ "steps": [...] }` pipeline.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RouterResponse {
+    Pipeline {
+        steps: Vec<Step>,
+    },
+    Single {
+        agent: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+}
+
+impl RouterResponse {
+    fn into_plan(self, original_input: &str) -> Plan {
+        match self {
+            RouterResponse::Pipeline { steps } => Plan { steps },
+            RouterResponse::Single { agent, reason } => Plan {
+                steps: vec![Step {
+                    agent,
+                    input: original_input.to_string(),
+                    reason,
+                }],
+            },
+        }
+    }
 }
 
 const ROUTER_MAX_RETRIES: usize = 2;
@@ -53,13 +111,45 @@ pub async fn run_claude_router_agent(user_input: impl Into<String>) -> anyhow::R
     run_router_agent("anthropic/claude-haiku-4-5", user_input).await
 }
 
-async fn run_router_agent(
-    model: &str,
-    user_input: impl Into<String>,
-) -> anyhow::Result<Plan> {
+async fn run_router_agent(model: &str, user_input: impl Into<String>) -> anyhow::Result<Plan> {
     let user_input: String = user_input.into();
+    let schema = to_value!({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "agent": { "type": "string", "description": "Selected agent name" },
+                    "reason": { "type": "string", "description": "Short reason why this agent was selected" }
+                },
+                "required": ["agent", "reason"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "agent": { "type": "string", "description": "Agent assigned to this step" },
+                                "query": { "type": "string", "description": "Sub-request for the agent" },
+                                "reason": { "type": "string", "description": "Short reason for assigning this step to the agent" }
+                            },
+                            "required": ["agent", "query", "reason"],
+                            "additionalProperties": false
+                        },
+                        "minItems": 1
+                    }
+                },
+                "required": ["steps"],
+                "additionalProperties": false
+            }
+        ]
+    });
     let mut agent = AgentBuilder::new(model)
         .instruction(ROUTER_INSTRUCTION)
+        .response_format(ResponseFormat::json_schema(schema)?)
         .build()?;
 
     let mut next_message =
@@ -90,16 +180,17 @@ async fn run_router_agent(
             .collect::<Vec<_>>()
             .join("");
 
-        let mut it = serde_json::Deserializer::from_str(&raw).into_iter::<Plan>();
+        let mut it = serde_json::Deserializer::from_str(&raw).into_iter::<RouterResponse>();
         last_err = match it.next() {
-            Some(Ok(plan)) => {
+            Some(Ok(resp)) => {
+                let plan = resp.into_plan(&user_input);
                 if plan.steps.is_empty() {
                     "empty steps array".to_string()
                 } else {
                     let invalid = plan.steps.iter().enumerate().find_map(|(i, s)| {
-                        if !matches!(s.agent.as_str(), "speedwagon" | "vegapunk" | "minerva") {
+                        if !matches!(s.agent.as_str(), "trivial" | "rag" | "deep_research" | "cowork") {
                             Some(format!(
-                                "invalid agent '{}' at step {}; must be one of speedwagon/vegapunk/minerva",
+                                "invalid agent '{}' at step {}; must be one of trivial/rag/deep_research/cowork",
                                 s.agent, i
                             ))
                         } else {
@@ -123,7 +214,7 @@ async fn run_router_agent(
     }
     Ok(Plan {
         steps: vec![Step {
-            agent: "minerva".to_string(),
+            agent: "cowork".to_string(),
             input: user_input,
             reason: Some(format!("fallback: {last_err}")),
         }],

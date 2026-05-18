@@ -14,7 +14,7 @@
 
 use ailoy::{
     agent::AgentProvider,
-    lang_model::LangModel,
+    lang_model::{LangModel, LangModelOptions},
     message::{Message, Part, Role},
 };
 use anyhow::Result;
@@ -191,7 +191,7 @@ pub async fn reflect_call(
         Message::new(Role::System).with_contents([Part::text(REFLECT_SYSTEM_PROMPT)]),
         Message::new(Role::User).with_contents([Part::text(user_text)]),
     ];
-    let output = model.run(&messages, &[]).await?;
+    let output = model.run(&messages, &[], &LangModelOptions::new()).await?;
     let raw = collect_assistant_text(&output.message);
     Ok(parse_verdict(&raw))
 }
