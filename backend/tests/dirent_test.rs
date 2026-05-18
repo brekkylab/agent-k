@@ -514,3 +514,47 @@ async fn batch_op_partial_success_on_name_conflict() {
         failed[0]["error"]
     );
 }
+
+#[tokio::test]
+async fn batch_op_all_failed_does_not_materialise_dest_dir() {
+    // Regression: a batch op whose sources all fail must NOT leave an empty
+    // destination directory on disk. Creation of dest_dir is deferred to the
+    // first successful per-source op so that aborted batches leave no trace.
+    let (state, tmp) = make_state_with_dir().await;
+    let data_root = tmp.path().to_path_buf();
+    let app = common::make_app_with_state(state);
+    common::signup(&app, "jay", "Password123!").await;
+    let token = common::login(&app, "jay", "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let pid = project["id"].as_str().unwrap();
+
+    // Move two non-existent sources into a destination path that has never
+    // been created before. Both sources fail at load_source.
+    let body = serde_json::json!({
+        "op": "move",
+        "sources": ["ghost-a.txt", "ghost-b.txt"],
+        "destination": "phantom-dir",
+    });
+    let (status, resp) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{pid}/dirents"),
+        &token,
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{resp}");
+    assert!(resp["succeeded"].as_array().unwrap().is_empty(), "{resp}");
+    assert_eq!(resp["failed"].as_array().unwrap().len(), 2, "{resp}");
+
+    let dest_on_disk = data_root
+        .join("projects")
+        .join(pid)
+        .join("uploads")
+        .join("phantom-dir");
+    assert!(
+        !dest_on_disk.exists(),
+        "destination dir must not be created when every source fails: {}",
+        dest_on_disk.display()
+    );
+}

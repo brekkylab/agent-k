@@ -476,21 +476,30 @@ fn resolve_destination(uploads_root: &Path, dest: &str) -> Result<PathBuf, Strin
     safe_join(uploads_root, trimmed)
 }
 
-/// Resolve, create, and validate a destination directory for batch ops.
-/// Returns ApiError so the outer handler can short-circuit on malformed input
-/// without polluting `failed` with the same error per source.
+/// Resolve and validate a destination directory for batch ops.
+///
+/// Does NOT create the directory. Creation is deferred to the first
+/// per-source success (via `ensure_dest_dir` inside `move_one` / `copy_one`)
+/// so that a batch where every source fails (e.g. all source paths missing)
+/// does not leave a stray empty directory on disk.
+///
+/// If the destination path already exists and is not a directory, this
+/// returns a batch-wide 4xx so the outer handler can short-circuit.
 async fn prepare_dest_dir(uploads_root: &Path, destination: &str) -> Result<PathBuf, ApiError> {
     let dest_dir = resolve_destination(uploads_root, destination).map_err(AppError::bad_request)?;
-    tokio::fs::create_dir_all(&dest_dir)
-        .await
-        .map_err(|e| AppError::internal(format!("create dest: {e}")))?;
-    let dest_meta = tokio::fs::metadata(&dest_dir)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    if !dest_meta.is_dir() {
-        return Err(AppError::bad_request("destination is not a directory"));
+    match tokio::fs::metadata(&dest_dir).await {
+        Ok(meta) if !meta.is_dir() => Err(AppError::bad_request("destination is not a directory")),
+        Ok(_) | Err(_) => Ok(dest_dir),
     }
-    Ok(dest_dir)
+}
+
+/// Idempotent best-effort creation of the destination directory.
+/// Called by per-source ops right before the rename/copy, so a fully-failed
+/// batch (e.g. every source missing) never materialises an empty dest dir.
+async fn ensure_dest_dir(dest_dir: &Path) -> Result<(), String> {
+    tokio::fs::create_dir_all(dest_dir)
+        .await
+        .map_err(|e| format!("create dest: {e}"))
 }
 
 /// Load and validate a source path against an already-prepared destination.
@@ -540,9 +549,13 @@ async fn build_dirent(uploads_root: &Path, host: &Path) -> Result<Dirent, String
 
 /// "foo.pdf" → "foo copy.pdf" → "foo copy 2.pdf" → …
 /// Dot-files ("foo" prefix is empty) are treated as having no extension.
-fn find_available_name(parent: &Path, base_name: &str) -> PathBuf {
+///
+/// Async to avoid blocking a Tokio worker on up to ~1000 sync `stat`
+/// calls when `parent` happens to be a directory with a long history
+/// of " copy N" siblings.
+async fn find_available_name(parent: &Path, base_name: &str) -> PathBuf {
     let candidate = parent.join(base_name);
-    if !candidate.exists() {
+    if !tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
         return candidate;
     }
     let (stem, ext) = if base_name.starts_with('.') {
@@ -554,12 +567,12 @@ fn find_available_name(parent: &Path, base_name: &str) -> PathBuf {
         }
     };
     let first = parent.join(format!("{stem} copy{ext}"));
-    if !first.exists() {
+    if !tokio::fs::try_exists(&first).await.unwrap_or(false) {
         return first;
     }
     for n in 2..1000 {
         let cand = parent.join(format!("{stem} copy {n}{ext}"));
-        if !cand.exists() {
+        if !tokio::fs::try_exists(&cand).await.unwrap_or(false) {
             return cand;
         }
     }
@@ -628,6 +641,7 @@ async fn move_one(
         return Err(format!("\"{filename}\" already exists at destination"));
     }
 
+    ensure_dest_dir(dest_dir).await?;
     tokio::fs::rename(&src_host, &new_host)
         .await
         .map_err(|e| format!("rename failed: {e}"))?;
@@ -649,17 +663,20 @@ async fn copy_one(
         .ok_or_else(|| "could not determine source filename".to_string())?
         .to_string();
 
-    let new_host = find_available_name(dest_dir, &base_name);
+    let new_host = find_available_name(dest_dir, &base_name).await;
 
     if new_host.strip_prefix(uploads_root).is_err() {
         return Err("destination would escape uploads root".into());
     }
 
     if src_meta.is_dir() {
+        // `copy_dir_recursive` does its own `create_dir_all(new_host)`, which
+        // also creates `dest_dir` as a side effect — no separate ensure needed.
         copy_dir_recursive(&src_host, &new_host)
             .await
             .map_err(|e| format!("copy failed: {e}"))?;
     } else {
+        ensure_dest_dir(dest_dir).await?;
         tokio::fs::copy(&src_host, &new_host)
             .await
             .map_err(|e| format!("copy failed: {e}"))?;
