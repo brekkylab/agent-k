@@ -607,6 +607,104 @@ mod tests {
             let reset = repo.get_run(run2.id).await.unwrap().unwrap();
             assert_eq!(reset.status, RunStatus::Queued);
             assert!(reset.lease_until.is_none());
+
+            // Reaper must record a lease_lost event in the same transaction.
+            let events = repo.list_events_for_run(run2.id).await.unwrap();
+            assert!(
+                events.iter().any(|e| e.kind == EventKind::LeaseLost),
+                "expected lease_lost event after reap, got {:?}",
+                events.iter().map(|e| e.kind).collect::<Vec<_>>()
+            );
+        }
+
+        #[tokio::test]
+        async fn reap_all_running_requeues_unconditionally() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let scheduled_for = Utc::now() - ChronoDuration::seconds(1);
+            repo.create_run(auto.id, None, session.id, scheduled_for, None)
+                .await
+                .unwrap();
+
+            // Claim with a lease far in the future — would not be reaped by
+            // reap_expired_leases yet.
+            let claimed = repo
+                .claim_due_run(Utc::now(), Utc::now() + ChronoDuration::hours(1))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(claimed.status, RunStatus::Running);
+
+            // Boot reap should still pick it up.
+            let reaped = repo.reap_all_running().await.unwrap();
+            assert_eq!(reaped, vec![claimed.id]);
+            let reset = repo.get_run(claimed.id).await.unwrap().unwrap();
+            assert_eq!(reset.status, RunStatus::Queued);
+            assert!(reset.lease_until.is_none());
+
+            // Same-tx lease_lost event must be present.
+            let events = repo.list_events_for_run(claimed.id).await.unwrap();
+            assert!(events.iter().any(|e| e.kind == EventKind::LeaseLost));
+
+            // Second call is a no-op.
+            assert!(repo.reap_all_running().await.unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn finalize_run_writes_event_and_status_atomically() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let run = repo
+                .create_run(auto.id, None, session.id, Utc::now(), None)
+                .await
+                .unwrap();
+            let claimed = repo
+                .claim_due_run(Utc::now(), Utc::now() + ChronoDuration::minutes(3))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(claimed.id, run.id);
+
+            let written = repo
+                .finalize_run(run.id, RunStatus::Succeeded, EventKind::Succeeded, 1, None)
+                .await
+                .unwrap();
+            assert!(written, "expected finalize_run to write on running row");
+
+            // Status flipped + lease cleared + succeeded event present.
+            let finalized = repo.get_run(run.id).await.unwrap().unwrap();
+            assert_eq!(finalized.status, RunStatus::Succeeded);
+            assert!(finalized.lease_until.is_none());
+            let events = repo.list_events_for_run(run.id).await.unwrap();
+            assert!(events.iter().any(|e| e.kind == EventKind::Succeeded));
+
+            // Second call (status no longer 'running') is a no-op: returns false
+            // and does not add another event.
+            let written_again = repo
+                .finalize_run(run.id, RunStatus::Failed, EventKind::Failed, 1, None)
+                .await
+                .unwrap();
+            assert!(!written_again);
+            let events_after = repo.list_events_for_run(run.id).await.unwrap();
+            assert_eq!(events.len(), events_after.len());
+            let still = repo.get_run(run.id).await.unwrap().unwrap();
+            assert_eq!(still.status, RunStatus::Succeeded);
         }
 
         #[tokio::test]

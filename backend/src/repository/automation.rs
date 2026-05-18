@@ -698,6 +698,53 @@ impl SqliteRepository {
         Ok(res.rows_affected() == 1)
     }
 
+    /// Atomically write the terminal event and update the run status (clearing
+    /// the lease). The UPDATE is guarded by `status='running'` — if the row
+    /// has been reaped out from under us, no rows match, the tx is rolled
+    /// back, and `Ok(false)` is returned. Caller can ignore the false case
+    /// because the reaper has already written its own lease_lost + queued.
+    pub async fn finalize_run(
+        &self,
+        run_id: Uuid,
+        status: RunStatus,
+        event_kind: EventKind,
+        event_attempt: i64,
+        event_payload: Option<&serde_json::Value>,
+    ) -> RepositoryResult<bool> {
+        let mut tx = self.pool.begin().await?;
+        let now = Self::now_string();
+
+        let res = sqlx::query(
+            "UPDATE automation_runs SET status = ?, lease_until = NULL, updated_at = ? \
+             WHERE id = ? AND status = 'running'",
+        )
+        .bind(status.as_str())
+        .bind(&now)
+        .bind(run_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+
+        if res.rows_affected() != 1 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+
+        let payload_str = event_payload.map(serde_json::to_string).transpose()?;
+        sqlx::query(
+            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(run_id.to_string())
+        .bind(&now)
+        .bind(event_kind.as_str())
+        .bind(event_attempt)
+        .bind(&payload_str)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     pub async fn update_run_status(
         &self,
         run_id: Uuid,
@@ -719,7 +766,50 @@ impl SqliteRepository {
         Ok(())
     }
 
-    /// Move expired-lease runs back to `queued`. Returns reaped run IDs.
+    /// Move all `running` rows back to `queued` unconditionally and emit
+    /// `lease_lost` in the same per-row transaction. Intended for boot-time
+    /// recovery — any `running` rows after a process restart are orphaned,
+    /// since no in-process worker can still own them.
+    pub async fn reap_all_running(&self) -> RepositoryResult<Vec<Uuid>> {
+        let rows = sqlx::query("SELECT id FROM automation_runs WHERE status = 'running'")
+            .fetch_all(&self.pool)
+            .await?;
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
+        let updated_at = Self::now_string();
+        let mut reaped = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let id_s: String = r.get("id");
+            let mut tx = self.pool.begin().await?;
+            let res = sqlx::query(
+                "UPDATE automation_runs SET status = 'queued', lease_until = NULL, updated_at = ? \
+                 WHERE id = ? AND status = 'running'",
+            )
+            .bind(&updated_at)
+            .bind(&id_s)
+            .execute(&mut *tx)
+            .await?;
+            if res.rows_affected() == 1 {
+                sqlx::query(
+                    "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
+                     VALUES (?, ?, 'lease_lost', 1, NULL)",
+                )
+                .bind(&id_s)
+                .bind(&updated_at)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                reaped.push(Self::parse_uuid(id_s, "automation_runs.id")?);
+            } else {
+                tx.rollback().await?;
+            }
+        }
+        Ok(reaped)
+    }
+
+    /// Move expired-lease runs back to `queued` and emit `lease_lost` in the
+    /// same per-row transaction. Returns reaped run IDs.
     pub async fn reap_expired_leases(&self, now: DateTime<Utc>) -> RepositoryResult<Vec<Uuid>> {
         let now_s = Self::ts_string(now);
         let rows = sqlx::query(
@@ -738,6 +828,7 @@ impl SqliteRepository {
         let updated_at = Self::now_string();
         for r in &rows {
             let id_s: String = r.get("id");
+            let mut tx = self.pool.begin().await?;
             let res = sqlx::query(
                 "UPDATE automation_runs SET status = 'queued', lease_until = NULL, updated_at = ? \
                  WHERE id = ? AND status = 'running' AND lease_until < ?",
@@ -745,10 +836,21 @@ impl SqliteRepository {
             .bind(&updated_at)
             .bind(&id_s)
             .bind(&now_s)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
             if res.rows_affected() == 1 {
+                sqlx::query(
+                    "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
+                     VALUES (?, ?, 'lease_lost', 1, NULL)",
+                )
+                .bind(&id_s)
+                .bind(&updated_at)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
                 reaped.push(Self::parse_uuid(id_s, "automation_runs.id")?);
+            } else {
+                tx.rollback().await?;
             }
         }
         Ok(reaped)

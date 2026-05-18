@@ -1,12 +1,25 @@
 //! Automation worker loop. Picks up queued runs and executes prompts
 //! against the router agent in the run's session.
+//!
+//! Crash safety: each claimed run has its `lease_until` heartbeated by a
+//! companion task. If a heartbeat finds the row no longer ours (reaper
+//! requeued it) it cancels the in-flight agent. A separate reaper task
+//! periodically requeues expired-lease rows.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use ailoy::message::{Message, Part, Role};
 use chrono::Utc;
 use futures_util::StreamExt;
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::{
     handlers::session::{build_agent, build_sandbox},
@@ -16,16 +29,49 @@ use crate::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-const LEASE_MINUTES: i64 = 5;
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const REAP_INTERVAL: Duration = Duration::from_secs(60);
+const LEASE_MINUTES: i64 = 3;
 
 /// Spawn `count` independent worker tasks. Each loops claim → execute.
-/// No shutdown plumbing yet — tokio reaps tasks on process exit.
 pub fn spawn_workers(state: Arc<AppState>, count: usize) {
     for idx in 0..count {
         let state = state.clone();
         tokio::spawn(async move { worker_loop(state, idx).await });
     }
     tracing::info!(count, "automation workers spawned");
+}
+
+/// Recover leftover `running` rows from prior crashes, then loop reaping
+/// expired leases. Must be spawned once per process.
+pub fn spawn_reaper(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        match state.repository.reap_all_running().await {
+            Ok(reaped) if !reaped.is_empty() => {
+                tracing::warn!(count = reaped.len(), "boot reap: requeued orphaned running rows");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::error!("boot reap failed: {e}"),
+        }
+        loop {
+            tokio::time::sleep(REAP_INTERVAL).await;
+            if let Err(e) = reap_once(&state).await {
+                tracing::error!("reap failed: {e}");
+            }
+        }
+    });
+}
+
+async fn reap_once(state: &Arc<AppState>) -> Result<(), String> {
+    let reaped = state
+        .repository
+        .reap_expired_leases(Utc::now())
+        .await
+        .map_err(|e| e.to_string())?;
+    for run_id in reaped {
+        tracing::warn!(run = %run_id, "lease expired — requeued");
+    }
+    Ok(())
 }
 
 async fn worker_loop(state: Arc<AppState>, idx: usize) {
@@ -52,27 +98,61 @@ async fn try_claim_and_execute(state: &Arc<AppState>) -> Result<bool, String> {
     let Some(run) = claimed else { return Ok(false) };
 
     tracing::info!(run = %run.id, "claimed run");
-    let result = execute_run(state, &run).await;
 
-    let (kind, payload) = match &result {
-        Ok(()) => (EventKind::Succeeded, None),
-        Err(e) => (EventKind::Failed, Some(json!({ "error": e }))),
-    };
-    let _ = state
-        .repository
-        .append_event(run.id, kind, 1, payload.as_ref())
-        .await;
+    let cancel = CancellationToken::new();
+    // Belt: panic anywhere inside this scope unwinds the drop_guard → cancel.
+    let _drop_guard = cancel.clone().drop_guard();
+    let lease_lost = Arc::new(AtomicBool::new(false));
+    let mut heartbeat =
+        spawn_heartbeat(state.clone(), run.id, cancel.clone(), lease_lost.clone());
 
-    let final_status = match &result {
-        Ok(()) => RunStatus::Succeeded,
-        Err(_) => RunStatus::Failed,
+    // Race execute_run against the heartbeat task; whichever ends first drives the flow.
+    let agent_result = tokio::select! {
+        // Happy path: agent ran to completion (Ok or Err). Signal HB to exit and keep the result.
+        result = execute_run(state, &run, &cancel) => {
+            cancel.cancel();
+            Some(result)
+        }
+        // Failure path: HB ended first — lease-loss self-cancel (#4), panic (#7), or cancel-ack.
+        // The agent future is dropped right here; we skip finalize and let the reaper own the row.
+        hb_result = &mut heartbeat => {
+            cancel.cancel();
+            if let Err(je) = &hb_result {
+                if je.is_panic() {
+                    tracing::error!(run = %run.id, "heartbeat task panicked");
+                }
+            }
+            None
+        }
     };
-    if let Err(e) = state
+
+    // Happy path: wait for HB to observe the cancel and exit. Failure path: already done, returns now.
+    let _ = heartbeat.await;
+
+    if agent_result.is_none() || lease_lost.load(Ordering::SeqCst) {
+        tracing::warn!(run = %run.id, "abandoning run (heartbeat ended or lease lost)");
+        return Ok(true);
+    }
+
+    let result = agent_result.expect("agent_result branch checked above");
+    let (final_status, kind, payload) = match &result {
+        Ok(()) => (RunStatus::Succeeded, EventKind::Succeeded, None),
+        Err(e) => (
+            RunStatus::Failed,
+            EventKind::Failed,
+            Some(json!({ "error": e })),
+        ),
+    };
+    match state
         .repository
-        .update_run_status(run.id, final_status, true)
+        .finalize_run(run.id, final_status, kind, 1, payload.as_ref())
         .await
     {
-        tracing::error!(run = %run.id, "failed to update final status: {e}");
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(run = %run.id, "finalize_run found row no longer running (reaper raced us)");
+        }
+        Err(e) => tracing::error!(run = %run.id, "failed to finalize run: {e}"),
     }
 
     match &result {
@@ -82,7 +162,43 @@ async fn try_claim_and_execute(state: &Arc<AppState>) -> Result<bool, String> {
     Ok(true)
 }
 
-async fn execute_run(state: &Arc<AppState>, run: &DbAutomationRun) -> Result<(), String> {
+fn spawn_heartbeat(
+    state: Arc<AppState>,
+    run_id: Uuid,
+    cancel: CancellationToken,
+    lease_lost: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep(HEARTBEAT_INTERVAL) => {}
+            }
+            let new_lease = Utc::now() + chrono::Duration::minutes(LEASE_MINUTES);
+            match state.repository.renew_lease(run_id, new_lease).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!(run = %run_id, "lease lost — cancelling agent");
+                    lease_lost.store(true, Ordering::SeqCst);
+                    cancel.cancel();
+                    return;
+                }
+                Err(e) => {
+                    // Transient DB error — keep retrying until next tick. Lease
+                    // will eventually expire if these keep failing, at which
+                    // point the reaper takes over.
+                    tracing::error!(run = %run_id, "heartbeat renew error: {e}");
+                }
+            }
+        }
+    })
+}
+
+async fn execute_run(
+    state: &Arc<AppState>,
+    run: &DbAutomationRun,
+    cancel: &CancellationToken,
+) -> Result<(), String> {
     let repo = &state.repository;
     let automation = repo
         .get_automation(run.automation_id)
@@ -94,13 +210,14 @@ async fn execute_run(state: &Arc<AppState>, run: &DbAutomationRun) -> Result<(),
         .await
         .map_err(|e| e.to_string())?;
 
-    // Build sandbox + agent for this run's session. Insert into AppState so
-    // subsequent HTTP calls can resolve the same agent instance.
     let sandbox = build_sandbox(state, automation.project_id, run.session_id).await?;
     let agent = build_agent(sandbox).await?;
     state.insert_agent(run.session_id, agent);
 
     for (idx, prompt) in automation.prompts.iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Err("cancelled".into());
+        }
         let step_index = idx as i64;
         repo.append_event(
             run.id,
@@ -120,10 +237,23 @@ async fn execute_run(state: &Arc<AppState>, run: &DbAutomationRun) -> Result<(),
         let msg = Message::new(Role::User).with_contents([Part::text(prompt.clone())]);
         let mut stream = agent.run(msg);
         let mut step_err: Option<String> = None;
-        while let Some(item) = stream.next().await {
-            if let Err(e) = item {
-                step_err = Some(e.to_string());
-                break;
+        let mut cancelled = false;
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    cancelled = true;
+                    break;
+                }
+                next = stream.next() => {
+                    match next {
+                        None => break,
+                        Some(Ok(_)) => continue,
+                        Some(Err(e)) => {
+                            step_err = Some(e.to_string());
+                            break;
+                        }
+                    }
+                }
             }
         }
         drop(stream);
@@ -135,6 +265,9 @@ async fn execute_run(state: &Arc<AppState>, run: &DbAutomationRun) -> Result<(),
             .await
             .map_err(|e| e.to_string())?;
 
+        if cancelled {
+            return Err("cancelled".into());
+        }
         if let Some(err) = step_err {
             return Err(format!("step {step_index} failed: {err}"));
         }
