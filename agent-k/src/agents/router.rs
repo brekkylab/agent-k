@@ -42,17 +42,14 @@ Prefer a single agent whenever possible.
 Pipelines should be rare and only used when the request clearly contains multiple separable objectives that map naturally to different agents.
 
 ## Response format
-The response should be a single JSON, following below schema.
-If a pipeline is not applied, return an object containing agent and reason.
+Always respond with a single JSON object containing a `steps` array. Each step has `agent`, `query`, and `reason` fields.
+
+When a single agent handles the whole request, return one step whose `query` is the user's original request kept close to the original wording.
+
+When a pipeline applies, return one step per stage in execution order.
 
 ```
-{"agent": "<selected agent name>"}
-```
-
-If a pipeline is applied, return a list of steps.
-
-```
-{"steps": [{"agent": "<selected agent name>", "query": "..."}, ...]}
+{"steps": [{"agent": "<selected agent name>", "query": "...", "reason": "..."}, ...]}
 ```
 "#;
 
@@ -71,36 +68,6 @@ pub struct Plan {
     pub steps: Vec<Step>,
 }
 
-/// Matches the two shapes documented in `ROUTER_INSTRUCTION` → `## Response
-/// format`: a single-agent object, or a `{ "steps": [...] }` pipeline.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RouterResponse {
-    Pipeline {
-        steps: Vec<Step>,
-    },
-    Single {
-        agent: String,
-        #[serde(default)]
-        reason: Option<String>,
-    },
-}
-
-impl RouterResponse {
-    fn into_plan(self, original_input: &str) -> Plan {
-        match self {
-            RouterResponse::Pipeline { steps } => Plan { steps },
-            RouterResponse::Single { agent, reason } => Plan {
-                steps: vec![Step {
-                    agent,
-                    input: original_input.to_string(),
-                    reason,
-                }],
-            },
-        }
-    }
-}
-
 const ROUTER_MAX_RETRIES: usize = 2;
 
 pub async fn run_gpt_router_agent(user_input: impl Into<String>) -> anyhow::Result<Plan> {
@@ -114,38 +81,24 @@ pub async fn run_claude_router_agent(user_input: impl Into<String>) -> anyhow::R
 async fn run_router_agent(model: &str, user_input: impl Into<String>) -> anyhow::Result<Plan> {
     let user_input: String = user_input.into();
     let schema = to_value!({
-        "oneOf": [
-            {
-                "type": "object",
-                "properties": {
-                    "agent": { "type": "string", "description": "Selected agent name" },
-                    "reason": { "type": "string", "description": "Short reason why this agent was selected" }
-                },
-                "required": ["agent", "reason"],
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "properties": {
-                    "steps": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "agent": { "type": "string", "description": "Agent assigned to this step" },
-                                "query": { "type": "string", "description": "Sub-request for the agent" },
-                                "reason": { "type": "string", "description": "Short reason for assigning this step to the agent" }
-                            },
-                            "required": ["agent", "query", "reason"],
-                            "additionalProperties": false
-                        },
-                        "minItems": 1
-                    }
-                },
-                "required": ["steps"],
-                "additionalProperties": false
+        "type": "object",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "agent": { "type": "string", "description": "Agent assigned to this step" },
+                        "query": { "type": "string", "description": "Sub-request for the agent" },
+                        "reason": { "type": "string", "description": "Short reason for assigning this step to the agent" }
+                    },
+                    "required": ["agent", "query", "reason"],
+                    "additionalProperties": false
+                }
             }
-        ]
+        },
+        "required": ["steps"],
+        "additionalProperties": false
     });
     let mut agent = AgentBuilder::new(model)
         .instruction(ROUTER_INSTRUCTION)
@@ -180,10 +133,9 @@ async fn run_router_agent(model: &str, user_input: impl Into<String>) -> anyhow:
             .collect::<Vec<_>>()
             .join("");
 
-        let mut it = serde_json::Deserializer::from_str(&raw).into_iter::<RouterResponse>();
+        let mut it = serde_json::Deserializer::from_str(&raw).into_iter::<Plan>();
         last_err = match it.next() {
-            Some(Ok(resp)) => {
-                let plan = resp.into_plan(&user_input);
+            Some(Ok(plan)) => {
                 if plan.steps.is_empty() {
                     "empty steps array".to_string()
                 } else {
