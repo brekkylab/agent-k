@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" width="240" height="64">
+  
+  <g fill="none" stroke="oklch(0.205 0 0)" stroke-width="10" stroke-linecap="round">
+    <path d="M 45 19 A 19 19 0 1 0 45 45"></path>
+  </g>
+  <circle cx="50" cy="32" r="5" fill="oklch(0.205 0 0)"></circle>
+  <text x="78" y="42" font-family="&#39;Pretendard Variable&#39;, Pretendard, ui-sans-serif, system-ui, -apple-system, &#39;Segoe UI&#39;, Roboto, sans-serif" font-size="30" font-weight="600" fill="oklch(0.205 0 0)" letter-spacing="-0.015em">Cowork</text>
+</svg>

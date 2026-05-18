@@ -1,0 +1,105 @@
+/* Cowork chat-prose styling — prose locked to the design system tokens.
+   Refined-minimalist: small but readable, mono for code, tight headings. */
+
+.cw-md { color: var(--cw-ink); font-size: 14px; line-height: 1.68; }
+.cw-md > * + * { margin-top: 10px; }
+.cw-md h1, .cw-md h2, .cw-md h3 {
+  margin: 16px 0 6px;
+  letter-spacing: -0.018em;
+  font-weight: 600;
+  color: var(--cw-ink);
+}
+.cw-md h1 { font-size: 18px; }
+.cw-md h2 { font-size: 16px; }
+.cw-md h3 { font-size: 14.5px; color: var(--cw-ink-2); }
+.cw-md p { margin: 0; }
+.cw-md ul, .cw-md ol { margin: 4px 0 0; padding-left: 1.4em; }
+.cw-md li + li { margin-top: 4px; }
+.cw-md blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 2px solid var(--cw-paper-4);
+  color: var(--cw-ink-2);
+}
+.cw-md hr { border: 0; border-top: 1px solid var(--cw-line-soft); margin: 14px 0; }
+.cw-md a { color: var(--cw-accent); text-decoration: underline; text-underline-offset: 2px; }
+.cw-md-inline-code {
+  font-family: var(--cw-font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--cw-paper-3);
+  color: var(--cw-ink);
+}
+.cw-md pre {
+  margin: 6px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--cw-paper-3);
+  border: 1px solid var(--cw-line-soft);
+  overflow-x: auto;
+  font-family: var(--cw-font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.cw-md pre code { background: transparent; padding: 0; border-radius: 0; }
+.cw-md table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+.cw-md th, .cw-md td {
+  border-bottom: 1px solid var(--cw-line-soft);
+  padding: 6px 10px;
+  text-align: left;
+}
+.cw-md th { color: var(--cw-ink-2); font-weight: 500; }
+
+/* Tool call card — speedwagon/code/web_search executed by the agent.
+   Dashed border to signal "behind the scenes" without competing with prose. */
+.cw-toolcall {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 4px 10px 4px 8px;
+  border: 1px dashed var(--cw-paper-4);
+  border-radius: 999px;
+  background: var(--cw-paper-2);
+  color: var(--cw-ink-2);
+  font-family: var(--cw-font-mono);
+  font-size: 10.5px;
+  text-transform: lowercase;
+  letter-spacing: 0.01em;
+}
+.cw-toolcall .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--cw-accent);
+  animation: cw-ping 1.1s steps(2, start) infinite;
+}
+.cw-toolcall.is-done .dot { background: var(--cw-ok); animation: none; }
+
+/* Thinking cursor — single block that fades while the assistant streams. */
+.cw-thinking-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--cw-ink-3);
+  animation: cw-ping 0.9s steps(2, start) infinite;
+  border-radius: 1px;
+}
+
+.cw-message-error {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--cw-destructive), white 88%);
+  border: 1px solid color-mix(in oklch, var(--cw-destructive), white 70%);
+  color: oklch(0.4 0.15 25);
+  font-size: 12px;
+  font-family: var(--cw-font-mono);
+}

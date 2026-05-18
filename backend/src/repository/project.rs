@@ -167,15 +167,23 @@ impl SqliteRepository {
         &self,
         project_id: Uuid,
     ) -> RepositoryResult<Vec<(crate::repository::DbUser, chrono::DateTime<chrono::Utc>)>> {
+        let pid = project_id.to_string();
         let rows = sqlx::query(
             "SELECT u.id, u.username, u.password_hash, u.role, u.display_name, u.is_active,
+                    u.created_at, u.updated_at, p.created_at AS added_at
+             FROM projects p
+             JOIN users u ON u.id = p.owner_id
+             WHERE p.id = ?1
+             UNION ALL
+             SELECT u.id, u.username, u.password_hash, u.role, u.display_name, u.is_active,
                     u.created_at, u.updated_at, pm.added_at
              FROM project_members pm
              JOIN users u ON u.id = pm.user_id
-             WHERE pm.project_id = ?
-             ORDER BY pm.added_at ASC",
+             WHERE pm.project_id = ?1
+               AND pm.user_id <> (SELECT owner_id FROM projects WHERE id = ?1)
+             ORDER BY added_at ASC",
         )
-        .bind(project_id.to_string())
+        .bind(&pid)
         .fetch_all(&self.pool)
         .await?;
 

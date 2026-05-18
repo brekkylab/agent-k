@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.demo/
+*.tsbuildinfo
+.vite/
+test-results/
+playwright-report/
+playwright/.cache/
