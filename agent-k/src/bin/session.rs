@@ -1,14 +1,16 @@
 //! Session CLI.
 //!
 //! Reads a user request from argv (or stdin if none given), asks a small router
-//! agent which sub-agent should handle it, then dispatches.
+//! agent for a Plan (a sequence of (agent, input) steps), then dispatches each
+//! step in order. Step outputs are appended verbatim to stdout (streaming for
+//! minerva). Dependent steps see prior step outputs in their prompt.
 //!
 //! echo "주간 보고 메일 초안 써줘" | cargo run -p agent-k --bin session
 //! cargo run -p agent-k --bin session -- "세계 날씨를 확인할 수 있는 간단한 HTML 페이지 만들어주세요"
 
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 
-use agent_k::agents::{get_gpt_minerva_agent, run_gpt_router_agent};
+use agent_k::agents::{get_gpt_minerva_agent, run_gpt_router_agent, Plan};
 use ailoy::{
     agent::Agent,
     message::{Message, Part, Role},
@@ -119,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => Err(e),
             },
-            Some(s) => run_in_session(s, &user_input).await,
+            Some(s) => run_in_session(s, &user_input).await.map(|_| ()),
         };
         if let Err(e) = result {
             eprintln!("[error] {e}");
@@ -151,37 +153,96 @@ fn handle_slash(cmd: &str) -> SlashAction {
 }
 
 async fn route_and_run(user_input: &str) -> anyhow::Result<Session> {
-    let decision = run_gpt_router_agent(user_input).await?;
+    let plan = run_gpt_router_agent(user_input).await?;
 
     println!(
         "[router] {}",
-        serde_json::to_string(&serde_json::json!({
-            "agent": decision.agent,
-            "reason": decision.reason,
-        }))?
+        serde_json::to_string(&plan_log(&plan))?
     );
 
-    let mut session = match decision.agent.as_str() {
+    // Surface "current session" hint is the *first* step's agent. This keeps
+    // the existing /minerva, /speedwagon, /vegapunk slash UX meaningful: a
+    // user can see / force the agent that handled the head of the plan.
+    let first_agent = plan.steps[0].agent.clone();
+    let mut session = match first_agent.as_str() {
         "speedwagon" => Session::Speedwagon,
         "vegapunk" => Session::Vegapunk,
         "minerva" => Session::Minerva(build_minerva()?),
         other => anyhow::bail!("router returned unknown agent '{other}'"),
     };
-    run_in_session(&mut session, user_input).await?;
+
+    // Run each step in order. Prior step outputs are prepended to subsequent
+    // step inputs so dependent intents can reference them. For single-step
+    // plans, forward the user's original input as-is to preserve their
+    // phrasing instead of using the router's paraphrase.
+    let single_step = plan.steps.len() == 1;
+    let mut accumulated: Vec<String> = Vec::with_capacity(plan.steps.len());
+    for (i, step) in plan.steps.iter().enumerate() {
+        let step_input = if single_step { user_input } else { &step.input };
+        let prompt = if accumulated.is_empty() {
+            step_input.to_string()
+        } else {
+            let mut s = String::from("Previous step results (chronological):\n");
+            for (j, prev) in accumulated.iter().enumerate() {
+                s.push_str(&format!("[step {}] {}\n\n", j + 1, prev));
+            }
+            s.push_str("---\nCurrent step: ");
+            s.push_str(step_input);
+            s
+        };
+
+        eprintln!(
+            "[step {} • {}] {}",
+            i + 1,
+            step.agent,
+            cap_for_echo(step_input)
+        );
+
+        // Reuse the head session for matching steps; otherwise spin up a
+        // temporary session for that step.
+        let out = if step.agent == first_agent {
+            run_in_session(&mut session, &prompt).await?
+        } else {
+            let mut tmp = match step.agent.as_str() {
+                "speedwagon" => Session::Speedwagon,
+                "vegapunk" => Session::Vegapunk,
+                "minerva" => Session::Minerva(build_minerva()?),
+                other => anyhow::bail!("step {} agent unknown: {other}", i + 1),
+            };
+            run_in_session(&mut tmp, &prompt).await?
+        };
+
+        accumulated.push(out);
+    }
+
     Ok(session)
 }
 
-async fn run_in_session(session: &mut Session, user_input: &str) -> anyhow::Result<()> {
+fn plan_log(plan: &Plan) -> serde_json::Value {
+    serde_json::json!({
+        "steps": plan
+            .steps
+            .iter()
+            .map(|s| serde_json::json!({
+                "agent": s.agent,
+                "input": s.input,
+                "reason": s.reason,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+async fn run_in_session(session: &mut Session, user_input: &str) -> anyhow::Result<String> {
     match session {
         Session::Speedwagon => {
             eprintln!("[dispatch] TODO: speedwagon (RAG Q&A) is not implemented yet");
             eprintln!("[dispatch] forwarding query: {}", cap_for_echo(user_input));
-            Ok(())
+            Ok("[speedwagon stub: not yet implemented]".to_string())
         }
         Session::Vegapunk => {
             eprintln!("[dispatch] TODO: vegapunk (deep research) is not implemented yet");
             eprintln!("[dispatch] forwarding query: {}", cap_for_echo(user_input));
-            Ok(())
+            Ok("[vegapunk stub: not yet implemented]".to_string())
         }
         Session::Minerva(agent) => stream_minerva_turn(agent, user_input).await,
     }
@@ -217,9 +278,10 @@ fn build_minerva() -> anyhow::Result<Agent> {
     Ok(agent)
 }
 
-async fn stream_minerva_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<()> {
+async fn stream_minerva_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<String> {
     let query = Message::new(Role::User).with_contents([Part::text(user_input)]);
     let mut stream = agent.run(query);
+    let mut captured = String::new();
     while let Some(event) = stream.next().await {
         let event = event?;
         let msg = &event.message;
@@ -229,6 +291,7 @@ async fn stream_minerva_turn(agent: &mut Agent, user_input: &str) -> anyhow::Res
                     if let Some(t) = part.as_text() {
                         if !t.is_empty() {
                             print!("{t}");
+                            captured.push_str(t);
                             io::stdout().flush().ok();
                         }
                     }
@@ -250,5 +313,5 @@ async fn stream_minerva_turn(agent: &mut Agent, user_input: &str) -> anyhow::Res
         }
     }
     println!();
-    Ok(())
+    Ok(captured)
 }

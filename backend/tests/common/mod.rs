@@ -53,6 +53,20 @@ pub fn make_test_store() -> agent_k::knowledge_base::SharedStore {
     ))
 }
 
+pub async fn make_app_repo_state() -> (axum::Router, repository::AppRepository, Arc<AppState>) {
+    let repo = make_repo().await;
+    let store = make_test_store();
+    let data_root = std::env::temp_dir().join(format!("agent-k-test-{}", uuid::Uuid::new_v4()));
+    let state = Arc::new(AppState::new(
+        repo.clone(),
+        store,
+        test_jwt_config(),
+        data_root,
+    ));
+    let app = make_app_with_state(state.clone());
+    (app, repo, state)
+}
+
 pub fn make_app_with_repo(repo: repository::AppRepository) -> axum::Router {
     let store = make_test_store();
     let data_root = std::env::temp_dir().join(format!("agent-k-test-{}", uuid::Uuid::new_v4()));
