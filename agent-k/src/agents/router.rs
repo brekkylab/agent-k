@@ -7,102 +7,78 @@ use ailoy::{
 use serde::Deserialize;
 use tokio_stream::StreamExt;
 
-const ROUTER_INSTRUCTION: &str = r#"Your objective is to choose the most appropriate agent(s) to answer the user's query.
+const ROUTER_INSTRUCTION: &str = r#"Your objective is, based on the conversation history so far, to choose the most appropriate agent to answer the user's latest query.
 
-## Candidate agents
-- `trivial`: A simple agent that has no additional features, just LLM.
-- `rag`: Specialized in answering users' questions. It can use external sources or internal knowledge if needed.
-- `deep_research`: Can create structured reports for given topics.
-- `cowork`: Plans and executes tasks, including exploring/editing files, running code, and producing downloadable artifacts.
+## Candidate Agents
+- `reception`: A simple agent that has no additional features, just an LLM.
+- `speedwagon`: A RAG-enabled agent specialized in answering users' questions. It can use external sources or internal knowledge if needed.
+- `vegapunk`: A deep-research agent that can create structured reports, literature or research synthesis for given topics as markdown-formatted artifacts.
+- `minerva`: An execution-oriented agent that can plan and perform tasks autonomously, including exploring/editing files, running code, and producing downloadable artifacts.
 
-## Rules
+## Aggregation
+- Some agents hold other agents as sub-agents.
+  - `minerva` holds `speedwagon` and `vegapunk`.
+  - `vegapunk` holds `speedwagon`.
+- Calling a parent agent implies calling its sub-agents as well, meaning it can do everything a sub-agent can do. We refer to this as being "more capable."
 
-### Selecting agents
-Route to `trivial` only for trivial tasks: greetings, pure noise, or refusals to act.
-Route to `rag` for direct questions that can be answered in a single turn.
-If you think searching for materials or references is necessary, always use `rag` instead of `trivial`.
-Route to `deep_research` when the user expects:
- - a structured report,
- - extensive comparison,
- - literature or research synthesis,
- - or investigation across many sources or topics.
-`cowork` is the only agent that can control the local file system. Therefore, if access to local files is required, route to `cowork`.
-We believe `cowork` has the most powerful capabilities, including other agent's capabilities. Therefore, tasks that may be difficult for other agents to solve should be routed to `cowork`.
+## Selecting Rules
+- Even when the information cannot be found via internet search, the user may have provided their own documents, so consider `speedwagon` first.
+- `reception` can be selected only for trivial tasks: greetings, nonsensical input, or refusals to act.
+- The expected output format is the first consideration.
+  - Brief answer is sufficient → `speedwagon`
+  - Markdown-formatted report is the better presentation → `vegapunk`
+  - If other file types need to be produced as artifacts → `minerva`
+- Analyze the work required to fulfill the user's request. Even when the intent is clear, if the task is beyond what a less-capable agent can handle, do not choose that agent.
+  - If external information retrieval alone is enough to answer → `speedwagon`
+  - If the answer requires cross-checking and reasoning across multiple sources → `vegapunk`
+  - If analyzing or processing the information requires external tools or scripts → `minerva`
+- Prefer to call less-capable agent whenever confidence is sufficient.
+- Consider the actions required to fulfill the request, and choose `minerva` only when truly necessary:
+  - If script generation and execution is needeed to satisfy user's query
+  - If the request requires iterative loop (action / observe / reflection) → minerva
+- If the user's query is obviously conjunction of two or more requests, consider each request and pick the agent that can handle them all.
 
-### Response
-Use the user's input as-is for the query to be routed.
-Correct it only when there is an obvious typo.
-The `reason` must be written in the language the user used in the query.
-
-## Pipelining
-If the user's query involves more than one objective, decompose it into sub-queries and pipeline one agent's result to other agents.
-When pipelining is applied, the downstream agent treats the generated sub-query as the user's input. The preceding agent's input and output are appended to that input as prior context.
-You have to pipeline them only if a pipelining path is available. If none exists, you may find the closest agent.
-Do not pipeline a query that has a single intent, even when it is list-like, lengthy, or asks about multiple items. Assign it to one agent as-is.
-Each sub-query is the corresponding part of the user's request, kept close to the original wording.
-
-Available pipelines are:
-- `rag` → `cowork`
-- `deep_research` → `cowork`
-
-Prefer a single agent whenever possible.
-Pipelines should be rare and only used when the request clearly contains multiple separable objectives that map naturally to different agents.
-
-## Response format
-Always respond with a single JSON object containing a `steps` array. Each step has `agent`, `query`, and `reason` fields.
-
-When a single agent handles the whole request, return one step whose `query` is the user's original request kept close to the original wording.
-
-When a pipeline applies, return one step per stage in execution order.
-
+## Response Format
 ```
-{"steps": [{"agent": "<selected agent name>", "query": "...", "reason": "..."}, ...]}
+{"choice": "<selected agent name>", "reason": "..."}
 ```
+- The `reason` must be written in the language the user used in the query.
 "#;
 
+// - The user's intent is the primary consideration when selecting an agent. If the user's intent is clear, route in that direction.
+//   - Makes an informational request → `speedwagon`
+//   - Asks for an analysis report → `vegapunk`
+//   - Wants a task to be performed → `minerva`
+
 #[derive(Debug, Deserialize)]
-pub struct Step {
-    pub agent: String,
-    #[serde(rename = "query")]
-    pub input: String,
+pub struct Route {
+    pub choice: String,
 
     #[serde(default)]
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Plan {
-    pub steps: Vec<Step>,
+pub async fn run_gpt_router_agent(user_input: impl Into<String>) -> anyhow::Result<Route> {
+    run_router_agent("openai/gpt-5.4-mini", user_input).await
 }
 
-pub async fn run_gpt_router_agent(user_input: impl Into<String>) -> anyhow::Result<Plan> {
-    run_router_agent("openai/gpt-5.4-nano", user_input).await
-}
-
-pub async fn run_claude_router_agent(user_input: impl Into<String>) -> anyhow::Result<Plan> {
+pub async fn run_claude_router_agent(user_input: impl Into<String>) -> anyhow::Result<Route> {
     run_router_agent("anthropic/claude-haiku-4-5", user_input).await
 }
 
-async fn run_router_agent(model: &str, user_input: impl Into<String>) -> anyhow::Result<Plan> {
+async fn run_router_agent(model: &str, user_input: impl Into<String>) -> anyhow::Result<Route> {
     let user_input: String = user_input.into();
     let schema = to_value!({
         "type": "object",
         "properties": {
-            "steps": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "agent": { "type": "string", "description": "Agent assigned to this step" },
-                        "query": { "type": "string", "description": "Sub-request for the agent" },
-                        "reason": { "type": "string", "description": "Short reason for assigning this step to the agent" }
-                    },
-                    "required": ["agent", "query", "reason"],
-                    "additionalProperties": false
-                }
-            }
+            "choice": {
+                "type": "string",
+                "enum": ["reception", "speedwagon", "vegapunk", "minerva"],
+                "description": "Agent assigned to this step"
+            },
+            "reason": { "type": "string", "description": "Short reason for assigning this step to the agent" }
         },
-        "required": ["steps"],
+        "required": ["choice", "reason"],
         "additionalProperties": false
     });
     let mut agent = AgentBuilder::new(model)
@@ -131,6 +107,6 @@ async fn run_router_agent(model: &str, user_input: impl Into<String>) -> anyhow:
         .collect::<Vec<_>>()
         .join("");
 
-    let plan: Plan = serde_json::from_str(&raw)?;
-    Ok(plan)
+    let route: Route = serde_json::from_str(&raw)?;
+    Ok(route)
 }
