@@ -125,6 +125,7 @@ async fn run_server() -> std::io::Result<()> {
         .unwrap_or(2usize);
     worker::spawn_workers(app_state.clone(), worker_count);
     worker::spawn_reaper(app_state.clone());
+    worker::spawn_cron_ticker(app_state.clone());
 
     let app = router::get_router(app_state)
         .finish_api(&mut openapi)

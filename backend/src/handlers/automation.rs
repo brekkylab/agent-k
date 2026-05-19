@@ -160,9 +160,19 @@ pub async fn create_trigger(
         (None, None)
     };
 
+    let next_fire_at = if let TriggerSpec::Cron { expr, tz } = &spec {
+        let default_tz = crate::cron::default_tz_name();
+        let tz_name = tz.as_deref().unwrap_or(default_tz);
+        let next = crate::cron::next_fire_after(expr, tz_name, chrono::Utc::now())
+            .map_err(AppError::bad_request)?;
+        Some(next)
+    } else {
+        None
+    };
+
     let trigger = state
         .repository
-        .create_trigger(automation_id, &spec, token_hash, None)
+        .create_trigger(automation_id, &spec, token_hash, next_fire_at)
         .await
         .map_err(|e| match e {
             RepositoryError::UniqueViolation(_) => {
@@ -237,9 +247,22 @@ pub async fn update_trigger(
         }
     }
 
+    // Recompute next_fire_at if the cron expression / tz changed.
+    let next_fire_at = match payload.spec.as_ref() {
+        Some(TriggerSpec::Cron { expr, tz }) => {
+            let default_tz = crate::cron::default_tz_name();
+            let tz_name = tz.as_deref().unwrap_or(default_tz);
+            Some(Some(
+                crate::cron::next_fire_after(expr, tz_name, chrono::Utc::now())
+                    .map_err(AppError::bad_request)?,
+            ))
+        }
+        _ => None,
+    };
+
     let updated = state
         .repository
-        .update_trigger(trigger_id, payload.spec.as_ref(), payload.enabled, None)
+        .update_trigger(trigger_id, payload.spec.as_ref(), payload.enabled, next_fire_at)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 

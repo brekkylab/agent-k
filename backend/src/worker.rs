@@ -22,8 +22,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
+    cron::next_fire_after,
     handlers::session::{build_agent, build_sandbox},
-    model::{EventKind, RunStatus},
+    model::{EventKind, RunStatus, TriggerSpec},
     repository::DbAutomationRun,
     state::AppState,
 };
@@ -31,6 +32,7 @@ use crate::{
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const REAP_INTERVAL: Duration = Duration::from_secs(60);
+const CRON_TICK_INTERVAL: Duration = Duration::from_secs(15);
 const LEASE_MINUTES: i64 = 3;
 
 /// Spawn `count` independent worker tasks. Each loops claim → execute.
@@ -71,6 +73,78 @@ async fn reap_once(state: &Arc<AppState>) -> Result<(), String> {
     for run_id in reaped {
         tracing::warn!(run = %run_id, "lease expired — requeued");
     }
+    Ok(())
+}
+
+/// Periodically scans for cron triggers whose `next_fire_at` has elapsed and
+/// fires them via the atomic `fire_cron_trigger` repo method.
+pub fn spawn_cron_ticker(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(CRON_TICK_INTERVAL).await;
+            if let Err(e) = cron_tick_once(&state, Utc::now()).await {
+                tracing::error!("cron tick failed: {e}");
+            }
+        }
+    });
+}
+
+async fn cron_tick_once(
+    state: &Arc<AppState>,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), String> {
+    let due = state
+        .repository
+        .list_due_cron_triggers(now)
+        .await
+        .map_err(|e| e.to_string())?;
+    for trigger in due {
+        if let Err(e) = fire_cron_trigger_once(state, &trigger, now).await {
+            tracing::error!(trigger = %trigger.id, "cron fire failed: {e}");
+        }
+    }
+    Ok(())
+}
+
+async fn fire_cron_trigger_once(
+    state: &Arc<AppState>,
+    trigger: &crate::repository::DbAutomationTrigger,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), String> {
+    let automation = state
+        .repository
+        .get_automation(trigger.automation_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("automation {} not found", trigger.automation_id))?;
+    let spec = TriggerSpec::from_db(trigger.kind, &trigger.spec_json)
+        .map_err(|e| format!("trigger spec decode: {e}"))?;
+    let TriggerSpec::Cron { expr, tz } = &spec else {
+        return Err("non-cron trigger surfaced in due list".into());
+    };
+    let default_tz = crate::cron::default_tz_name();
+    let tz_name = tz.as_deref().unwrap_or(default_tz);
+    let next_fire = next_fire_after(expr, tz_name, now)
+        .map_err(|e| format!("compute next_fire_at: {e}"))?;
+    let payload = json!({
+        "source": "cron",
+        "trigger_id": trigger.id.to_string(),
+        "fired_for": trigger.next_fire_at,
+    });
+    let run = state
+        .repository
+        .fire_cron_trigger(
+            automation.id,
+            automation.project_id,
+            automation.created_by,
+            trigger.id,
+            now,
+            next_fire,
+            &payload,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    tracing::info!(trigger = %trigger.id, run = %run.id, "cron trigger fired");
     Ok(())
 }
 

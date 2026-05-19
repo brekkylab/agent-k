@@ -708,6 +708,60 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn fire_cron_trigger_creates_run_and_advances_trigger_atomically() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+
+            // Create a cron trigger with a past next_fire_at.
+            let past = Utc::now() - ChronoDuration::seconds(5);
+            let spec = TriggerSpec::Cron {
+                expr: "0 * * * *".into(),
+                tz: Some("UTC".into()),
+            };
+            let trigger = repo
+                .create_trigger(auto.id, &spec, None, Some(past))
+                .await
+                .unwrap();
+
+            let next_fire = Utc::now() + ChronoDuration::minutes(60);
+            let payload = serde_json::json!({"source": "cron"});
+            let run = repo
+                .fire_cron_trigger(
+                    auto.id,
+                    project_id,
+                    user_id,
+                    trigger.id,
+                    Utc::now(),
+                    next_fire,
+                    &payload,
+                )
+                .await
+                .unwrap();
+
+            // Run is queued with trigger_id set.
+            assert_eq!(run.status, RunStatus::Queued);
+            assert_eq!(run.trigger_id, Some(trigger.id));
+
+            // Session was created with automation origin.
+            let session = repo.get_session(run.session_id).await.unwrap().unwrap();
+            assert_eq!(session.origin, SessionOrigin::Automation);
+
+            // Initial events were inserted in the same tx.
+            let events = repo.list_events_for_run(run.id).await.unwrap();
+            let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+            assert_eq!(kinds, vec![EventKind::Triggered, EventKind::Queued]);
+
+            // Trigger's next_fire_at advanced to the post-fire value.
+            let refreshed = repo.get_trigger(trigger.id).await.unwrap().unwrap();
+            assert!(refreshed.next_fire_at.is_some());
+            assert!(refreshed.next_fire_at.unwrap() > past);
+        }
+
+        #[tokio::test]
         async fn events_append_and_list_in_order() {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
