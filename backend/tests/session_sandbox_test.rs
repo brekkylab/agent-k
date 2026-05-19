@@ -58,20 +58,21 @@ async fn two_sessions_get_isolated_sandboxes() {
         (guard1.state.runenv.clone(), guard2.state.runenv.clone())
     };
 
-    assert!(
-        !Arc::ptr_eq(&re1, &re2),
-        "session 1 and 2 must not share the same runenv Arc"
-    );
+    let h1 = re1.get().await.expect("session 1 runenv boot failed");
+    let h2 = re2.get().await.expect("session 2 runenv boot failed");
 
-    re1.write(Path::new("/workspace/iso.txt"), b"session1")
+    h1.write(Path::new("/workspace/iso.txt"), b"session1")
         .await
         .expect("write to session 1 runenv failed");
 
-    let read_result = re2.read(Path::new("/workspace/iso.txt")).await;
+    let read_result = h2.read(Path::new("/workspace/iso.txt")).await;
     assert!(
         read_result.is_err(),
         "session 2 must not be able to read a file written in session 1's sandbox"
     );
+
+    drop(h1);
+    drop(h2);
 
     delete_session(&app, id1, &token).await;
     delete_session(&app, id2, &token).await;
@@ -120,9 +121,8 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
 
     let agent_arc = state.get_agent(&id).unwrap();
     let agent = agent_arc.lock().await;
-    let contents = agent
-        .state
-        .runenv
+    let handle = agent.state.runenv.get().await.expect("runenv boot failed");
+    let contents = handle
         .read(Path::new("/workspace/probe.txt"))
         .await
         .expect("probe.txt must exist in sandbox after agent wrote it");
@@ -130,6 +130,7 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
         contents.starts_with(b"sandbox_ok"),
         "file contents mismatch: {contents:?}"
     );
+    drop(handle);
     drop(agent);
 
     delete_session(&app, id, &token).await;
@@ -280,9 +281,8 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
 
     let agent_arc = state.get_agent(&id).unwrap();
     let agent = agent_arc.lock().await;
-    let contents = agent
-        .state
-        .runenv
+    let handle = agent.state.runenv.get().await.expect("runenv boot failed");
+    let contents = handle
         .read(Path::new("/workspace/probe_stream.txt"))
         .await
         .expect("probe_stream.txt must exist in sandbox");
@@ -290,6 +290,7 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
         contents.starts_with(b"sandbox_ok"),
         "file contents mismatch: {contents:?}"
     );
+    drop(handle);
     drop(agent);
 
     delete_session(&app, id, &token).await;
