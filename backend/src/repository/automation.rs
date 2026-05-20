@@ -56,7 +56,6 @@ pub struct DbAutomationRunEvent {
     pub run_id: Uuid,
     pub ts: DateTime<Utc>,
     pub kind: EventKind,
-    pub attempt: i64,
     pub payload: Option<serde_json::Value>,
 }
 
@@ -188,7 +187,6 @@ impl SqliteRepository {
                 "automation_run_events.ts",
             )?,
             kind,
-            attempt: row.get("attempt"),
             payload,
         })
     }
@@ -633,8 +631,8 @@ impl SqliteRepository {
 
         let triggered_str = triggered_payload.map(serde_json::to_string).transpose()?;
         sqlx::query(
-            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
-             VALUES (?, ?, 'triggered', 1, ?)",
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, 'triggered', ?)",
         )
         .bind(run_id.to_string())
         .bind(&now)
@@ -643,8 +641,8 @@ impl SqliteRepository {
         .await?;
 
         sqlx::query(
-            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
-             VALUES (?, ?, 'queued', 1, NULL)",
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, 'queued', NULL)",
         )
         .bind(run_id.to_string())
         .bind(&now)
@@ -719,8 +717,8 @@ impl SqliteRepository {
 
         let triggered_str = serde_json::to_string(triggered_payload)?;
         sqlx::query(
-            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
-             VALUES (?, ?, 'triggered', 1, ?)",
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, 'triggered', ?)",
         )
         .bind(run_id.to_string())
         .bind(&now)
@@ -729,8 +727,8 @@ impl SqliteRepository {
         .await?;
 
         sqlx::query(
-            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
-             VALUES (?, ?, 'queued', 1, NULL)",
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, 'queued', NULL)",
         )
         .bind(run_id.to_string())
         .bind(&now)
@@ -854,7 +852,6 @@ impl SqliteRepository {
         run_id: Uuid,
         status: RunStatus,
         event_kind: EventKind,
-        event_attempt: i64,
         event_payload: Option<&serde_json::Value>,
     ) -> RepositoryResult<bool> {
         let mut tx = self.pool.begin().await?;
@@ -877,18 +874,136 @@ impl SqliteRepository {
 
         let payload_str = event_payload.map(serde_json::to_string).transpose()?;
         sqlx::query(
-            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, ?, ?)",
         )
         .bind(run_id.to_string())
         .bind(&now)
         .bind(event_kind.as_str())
-        .bind(event_attempt)
         .bind(&payload_str)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
         Ok(true)
+    }
+
+    /// Returns the attempt number of `run_id`, derived from the
+    /// `previous_run_id` chain depth. The initial run in a chain has attempt
+    /// 1; each retry increments by one. This is a derived property, not a
+    /// persisted column — `DbAutomationRun` stays a 1:1 row mirror.
+    pub async fn compute_run_attempt(&self, run_id: Uuid) -> RepositoryResult<i64> {
+        let row = sqlx::query(
+            "WITH RECURSIVE chain(id, prev, depth) AS ( \
+               SELECT id, previous_run_id, 1 FROM automation_runs WHERE id = ? \
+               UNION ALL \
+               SELECT r.id, r.previous_run_id, c.depth + 1 \
+                 FROM automation_runs r JOIN chain c ON c.prev = r.id \
+             ) \
+             SELECT MAX(depth) AS d FROM chain",
+        )
+        .bind(run_id.to_string())
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.get::<i64, _>("d"))
+    }
+
+    /// Atomically schedule a retry for a finalized-failed run: creates a fresh
+    /// session + queued run with `previous_run_id` pointing back and
+    /// `attempt = next_attempt`, and emits `retry_scheduled` on the previous
+    /// run. The new run inherits `automation_id` / `trigger_id` (so cron and
+    /// webhook context survive the chain). `project_id` and `creator_id` are
+    /// looked up from the automation in the same transaction.
+    ///
+    /// No external trigger payload is emitted on the retry run — only `queued`
+    /// — since the chain via `previous_run_id` already documents the origin.
+    pub async fn schedule_retry(
+        &self,
+        previous_run: &DbAutomationRun,
+        scheduled_for: DateTime<Utc>,
+        next_attempt: i64,
+    ) -> RepositoryResult<DbAutomationRun> {
+        let mut tx = self.pool.begin().await?;
+        let now = Self::now_string();
+        let scheduled_s = Self::ts_string(scheduled_for);
+
+        let row = sqlx::query("SELECT project_id, created_by FROM automations WHERE id = ?")
+            .bind(previous_run.automation_id.to_string())
+            .fetch_one(&mut *tx)
+            .await?;
+        let project_id = Self::parse_uuid(row.get::<String, _>("project_id"), "automations.project_id")?;
+        let creator_id = Self::parse_uuid(row.get::<String, _>("created_by"), "automations.created_by")?;
+
+        let session_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?)",
+        )
+        .bind(session_id.to_string())
+        .bind(project_id.to_string())
+        .bind(creator_id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+
+        let run_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO automation_runs \
+               (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, NULL, ?, ?)",
+        )
+        .bind(run_id.to_string())
+        .bind(previous_run.automation_id.to_string())
+        .bind(previous_run.trigger_id.map(|u| u.to_string()))
+        .bind(session_id.to_string())
+        .bind(&scheduled_s)
+        .bind(previous_run.id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Self::map_db_error(e, "automation_runs.session_id"))?;
+
+        sqlx::query(
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, 'queued', NULL)",
+        )
+        .bind(run_id.to_string())
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+
+        let retry_payload = serde_json::json!({
+            "next_run_id": run_id.to_string(),
+            "scheduled_for": scheduled_for,
+            "attempt": next_attempt,
+        });
+        let retry_payload_str = serde_json::to_string(&retry_payload)?;
+        sqlx::query(
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, 'retry_scheduled', ?)",
+        )
+        .bind(previous_run.id.to_string())
+        .bind(&now)
+        .bind(&retry_payload_str)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(DbAutomationRun {
+            id: run_id,
+            automation_id: previous_run.automation_id,
+            trigger_id: previous_run.trigger_id,
+            session_id,
+            status: RunStatus::Queued,
+            scheduled_for,
+            lease_until: None,
+            previous_run_id: Some(previous_run.id),
+            idempotency_key: None,
+            created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
+            updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
+        })
     }
 
     pub async fn update_run_status(
@@ -938,8 +1053,8 @@ impl SqliteRepository {
             .await?;
             if res.rows_affected() == 1 {
                 sqlx::query(
-                    "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
-                     VALUES (?, ?, 'lease_lost', 1, NULL)",
+                    "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+                     VALUES (?, ?, 'lease_lost', NULL)",
                 )
                 .bind(&id_s)
                 .bind(&updated_at)
@@ -986,8 +1101,8 @@ impl SqliteRepository {
             .await?;
             if res.rows_affected() == 1 {
                 sqlx::query(
-                    "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
-                     VALUES (?, ?, 'lease_lost', 1, NULL)",
+                    "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+                     VALUES (?, ?, 'lease_lost', NULL)",
                 )
                 .bind(&id_s)
                 .bind(&updated_at)
@@ -1008,19 +1123,17 @@ impl SqliteRepository {
         &self,
         run_id: Uuid,
         kind: EventKind,
-        attempt: i64,
         payload: Option<&serde_json::Value>,
     ) -> RepositoryResult<i64> {
         let ts = Self::now_string();
         let payload_str = payload.map(serde_json::to_string).transpose()?;
         let res = sqlx::query(
-            "INSERT INTO automation_run_events (run_id, ts, kind, attempt, payload) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, ?, ?)",
         )
         .bind(run_id.to_string())
         .bind(&ts)
         .bind(kind.as_str())
-        .bind(attempt)
         .bind(&payload_str)
         .execute(&self.pool)
         .await?;
@@ -1032,7 +1145,7 @@ impl SqliteRepository {
         run_id: Uuid,
     ) -> RepositoryResult<Vec<DbAutomationRunEvent>> {
         let rows = sqlx::query(
-            "SELECT id, run_id, ts, kind, attempt, payload \
+            "SELECT id, run_id, ts, kind, payload \
              FROM automation_run_events WHERE run_id = ? ORDER BY ts ASC, id ASC",
         )
         .bind(run_id.to_string())

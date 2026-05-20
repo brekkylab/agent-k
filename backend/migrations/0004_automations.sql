@@ -41,7 +41,7 @@ CREATE UNIQUE INDEX idx_triggers_webhook_token
     WHERE webhook_token_hash IS NOT NULL;
 
 -- 1 run == 1 session. trigger_id=NULL for ad-hoc/manual runs.
--- started_at / finished_at / attempt / failure reason live on
+-- started_at / finished_at / failure reason live on
 -- automation_run_events; status is kept here for cheap list queries.
 CREATE TABLE automation_runs (
     id                   TEXT PRIMARY KEY,
@@ -77,7 +77,6 @@ CREATE TABLE automation_run_events (
     run_id      TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
     ts          TEXT NOT NULL,
     kind        TEXT NOT NULL,
-    attempt     INTEGER NOT NULL DEFAULT 1,
     payload     TEXT
 );
 CREATE INDEX idx_run_events_run_ts ON automation_run_events(run_id, ts);

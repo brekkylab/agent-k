@@ -771,7 +771,7 @@ mod tests {
             assert_eq!(claimed.id, run.id);
 
             let written = repo
-                .finalize_run(run.id, RunStatus::Succeeded, EventKind::Succeeded, 1, None)
+                .finalize_run(run.id, RunStatus::Succeeded, EventKind::Succeeded, None)
                 .await
                 .unwrap();
             assert!(written, "expected finalize_run to write on running row");
@@ -786,7 +786,7 @@ mod tests {
             // Second call (status no longer 'running') is a no-op: returns false
             // and does not add another event.
             let written_again = repo
-                .finalize_run(run.id, RunStatus::Failed, EventKind::Failed, 1, None)
+                .finalize_run(run.id, RunStatus::Failed, EventKind::Failed, None)
                 .await
                 .unwrap();
             assert!(!written_again);
@@ -794,6 +794,73 @@ mod tests {
             assert_eq!(events.len(), events_after.len());
             let still = repo.get_run(run.id).await.unwrap().unwrap();
             assert_eq!(still.status, RunStatus::Succeeded);
+        }
+
+        #[tokio::test]
+        async fn schedule_retry_chains_new_run_and_emits_retry_event() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let original = repo
+                .create_run(auto.id, None, session.id, Utc::now(), None)
+                .await
+                .unwrap();
+            assert_eq!(
+                repo.compute_run_attempt(original.id).await.unwrap(),
+                1,
+                "initial run must be attempt 1 (no previous_run_id)"
+            );
+
+            let scheduled = Utc::now() + ChronoDuration::seconds(30);
+            let retry = repo.schedule_retry(&original, scheduled, 2).await.unwrap();
+
+            // (a) new run inherits automation/trigger, fresh session, attempt+1, queued.
+            assert_ne!(retry.id, original.id);
+            assert_eq!(retry.automation_id, original.automation_id);
+            assert_eq!(retry.trigger_id, original.trigger_id);
+            assert_ne!(retry.session_id, original.session_id);
+            assert_eq!(retry.previous_run_id, Some(original.id));
+            assert_eq!(
+                repo.compute_run_attempt(retry.id).await.unwrap(),
+                2,
+                "retry run chain depth = 2"
+            );
+            assert_eq!(retry.status, RunStatus::Queued);
+            assert!(retry.idempotency_key.is_none());
+            assert!(retry.lease_until.is_none());
+
+            // (b) retry_scheduled event lands on the ORIGINAL run with the
+            //     next run's id and attempt in payload.
+            let prev_events = repo.list_events_for_run(original.id).await.unwrap();
+            let retry_event = prev_events
+                .iter()
+                .find(|e| e.kind == EventKind::RetryScheduled)
+                .expect("retry_scheduled event on original run");
+            let payload = retry_event
+                .payload
+                .as_ref()
+                .expect("retry_scheduled has payload");
+            assert_eq!(payload["next_run_id"], retry.id.to_string());
+            assert_eq!(payload["attempt"], 2);
+
+            // (c) queued event lands on the NEW run.
+            //     No `triggered` event — retry isn't externally triggered.
+            let new_events = repo.list_events_for_run(retry.id).await.unwrap();
+            assert!(
+                new_events.iter().any(|e| e.kind == EventKind::Queued),
+                "queued event on retry run"
+            );
+            assert!(
+                !new_events.iter().any(|e| e.kind == EventKind::Triggered),
+                "retry run must not emit a triggered event"
+            );
         }
 
         #[tokio::test]
@@ -867,16 +934,15 @@ mod tests {
                 .await
                 .unwrap();
 
-            repo.append_event(run.id, EventKind::Triggered, 1, None)
+            repo.append_event(run.id, EventKind::Triggered, None)
                 .await
                 .unwrap();
-            repo.append_event(run.id, EventKind::Queued, 1, None)
+            repo.append_event(run.id, EventKind::Queued, None)
                 .await
                 .unwrap();
             repo.append_event(
                 run.id,
                 EventKind::StepStarted,
-                1,
                 Some(&serde_json::json!({ "step_index": 0 })),
             )
             .await

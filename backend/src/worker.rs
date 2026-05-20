@@ -38,6 +38,13 @@ const CRON_TICK_INTERVAL: Duration = Duration::from_secs(15);
 const LEASE_MINUTES: i64 = 3;
 const WEBHOOK_IDEMPOTENCY_RETENTION_HOURS: i64 = 24;
 
+// Retry policy. MAX_ATTEMPTS is the total number of attempts including the
+// initial one — so RETRY_BACKOFFS has MAX_ATTEMPTS-1 entries (one per gap
+// between consecutive attempts). Attempt N (1-indexed) failing schedules
+// attempt N+1 with backoff RETRY_BACKOFFS[N-1].
+const MAX_ATTEMPTS: i64 = 3;
+const RETRY_BACKOFFS: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(120)];
+
 /// Spawn `count` independent worker tasks. Each loops claim → execute.
 pub fn spawn_workers(state: Arc<AppState>, count: usize) {
     for idx in 0..count {
@@ -218,6 +225,15 @@ async fn try_claim_and_execute(state: &Arc<AppState>) -> Result<bool, String> {
 
     tracing::info!(run = %run.id, "claimed run");
 
+    // attempt is a derived property (chain depth via previous_run_id), not a
+    // persisted column. Compute once per claim and cache locally — the worker
+    // uses it for event tagging and retry budget decisions.
+    let attempt = state
+        .repository
+        .compute_run_attempt(run.id)
+        .await
+        .map_err(|e| e.to_string())?;
+
     let cancel = CancellationToken::new();
     // Belt: panic anywhere inside this scope unwinds the drop_guard → cancel.
     let _drop_guard = cancel.clone().drop_guard();
@@ -254,30 +270,75 @@ async fn try_claim_and_execute(state: &Arc<AppState>) -> Result<bool, String> {
 
     let result = agent_result.expect("agent_result branch checked above");
     let (final_status, kind, payload) = match &result {
-        Ok(()) => (RunStatus::Succeeded, EventKind::Succeeded, None),
-        Err(e) => (
-            RunStatus::Failed,
-            EventKind::Failed,
-            Some(json!({ "error": e })),
-        ),
+        Ok(()) => {
+            tracing::info!(run = %run.id, "run succeeded");
+            (RunStatus::Succeeded, EventKind::Succeeded, None)
+        }
+        Err(e) => {
+            tracing::warn!(run = %run.id, "run failed: {e}");
+            (
+                RunStatus::Failed,
+                EventKind::Failed,
+                Some(json!({ "error": e })),
+            )
+        }
     };
-    match state
+
+    let finalize_owned = match state
         .repository
-        .finalize_run(run.id, final_status, kind, 1, payload.as_ref())
+        .finalize_run(run.id, final_status, kind, payload.as_ref())
         .await
     {
-        Ok(true) => {}
+        Ok(true) => true,
         Ok(false) => {
             tracing::warn!(run = %run.id, "finalize_run found row no longer running (reaper raced us)");
+            false
         }
-        Err(e) => tracing::error!(run = %run.id, "failed to finalize run: {e}"),
+        Err(e) => {
+            tracing::error!(run = %run.id, "failed to finalize run: {e}");
+            false
+        }
+    };
+
+    // Schedule a retry when (a) we actually finalized as Failed, and (b) the
+    // attempt is still within budget. The reaper-raced case (finalize_owned ==
+    // false) skips retry because the row is back to queued under another
+    // worker — that retry happens via lease loss + re-claim, not via a new
+    // chain entry.
+    if finalize_owned
+        && matches!(final_status, RunStatus::Failed)
+        && let Some(backoff) = retry_backoff_for(attempt)
+    {
+        let scheduled_for = Utc::now() + chrono::Duration::from_std(backoff).unwrap_or_default();
+        let next_attempt = attempt + 1;
+        match state
+            .repository
+            .schedule_retry(&run, scheduled_for, next_attempt)
+            .await
+        {
+            Ok(retry_run) => {
+                tracing::info!(
+                    run = %run.id, next = %retry_run.id, attempt = next_attempt,
+                    "retry scheduled",
+                );
+            }
+            Err(e) => {
+                tracing::error!(run = %run.id, "schedule_retry failed: {e}");
+            }
+        }
     }
 
-    match &result {
-        Ok(()) => tracing::info!(run = %run.id, "run succeeded"),
-        Err(e) => tracing::warn!(run = %run.id, "run failed: {e}"),
-    }
     Ok(true)
+}
+
+/// Returns the wait before the next attempt given the just-failed attempt
+/// number. None when we've exhausted `MAX_ATTEMPTS`.
+fn retry_backoff_for(current_attempt: i64) -> Option<Duration> {
+    if current_attempt >= MAX_ATTEMPTS {
+        return None;
+    }
+    let idx = (current_attempt - 1).max(0) as usize;
+    RETRY_BACKOFFS.get(idx).copied()
 }
 
 fn spawn_heartbeat(
@@ -324,7 +385,7 @@ async fn execute_run(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("automation {} not found", run.automation_id))?;
 
-    repo.append_event(run.id, EventKind::Started, 1, None)
+    repo.append_event(run.id, EventKind::Started, None)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -340,7 +401,6 @@ async fn execute_run(
         repo.append_event(
             run.id,
             EventKind::StepStarted,
-            1,
             Some(&json!({ "step_index": step_index })),
         )
         .await
@@ -393,7 +453,6 @@ async fn execute_run(
         repo.append_event(
             run.id,
             EventKind::StepFinished,
-            1,
             Some(&json!({ "step_index": step_index })),
         )
         .await
