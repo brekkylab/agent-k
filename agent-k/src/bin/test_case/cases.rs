@@ -33,5 +33,15 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("payslips.pdf"),
             )],
         },
+        // Case 3
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "급여명세서 문서를 각각 한 페이지짜리 PDF로 분리해주세요.",
+            )]),
+            files: vec![(
+                include_bytes!("payslips.pdf").to_vec(),
+                PathBuf::from("payslips.pdf"),
+            )],
+        },
     ]
 }
