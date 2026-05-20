@@ -10,6 +10,14 @@ path = "src/lib.rs"
 name = "session"
 path = "src/bin/session.rs"
 
+[[bin]]
+name = "run"
+path = "src/bin/run.rs"
+
+[[bin]]
+name = "test_case"
+path = "src/bin/test_case.rs"
+
 [features]
 internal = ["dep:knowledge-base-examples"]
 

@@ -9,4 +9,4 @@ members = [
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "7848727044d6ff660f09deda25d1864664dac767", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "372f98f7e655b6a169e0e61699278322f3ee51e3", features = ["sandbox"] }
