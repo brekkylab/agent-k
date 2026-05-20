@@ -65,7 +65,7 @@ pub async fn get_coworker_agent(
 
     // Build instruction
     let mut config = SandboxConfig::default();
-    config.image = "python:3.13-alpine3.21".into();
+    config.image = "brekkylab/agent-k:latest".into();
     config.cpus = 8;
     config.memory_mib = 1024;
     config.workdir = "/workspace".into();
