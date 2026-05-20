@@ -5,7 +5,7 @@ use aide::NoApi;
 use ailoy::{
     agent::{Agent, AgentBuilder, AgentCard},
     message::{Message, MessageOutput, Part, Role},
-    runenv::{Sandbox, SandboxConfig, VolumeMount},
+    runenv::{RunEnv, Sandbox, SandboxConfig, VolumeMount},
 };
 use axum::{
     Json,
@@ -41,7 +41,7 @@ async fn build_sandbox(
     state: &Arc<AppState>,
     project_id: Uuid,
     session_id: Uuid,
-) -> Result<Sandbox, String> {
+) -> Result<RunEnv, String> {
     let uploads_host = state
         .data_root
         .join("projects")
@@ -64,10 +64,10 @@ async fn build_sandbox(
         volumes,
         ..Default::default()
     };
-    Sandbox::new(cfg).await.map_err(|e| e.to_string())
+    RunEnv::sandbox(cfg).await.map_err(|e| e.to_string())
 }
 
-async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
+async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
     let sw_card = AgentCard {
         name: "speedwagon".into(),
         description: "Search the knowledge base for answers. \
@@ -97,7 +97,7 @@ async fn build_agent(sandbox: Sandbox) -> Result<Agent, String> {
         ))
         .system_tools()
         .web_search_tool()
-        .runenv(sandbox)
+        .runenv(runenv)
         .subagent(sw_spec)
         .build()
         .map_err(|e| e.to_string())
