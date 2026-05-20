@@ -441,21 +441,26 @@ pub async fn get_message_history(
 
     let items = rows
         .into_iter()
-        .map(|r| SessionMessageResponse {
-            message: r.message,
-            sender: match r.sender_kind {
+        .map(|r| -> ApiResult<SessionMessageResponse> {
+            let sender = match r.sender_kind {
                 DbSenderKind::User => MessageSender::User {
-                    user_id: r.sender_user_id.unwrap_or(session.creator_id),
+                    user_id: r.sender_user_id.ok_or_else(|| {
+                        AppError::internal("user message missing sender_user_id")
+                    })?,
                 },
                 DbSenderKind::Agent => MessageSender::Agent {
                     name: r
                         .sender_name
                         .unwrap_or_else(|| TOP_LEVEL_AGENT_NAME.to_string()),
                 },
-            },
-            created_at: r.created_at,
+            };
+            Ok(SessionMessageResponse {
+                message: r.message,
+                sender,
+                created_at: r.created_at,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     // Auto-mark all messages as read for this user
     let _ = state

@@ -1,6 +1,4 @@
 import dayjs from 'dayjs';
-import 'dayjs/locale/ko';
-dayjs.locale('ko');
 
 export function formatMessageTime(iso: string | null | undefined): string {
   if (!iso) return '';

@@ -57,17 +57,30 @@ export async function* streamMessage(
     if (msg.role === 'assistant') {
       accumulated = aiMessageText(msg.contents as AiloyPart[] | undefined);
       for (const call of (msg.tool_calls ?? []) as AiloyToolCall[]) {
-        if (call.id && call.function?.name && !toolCalls.find((tc) => tc.id === call.id)) {
+        if (!call.id || !call.function?.name) continue;
+        const existing = toolCalls.find((tc) => tc.id === call.id);
+        if (existing) {
+          if (existing.name === '(pending)') existing.name = call.function.name;
+          if (existing.arguments === undefined) existing.arguments = call.function.arguments;
+        } else {
           toolCalls.push({ id: call.id, name: call.function.name, arguments: call.function.arguments });
         }
       }
       yield { text: accumulated, toolCalls: [...toolCalls], status: 'streaming' };
-    } else if (msg.role === 'tool' && msg.id) {
-      const tc = toolCalls.find((t) => t.id === msg.id);
-      if (tc) {
-        tc.result = aiMessageText(msg.contents as AiloyPart[] | undefined) || '[done]';
-        yield { text: accumulated, toolCalls: [...toolCalls], status: 'streaming' };
+    } else if (msg.role === 'tool') {
+      if (!msg.id) {
+        console.warn('[streamMessage] tool message without id; cannot attach', msg);
+        continue;
       }
+      const resultText = aiMessageText(msg.contents as AiloyPart[] | undefined) || '[done]';
+      let tc = toolCalls.find((t) => t.id === msg.id);
+      if (!tc) {
+        console.warn(`[streamMessage] tool result id=${msg.id} arrived without matching tool_call; rendering as stub`);
+        tc = { id: msg.id, name: '(pending)' };
+        toolCalls.push(tc);
+      }
+      tc.result = resultText;
+      yield { text: accumulated, toolCalls: [...toolCalls], status: 'streaming' };
     }
   }
 }
