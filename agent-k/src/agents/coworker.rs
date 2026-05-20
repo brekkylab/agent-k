@@ -80,7 +80,7 @@ pub async fn get_coworker_agent(
         .replace("{{NAME}}", name.as_ref())
         .replace("{{TIME}}", &now_utc_iso8601())
         .replace("{{HOME}}", "/workspace")
-        .replace("{{OS}}", "Alpine Linux 3.21");
+        .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
     AgentBuilder::new(model.as_ref())
         .instruction(inst)
