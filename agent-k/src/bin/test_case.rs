@@ -21,7 +21,7 @@ use cases::{Case, get_coworker_cases};
 const COWORKER_AGENT_NAME: &str = "minerva";
 const COWORKER_AGENT_OPENAI_MODEL: &str = "openai/gpt-5.5";
 const COWORKER_AGENT_CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
-const COWORKER_AGENT_GEMINI_MODEL: &str = "gemini/gemini-2.5-pro";
+const COWORKER_AGENT_GEMINI_MODEL: &str = "gemini/gemini-3.5-flash";
 const ARTIFACT_DIR: &str = "./artifacts";
 
 enum InputSource {
