@@ -1,9 +1,8 @@
 use std::{convert::Infallible, sync::Arc};
 
-use agent_k::agents::SpeedwagonSpec;
 use aide::NoApi;
 use ailoy::{
-    agent::{Agent, AgentBuilder, AgentCard},
+    agent::{Agent, AgentBuilder, AgentCard, AgentSpec},
     message::{Message, MessageOutput, Part, Role},
     runenv::{RunEnv, Sandbox, SandboxConfig, VolumeMount},
 };
@@ -29,7 +28,7 @@ use crate::{
     state::AppState,
 };
 
-const DEFAULT_MODEL: &str = "openai/gpt-5.4-mini";
+const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 
 fn sandbox_name_for(id: &Uuid) -> String {
@@ -68,21 +67,24 @@ async fn build_sandbox(
 }
 
 async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
-    let sw_card = AgentCard {
-        name: "speedwagon".into(),
-        description: "Search the knowledge base for answers. \
-            This tool has access to uploaded documents that may contain \
-            information the model doesn't have. \
-            Use it for any question that could be answered from the knowledge base."
-            .into(),
-        skills: vec![],
-    };
-    let sw_spec = SpeedwagonSpec::new().card(sw_card.clone()).into_spec();
+    // TODO: Remove the subagent. This is added for testing frontend UI.
+    let math_spec = AgentSpec::new(DEFAULT_MODEL)
+        .instruction(
+            "You are a math expert. Solve any mathematical problem step by step, \
+            showing your reasoning clearly. Return the final answer at the end.",
+        )
+        .card(AgentCard {
+            name: "math".into(),
+            description: "Solve mathematical problems step by step. \
+                Use for arithmetic, algebra, calculus, statistics, or any numeric reasoning."
+                .into(),
+            skills: vec![],
+        });
 
     AgentBuilder::new(DEFAULT_MODEL)
         .instruction(concat!(
             "You are a versatile assistant with access to code execution tools ",
-            "(bash, python), web search, and a knowledge base (speedwagon). ",
+            "(bash, python), web search, and a math subagent. ",
             "Your working directory is /workspace, which is read-write — you can freely ",
             "create, edit, and delete files there for intermediate work, scripts, and results. ",
             "Project files uploaded by the user are available read-only at /workspace/.uploads/. ",
@@ -90,39 +92,50 @@ async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
             "`cat /workspace/.uploads/<path>` to read them. ",
             "To modify or analyse uploaded files, copy them into /workspace first. ",
             "New uploads appear in /workspace/.uploads immediately without restarting. ",
-            "You MUST use the speedwagon tool to search the document corpus ",
-            "before answering ANY factual question — even if you think you already know the answer. ",
+            "You MUST delegate ALL math and numeric problems to the math tool. ",
             "Use bash and python tools for computation, data analysis, and code execution tasks. ",
             "Only skip tools for greetings or casual conversation.",
         ))
         .system_tools()
         .web_search_tool()
         .runenv(runenv)
-        .subagent(sw_spec)
+        .subagent(math_spec)
         .build()
         .map_err(|e| e.to_string())
 }
 
-/// Attribute each message in the persistence slice to a sender.
+/// Attribute each persisted message to a sender using `MessageOutput` metadata.
 ///
-/// The slice from `agent.get_history()[prev_len..]` only contains depth-0
-/// messages: all Role::Assistant/Tool/System originate from the top-level agent.
-/// If subagent internal turns are ever surfaced, this function will need to
-/// track depth and subagent name separately.
-fn classify_senders(
-    msgs: &[Message],
+/// `agent.get_history()[prev_len..]` always starts with the user query (pushed
+/// by `Agent::run` before any outputs are emitted), followed by one entry per
+/// depth-0 `MessageOutput` in emission order.  This function mirrors that layout:
+/// the first sender is always the user; subsequent senders are derived from the
+/// depth-0 outputs via `source_agent` (set by ailoy's `stamp_source_agent`).
+///
+/// Depth ≥ 1 outputs are skipped because ailoy does not push them into history.
+fn classify_senders_from_outputs(
+    outputs: &[MessageOutput],
     user_id: Uuid,
 ) -> Vec<(DbSenderKind, Option<String>, Option<Uuid>)> {
-    msgs.iter()
-        .map(|m| match m.role {
-            Role::User => (DbSenderKind::User, None, Some(user_id)),
-            Role::System | Role::Assistant | Role::Tool => (
-                DbSenderKind::Agent,
-                Some(TOP_LEVEL_AGENT_NAME.to_string()),
-                None,
-            ),
-        })
-        .collect()
+    let mut senders = vec![(DbSenderKind::User, None, Some(user_id))];
+
+    for output in outputs {
+        if !matches!(output.depth, None | Some(0)) {
+            continue;
+        }
+        match output.message.role {
+            Role::User => continue,
+            _ => {
+                let name = output
+                    .source_agent
+                    .clone()
+                    .unwrap_or_else(|| TOP_LEVEL_AGENT_NAME.to_string());
+                senders.push((DbSenderKind::Agent, Some(name), None));
+            }
+        }
+    }
+
+    senders
 }
 
 async fn resolve_agent_for(
@@ -426,7 +439,7 @@ pub async fn get_message_history(
     Extension(auth_user): Extension<AuthUser>,
     Path(session_id): Path<Uuid>,
 ) -> ApiResult<Json<SessionMessageListResponse>> {
-    let (session, _access) = state
+    let (_session, _access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
         .await
@@ -568,7 +581,7 @@ pub async fn send_message(
     let new_messages = agent.get_history()[prev_len..].to_vec();
     drop(agent);
 
-    let senders = classify_senders(&new_messages, auth_user.id);
+    let senders = classify_senders_from_outputs(&outputs, auth_user.id);
     let to_persist: Vec<NewSessionMessage> = new_messages
         .into_iter()
         .zip(senders)
@@ -662,9 +675,13 @@ pub async fn send_message_stream(
         let mut run = agent.run(msg);
 
         let mut run_error: Option<String> = None;
+        let mut depth0_outputs: Vec<MessageOutput> = Vec::new();
         while let Some(item) = run.next().await {
             match item {
                 Ok(output) => {
+                    if matches!(output.depth, None | Some(0)) {
+                        depth0_outputs.push(output.clone());
+                    }
                     let json = serde_json::to_string(&output)
                         .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
                     yield Ok::<Event, Infallible>(
@@ -690,7 +707,7 @@ pub async fn send_message_stream(
         let new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);  // Release OwnedMutexGuard
 
-        let senders = classify_senders(&new_msgs, sender_id);
+        let senders = classify_senders_from_outputs(&depth0_outputs, sender_id);
         let to_persist: Vec<NewSessionMessage> = new_msgs
             .into_iter()
             .zip(senders)

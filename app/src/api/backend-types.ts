@@ -105,7 +105,8 @@ export interface SessionMessageList {
 }
 
 export interface MessageOutput {
-  depth: number;
+  depth?: number | null;
+  source_agent?: string | null;
   message: AiloyMessage;
   finish_reason?: { type?: string };
   usage?: { input_tokens?: number; output_tokens?: number };

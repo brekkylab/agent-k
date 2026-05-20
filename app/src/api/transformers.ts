@@ -2,7 +2,7 @@
 // Default values for missing metadata (intent, references, etc.) are filled here.
 
 import type { FileAsset, Message, MessageSender, Project, Session, ToolCallInvocation, User } from '@/domain/types';
-import type { AiloyPart, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser, SessionMessageItem } from './backend-types';
+import type { AiloyPart, AiloyToolCall, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser, SessionMessageItem } from './backend-types';
 
 const USER_COLOR_TOKENS = [
   'var(--cw-cozy-clay)',
@@ -90,7 +90,10 @@ function extractText(contents: AiloyPart[] | undefined): string {
     .map((part) => {
       if (!part) return '';
       if (part.type === 'text') return (part as { text?: string }).text ?? '';
-      if (part.type === 'value') return safeStringify((part as { value?: unknown }).value);
+      if (part.type === 'value') {
+        const val = (part as { value?: unknown }).value;
+        return typeof val === 'string' ? val : safeStringify(val);
+      }
       if (part.type === 'function') {
         const fn = (part as { function?: { name?: string } }).function;
         return fn?.name ? `[tool: ${fn.name}]` : '[tool call]';
@@ -143,25 +146,56 @@ export function collapseToolMessages(
   items: SessionMessageItem[],
   sessionId: string,
 ): Message[] {
+  // tool_call_id → tool_call_name
+  const toolCallNames = new Map<string, string>();
+  for (const it of items) {
+    if (it.message.role === 'assistant' && it.message.tool_calls) {
+      for (const tc of it.message.tool_calls as AiloyToolCall[]) {
+        toolCallNames.set(tc.id, tc.function?.name ?? 'tool');
+      }
+    }
+  }
+
+  // tool_call_id → result body (from role=tool messages shown as separate bubbles)
   const toolBodies = new Map<string, string>();
   for (const it of items) {
     if (it.message.role === 'tool' && it.message.id) {
-      toolBodies.set(it.message.id, extractText(it.message.contents) || '[tool result]');
+      toolBodies.set(it.message.id, extractText(it.message.contents) || '[done]');
     }
   }
-  return items
-    .map((it, idx) => ({ it, idx }))
-    .filter(({ it }) => it.message.role !== 'tool')
-    .map(({ it, idx }) => {
-      const msg = toMessageItem(it, sessionId, idx);
-      if (msg.toolCalls) {
-        msg.toolCalls = msg.toolCalls.map((tc) => ({
+
+  return items.map((it, idx) => {
+    if (it.message.role === 'tool') {
+      // Prefer the DB-persisted sender name (clean, no prefix) over the tool_call
+      // function name, which may carry the subagent_ tool-descriptor prefix.
+      const senderName = it.sender.kind === 'agent'
+        ? it.sender.name
+        : (it.message.id ? toolCallNames.get(it.message.id) : null) ?? 'tool';
+      return {
+        id: it.message.id || `${sessionId}-tool-${idx}`,
+        sessionId,
+        sender: { kind: 'agent' as const, name: senderName },
+        createdAt: it.created_at,
+        body: extractText(it.message.contents),
+        status: 'done' as const,
+      };
+    }
+
+    const baseMsg = toMessageItem(it, sessionId, idx);
+    if (baseMsg.toolCalls) {
+      // Inline result only for tool calls whose result is NOT shown as a separate bubble
+      // (i.e. non-subagent system tools). Subagent tool calls keep result=undefined so
+      // MessageBubble can render them as "@name <query>" once the subagent bubble exists.
+      return {
+        ...baseMsg,
+        toolCalls: baseMsg.toolCalls.map((tc) => ({
           ...tc,
-          result: toolBodies.get(tc.id),
-        }));
-      }
-      return msg;
-    });
+          result: toolBodies.has(tc.id) ? undefined : undefined,
+        })),
+      };
+    }
+    return baseMsg;
+  });
 }
 
 export function toFileAsset(entry: BackendDirent, projectId: string, projectName: string): FileAsset {

@@ -3,6 +3,11 @@ import type { AiloyMessage, AiloyPart, AiloyToolCall, MessageOutput, SessionMess
 import { aiMessageText, collapseToolMessages } from './transformers';
 import type { Message } from '@/domain/types';
 
+export interface SubagentUpdate {
+  sourceAgent: string;
+  text: string;
+}
+
 export async function listMessages(sessionId: string): Promise<Message[]> {
   const raw = await request<SessionMessageList>(`/sessions/${sessionId}/messages`);
   return collapseToolMessages(raw.items, sessionId);
@@ -27,6 +32,7 @@ export interface StreamUpdate {
   toolCalls: StreamToolCall[];
   status: 'streaming' | 'done' | 'error';
   errorText?: string;
+  subagentUpdates: SubagentUpdate[];
 }
 
 export async function* streamMessage(
@@ -36,23 +42,45 @@ export async function* streamMessage(
 ): AsyncGenerator<StreamUpdate, void, void> {
   let accumulated = '';
   const toolCalls: StreamToolCall[] = [];
+  const subagentTexts = new Map<string, string>();
+
+  const currentSubagentUpdates = (): SubagentUpdate[] =>
+    [...subagentTexts.entries()].map(([sourceAgent, text]) => ({ sourceAgent, text }));
+
+  const snapshot = (): StreamUpdate => ({
+    text: accumulated,
+    toolCalls: [...toolCalls],
+    status: 'streaming',
+    subagentUpdates: currentSubagentUpdates(),
+  });
 
   for await (const evt of streamSse(`/sessions/${sessionId}/messages/stream`, { content }, signal)) {
     if (evt.event === 'error') {
-      yield { text: accumulated, toolCalls, status: 'error', errorText: evt.data };
+      yield { ...snapshot(), status: 'error', errorText: evt.data };
       return;
     }
     if (evt.event === 'done') {
-      yield { text: accumulated, toolCalls, status: 'done' };
+      yield { ...snapshot(), status: 'done' };
       return;
     }
     if (evt.event !== 'message') continue;
 
-    let output: { message?: AiloyMessage } | null = null;
-    try { output = JSON.parse(evt.data) as { message?: AiloyMessage }; } catch { continue; }
+    let output: MessageOutput | null = null;
+    try { output = JSON.parse(evt.data) as MessageOutput; } catch { continue; }
     if (!output?.message) continue;
 
-    const msg = output.message;
+    const depth = output.depth ?? 0;
+    const sourceAgent = output.source_agent ?? null;
+    const msg = output.message as AiloyMessage;
+
+    if (depth >= 1) {
+      if (msg.role === 'assistant' && sourceAgent) {
+        const text = aiMessageText(msg.contents as AiloyPart[] | undefined);
+        subagentTexts.set(sourceAgent, (subagentTexts.get(sourceAgent) ?? '') + text);
+        yield snapshot();
+      }
+      continue;
+    }
 
     if (msg.role === 'assistant') {
       accumulated = aiMessageText(msg.contents as AiloyPart[] | undefined);
@@ -66,7 +94,7 @@ export async function* streamMessage(
           toolCalls.push({ id: call.id, name: call.function.name, arguments: call.function.arguments });
         }
       }
-      yield { text: accumulated, toolCalls: [...toolCalls], status: 'streaming' };
+      yield snapshot();
     } else if (msg.role === 'tool') {
       if (!msg.id) {
         console.warn('[streamMessage] tool message without id; cannot attach', msg);
@@ -80,7 +108,7 @@ export async function* streamMessage(
         toolCalls.push(tc);
       }
       tc.result = resultText;
-      yield { text: accumulated, toolCalls: [...toolCalls], status: 'streaming' };
+      yield snapshot();
     }
   }
 }

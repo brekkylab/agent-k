@@ -88,17 +88,17 @@
 }
 .cw-toolcall-args { opacity: 0.85; }
 
-/* Thinking cursor — single block that fades while the assistant streams. */
-.cw-thinking-cursor {
-  display: inline-block;
-  width: 6px;
-  height: 14px;
-  margin-left: 2px;
-  vertical-align: -2px;
-  background: var(--cw-ink-3);
-  animation: cw-ping 0.9s steps(2, start) infinite;
-  border-radius: 1px;
+/* Subagent mention — "@math <query>" inline line under parent assistant message. */
+.cw-subagent-call {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--cw-ink-2);
 }
+.cw-subagent-mention {
+  font-weight: 600;
+  color: var(--cw-accent);
+}
+
 
 .cw-message-error {
   margin-top: 6px;

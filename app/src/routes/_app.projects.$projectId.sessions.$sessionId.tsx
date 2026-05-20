@@ -1,7 +1,7 @@
 // Session — markup mirrors app-live SessionPage. Chat surface (head + messages
 // + composer) + right side (members, references, access, artifact).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
@@ -23,6 +23,11 @@ export const Route = createFileRoute('/_app/projects/$projectId/sessions/$sessio
   component: SessionPage,
 });
 
+const SUBAGENT_PREFIX = 'subagent_';
+function stripSubagentPrefix(name: string): string {
+  return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
+}
+
 function SessionPage() {
   const { projectId, sessionId } = Route.useParams();
   const queryClient = useQueryClient();
@@ -37,6 +42,8 @@ function SessionPage() {
     queryFn: () => listMessages(sessionId),
     enabled: Boolean(session.data && currentUser),
   });
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const [composerText, setComposerText] = useState('');
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
@@ -60,6 +67,10 @@ function SessionPage() {
     ...liveMessages,
   ], [history.data, liveMessages]);
 
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [allMessages.length, streaming]);
+
   const send = useCallback(async () => {
     const text = composerText.trim();
     if (!text || streaming) return;
@@ -78,23 +89,53 @@ function SessionPage() {
     setLiveMessages((prev) => [...prev, userMsg, {
       id: aiId,
       sessionId,
-      sender: { kind: 'agent', name: 'agent-k' },
+      sender: { kind: 'agent' as const, name: 'agent-k' },
       createdAt: nowIso,
       body: '',
-      status: 'streaming',
+      status: 'streaming' as const,
     }]);
     setStreaming(true);
 
     const ctrl = new AbortController();
+
     try {
       for await (const update of streamMessage(sessionId, text, ctrl.signal)) {
-        setLiveMessages((prev) => prev.map((m) => {
-          if (m.id !== aiId) return m;
-          const updatedToolCalls = update.toolCalls.length > 0
-            ? update.toolCalls.map((tc) => ({ ...tc }))
-            : m.toolCalls;
-          return { ...m, body: update.text, status: update.status === 'done' ? 'done' : 'streaming', toolCalls: updatedToolCalls };
-        }));
+        const isDone = update.status === 'done';
+        const doneOrStreaming = isDone ? 'done' as const : 'streaming' as const;
+
+        setLiveMessages((prev) => {
+          // Update main agent-k bubble
+          let next: Message[] = prev.map((m) => {
+            if (m.id !== aiId) return m;
+            const updatedToolCalls = update.toolCalls.length > 0
+              ? update.toolCalls.map((tc) => ({ ...tc }))
+              : m.toolCalls;
+            return { ...m, body: update.text, status: doneOrStreaming, toolCalls: updatedToolCalls };
+          });
+
+          // Apply subagent bubble updates — stable id derived from sender name
+          for (const sub of update.subagentUpdates) {
+            const subId = `live-sub-${sub.sourceAgent}`;
+            const exists = next.some((m) => m.id === subId);
+            if (exists) {
+              next = next.map((m) =>
+                m.id === subId ? { ...m, body: sub.text, status: doneOrStreaming } : m,
+              );
+            } else {
+              next = [...next, {
+                id: subId,
+                sessionId,
+                sender: { kind: 'agent' as const, name: sub.sourceAgent },
+                createdAt: nowIso,
+                body: sub.text,
+                status: 'streaming' as const,
+              }];
+            }
+          }
+
+          return next;
+        });
+
         if (update.status === 'error') {
           showToast(`스트리밍 실패: ${update.errorText ?? 'unknown'}`);
           break;
@@ -105,10 +146,11 @@ function SessionPage() {
       showToast(`전송 실패: ${msg}`);
     } finally {
       setStreaming(false);
-      await queryClient.invalidateQueries({ queryKey: ['messages', sessionId] });
+      // Refetch and wait for new history data before clearing live messages to avoid flash.
+      await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+      setLiveMessages([]);
       void queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
-      setLiveMessages([]);
     }
   }, [composerText, streaming, sessionId, projectId, currentUser, queryClient, showToast]);
 
@@ -129,6 +171,8 @@ function SessionPage() {
   const userList = members.data ?? [];
   const creator = userList.find((u) => u.id === sess?.creatorId);
   const usersForRender: User[] = [...userList, AI_USER];
+
+
 
   return (
     <div className="cw-session-layout cw-page-enter">
@@ -160,8 +204,9 @@ function SessionPage() {
             />
           ))}
           {streaming && (
-            <div className="cw-live"><span />응답 받는 중…</div>
+            <div className="cw-live"><span />AI 답변 중…</div>
           )}
+          <div ref={messagesEndRef} />
         </div>
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
@@ -213,6 +258,26 @@ function SessionPage() {
   );
 }
 
+function extractSubagentQuery(args: unknown): string {
+  if (typeof args === 'string') {
+    try {
+      const parsed = JSON.parse(args) as unknown;
+      if (parsed && typeof parsed === 'object') {
+        const vals = Object.values(parsed as Record<string, unknown>);
+        const first = vals[0];
+        if (typeof first === 'string') return first;
+      }
+    } catch { /* ignore */ }
+    return args;
+  }
+  if (args && typeof args === 'object') {
+    const vals = Object.values(args as Record<string, unknown>);
+    const first = vals[0];
+    if (typeof first === 'string') return first;
+  }
+  return '';
+}
+
 function MessageBubble({
   message,
   users,
@@ -234,31 +299,39 @@ function MessageBubble({
   const timeLabel = formatMessageTime(message.createdAt);
   const agentLabel = isAi ? (message.sender as { name: string }).name : null;
 
+  const isLive = message.id.startsWith('live-');
+
   return (
-    <article className={`cw-message ${isAi ? 'is-ai' : isSelf ? 'is-self' : 'is-other'}`}>
-      {isAi ? <span className="cw-ai-chip">CW</span> : <Avatar user={displayUser} />}
+    <article className={`cw-message ${isAi ? 'is-ai' : isSelf ? 'is-self' : 'is-other'}${isLive ? ' is-entering' : ''}`}>
+      {isAi ? <span className="cw-ai-chip">AI</span> : <Avatar user={displayUser} />}
       <div className="cw-message-body">
         <div className="cw-message-meta">
-          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · 나` : isAi ? 'AI' : displayUser.name.split(' ')[0]}</b>
-          {agentLabel && <span>{agentLabel}</span>}
+          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · 나` : isAi ? (agentLabel ?? 'AI') : displayUser.name.split(' ')[0]}</b>
           <time dateTime={message.createdAt} data-tooltip={formatMessageTimeFull(message.createdAt)}>{timeLabel}</time>
         </div>
         <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
           {isAi
-            ? <><MarkdownRenderer text={message.body} />{isStreaming && <span className="cw-thinking-cursor" />}</>
+            ? <MarkdownRenderer text={message.body} />
             : message.body.split('\n').map((line, i) => <p key={`${message.id}-${i}`}>{line || ' '}</p>)}
         </div>
-        {isAi && message.toolCalls?.map((tc) => (
-          <details key={tc.id} className="cw-toolcall">
-            <summary>🔧 {tc.name}{tc.result === undefined ? ' · 실행 중…' : ''}</summary>
-            {tc.arguments !== undefined && (
-              <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
-                ? tc.arguments
-                : JSON.stringify(tc.arguments, null, 2)}</pre>
-            )}
-            {tc.result !== undefined && <pre className="cw-toolcall-result">{tc.result}</pre>}
-          </details>
-        ))}
+        {isAi && message.toolCalls?.map((tc) =>
+          tc.name.startsWith(SUBAGENT_PREFIX) ? (
+            <div key={tc.id} className="cw-subagent-call">
+              <span className="cw-subagent-mention">@{stripSubagentPrefix(tc.name)}</span>
+              {' '}{extractSubagentQuery(tc.arguments)}
+            </div>
+          ) : (
+            <details key={tc.id} className="cw-toolcall">
+              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ' · 실행 중…' : ''}</summary>
+              {tc.arguments !== undefined && (
+                <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
+                  ? tc.arguments
+                  : JSON.stringify(tc.arguments, null, 2)}</pre>
+              )}
+              {tc.result !== undefined && <pre className="cw-toolcall-result">{tc.result}</pre>}
+            </details>
+          )
+        )}
         {isAi && message.status === 'done' && (
           <div className="cw-ai-actions">
             <button>Copy</button>

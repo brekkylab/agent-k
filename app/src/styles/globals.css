@@ -642,8 +642,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   gap: 10px;
   width: 100%;
   margin-bottom: 22px;
-  animation: cw-rise .28s ease both;
 }
+.cw-message.is-entering { animation: cw-rise .28s ease both; }
 .cw-message.is-self {
   flex-direction: row-reverse;
 }

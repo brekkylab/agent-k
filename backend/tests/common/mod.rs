@@ -411,14 +411,15 @@ pub fn parse_sse_events_by_type(body: &[u8], target_event: &str) -> Vec<String> 
 }
 
 /// Converts `&[Message]` to `Vec<NewSessionMessage>` for use in tests.
-/// User messages get `sender_user_id: None`; the handler falls back to `session.creator_id`,
-/// which is correct for single-user tests. When a test needs to assert on `sender.user_id`
-/// directly, construct `NewSessionMessage` values explicitly instead.
-pub fn to_new_msgs(msgs: &[ailoy::message::Message]) -> Vec<NewSessionMessage> {
+/// `user_id` is set as `sender_user_id` for user-role messages.
+pub fn to_new_msgs(
+    msgs: &[ailoy::message::Message],
+    user_id: uuid::Uuid,
+) -> Vec<NewSessionMessage> {
     msgs.iter()
         .map(|m| {
             let (sender_kind, sender_name, sender_user_id) = match m.role {
-                ailoy::message::Role::User => (DbSenderKind::User, None, None),
+                ailoy::message::Role::User => (DbSenderKind::User, None, Some(user_id)),
                 _ => (DbSenderKind::Agent, Some("agent-k".to_string()), None),
             };
             NewSessionMessage {

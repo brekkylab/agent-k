@@ -32,17 +32,21 @@ async fn session_persists_and_restores_history_across_restart() {
         let repo = repository::create_repository(&db_url).await.unwrap();
         let app = make_app_with_repo(repo.clone());
         let username = format!("user_{}", uuid::Uuid::new_v4().simple());
-        signup(&app, &username, "Password123!").await;
+        let user_info = signup(&app, &username, "Password123!").await;
+        let user_id = uuid::Uuid::parse_str(user_info["id"].as_str().unwrap()).unwrap();
         let token = login(&app, &username, "Password123!").await;
         let project = common::get_personal_project(&app, &token).await;
         let project_id = project["id"].as_str().unwrap().to_string();
         let id = post_session_authed(&app, &token, &project_id).await;
         repo.append_messages(
             id,
-            &common::to_new_msgs(&[
-                Message::new(Role::User).with_contents([Part::text("hello")]),
-                Message::new(Role::Assistant).with_contents([Part::text("world")]),
-            ]),
+            &common::to_new_msgs(
+                &[
+                    Message::new(Role::User).with_contents([Part::text("hello")]),
+                    Message::new(Role::Assistant).with_contents([Part::text("world")]),
+                ],
+                user_id,
+            ),
         )
         .await
         .unwrap();
@@ -186,7 +190,7 @@ async fn get_messages_returns_persisted_messages_in_order() {
         ];
         state
             .repository
-            .append_messages(session.id, &common::to_new_msgs(&msgs))
+            .append_messages(session.id, &common::to_new_msgs(&msgs, user_id))
             .await
             .unwrap();
     }
@@ -254,7 +258,7 @@ async fn clear_messages_removes_persisted_messages() {
         ];
         state
             .repository
-            .append_messages(session.id, &common::to_new_msgs(&msgs))
+            .append_messages(session.id, &common::to_new_msgs(&msgs, user_id))
             .await
             .unwrap();
     }
@@ -305,7 +309,7 @@ async fn clear_messages_does_not_delete_session() {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("ping")])];
         state
             .repository
-            .append_messages(session.id, &common::to_new_msgs(&msgs))
+            .append_messages(session.id, &common::to_new_msgs(&msgs, user_id))
             .await
             .unwrap();
     }
@@ -349,7 +353,7 @@ async fn can_append_messages_after_clear() {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("old")])];
         state
             .repository
-            .append_messages(session.id, &common::to_new_msgs(&msgs))
+            .append_messages(session.id, &common::to_new_msgs(&msgs, user_id))
             .await
             .unwrap();
     }
@@ -360,7 +364,7 @@ async fn can_append_messages_after_clear() {
         let msgs = vec![Message::new(Role::User).with_contents([Part::text("new")])];
         state
             .repository
-            .append_messages(session.id, &common::to_new_msgs(&msgs))
+            .append_messages(session.id, &common::to_new_msgs(&msgs, user_id))
             .await
             .unwrap();
     }
@@ -469,7 +473,8 @@ async fn clear_messages_also_clears_in_memory_agent_history() {
     let app = make_app_with_repo(repo.clone());
 
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
-    signup(&app, &username, "Password123!").await;
+    let user_info = signup(&app, &username, "Password123!").await;
+    let user_id = uuid::Uuid::parse_str(user_info["id"].as_str().unwrap()).unwrap();
     let token = login(&app, &username, "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
     let project_id = project["id"].as_str().unwrap().to_string();
@@ -484,9 +489,10 @@ async fn clear_messages_also_clears_in_memory_agent_history() {
     {
         repo.append_messages(
             id,
-            &common::to_new_msgs(&[
-                Message::new(Role::User).with_contents([Part::text("should be cleared")])
-            ]),
+            &common::to_new_msgs(
+                &[Message::new(Role::User).with_contents([Part::text("should be cleared")])],
+                user_id,
+            ),
         )
         .await
         .unwrap();
