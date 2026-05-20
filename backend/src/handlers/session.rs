@@ -444,9 +444,9 @@ pub async fn get_message_history(
         .map(|r| -> ApiResult<SessionMessageResponse> {
             let sender = match r.sender_kind {
                 DbSenderKind::User => MessageSender::User {
-                    user_id: r.sender_user_id.ok_or_else(|| {
-                        AppError::internal("user message missing sender_user_id")
-                    })?,
+                    user_id: r
+                        .sender_user_id
+                        .ok_or_else(|| AppError::internal("user message missing sender_user_id"))?,
                 },
                 DbSenderKind::Agent => MessageSender::Agent {
                     name: r
