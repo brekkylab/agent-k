@@ -7,10 +7,6 @@ edition = "2024"
 path = "src/lib.rs"
 
 [[bin]]
-name = "session"
-path = "src/bin/session.rs"
-
-[[bin]]
 name = "run"
 path = "src/bin/run.rs"
 
