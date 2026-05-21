@@ -11,7 +11,6 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 - OS: {{OS}}
 - You are running in a container environment.
 - Internet access is available.
-- User data resides in {{HOME}}.
 
 ## Scripts
 - You may write and execute a Python script to carry out the task.
@@ -19,10 +18,15 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 - Prefer the available tools when they can accomplish the task.
 - You are free to install and remove packages.
 
+## Input files
+- The user may mention files in the query outside the home directory.
+- These files are reside in the `{{INPUTS}}` (input files) or `{{SHARED_DATA}}` (shared data files) directories.
+
 ## Artifacts
 - Artifacts are output files produced by the task and shown to the user as the result.
-- Artifacts must be placed under `{{HOME}}/artifacts/`.
-- When the task is done, briefly tell the user which files you produced, using relative paths under artifacts/ (e.g. report.md, scripts/build.sh).
+- Artifacts must be placed under `{{ARTIFACTS}}`.
+- Files outside of artifacts cannot be inspected by the user. Make sure every file you want to show is placed under `{{ARTIFACTS}}`.
+- When referring to artifact files, you must use paths relative to `{{ARTIFACTS}}` (report.md, not {{ARTIFACTS}}/report.md).
 
 ## Others
 - Current time: {{TIME}}
@@ -33,6 +37,8 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 pub async fn get_coworker_agent(
     name: impl AsRef<str>,
     model: impl AsRef<str>,
+    input_dir: impl AsRef<Path>,
+    shared_data_dir: impl AsRef<Path>,
     artifacts_dir: impl AsRef<Path>,
 ) -> anyhow::Result<Agent> {
     /// Days since 1970-01-01 → (year, month, day). Howard Hinnant's `civil_from_days`.
@@ -73,6 +79,16 @@ pub async fn get_coworker_agent(
     config.workdir = "/workspace".into();
     config.env.insert("HOME".into(), "/workspace".into());
     config.volumes.push(VolumeMount::Bind {
+        host: input_dir.as_ref().into(),
+        guest: "/inputs".into(),
+        readonly: true,
+    });
+    config.volumes.push(VolumeMount::Bind {
+        host: shared_data_dir.as_ref().into(),
+        guest: "/shared_data".into(),
+        readonly: true,
+    });
+    config.volumes.push(VolumeMount::Bind {
         host: artifacts_dir.as_ref().into(),
         guest: "/workspace/artifacts".into(),
         readonly: false,
@@ -81,6 +97,9 @@ pub async fn get_coworker_agent(
         .replace("{{NAME}}", name.as_ref())
         .replace("{{TIME}}", &now_utc_iso8601())
         .replace("{{HOME}}", "/workspace")
+        .replace("{{INPUTS}}", &"/inputs")
+        .replace("{{SHARED_DATA}}", &"/shared_data")
+        .replace("{{ARTIFACTS}}", "/workspace/artifacts")
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
     let spec = AgentSpec::new(model.as_ref())

@@ -19,7 +19,9 @@ const COWORKER_AGENT_NAME: &str = "minerva";
 const COWORKER_AGENT_OPENAI_MODEL: &str = "openai/gpt-5.4";
 const COWORKER_AGENT_CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
 const COWORKER_AGENT_GEMINI_MODEL: &str = "gemini/gemini-3.5-flash";
-const ARTIFACT_DIR: &str = "./artifacts";
+const ARTIFACT_DIR: &str = "./test/artifacts";
+const DATA_DIR: &str = "./test/data";
+const SHARED_DATA_DIR: &str = "./test/shared_data";
 
 enum InputSource {
     Stdin,
@@ -30,7 +32,9 @@ enum InputSource {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    clean_artifact_dir();
+    prepare_dir(ARTIFACT_DIR);
+    prepare_dir(DATA_DIR);
+    prepare_dir(SHARED_DATA_DIR);
 
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut model_arg: Option<String> = None;
@@ -86,8 +90,14 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let mut agent =
-        get_coworker_agent(COWORKER_AGENT_NAME, coworker_agent_model, ARTIFACT_DIR).await?;
+    let mut agent = get_coworker_agent(
+        COWORKER_AGENT_NAME,
+        coworker_agent_model,
+        DATA_DIR,
+        SHARED_DATA_DIR,
+        ARTIFACT_DIR,
+    )
+    .await?;
     println!(
         "[coworker] starting as '{}' ({})",
         COWORKER_AGENT_NAME, coworker_agent_model
@@ -169,8 +179,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn clean_artifact_dir() {
-    let path = std::path::Path::new(ARTIFACT_DIR);
+fn prepare_dir(dir: &str) {
+    let path = std::path::Path::new(dir);
     if path.exists() {
         if let Err(e) = std::fs::remove_dir_all(path) {
             println!("[warn] failed to clean {}: {e}", path.display());

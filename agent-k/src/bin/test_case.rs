@@ -26,7 +26,9 @@ const COWORKER_AGENT_OPENAI_MODEL: &str = "openai/gpt-5.5";
 const COWORKER_AGENT_CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
 const COWORKER_AGENT_GEMINI_MODEL: &str = "gemini/gemini-3.5-flash";
 const COWORKER_AGENT_KIMI_MODEL: &str = "moonshot/kimi-k2.6";
-const ARTIFACT_DIR: &str = "./artifacts";
+const ARTIFACT_DIR: &str = "./test/artifacts";
+const DATA_DIR: &str = "./test/data";
+const SHARED_DATA_DIR: &str = "./test/shared_data";
 
 enum InputSource {
     Stdin,
@@ -109,11 +111,19 @@ async fn main() -> anyhow::Result<()> {
     }
     let case = cases.swap_remove(case_no);
 
-    clean_artifact_dir();
+    prepare_dir(ARTIFACT_DIR);
+    prepare_dir(DATA_DIR);
+    prepare_dir(SHARED_DATA_DIR);
     write_case_files(&case)?;
 
-    let mut agent =
-        get_coworker_agent(COWORKER_AGENT_NAME, coworker_agent_model, ARTIFACT_DIR).await?;
+    let mut agent = get_coworker_agent(
+        COWORKER_AGENT_NAME,
+        coworker_agent_model,
+        DATA_DIR,
+        SHARED_DATA_DIR,
+        ARTIFACT_DIR,
+    )
+    .await?;
     println!(
         "[coworker] starting as '{}' ({}) — case #{}",
         COWORKER_AGENT_NAME, coworker_agent_model, case_no
@@ -191,8 +201,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn clean_artifact_dir() {
-    let path = std::path::Path::new(ARTIFACT_DIR);
+fn prepare_dir(dir: &str) {
+    let path = std::path::Path::new(dir);
     if path.exists() {
         if let Err(e) = std::fs::remove_dir_all(path) {
             println!("[warn] failed to clean {}: {e}", path.display());
@@ -204,8 +214,14 @@ fn clean_artifact_dir() {
 }
 
 fn write_case_files(case: &Case) -> anyhow::Result<()> {
-    let base = std::path::Path::new(ARTIFACT_DIR);
-    for (bytes, rel) in &case.files {
+    write_files(DATA_DIR, &case.files)?;
+    write_files(SHARED_DATA_DIR, &case.shared_files)?;
+    Ok(())
+}
+
+fn write_files(dir: &str, files: &[(Vec<u8>, std::path::PathBuf)]) -> anyhow::Result<()> {
+    let base = std::path::Path::new(dir);
+    for (bytes, rel) in files {
         let dst = base.join(rel);
         if let Some(parent) = dst.parent() {
             std::fs::create_dir_all(parent)?;

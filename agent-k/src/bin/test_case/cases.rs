@@ -5,6 +5,7 @@ use ailoy::message::{Message, Part, Role};
 pub struct Case {
     pub query: Message,
     pub files: Vec<(Vec<u8>, PathBuf)>,
+    pub shared_files: Vec<(Vec<u8>, PathBuf)>,
 }
 
 pub fn get_coworker_cases() -> Vec<Case> {
@@ -15,6 +16,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 "Make an HTML page that shows the current weather of major cities around the world",
             )]),
             files: Vec::new(),
+            shared_files: Vec::new(),
         },
         // Case 1
         Case {
@@ -22,6 +24,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 "세계 주요 도시의 현재 날씨를 보여주는 HTML 페이지 만들어줘",
             )]),
             files: Vec::new(),
+            shared_files: Vec::new(),
         },
         // Case 2
         Case {
@@ -32,6 +35,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 include_bytes!("payslips.pdf").to_vec(),
                 PathBuf::from("payslips.pdf"),
             )],
+            shared_files: Vec::new(),
         },
         // Case 3
         Case {
@@ -42,6 +46,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 include_bytes!("payslips.pdf").to_vec(),
                 PathBuf::from("payslips.pdf"),
             )],
+            shared_files: Vec::new(),
         },
         // Case 4
         Case {
@@ -52,6 +57,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 include_bytes!("co2.csv").to_vec(),
                 PathBuf::from("co2.csv"),
             )],
+            shared_files: Vec::new(),
         },
         // Case 5
         Case {
@@ -62,6 +68,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 include_bytes!("co2.csv").to_vec(),
                 PathBuf::from("co2.csv"),
             )],
+            shared_files: Vec::new(),
         },
         // Case 6
         Case {
@@ -79,6 +86,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 Part::image_embedded("image/png", include_bytes!("receipt_2.png").to_vec().into()).unwrap()
             ]),
             files: vec![],
+            shared_files: Vec::new(),
         },
         // Case 7
         Case {
@@ -96,6 +104,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 Part::image_embedded("image/png", include_bytes!("receipt_2.png").to_vec().into()).unwrap(),
             ]),
             files: Vec::new(),
+            shared_files: Vec::new(),
         },
         // Case 8
         Case {
@@ -106,6 +115,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 include_bytes!("tax_invoice.jpg").to_vec(),
                 PathBuf::from("tax_invoice.jpg"),
             )],
+            shared_files: Vec::new(),
         },
         // Case 9
         Case {
@@ -122,6 +132,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                     PathBuf::from("logo.png"),
                 )
             ],
+            shared_files: Vec::new(),
         },
         // Case 10 — pptx create (source: comirnaty0.1mg.txt)
         Case {
@@ -143,6 +154,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 include_bytes!("comirnaty0.1mg.txt").to_vec(),
                 PathBuf::from("comirnaty0.1mg.txt"),
             )],
+            shared_files: Vec::new(),
         },
         // Case 11 — pptx edit (source: comirnaty_deck gpt5.5 skills.pptx)
         Case {
@@ -169,6 +181,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 include_bytes!("comirnaty_deck gpt5.5 skills.pptx").to_vec(),
                 PathBuf::from("slides.pptx"),
             )],
+            shared_files: Vec::new(),
         },
     ]
 }
