@@ -123,5 +123,52 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 )
             ],
         },
+        // Case 8 — pptx create (source: comirnaty0.1mg.txt)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "Using artifacts/comirnaty0.1mg.txt as the source content, \
+                 produce a presentation and save it to \
+                 artifacts/result/comirnaty_brochure.pptx (create the \
+                 artifacts/result/ directory if it does not exist). Summarize \
+                 the brochure for a clinical audience. Preserve the original \
+                 Korean text. Include a title slide, an agenda slide, one \
+                 slide per major section (composition, dosing schedule, \
+                 booster, storage, etc.), and a closing slide. Use a \
+                 consistent theme, readable font sizes, and bullet points \
+                 rather than walls of text. \
+                 (Environment: any attached files are already at artifacts/; \
+                 put helper scripts in the working directory, not /tmp.)",
+            )]),
+            files: vec![(
+                include_bytes!("comirnaty0.1mg.txt").to_vec(),
+                PathBuf::from("comirnaty0.1mg.txt"),
+            )],
+        },
+        // Case 9 — pptx edit (source: comirnaty_deck gpt5.5 skills.pptx)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "Open artifacts/slides.pptx and make four edits: update the \
+                 title slide subtitle to today's date in ISO format; append a \
+                 new closing slide titled \"Thank You\" with a single centered \
+                 line \"Questions?\"; change every slide's footer to \
+                 \"Confidential — Internal Use Only\"; and on slide 3 remove \
+                 the two red-arrow + small-blue-rectangle pairs that sit just \
+                 below the red circles labeled \"1차\" and \"2차\". Each pair \
+                 consists of a small blue rectangle with a red arrow attached \
+                 to it — both shapes in each pair are visually out of place, \
+                 so remove all four shapes (two red arrows + two blue \
+                 rectangles) total. Apply the same removal to slide 4 if \
+                 similarly out-of-place arrow/rectangle pairs exist. Save the \
+                 result as \
+                 artifacts/slides_edited.pptx and leave the original \
+                 untouched. \
+                 (Environment: any attached files are already at artifacts/; \
+                 put helper scripts in the working directory, not /tmp.)",
+            )]),
+            files: vec![(
+                include_bytes!("comirnaty_deck gpt5.5 skills.pptx").to_vec(),
+                PathBuf::from("slides.pptx"),
+            )],
+        },
     ]
 }
