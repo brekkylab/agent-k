@@ -97,7 +97,7 @@ async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
             "Only skip tools for greetings or casual conversation.",
         ))
         .system_tools()
-        .web_search_tool()
+        .web_search_tool(vec![])
         .runenv(runenv)
         .subagent(math_spec)
         .build()
