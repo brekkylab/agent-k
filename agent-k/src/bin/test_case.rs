@@ -8,7 +8,9 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use agent_k::agents::{get_coworker_agent, get_deep_research_agent};
+use agent_k::agents::{
+    get_coworker_agent, get_deep_research_agent, get_deep_research_agent_local,
+};
 use ailoy::{
     agent::Agent,
     message::{Message, Part, Role},
@@ -70,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut positional: Vec<&str> = Vec::new();
     let mut model_arg: Option<&str> = None;
+    let mut local_flag = false;
     let mut i = 0;
     while i < argv.len() {
         let a = argv[i].as_str();
@@ -83,6 +86,10 @@ async fn main() -> anyhow::Result<()> {
             }
             s if s.starts_with("--model=") => {
                 model_arg = Some(&s["--model=".len()..]);
+                i += 1;
+            }
+            "--local" => {
+                local_flag = true;
                 i += 1;
             }
             s => {
@@ -136,10 +143,17 @@ async fn main() -> anyhow::Result<()> {
 
     let mut agent = match agent_kind {
         AgentKind::Coworker => {
+            if local_flag {
+                anyhow::bail!("--local is only supported for deep-research");
+            }
             get_coworker_agent(agent_kind.name(), agent_model, ARTIFACT_DIR).await?
         }
         AgentKind::DeepResearch => {
-            get_deep_research_agent(agent_kind.name(), agent_model, ARTIFACT_DIR).await?
+            if local_flag {
+                get_deep_research_agent_local(agent_kind.name(), agent_model).await?
+            } else {
+                get_deep_research_agent(agent_kind.name(), agent_model, ARTIFACT_DIR).await?
+            }
         }
     };
     println!(

@@ -44,4 +44,5 @@ CLAUDE.md
 docs/superpowers/
 
 # Others
-artifacts
+artifacts/
+eval-runs/
