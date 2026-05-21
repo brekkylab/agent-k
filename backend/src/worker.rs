@@ -24,9 +24,9 @@ use uuid::Uuid;
 
 use crate::{
     cron::next_fire_after,
-    handlers::session::{build_agent, build_sandbox, classify_senders_from_outputs},
+    handlers::session::{attribute_messages, build_agent, build_sandbox},
     model::{EventKind, RunStatus, TriggerSpec},
-    repository::{DbAutomationRun, NewSessionMessage},
+    repository::DbAutomationRun,
     state::AppState,
 };
 
@@ -444,21 +444,9 @@ async fn execute_run(
         drop(agent);
 
         // Attribute the prompt to the automation's creator (User-kind) and any
-        // agent outputs to the agent (Agent-kind). The same classify helper
-        // that send_message uses keeps subagent attribution consistent.
-        let senders = classify_senders_from_outputs(&outputs, automation.created_by);
-        let to_persist: Vec<NewSessionMessage> = new_msgs
-            .into_iter()
-            .zip(senders)
-            .map(
-                |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
-                    message,
-                    sender_kind,
-                    sender_name,
-                    sender_user_id,
-                },
-            )
-            .collect();
+        // agent outputs to the agent (Agent-kind), via the same helper that
+        // session.send_message uses.
+        let to_persist = attribute_messages(new_msgs, &outputs, automation.created_by);
         repo.append_messages(run.session_id, &to_persist)
             .await
             .map_err(|e| e.to_string())?;

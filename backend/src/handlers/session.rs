@@ -113,7 +113,30 @@ pub(crate) async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
 /// depth-0 outputs via `source_agent` (set by ailoy's `stamp_source_agent`).
 ///
 /// Depth ≥ 1 outputs are skipped because ailoy does not push them into history.
-pub(crate) fn classify_senders_from_outputs(
+/// Pair each message in `messages` with its sender attribution derived from
+/// the agent run's `outputs`. The first message is the user query;
+/// subsequent agent messages are tagged with `source_agent` when present.
+pub(crate) fn attribute_messages(
+    messages: Vec<Message>,
+    outputs: &[MessageOutput],
+    user_id: Uuid,
+) -> Vec<NewSessionMessage> {
+    let senders = classify_senders_from_outputs(outputs, user_id);
+    messages
+        .into_iter()
+        .zip(senders)
+        .map(
+            |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+                message,
+                sender_kind,
+                sender_name,
+                sender_user_id,
+            },
+        )
+        .collect()
+}
+
+fn classify_senders_from_outputs(
     outputs: &[MessageOutput],
     user_id: Uuid,
 ) -> Vec<(DbSenderKind, Option<String>, Option<Uuid>)> {
@@ -597,19 +620,7 @@ pub async fn send_message(
     let new_messages = agent.get_history()[prev_len..].to_vec();
     drop(agent);
 
-    let senders = classify_senders_from_outputs(&outputs, auth_user.id);
-    let to_persist: Vec<NewSessionMessage> = new_messages
-        .into_iter()
-        .zip(senders)
-        .map(
-            |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
-                message,
-                sender_kind,
-                sender_name,
-                sender_user_id,
-            },
-        )
-        .collect();
+    let to_persist = attribute_messages(new_messages, &outputs, auth_user.id);
 
     state
         .repository
@@ -723,17 +734,7 @@ pub async fn send_message_stream(
         let new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);  // Release OwnedMutexGuard
 
-        let senders = classify_senders_from_outputs(&depth0_outputs, sender_id);
-        let to_persist: Vec<NewSessionMessage> = new_msgs
-            .into_iter()
-            .zip(senders)
-            .map(|(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
-                message,
-                sender_kind,
-                sender_name,
-                sender_user_id,
-            })
-            .collect();
+        let to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id);
 
         if let Err(e) = repo.append_messages(session_id, &to_persist).await {
             tracing::error!(%session_id, "failed to persist messages: {e}");
