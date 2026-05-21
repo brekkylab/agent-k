@@ -35,6 +35,46 @@ impl ShareMode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum DbSenderKind {
+    User,
+    Agent,
+}
+
+impl DbSenderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DbSenderKind::User => "user",
+            DbSenderKind::Agent => "agent",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(DbSenderKind::User),
+            "agent" => Some(DbSenderKind::Agent),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DbSessionMessage {
+    pub message: Message,
+    pub sender_kind: DbSenderKind,
+    pub sender_name: Option<String>,
+    pub sender_user_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewSessionMessage {
+    pub message: Message,
+    pub sender_kind: DbSenderKind,
+    pub sender_name: Option<String>,
+    pub sender_user_id: Option<Uuid>,
+}
+
 #[derive(Debug, Clone)]
 pub enum SessionAccess {
     Admin, // Session Creator or Project Owner
@@ -254,7 +294,7 @@ impl SqliteRepository {
     ) -> RepositoryResult<Vec<DbSession>> {
         let rows = sqlx::query(
             "SELECT id, project_id, creator_id, share_mode, title, last_message_at, \
-                    created_at, updated_at \
+                    last_message_snippet, created_at, updated_at \
              FROM sessions WHERE project_id = ? \
              ORDER BY created_at DESC",
         )
@@ -295,8 +335,9 @@ impl SqliteRepository {
         .await?;
 
         sqlx::query(
-            "INSERT INTO session_messages (session_id, message_json, created_at) \
-             SELECT ?, message_json, created_at \
+            "INSERT INTO session_messages \
+                 (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id) \
+             SELECT ?, message_json, created_at, sender_kind, sender_name, sender_user_id \
              FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
         )
         .bind(new_id.to_string())
@@ -335,25 +376,30 @@ impl SqliteRepository {
     pub async fn append_messages(
         &self,
         session_id: Uuid,
-        messages: &[Message],
+        messages: &[NewSessionMessage],
     ) -> RepositoryResult<()> {
         if messages.is_empty() {
             return Ok(());
         }
 
-        let now = Self::now_string();
         let sid = session_id.to_string();
+        let mut tx = self.pool.begin().await?;
 
         for msg in messages {
-            let msg_json = serde_json::to_string(msg)?;
+            let now = Self::now_string();
+            let msg_json = serde_json::to_string(&msg.message)?;
             sqlx::query(
-                "INSERT INTO session_messages (session_id, message_json, created_at) \
-                 VALUES (?, ?, ?);",
+                "INSERT INTO session_messages \
+                     (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id) \
+                 VALUES (?, ?, ?, ?, ?, ?);",
             )
             .bind(&sid)
             .bind(&msg_json)
             .bind(&now)
-            .execute(&self.pool)
+            .bind(msg.sender_kind.as_str())
+            .bind(&msg.sender_name)
+            .bind(msg.sender_user_id.map(|u| u.to_string()))
+            .execute(&mut *tx)
             .await?;
         }
 
@@ -363,6 +409,7 @@ impl SqliteRepository {
             .rev()
             .find_map(|msg| {
                 let text: String = msg
+                    .message
                     .contents
                     .iter()
                     .filter_map(|p| p.as_text())
@@ -371,6 +418,8 @@ impl SqliteRepository {
                 if text.is_empty() { None } else { Some(text) }
             })
             .map(|t| t.chars().take(200).collect::<String>());
+
+        let now = Self::now_string();
 
         // Use MAX(created_at) from messages so this path is consistent with fork_session,
         // which derives last_message_at from message timestamps rather than server clock.
@@ -385,9 +434,10 @@ impl SqliteRepository {
         .bind(&sid)
         .bind(snippet.as_deref())
         .bind(&sid)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
 
+        tx.commit().await?;
         Ok(())
     }
 
@@ -418,34 +468,52 @@ impl SqliteRepository {
         Ok(())
     }
 
-    pub async fn get_messages(&self, session_id: Uuid) -> RepositoryResult<Vec<Message>> {
+    pub async fn get_messages(&self, session_id: Uuid) -> RepositoryResult<Vec<DbSessionMessage>> {
         let rows = sqlx::query(
-            "SELECT message_json FROM session_messages \
-             WHERE session_id = ? ORDER BY seq ASC;",
+            "SELECT message_json, sender_kind, sender_name, sender_user_id, created_at \
+             FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
         )
         .bind(session_id.to_string())
         .fetch_all(&self.pool)
         .await?;
 
-        rows.iter()
+        rows.into_iter()
             .map(|row| {
                 let json = row.get::<String, _>("message_json");
-                serde_json::from_str::<Message>(&json)
-                    .map_err(crate::repository::RepositoryError::Serialization)
+                let message = serde_json::from_str::<Message>(&json)
+                    .map_err(crate::repository::RepositoryError::Serialization)?;
+
+                let kind_str: String = row.get("sender_kind");
+                let sender_kind = DbSenderKind::from_str(&kind_str).ok_or_else(|| {
+                    crate::repository::RepositoryError::InvalidData(format!(
+                        "invalid sender_kind: {kind_str}"
+                    ))
+                })?;
+
+                let sender_name: Option<String> = row.get("sender_name");
+                let sender_user_id: Option<Uuid> = row
+                    .try_get::<Option<String>, _>("sender_user_id")
+                    .unwrap_or(None)
+                    .map(|s| {
+                        Uuid::parse_str(&s).map_err(|_| {
+                            crate::repository::RepositoryError::InvalidData(format!(
+                                "invalid sender_user_id uuid: {s}"
+                            ))
+                        })
+                    })
+                    .transpose()?;
+                let created_at =
+                    Self::parse_timestamp(row.get("created_at"), "session_messages.created_at")?;
+
+                Ok(DbSessionMessage {
+                    message,
+                    sender_kind,
+                    sender_name,
+                    sender_user_id,
+                    created_at,
+                })
             })
             .collect()
-    }
-
-    // ── Session metadata ────────────────────────────────────────────────────────
-
-    /// Set title only if not already set (idempotent for concurrent title-gen spawns).
-    pub async fn set_session_title(&self, session_id: Uuid, title: &str) -> RepositoryResult<()> {
-        sqlx::query("UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL")
-            .bind(title)
-            .bind(session_id.to_string())
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 
     /// Mark all current messages as read for a user. Uses upsert semantics.
@@ -543,5 +611,17 @@ impl SqliteRepository {
         .await?;
 
         Ok(row.get::<i64, _>("cnt") as u64)
+    }
+
+    // ── Session metadata ────────────────────────────────────────────────────────
+
+    /// Set title only if not already set (idempotent for concurrent title-gen spawns).
+    pub async fn set_session_title(&self, session_id: Uuid, title: &str) -> RepositoryResult<()> {
+        sqlx::query("UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL")
+            .bind(title)
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }

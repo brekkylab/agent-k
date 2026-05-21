@@ -77,7 +77,6 @@ pub async fn get_coworker_agent(
         guest: "/workspace/artifacts".into(),
         readonly: false,
     });
-    config.persist = true;
     let inst = COWORKER_INSTRUCTION
         .replace("{{NAME}}", name.as_ref())
         .replace("{{TIME}}", &now_utc_iso8601())
@@ -87,7 +86,7 @@ pub async fn get_coworker_agent(
     let spec = AgentSpec::new(model.as_ref())
         .instruction(inst)
         .system_tools()
-        .web_search_tool()
+        .web_search_tool(vec![])
         .max_tokens(32_000);
     Agent::try_with_runenv(spec, RunEnv::sandbox(config).await?)
 }

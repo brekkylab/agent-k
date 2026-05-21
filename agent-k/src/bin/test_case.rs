@@ -124,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let stdin_is_tty = io::stdin().is_terminal();
-    let mut source = if stdin_is_tty {
+    let source = if stdin_is_tty {
         InputSource::Stdin
     } else {
         match std::fs::File::open("/dev/tty") {
@@ -133,27 +133,62 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    let (req_tx, mut req_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<Option<String>>(1);
+    std::thread::spawn(move || {
+        let mut source = source;
+        while req_rx.blocking_recv().is_some() {
+            eprint!("> ");
+            io::stderr().flush().ok();
+            let mut buf = String::new();
+            let payload = match &mut source {
+                InputSource::Stdin => io::stdin().read_line(&mut buf),
+                InputSource::Tty(r) => r.read_line(&mut buf),
+            };
+            let payload = match payload {
+                Ok(0) | Err(_) => None,
+                Ok(_) => Some(buf),
+            };
+            let done = payload.is_none();
+            if line_tx.blocking_send(payload).is_err() || done {
+                break;
+            }
+        }
+    });
+
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
     loop {
-        eprint!("> ");
-        io::stderr().flush().ok();
-        let mut buf = String::new();
-        let n = match &mut source {
-            InputSource::Stdin => io::stdin().read_line(&mut buf)?,
-            InputSource::Tty(r) => r.read_line(&mut buf)?,
-        };
-        if n == 0 {
-            println!();
-            return Ok(());
+        if req_tx.send(()).await.is_err() {
+            break;
         }
-        let user_input = buf.trim().to_string();
-        if user_input.is_empty() {
-            continue;
-        }
-        let query = Message::new(Role::User).with_contents([Part::text(&user_input)]);
-        if let Err(e) = stream_turn(&mut agent, query).await {
-            println!("[error] {e}");
+        tokio::select! {
+            _ = &mut ctrl_c => {
+                println!();
+                break;
+            }
+            msg = line_rx.recv() => {
+                match msg.flatten() {
+                    None => {
+                        println!();
+                        break;
+                    }
+                    Some(line) => {
+                        let input = line.trim().to_string();
+                        if !input.is_empty() {
+                            let query = Message::new(Role::User).with_contents([Part::text(&input)]);
+                            if let Err(e) = stream_turn(&mut agent, query).await {
+                                println!("[error] {e}");
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
+
+    Ok(())
 }
 
 fn clean_artifact_dir() {

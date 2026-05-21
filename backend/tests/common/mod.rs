@@ -4,7 +4,12 @@
 use std::sync::Arc;
 
 use agent_k::knowledge_base::Store;
-use agent_k_backend::{auth::JwtConfig, repository, router, state::AppState};
+use agent_k_backend::{
+    auth::JwtConfig,
+    repository::{self, DbSenderKind, NewSessionMessage},
+    router,
+    state::AppState,
+};
 use aide::openapi::OpenApi;
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider, tool::ToolProvider};
 use axum::{body::Body, http::Request};
@@ -400,6 +405,28 @@ pub fn parse_sse_events_by_type(body: &[u8], target_event: &str) -> Vec<String> 
                 Some(data_line.to_string())
             } else {
                 None
+            }
+        })
+        .collect()
+}
+
+/// Converts `&[Message]` to `Vec<NewSessionMessage>` for use in tests.
+/// `user_id` is set as `sender_user_id` for user-role messages.
+pub fn to_new_msgs(
+    msgs: &[ailoy::message::Message],
+    user_id: uuid::Uuid,
+) -> Vec<NewSessionMessage> {
+    msgs.iter()
+        .map(|m| {
+            let (sender_kind, sender_name, sender_user_id) = match m.role {
+                ailoy::message::Role::User => (DbSenderKind::User, None, Some(user_id)),
+                _ => (DbSenderKind::Agent, Some("agent-k".to_string()), None),
+            };
+            NewSessionMessage {
+                message: m.clone(),
+                sender_kind,
+                sender_name,
+                sender_user_id,
             }
         })
         .collect()

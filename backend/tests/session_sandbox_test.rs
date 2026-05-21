@@ -76,10 +76,6 @@ async fn two_sessions_get_isolated_sandboxes() {
 
     delete_session(&app, id1, &token).await;
     delete_session(&app, id2, &token).await;
-
-    ailoy::runenv::remove_persisted("session-doesnotexist")
-        .await
-        .expect("remove_persisted must be idempotent");
 }
 
 // ── bash tool ─────────────────────────────────────────────────────────────────

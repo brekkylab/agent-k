@@ -191,7 +191,7 @@ export function Sidebar() {
                   <SessionTitleText title={session.title} />
                   {session.isAutoAppend && <span className="auto-dot">●</span>}
                   {canDelete && (
-                    <span style={{ marginLeft: 'auto' }}>
+                    <span className="cw-session-menu-wrap">
                       <SessionCardMenu onDelete={() => setPendingDelete(session)} />
                     </span>
                   )}

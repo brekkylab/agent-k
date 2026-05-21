@@ -76,16 +76,37 @@ export type AiloyPart =
   | { type: 'function'; function?: { name?: string; arguments?: unknown } }
   | { type?: string; [k: string]: unknown };
 
+export interface AiloyToolCall {
+  id: string;
+  type?: 'function' | string;
+  function: { name: string; arguments?: unknown };
+}
+
 export interface AiloyMessage {
   id?: string | null;
   role: 'user' | 'assistant' | 'tool' | 'system' | string;
   contents?: AiloyPart[];
-  tool_calls?: unknown[];
+  tool_calls?: AiloyToolCall[];
   thinking?: string | null;
 }
 
+export type BackendMessageSender =
+  | { kind: 'user'; user_id: string }
+  | { kind: 'agent'; name: string };
+
+export interface SessionMessageItem {
+  message: AiloyMessage;
+  sender: BackendMessageSender;
+  created_at: string;
+}
+
+export interface SessionMessageList {
+  items: SessionMessageItem[];
+}
+
 export interface MessageOutput {
-  depth: number;
+  depth?: number | null;
+  source_agent?: string | null;
   message: AiloyMessage;
   finish_reason?: { type?: string };
   usage?: { input_tokens?: number; output_tokens?: number };

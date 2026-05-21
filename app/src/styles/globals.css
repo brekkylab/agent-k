@@ -39,7 +39,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-nav-row:active, .cw-session-row:active, .cw-btn-primary:active, .cw-btn-secondary:active { transform: translateY(1px); }
 .cw-nav-row.is-active, .cw-session-row.is-active { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
 .cw-nav-row.is-ghost, .cw-session-row.is-new { color: var(--cw-fg-3); }
-.cw-nav-row span, .cw-session-row span:not(.auto-dot):not(.cw-pocket) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-nav-row span, .cw-session-row span:not(.auto-dot):not(.cw-pocket):not(.cw-session-menu-wrap) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-session-row .cw-session-title { flex: 1; min-width: 0; }
+.cw-session-menu-wrap { flex-shrink: 0; margin-left: auto; }
 .cw-project-block { margin-top: 24px; }
 .cw-project-name { padding: 10px 8px 5px; font-size: 11px; color: var(--cw-fg-2); font-weight: 600; }
 .cw-session-rail { }
@@ -640,8 +642,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   gap: 10px;
   width: 100%;
   margin-bottom: 22px;
-  animation: cw-rise .28s ease both;
 }
+.cw-message.is-entering { animation: cw-rise .28s ease both; }
 .cw-message.is-self {
   flex-direction: row-reverse;
 }
@@ -662,7 +664,33 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-size: 10px;
   color: var(--cw-ink-4);
 }
-.cw-message-meta time { font-size: 10px; color: var(--cw-ink-4); }
+.cw-message-meta time {
+  font-size: 10px;
+  color: var(--cw-ink-4);
+  position: relative;
+  cursor: default;
+}
+.cw-message-meta time[data-tooltip]::before {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--cw-ink);
+  color: var(--cw-paper);
+  font-size: 11px;
+  font-family: var(--cw-font-sans);
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 5px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 100;
+}
+.cw-message-meta time[data-tooltip]:hover::before {
+  opacity: 1;
+}
 .cw-message-bubble {
   padding: 9px 13px;
   border-radius: 12px;
