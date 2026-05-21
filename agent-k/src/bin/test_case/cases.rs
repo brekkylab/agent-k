@@ -123,7 +123,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 )
             ],
         },
-        // Case 8 — pptx create (source: comirnaty0.1mg.txt)
+        // Case 10 — pptx create (source: comirnaty0.1mg.txt)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "Using artifacts/comirnaty0.1mg.txt as the source content, \
@@ -144,7 +144,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("comirnaty0.1mg.txt"),
             )],
         },
-        // Case 9 — pptx edit (source: comirnaty_deck gpt5.5 skills.pptx)
+        // Case 11 — pptx edit (source: comirnaty_deck gpt5.5 skills.pptx)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "Open artifacts/slides.pptx and make four edits: update the \
