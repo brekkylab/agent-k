@@ -61,10 +61,6 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             delete(handlers::remove_member),
         )
         .api_route(
-            "/projects/{project_id}/sessions",
-            get(handlers::list_sessions).post(handlers::create_session),
-        )
-        .api_route(
             "/projects/{project_id}/dirents",
             // Body limit disabled only for upload; PATCH batch_op carries a small JSON body.
             post(handlers::upload.layer(axum::extract::DefaultBodyLimit::disable()))
@@ -81,6 +77,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         ));
 
     let session_routes = ApiRouter::new()
+        .api_route(
+            "/sessions",
+            get(handlers::list_sessions).post(handlers::create_session),
+        )
         .api_route(
             "/sessions/{session_id}",
             get(handlers::get_session)
@@ -103,6 +103,44 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             auth_required,
         ));
 
+    let automation_routes = ApiRouter::new()
+        .api_route(
+            "/automations",
+            get(handlers::list_automations).post(handlers::create_automation),
+        )
+        .api_route(
+            "/automations/{automation_id}",
+            get(handlers::get_automation)
+                .patch(handlers::update_automation)
+                .delete(handlers::delete_automation),
+        )
+        .api_route(
+            "/automations/{automation_id}/triggers",
+            get(handlers::list_triggers).post(handlers::create_trigger),
+        )
+        .api_route(
+            "/automations/{automation_id}/triggers/{trigger_id}",
+            get(handlers::get_trigger)
+                .patch(handlers::update_trigger)
+                .delete(handlers::delete_trigger),
+        )
+        .api_route(
+            "/automations/{automation_id}/runs",
+            get(handlers::list_runs).post(handlers::create_run),
+        )
+        .api_route(
+            "/automations/{automation_id}/runs/{run_id}",
+            get(handlers::get_run),
+        )
+        .api_route(
+            "/automations/{automation_id}/runs/{run_id}/events",
+            get(handlers::list_run_events),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_required,
+        ));
+
     let document_routes = ApiRouter::new()
         .api_route(
             "/documents",
@@ -115,6 +153,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             get(handlers::get_document).delete(handlers::purge_document),
         );
 
+    // Auth-exempt route: webhook firing is gated only on the bearer token.
+    // The token IS the identifier — trigger is resolved by its stored hash,
+    // so no path parameter is needed.
+    let webhook_routes = ApiRouter::new().api_route(
+        "/webhooks/automations",
+        post(handlers::fire_webhook_trigger),
+    );
+
     // /ws uses plain axum routing: WebSocketUpgrade doesn't implement aide's OperationInput.
     let ws_route = ApiRouter::new()
         .route("/ws", axum::routing::get(handlers::ws_handler))
@@ -126,7 +172,9 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .merge(admin_routes)
         .merge(project_routes)
         .merge(session_routes)
+        .merge(automation_routes)
         .merge(document_routes)
+        .merge(webhook_routes)
         .merge(ws_route)
         .with_state(state)
 }

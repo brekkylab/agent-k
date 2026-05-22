@@ -1,12 +1,17 @@
+mod automation;
 mod project;
 mod session;
 mod sqlite;
 mod user;
 use std::{sync::Arc, time::Duration};
 
+pub use automation::{
+    DbAutomation, DbAutomationRun, DbAutomationRunEvent, DbAutomationTrigger,
+};
 pub use project::{DbProject, DbProjectMember};
 pub use session::{
-    DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, SessionAccess, ShareMode,
+    DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, SessionAccess, SessionOrigin,
+    ShareMode,
 };
 pub use sqlite::SqliteRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};

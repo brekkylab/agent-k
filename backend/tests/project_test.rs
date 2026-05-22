@@ -301,7 +301,7 @@ async fn member_sees_own_sessions_in_project_list_but_not_others() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/sessions?project_id={project_id_str}"),
         &alice_token,
         None,
     )
@@ -317,7 +317,7 @@ async fn member_sees_own_sessions_in_project_list_but_not_others() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/sessions?project_id={project_id_str}"),
         &bob_token,
         None,
     )

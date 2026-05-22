@@ -31,12 +31,12 @@ use crate::{
 const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 
-fn sandbox_name_for(id: &Uuid) -> String {
+pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
     format!("session-{}", &s[..12])
 }
 
-async fn build_sandbox(
+pub(crate) async fn build_sandbox(
     state: &Arc<AppState>,
     project_id: Uuid,
     session_id: Uuid,
@@ -66,7 +66,7 @@ async fn build_sandbox(
     RunEnv::sandbox(cfg).await.map_err(|e| e.to_string())
 }
 
-async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
+pub(crate) async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
     // TODO: Remove the subagent. This is added for testing frontend UI.
     let math_spec = AgentSpec::new(DEFAULT_MODEL)
         .instruction(
@@ -113,6 +113,29 @@ async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
 /// depth-0 outputs via `source_agent` (set by ailoy's `stamp_source_agent`).
 ///
 /// Depth ≥ 1 outputs are skipped because ailoy does not push them into history.
+/// Pair each message in `messages` with its sender attribution derived from
+/// the agent run's `outputs`. The first message is the user query;
+/// subsequent agent messages are tagged with `source_agent` when present.
+pub(crate) fn attribute_messages(
+    messages: Vec<Message>,
+    outputs: &[MessageOutput],
+    user_id: Uuid,
+) -> Vec<NewSessionMessage> {
+    let senders = classify_senders_from_outputs(outputs, user_id);
+    messages
+        .into_iter()
+        .zip(senders)
+        .map(
+            |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+                message,
+                sender_kind,
+                sender_name,
+                sender_user_id,
+            },
+        )
+        .collect()
+}
+
 fn classify_senders_from_outputs(
     outputs: &[MessageOutput],
     user_id: Uuid,
@@ -174,13 +197,14 @@ async fn resolve_agent_for(
 
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
-/// POST /projects/{project_id}/sessions
+/// POST /sessions
+/// body must include `project_id`; user must be a member of that project.
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
-    Json(_payload): Json<CreateSessionRequest>,
+    Json(payload): Json<CreateSessionRequest>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
+    let project_id = payload.project_id;
     let is_member = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -221,26 +245,41 @@ pub async fn create_session(
     ))
 }
 
-/// GET /projects/{project_id}/sessions
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct ListSessionsQuery {
+    pub project_id: Option<Uuid>,
+}
+
+/// GET /sessions?project_id=...
+/// `project_id` is optional — omit to list all sessions across projects the user can access.
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    axum::extract::Query(q): axum::extract::Query<ListSessionsQuery>,
 ) -> ApiResult<Json<SessionListResponse>> {
-    let is_member = state
-        .repository
-        .user_in_project(auth_user.id, project_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    if !is_member {
-        return Err(AppError::forbidden("not a member of this project"));
-    }
-
-    let sessions = state
-        .repository
-        .list_sessions_in_project(project_id, auth_user.id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let sessions = match q.project_id {
+        Some(project_id) => {
+            let is_member = state
+                .repository
+                .user_in_project(auth_user.id, project_id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            if !is_member {
+                return Err(AppError::forbidden("not a member of this project"));
+            }
+            state
+                .repository
+                .list_sessions_in_project(project_id, auth_user.id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+        }
+        None => state
+            .repository
+            .list_sessions_for_user(auth_user.id)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    };
 
     let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
     let unread_map = state
@@ -581,19 +620,7 @@ pub async fn send_message(
     let new_messages = agent.get_history()[prev_len..].to_vec();
     drop(agent);
 
-    let senders = classify_senders_from_outputs(&outputs, auth_user.id);
-    let to_persist: Vec<NewSessionMessage> = new_messages
-        .into_iter()
-        .zip(senders)
-        .map(
-            |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
-                message,
-                sender_kind,
-                sender_name,
-                sender_user_id,
-            },
-        )
-        .collect();
+    let to_persist = attribute_messages(new_messages, &outputs, auth_user.id);
 
     state
         .repository
@@ -707,17 +734,7 @@ pub async fn send_message_stream(
         let new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);  // Release OwnedMutexGuard
 
-        let senders = classify_senders_from_outputs(&depth0_outputs, sender_id);
-        let to_persist: Vec<NewSessionMessage> = new_msgs
-            .into_iter()
-            .zip(senders)
-            .map(|(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
-                message,
-                sender_kind,
-                sender_name,
-                sender_user_id,
-            })
-            .collect();
+        let to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id);
 
         if let Err(e) = repo.append_messages(session_id, &to_persist).await {
             tracing::error!(%session_id, "failed to persist messages: {e}");
