@@ -30,6 +30,7 @@ use crate::{
 
 const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
+const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
 
 fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
@@ -59,6 +60,7 @@ async fn build_sandbox(
     let sandbox_name = sandbox_name_for(&session_id);
     let cfg = SandboxConfig {
         name: Some(sandbox_name),
+        image: SANDBOX_IMAGE.into(),
         persist: true,
         volumes,
         ..Default::default()
@@ -391,6 +393,7 @@ pub async fn fork_session(
 
     let source_cfg = SandboxConfig {
         name: Some(sandbox_name_for(&source_session_id)),
+        image: SANDBOX_IMAGE.into(),
         persist: true,
         ..Default::default()
     };
@@ -405,6 +408,7 @@ pub async fn fork_session(
     let new_sandbox_name = sandbox_name_for(&new_id);
     let new_cfg = SandboxConfig {
         name: Some(new_sandbox_name.clone()),
+        image: SANDBOX_IMAGE.into(),
         persist: true,
         ..Default::default()
     };
