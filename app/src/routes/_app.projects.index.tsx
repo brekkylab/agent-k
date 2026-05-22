@@ -6,9 +6,9 @@ import { useQuery } from '@tanstack/react-query';
 import { listMembers, listProjects } from '@/api/projects';
 import { listSessions } from '@/api/sessions';
 import { Icon } from '@/components/Icon';
+import { useNewProjectDialog } from '@/components/NewProjectDialog';
 import { AvatarStack, SectionLabel } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
-import { useToastStore } from '@/components/Toast';
 import type { Project, Session, User } from '@/domain/types';
 
 function useActiveProjectIdFromRoute(): string | null {
@@ -26,9 +26,9 @@ export const Route = createFileRoute('/_app/projects/')({
 
 function ProjectsPage() {
   const navigate = useNavigate();
-  const showToast = useToastStore((s) => s.show);
   const projects = useQuery({ queryKey: ['projects'], queryFn: listProjects });
   const activeProjectId = useActiveProjectIdFromRoute() ?? projects.data?.[0]?.id ?? null;
+  const creator = useNewProjectDialog();
 
   return (
     <section className="cw-page cw-projects-page cw-page-enter">
@@ -37,7 +37,7 @@ function ProjectsPage() {
           <h1>Your projects</h1>
           <p>Each project is a workspace. Sessions, files, members, skills, schedule — all live inside.</p>
         </div>
-        <button className="cw-btn-primary" onClick={() => showToast('새 프로젝트 생성 다이얼로그는 곧 추가됩니다')}>
+        <button className="cw-btn-primary" onClick={creator.open}>
           <Icon name="plus" /> New project
         </button>
       </div>
@@ -52,6 +52,7 @@ function ProjectsPage() {
           />
         ))}
       </div>
+      {creator.dialog}
     </section>
   );
 }
