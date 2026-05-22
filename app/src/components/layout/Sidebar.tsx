@@ -15,11 +15,9 @@ import { Avatar, IconPocket } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
 import {
   getSidebarModeForDrag,
-  getSidebarModeWhileResizing,
   isSidebarRevealHoldPoint,
-  shouldCloseSidebarRevealOnNavigation,
-  shouldRevealSidebarAfterDrag,
   useLayoutStore,
+  SIDEBAR_MOBILE_BREAKPOINT,
   SIDEBAR_REVEAL_WIDTH,
 } from '@/stores/layout';
 import { useToastStore } from '@/components/Toast';
@@ -42,42 +40,42 @@ function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => v
       const { sidebarMode, expandedWidth } = useLayoutStore.getState();
       // When hidden, the floating overlay shows at REVEAL_WIDTH, so the user's hand
       // is already at that x-coordinate — start from there so dragging is 1:1.
-      const hiddenAtStart = sidebarMode === 'hidden';
       const startW = sidebarMode === 'hidden' ? SIDEBAR_REVEAL_WIDTH : expandedWidth;
       let lastW = startW;
       let lastClientX = e.clientX;
-      let lastClientY = e.clientY;
       document.body.classList.add('is-resizing-sidebar');
 
       function onMove(ev: PointerEvent) {
         const w = startW + (ev.clientX - startX);
-        const modeAfterRelease = getSidebarModeForDrag(w, hiddenAtStart);
-        const modeWhileResizing = getSidebarModeWhileResizing(modeAfterRelease);
+        // Re-read the current mode every move so hysteresis tracks the live state:
+        // if the user drags into hidden mid-drag, the next move's threshold flips
+        // up to SIDEBAR_EXPAND_ABOVE, matching the "I'm in hidden now" mental model.
+        const liveHidden = useLayoutStore.getState().sidebarMode === 'hidden';
+        const nextMode = getSidebarModeForDrag(w, liveHidden);
         lastW = w;
         lastClientX = ev.clientX;
-        lastClientY = ev.clientY;
-        setRevealed(false);
-        if (modeWhileResizing === 'hidden') {
+        if (nextMode === 'hidden') {
+          // Keep the sidebar on screen as a floating reveal so the user's grip on
+          // the resizer survives the mode flip — release decides if it stays open.
           setSidebarMode('hidden');
+          setRevealed(true);
         } else {
           setSidebarMode('expanded');
           setExpandedWidth(w);  // store clamps to [MIN, MAX]
+          setRevealed(false);
         }
       }
       function onUp() {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         document.body.classList.remove('is-resizing-sidebar');
-        const modeAfterRelease = getSidebarModeForDrag(lastW, hiddenAtStart);
+        const liveHidden = useLayoutStore.getState().sidebarMode === 'hidden';
+        const modeAfterRelease = getSidebarModeForDrag(lastW, liveHidden);
         setSidebarMode(modeAfterRelease);
-        setRevealed(
-          shouldRevealSidebarAfterDrag(
-            modeAfterRelease,
-            lastClientX,
-            lastClientY,
-            window.innerHeight,
-          ),
-        );
+        // Keep reveal open only if the cursor is still resting on the floating
+        // sidebar (or its exit buffer) at release time. lastClientY unused: vertical
+        // bounds are the full viewport.
+        setRevealed(modeAfterRelease === 'hidden' && isSidebarRevealHoldPoint(lastClientX));
       }
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
@@ -157,9 +155,6 @@ export function Sidebar() {
   // Grace delay before closing on mouse-leave so brief excursions outside the
   // floating sidebar don't snap it shut. ~250ms feels intentional but not sticky.
   const closeTimerRef = useRef<number | null>(null);
-  const shouldHoldReveal = useCallback((clientX: number, clientY: number) => (
-    isSidebarRevealHoldPoint(clientX, clientY, window.innerHeight)
-  ), []);
   const cancelClose = useCallback(() => {
     if (closeTimerRef.current !== null) {
       window.clearTimeout(closeTimerRef.current);
@@ -170,18 +165,18 @@ export function Sidebar() {
     cancelClose();
     setRevealed(true);
   }, [cancelClose]);
-  const scheduleClose = useCallback((point?: { clientX: number; clientY: number }) => {
+  const scheduleClose = useCallback((point?: { clientX: number }) => {
     cancelClose();
-    if (point && shouldHoldReveal(point.clientX, point.clientY)) return;
+    if (point && isSidebarRevealHoldPoint(point.clientX)) return;
     closeTimerRef.current = window.setTimeout(() => setRevealed(false), 250);
-  }, [cancelClose, shouldHoldReveal]);
+  }, [cancelClose]);
   useEffect(() => cancelClose, [cancelClose]);
 
   useEffect(() => {
     if (sidebarMode !== 'hidden' || !revealed) return;
 
     function onPointerMove(ev: PointerEvent) {
-      if (shouldHoldReveal(ev.clientX, ev.clientY)) {
+      if (isSidebarRevealHoldPoint(ev.clientX)) {
         cancelClose();
       } else {
         scheduleClose();
@@ -190,7 +185,7 @@ export function Sidebar() {
 
     window.addEventListener('pointermove', onPointerMove);
     return () => window.removeEventListener('pointermove', onPointerMove);
-  }, [cancelClose, revealed, scheduleClose, shouldHoldReveal, sidebarMode]);
+  }, [cancelClose, revealed, scheduleClose, sidebarMode]);
 
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: listProjects });
   // URL에 projectId가 있을 때만 활성 프로젝트로 인정한다 — /projects 같은 곳에서는
@@ -210,9 +205,8 @@ export function Sidebar() {
   // Close on navigation for mobile drawers, but keep desktop hidden/reveal open
   // so sidebar clicks don't immediately tuck it away.
   useEffect(() => {
-    if (shouldCloseSidebarRevealOnNavigation(sidebarMode, window.innerWidth)) {
-      setRevealed(false);
-    }
+    const isMobile = window.innerWidth < SIDEBAR_MOBILE_BREAKPOINT;
+    if (isMobile || sidebarMode !== 'hidden') setRevealed(false);
   }, [activeProjectId, activeSessionId, activeRoute, sidebarMode]);
 
   const createSessionMutation = useMutation({
@@ -295,7 +289,7 @@ export function Sidebar() {
         className={`cw-sidebar-app${revealed ? ' is-revealed' : ''}`}
         onPointerEnter={() => { if (sidebarMode === 'hidden') openReveal(); }}
         onPointerLeave={(e) => {
-          if (sidebarMode === 'hidden') scheduleClose({ clientX: e.clientX, clientY: e.clientY });
+          if (sidebarMode === 'hidden') scheduleClose({ clientX: e.clientX });
         }}
       >
       <div className="cw-sidebar-header">

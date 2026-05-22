@@ -40,35 +40,8 @@ export function getSidebarModeForDrag(width: number, hiddenAtStart: boolean): Si
   return 'expanded';
 }
 
-export function getSidebarModeWhileResizing(modeAfterRelease: SidebarMode): SidebarMode {
-  return modeAfterRelease === 'hidden' ? 'expanded' : modeAfterRelease;
-}
-
-export function isSidebarRevealHoldPoint(
-  clientX: number,
-  clientY: number,
-  viewportHeight: number,
-): boolean {
-  return clientX >= 0
-    && clientX <= SIDEBAR_REVEAL_WIDTH + SIDEBAR_REVEAL_EXIT_BUFFER
-    && clientY >= 0
-    && clientY <= viewportHeight;
-}
-
-export function shouldCloseSidebarRevealOnNavigation(
-  sidebarMode: SidebarMode,
-  viewportWidth: number,
-): boolean {
-  return viewportWidth < SIDEBAR_MOBILE_BREAKPOINT || sidebarMode !== 'hidden';
-}
-
-export function shouldRevealSidebarAfterDrag(
-  sidebarMode: SidebarMode,
-  clientX: number,
-  clientY: number,
-  viewportHeight: number,
-): boolean {
-  return sidebarMode === 'hidden' && isSidebarRevealHoldPoint(clientX, clientY, viewportHeight);
+export function isSidebarRevealHoldPoint(clientX: number): boolean {
+  return clientX >= 0 && clientX <= SIDEBAR_REVEAL_WIDTH + SIDEBAR_REVEAL_EXIT_BUFFER;
 }
 
 export const useLayoutStore = create<LayoutState>()(
