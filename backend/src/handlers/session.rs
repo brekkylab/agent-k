@@ -15,6 +15,8 @@ use axum::{
 use futures_util::StreamExt;
 use uuid::Uuid;
 
+use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
+
 use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
@@ -597,7 +599,7 @@ pub async fn send_message(
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "{}\n\n[Attached files (available in sandbox at /inputs/<name> or /shared_data/<name>): {names}]",
+            "{}\n\n[Attached files (available in sandbox at {GUEST_ATTACHED_DIR}/<name> or {GUEST_SHARED_DIR}/<name>): {names}]",
             payload.content
         )
     };
@@ -710,7 +712,7 @@ pub async fn send_message_stream(
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "{}\n\n[Attached files (available in sandbox at /inputs/<name> or /shared_data/<name>): {names}]",
+            "{}\n\n[Attached files (available in sandbox at {GUEST_ATTACHED_DIR}/<name> or {GUEST_SHARED_DIR}/<name>): {names}]",
             payload.content
         )
     };

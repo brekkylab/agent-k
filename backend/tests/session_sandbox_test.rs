@@ -9,6 +9,7 @@ mod common;
 
 use std::{path::Path, sync::Arc};
 
+use agent_k::agents::GUEST_SHARED_DIR;
 use agent_k_backend::state::AppState;
 use common::{
     delete_session, extract_text, extract_text_from_slice, get_personal_project, login, make_repo,
@@ -133,7 +134,7 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
 }
 
 /// Files uploaded via the dirent API to the project's shared scope must be
-/// readable by the agent inside the session sandbox at `/shared_data/<path>`.
+/// readable by the agent inside the session sandbox at `{GUEST_SHARED_DIR}/<path>`.
 ///
 /// Requires: microsandbox runtime + ANTHROPIC_API_KEY (real value).
 #[tokio::test]
@@ -164,7 +165,7 @@ async fn agent_can_read_shared_files_from_shared_data() {
     let outputs = send_message(
         &app,
         session_id,
-        "Run this bash command exactly and report the output: cat /shared_data/context.txt",
+        &format!("Run this bash command exactly and report the output: cat {GUEST_SHARED_DIR}/context.txt"),
         &token,
     )
     .await;
@@ -172,7 +173,7 @@ async fn agent_can_read_shared_files_from_shared_data() {
     let text = extract_text(&outputs);
     assert!(
         text.contains("SENTINEL_UPLOAD_OK"),
-        "expected agent to read 'SENTINEL_UPLOAD_OK' from /shared_data/context.txt, got: {text:?}"
+        "expected agent to read 'SENTINEL_UPLOAD_OK' from {GUEST_SHARED_DIR}/context.txt, got: {text:?}"
     );
 
     delete_session(&app, session_id, &token).await;
