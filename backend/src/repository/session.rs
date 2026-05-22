@@ -8,6 +8,16 @@ use uuid::Uuid;
 use super::SqliteRepository;
 use crate::repository::RepositoryResult;
 
+/// Result of a prefix-based session lookup.
+pub enum PrefixLookup {
+    /// Exactly one session matched the prefix.
+    Unique(Uuid),
+    /// Two or more sessions share the same prefix — caller should ask for more characters.
+    Ambiguous(Vec<Uuid>),
+    /// No session matched.
+    None,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ShareMode {
@@ -623,5 +633,36 @@ impl SqliteRepository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Look up a session by a UUID prefix string.
+    ///
+    /// Accepts any non-empty prefix; LIKE-based scan reuses the PK index.
+    /// Returns `Unique` when exactly one row matches, `Ambiguous` when two or
+    /// more match (LIMIT 2 makes this O(1) past the first hit), `None` when
+    /// nothing matches.
+    pub async fn lookup_session_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> RepositoryResult<PrefixLookup> {
+        let pattern = format!("{prefix}%");
+        let rows = sqlx::query("SELECT id FROM sessions WHERE id LIKE ? LIMIT 2")
+            .bind(&pattern)
+            .fetch_all(&self.pool)
+            .await?;
+        match rows.len() {
+            0 => Ok(PrefixLookup::None),
+            1 => Ok(PrefixLookup::Unique(Self::parse_uuid(
+                rows[0].get::<String, _>("id"),
+                "sessions.id",
+            )?)),
+            _ => {
+                let mut ids = Vec::with_capacity(rows.len());
+                for r in rows {
+                    ids.push(Self::parse_uuid(r.get::<String, _>("id"), "sessions.id")?);
+                }
+                Ok(PrefixLookup::Ambiguous(ids))
+            }
+        }
     }
 }

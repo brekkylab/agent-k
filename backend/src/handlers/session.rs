@@ -24,7 +24,7 @@ use crate::{
         SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
         UpdateSessionRequest,
     },
-    repository::{DbSenderKind, NewSessionMessage, SessionAccess},
+    repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess},
     services::session_title::generate_session_title,
     state::AppState,
 };
@@ -175,6 +175,30 @@ async fn resolve_agent_for(
     Ok(state.get_agent(&session_id).unwrap())
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Resolve a path param to a session UUID.
+///
+/// Accepts both a full UUID string and a prefix (any length); returns 409 when
+/// the prefix matches multiple sessions and 404 when nothing matches.
+async fn resolve_session_id(state: &Arc<AppState>, session_ref: &str) -> ApiResult<Uuid> {
+    if let Ok(uuid) = Uuid::parse_str(session_ref) {
+        return Ok(uuid);
+    }
+    match state
+        .repository
+        .lookup_session_by_prefix(session_ref)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+    {
+        PrefixLookup::Unique(id) => Ok(id),
+        PrefixLookup::Ambiguous(_) => Err(AppError::conflict(
+            "ambiguous session prefix; provide more characters",
+        )),
+        PrefixLookup::None => Err(AppError::not_found("session not found")),
+    }
+}
+
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
 /// POST /projects/{project_slug}/sessions
@@ -270,8 +294,9 @@ pub async fn list_sessions(
 pub async fn get_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(session_id): Path<Uuid>,
+    Path(session_ref): Path<String>,
 ) -> ApiResult<Json<SessionResponse>> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
     let (session, _access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
@@ -292,9 +317,10 @@ pub async fn get_session(
 pub async fn update_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(session_id): Path<Uuid>,
+    Path(session_ref): Path<String>,
     Json(payload): Json<UpdateSessionRequest>,
 ) -> ApiResult<Json<SessionResponse>> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
     let (session, access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
@@ -333,8 +359,9 @@ pub(crate) async fn cleanup_session_resources(state: &Arc<AppState>, session_id:
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(session_id): Path<Uuid>,
+    Path(session_ref): Path<String>,
 ) -> ApiResult<StatusCode> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
     let (session, access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
@@ -362,8 +389,9 @@ pub async fn delete_session(
 pub async fn fork_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(source_session_id): Path<Uuid>,
+    Path(session_ref): Path<String>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
+    let source_session_id = resolve_session_id(&state, &session_ref).await?;
     let (source, _access) = state
         .repository
         .get_session_with_authz(source_session_id, auth_user.id)
@@ -446,8 +474,9 @@ pub async fn fork_session(
 pub async fn get_message_history(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(session_id): Path<Uuid>,
+    Path(session_ref): Path<String>,
 ) -> ApiResult<Json<SessionMessageListResponse>> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
     let (_session, _access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
@@ -497,8 +526,9 @@ pub async fn get_message_history(
 pub async fn clear_message_history(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(session_id): Path<Uuid>,
+    Path(session_ref): Path<String>,
 ) -> ApiResult<StatusCode> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
     let (session, access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
@@ -535,9 +565,10 @@ pub async fn clear_message_history(
 pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(session_id): Path<Uuid>,
+    Path(session_ref): Path<String>,
     Json(payload): Json<SendMessageRequest>,
 ) -> ApiResult<Json<SendMessageResponse>> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
     let (session, access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
@@ -622,11 +653,12 @@ pub async fn send_message(
 pub async fn send_message_stream(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(session_id): Path<Uuid>,
+    Path(session_ref): Path<String>,
     Json(payload): Json<SendMessageRequest>,
 ) -> ApiResult<
     NoApi<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>> + Send + 'static>>,
 > {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
     let (session, access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)

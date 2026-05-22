@@ -6,7 +6,8 @@ use std::{sync::Arc, time::Duration};
 
 pub use project::{DbProject, DbProjectMember};
 pub use session::{
-    DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, SessionAccess, ShareMode,
+    DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, PrefixLookup, SessionAccess,
+    ShareMode,
 };
 pub use sqlite::SqliteRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
