@@ -13,6 +13,7 @@ import { Avatar, IconPocket, SectionLabel } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useNewProjectDialog } from '@/components/NewProjectDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { canAdministerSession } from '@/lib/permissions';
 import { ApiError } from '@/api/client';
@@ -57,6 +58,7 @@ export function Sidebar() {
   });
 
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
+  const projectCreator = useNewProjectDialog();
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) => deleteSession(sessionId),
     onSuccess: async (_, deletedId) => {
@@ -113,7 +115,7 @@ export function Sidebar() {
         ))}
         <button
           className="cw-nav-row is-ghost"
-          onClick={() => showToast('새 프로젝트 생성 다이얼로그는 곧 추가됩니다')}
+          onClick={projectCreator.open}
         >
           <span className="cw-project-swatch is-plus">+</span>
           <span>새 Project</span>
@@ -221,6 +223,8 @@ export function Sidebar() {
           onClose={() => setPendingDelete(null)}
         />
       )}
+
+      {projectCreator.dialog}
 
       {currentUser && (
         <div className="cw-sidebar-user">
