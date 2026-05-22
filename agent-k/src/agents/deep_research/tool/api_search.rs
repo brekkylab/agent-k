@@ -73,7 +73,12 @@ pub fn get_api_search_tool_desc() -> ToolDesc {
             "Returns results ranked by the provider's own index, with the ",
             "same `{results, total}` shape as ailoy's meta-search builtin. ",
             "Use this to find current information, primary sources, ",
-            "documentation, or any web-accessible content."
+            "documentation, or any web-accessible content. ",
+            "When you need information about multiple independent entities ",
+            "(different missions, different people, different products), ",
+            "call this tool in a parallel batch of 2-5 in a single ",
+            "tool_calls block — one query per entity — rather than ",
+            "sequentially across multiple turns."
         ))
         .parameters(to_value!({
             "type": "object",

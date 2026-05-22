@@ -145,7 +145,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=7e847a369debdaca4281e95143214b116ee50c4e#7e847a369debdaca4281e95143214b116ee50c4e"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=5b82c957262425311e0c9182a442c15e497e0892#5b82c957262425311e0c9182a442c15e497e0892"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -160,6 +160,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "hex",
+ "html-to-markdown-rs",
  "image",
  "indexmap 2.14.0",
  "infer",
