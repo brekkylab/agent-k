@@ -427,6 +427,7 @@ pub fn to_new_msgs(
                 sender_kind,
                 sender_name,
                 sender_user_id,
+                attachments: vec![],
             }
         })
         .collect()
@@ -661,7 +662,7 @@ pub async fn upload_dirents(
     let (boundary, body) = build_multipart_body(files);
     let req = Request::builder()
         .method("POST")
-        .uri(format!("/projects/{project_id}/dirents"))
+        .uri(format!("/dirents?path=projects/{project_id}/shared"))
         .header("authorization", format!("Bearer {token}"))
         .header(
             "content-type",

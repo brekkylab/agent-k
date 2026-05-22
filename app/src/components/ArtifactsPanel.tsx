@@ -1,0 +1,181 @@
+// ArtifactsPanel — lists agent-generated artifacts for a session.
+// Copy-to-shared is handled by CopyToSharedDialog (passed as a render prop).
+
+import { useEffect, useRef, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { deleteDirent, downloadFile, listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
+import { nameOf } from '@/domain/files';
+import { Icon } from './Icon';
+import { EmptyState } from './uiPrimitives';
+import { ConfirmDialog } from './ConfirmDialog';
+import { useToastStore } from './Toast';
+
+interface ArtifactsPanelProps {
+  projectId: string;
+  sessionId: string;
+  /** Called when user requests "copy to shared" for the given relative paths.
+   *  Pass null if CopyToSharedDialog is not yet wired. */
+  onCopyToShared?: (relativePaths: string[]) => void;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: ArtifactsPanelProps) {
+  const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
+
+  const scope: DirentScope = { kind: 'artifacts', projectId, sessionId };
+
+  const { data: rawEntries = [], isLoading } = useQuery({
+    queryKey: ['dirents', 'artifacts', projectId, sessionId],
+    queryFn: () => listDirentsRaw(scope, true),
+  });
+
+  // Show files only, strip scope prefix for display
+  const entries = rawEntries
+    .filter((e) => e.kind === 'file')
+    .map((e) => ({ ...e, path: stripScopePrefix(scope, e.path) }));
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
+  const openMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (openMenuRef.current && !openMenuRef.current.contains(e.target as Node)) {
+        setMenuOpen(null);
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [menuOpen]);
+
+  const deleteMutation = useMutation({
+    mutationFn: async (paths: string[]) => {
+      for (const p of paths) await deleteDirent(scope, p);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+      showToast('삭제되었습니다');
+      setSelected(new Set());
+      setConfirmDelete(null);
+    },
+    onError: () => showToast('삭제 실패'),
+  });
+
+  const allSelected = entries.length > 0 && entries.every((e) => selected.has(e.path));
+
+  function toggleEntry(path: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(entries.map((e) => e.path)));
+    }
+  }
+
+  return (
+    <div className="cw-artifacts-panel">
+      {selected.size > 0 && (
+        <div className="cw-artifacts-actions">
+          <span>{selected.size}개 선택</span>
+          <button type="button" className="cw-btn-secondary" onClick={() => setConfirmDelete([...selected])}>삭제</button>
+          {onCopyToShared && (
+            <button type="button" className="cw-btn-secondary" onClick={() => onCopyToShared([...selected])}>공유로 복사</button>
+          )}
+          <button type="button" className="cw-btn-secondary" onClick={() => setSelected(new Set())}>선택 해제</button>
+        </div>
+      )}
+
+      {entries.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 11, color: 'var(--cw-ink-3)' }}>
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleAll}
+            style={{ cursor: 'pointer' }}
+          />
+          <span style={{ cursor: 'pointer', userSelect: 'none' }} onClick={toggleAll}>
+            {allSelected ? '전체 해제' : '전체 선택'}
+          </span>
+        </div>
+      )}
+
+      {entries.map((entry) => (
+        <div className="cw-artifact-row" key={entry.path}>
+          <input
+            type="checkbox"
+            checked={selected.has(entry.path)}
+            onChange={() => toggleEntry(entry.path)}
+            style={{ cursor: 'pointer', flexShrink: 0 }}
+          />
+          <span className="cw-artifact-name">
+            <Icon name="file-text" size={13} />
+            {nameOf(entry)}
+          </span>
+          <span className="cw-artifact-size">{entry.bytes != null ? formatBytes(entry.bytes) : ''}</span>
+          <div className="cw-artifact-menu-wrap" ref={menuOpen === entry.path ? openMenuRef : null}>
+            <button
+              type="button"
+              aria-label="더보기"
+              onClick={() => setMenuOpen(menuOpen === entry.path ? null : entry.path)}
+            >
+              <Icon name="more" size={13} />
+            </button>
+            {menuOpen === entry.path && (
+              <ul className="cw-file-dropdown" onClick={() => setMenuOpen(null)}>
+                <li>
+                  <button type="button" onClick={() => downloadFile(scope, entry.path)}>
+                    <Icon name="download" size={13} /> 다운로드
+                  </button>
+                </li>
+                {onCopyToShared && (
+                  <li>
+                    <button type="button" onClick={() => onCopyToShared([entry.path])}>
+                      <Icon name="file" size={13} /> 공유로 복사
+                    </button>
+                  </li>
+                )}
+                <li>
+                  <button type="button" className="cw-file-dropdown-destructive" onClick={() => setConfirmDelete([entry.path])}>
+                    <Icon name="trash" size={13} /> 삭제
+                  </button>
+                </li>
+              </ul>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {!isLoading && entries.length === 0 && (
+        <EmptyState chip="📦" title="산출물 없음" body="에이전트가 파일을 생성하면 여기에 표시됩니다." />
+      )}
+
+      {confirmDelete !== null && (
+        <ConfirmDialog
+          title="삭제 확인"
+          body={`${confirmDelete.length}개 파일을 삭제하시겠습니까?`}
+          confirmLabel="삭제"
+          destructive
+          pending={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(confirmDelete)}
+          onClose={() => setConfirmDelete(null)}
+        />
+      )}
+    </div>
+  );
+}

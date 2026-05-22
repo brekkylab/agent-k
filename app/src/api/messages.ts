@@ -13,10 +13,10 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
   return collapseToolMessages(raw.items, sessionId);
 }
 
-export async function sendMessage(sessionId: string, content: string): Promise<MessageOutput[]> {
+export async function sendMessage(sessionId: string, content: string, attachments?: string[]): Promise<MessageOutput[]> {
   return request<MessageOutput[]>(`/sessions/${sessionId}/messages`, {
     method: 'POST',
-    body: { content },
+    body: { content, attachments: attachments && attachments.length > 0 ? attachments : undefined },
   });
 }
 
@@ -39,6 +39,7 @@ export async function* streamMessage(
   sessionId: string,
   content: string,
   signal?: AbortSignal,
+  attachments?: string[],
 ): AsyncGenerator<StreamUpdate, void, void> {
   let accumulated = '';
   const toolCalls: StreamToolCall[] = [];
@@ -54,7 +55,7 @@ export async function* streamMessage(
     subagentUpdates: currentSubagentUpdates(),
   });
 
-  for await (const evt of streamSse(`/sessions/${sessionId}/messages/stream`, { content }, signal)) {
+  for await (const evt of streamSse(`/sessions/${sessionId}/messages/stream`, { content, attachments: attachments && attachments.length > 0 ? attachments : undefined }, signal)) {
     if (evt.event === 'error') {
       yield { ...snapshot(), status: 'error', errorText: evt.data };
       return;

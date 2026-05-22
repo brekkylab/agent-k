@@ -65,6 +65,7 @@ pub struct DbSessionMessage {
     pub sender_name: Option<String>,
     pub sender_user_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +74,7 @@ pub struct NewSessionMessage {
     pub sender_kind: DbSenderKind,
     pub sender_name: Option<String>,
     pub sender_user_id: Option<Uuid>,
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -336,8 +338,8 @@ impl SqliteRepository {
 
         sqlx::query(
             "INSERT INTO session_messages \
-                 (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id) \
-             SELECT ?, message_json, created_at, sender_kind, sender_name, sender_user_id \
+                 (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments) \
+             SELECT ?, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments \
              FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
         )
         .bind(new_id.to_string())
@@ -388,10 +390,12 @@ impl SqliteRepository {
         for msg in messages {
             let now = Self::now_string();
             let msg_json = serde_json::to_string(&msg.message)?;
+            let attachments_json =
+                serde_json::to_string(&msg.attachments).unwrap_or_else(|_| "[]".to_string());
             sqlx::query(
                 "INSERT INTO session_messages \
-                     (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id) \
-                 VALUES (?, ?, ?, ?, ?, ?);",
+                     (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?);",
             )
             .bind(&sid)
             .bind(&msg_json)
@@ -399,6 +403,7 @@ impl SqliteRepository {
             .bind(msg.sender_kind.as_str())
             .bind(&msg.sender_name)
             .bind(msg.sender_user_id.map(|u| u.to_string()))
+            .bind(&attachments_json)
             .execute(&mut *tx)
             .await?;
         }
@@ -470,7 +475,7 @@ impl SqliteRepository {
 
     pub async fn get_messages(&self, session_id: Uuid) -> RepositoryResult<Vec<DbSessionMessage>> {
         let rows = sqlx::query(
-            "SELECT message_json, sender_kind, sender_name, sender_user_id, created_at \
+            "SELECT message_json, sender_kind, sender_name, sender_user_id, created_at, attachments \
              FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
         )
         .bind(session_id.to_string())
@@ -505,12 +510,17 @@ impl SqliteRepository {
                 let created_at =
                     Self::parse_timestamp(row.get("created_at"), "session_messages.created_at")?;
 
+                let attachments_json: String = row.try_get("attachments").unwrap_or_default();
+                let attachments: Vec<String> =
+                    serde_json::from_str(&attachments_json).unwrap_or_default();
+
                 Ok(DbSessionMessage {
                     message,
                     sender_kind,
                     sender_name,
                     sender_user_id,
                     created_at,
+                    attachments,
                 })
             })
             .collect()

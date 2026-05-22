@@ -85,12 +85,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-activity-row p { margin: 3px 0 0; font-size: 13px; }
 .cw-activity-row time { color: var(--cw-fg-3); font-family: var(--cw-font-mono); font-size: 11px; }
 
-.cw-session-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: calc(100vh - 56px); }
-.cw-chat-surface { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); }
+.cw-session-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; flex: 1; min-height: 0; overflow: hidden; }
+.cw-chat-surface { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
 .cw-chat-head { padding: 34px 28px 18px; border-bottom: 1px solid var(--cw-border); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cw-chat-head p { display: flex; align-items: center; gap: 7px; color: var(--cw-fg-3); margin: 14px 0 0; }
 .cw-session-head-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.cw-messages { flex: 1; padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
+.cw-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
 .cw-message-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .cw-message-meta span { border: 1px solid var(--cw-border); color: var(--cw-fg-3); border-radius: var(--cw-radius-sm); padding: 1px 5px; font-size: 10px; }
 .cw-message-meta time { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
@@ -104,6 +104,17 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-side-file small { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
 .cw-live { display: inline-flex; align-items: center; gap: 8px; color: var(--cw-ok); font-size: 13px; }
 .cw-live span { width: 8px; height: 8px; border-radius: 999px; background: var(--cw-ok); animation: cw-ping 1s steps(2, start) infinite; }
+.cw-artifacts-panel { display: flex; flex-direction: column; gap: 2px; }
+.cw-artifacts-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 0 6px; font-size: 12px; color: var(--cw-fg-2); }
+.cw-artifacts-actions .cw-btn-secondary { min-height: 24px; padding: 3px 8px; font-size: 11px; }
+.cw-artifact-row { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 4px; border-radius: var(--cw-radius-sm); font-size: 12.5px; transition: background 100ms; }
+.cw-artifact-row:hover { background: var(--cw-bg-muted); }
+.cw-artifact-name { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cw-fg-1); }
+.cw-artifact-size { flex-shrink: 0; font-family: var(--cw-font-mono); font-size: 10.5px; color: var(--cw-fg-4); }
+.cw-artifact-menu-wrap { flex-shrink: 0; position: relative; }
+.cw-artifact-menu-wrap > button { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-fg-3); cursor: pointer; opacity: 0; transition: opacity 100ms, background 100ms; }
+.cw-artifact-row:hover .cw-artifact-menu-wrap > button { opacity: 1; }
+.cw-artifact-menu-wrap > button:focus { opacity: 1; }
 
 /* Files page takes the full main area — both width and height. Each ancestor
    in the chain gets flex:1 + min-height:0 so the file body can scroll its own
@@ -803,6 +814,81 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   text-align: center;
   color: var(--cw-fg-4);
   font-size: 11px;
+}
+
+/* ── Attachment tray (composer) & attachment chips ───────────────────────── */
+.cw-attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--cw-border);
+  background: var(--cw-paper-3);
+  font-size: 12px;
+  color: var(--cw-ink-2);
+  max-width: 180px;
+  overflow: hidden;
+}
+.cw-attach-chip--file {
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.cw-attach-chip--file:hover { background: var(--cw-paper-4); border-color: var(--cw-border-hover); }
+.cw-attach-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-attach-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--cw-ink-4);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+.cw-attach-remove:hover { color: var(--cw-ink); }
+.cw-attach-error { color: var(--cw-destructive); display: inline-flex; }
+.cw-attach-spinner { font-size: 10px; }
+
+/* Attachment preview in message bubbles */
+.cw-attach-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.cw-attach-thumb {
+  max-width: 80px;
+  max-height: 80px;
+  border-radius: 4px;
+  object-fit: cover;
+  border: 1px solid var(--cw-border);
+}
+.cw-attach-loading {
+  width: 80px;
+  height: 80px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--cw-paper-3);
+  border: 1px solid var(--cw-border);
+  color: var(--cw-ink-3);
+}
+.cw-attach-label {
+  font-size: 11px;
+  color: var(--cw-ink-3);
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
 }
 
 .cw-empty-state {

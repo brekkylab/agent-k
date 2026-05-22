@@ -6,7 +6,7 @@ use ailoy::{
 };
 use futures_util::StreamExt;
 
-const TITLE_MODEL: &str = "anthropic/claude-haiku-4-5";
+const TITLE_MODEL: &str = "openai/gpt-5.4-nano";
 pub const TITLE_MAX_LEN: usize = 60;
 const TITLE_TIMEOUT_SECS: u64 = 15;
 

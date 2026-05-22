@@ -110,7 +110,7 @@ pub async fn delete_project(
         .map_err(|e| AppError::internal(e.to_string()))?;
 
     for session in sessions {
-        cleanup_session_resources(&state, session.id).await;
+        cleanup_session_resources(&state, session.project_id, session.id).await;
     }
 
     state

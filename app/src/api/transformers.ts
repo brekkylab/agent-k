@@ -131,13 +131,19 @@ export function toMessageItem(
         }))
       : undefined;
 
+  const rawBody = extractText(a.contents);
+  const body = sender.kind === 'user'
+    ? rawBody.replace(/\n\n\[Attached files[^\]]*\]$/, '')
+    : rawBody;
+
   return {
     id: a.id || `${sessionId}-h-${idx}`,
     sessionId,
     sender,
     createdAt: item.created_at,
-    body: extractText(a.contents),
+    body,
     toolCalls,
+    attachments: item.attachments ?? undefined,
     status: 'done',
   };
 }

@@ -416,12 +416,14 @@ async fn get_messages_response_includes_correct_sender_field() {
                 sender_kind: DbSenderKind::User,
                 sender_name: None,
                 sender_user_id: Some(alice_id),
+                attachments: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant).with_contents([Part::text("hi there")]),
                 sender_kind: DbSenderKind::Agent,
                 sender_name: Some("agent-k".to_string()),
                 sender_user_id: None,
+                attachments: vec![],
             },
         ],
     )

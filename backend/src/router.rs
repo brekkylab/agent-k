@@ -64,16 +64,21 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/projects/{project_id}/sessions",
             get(handlers::list_sessions).post(handlers::create_session),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_required,
+        ));
+
+    let dirent_routes = ApiRouter::new()
         .api_route(
-            "/projects/{project_id}/dirents",
-            // Body limit disabled only for upload; PATCH batch_op carries a small JSON body.
-            post(handlers::upload.layer(axum::extract::DefaultBodyLimit::disable()))
-                .get(handlers::list)
-                .patch(handlers::batch_op),
+            "/dirents",
+            post(handlers::dirent_upload.layer(axum::extract::DefaultBodyLimit::disable()))
+                .get(handlers::dirent_list)
+                .patch(handlers::dirent_batch_op),
         )
         .api_route(
-            "/projects/{project_id}/dirents/{*path}",
-            get(handlers::get_file).delete(handlers::delete_path),
+            "/dirents/{*path}",
+            get(handlers::dirent_get_file).delete(handlers::dirent_delete),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -125,6 +130,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .merge(me_routes)
         .merge(admin_routes)
         .merge(project_routes)
+        .merge(dirent_routes)
         .merge(session_routes)
         .merge(document_routes)
         .merge(ws_route)

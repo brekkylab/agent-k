@@ -23,6 +23,8 @@ import {
   moveDirents,
   uploadFiles,
   type DirentBatchResult,
+  type DirentScope,
+  stripScopePrefix,
 } from '@/api/dirents';
 import { getProject } from '@/api/projects';
 import { Icon } from '@/components/Icon';
@@ -58,10 +60,13 @@ function FilesPage() {
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
+  const scope: DirentScope = { kind: 'shared', projectId };
+
   const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
   const dirents = useQuery({
-    queryKey: ['dirents', projectId],
-    queryFn: () => listDirentsRaw(projectId),
+    queryKey: ['dirents', 'shared', projectId],
+    queryFn: () => listDirentsRaw(scope),
+    select: (raw) => raw.map((e) => ({ ...e, path: stripScopePrefix(scope, e.path) })),
   });
 
   const entries = dirents.data ?? [];
@@ -137,10 +142,10 @@ function FilesPage() {
   const uploadMutation = useMutation({
     mutationFn: async (files: File[]): Promise<DirentBatchResult> => {
       const items = files.map((file) => ({ file, targetPath: targetPathFor(file) }));
-      return uploadFiles(projectId, items);
+      return uploadFiles(scope, items);
     },
     onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = result.succeeded.length;
       const ko = result.failed.length;
       if (ko === 0) {
@@ -168,10 +173,10 @@ function FilesPage() {
     mutationFn: (name: string) => {
       const cleaned = name.trim().replace(/^\/+|\/+$/g, '');
       const fullPath = currentPath.length > 0 ? `${currentPath.join('/')}/${cleaned}` : cleaned;
-      return createFolder(projectId, fullPath);
+      return createFolder(scope, fullPath);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       showToast('폴더가 생성되었습니다');
       setFolderDialogOpen(false);
     },
@@ -182,7 +187,7 @@ function FilesPage() {
   });
 
   const downloadMutation = useMutation({
-    mutationFn: (entry: BackendDirent) => downloadFile(projectId, entry.path),
+    mutationFn: (entry: BackendDirent) => downloadFile(scope, entry.path),
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'download failed';
       showToast(`다운로드 실패: ${msg}`);
@@ -201,11 +206,11 @@ function FilesPage() {
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (targets: BackendDirent[]) => {
-      const results = await Promise.allSettled(targets.map((t) => deleteDirent(projectId, t.path)));
+      const results = await Promise.allSettled(targets.map((t) => deleteDirent(scope, t.path)));
       return { targets, results };
     },
     onSuccess: async ({ targets, results }) => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const fails: Array<{ path: string; error: string }> = [];
       let okCount = 0;
       results.forEach((r, idx) => {
@@ -299,9 +304,9 @@ function FilesPage() {
   // to show "이름이 변경되었습니다" or "이동되었습니다" copy.
   const moveMutation = useMutation({
     mutationFn: ({ sources, destination, newName }: { sources: string[]; destination: string; newName?: string }) =>
-      moveDirents(projectId, sources, destination, newName),
+      moveDirents(scope, sources, destination, newName),
     onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = res.succeeded.length;
       const ko = res.failed.length;
       const wasRename = renamingRef.current;
@@ -328,9 +333,9 @@ function FilesPage() {
 
   const copyMutation = useMutation({
     mutationFn: ({ sources, destination }: { sources: string[]; destination: string }) =>
-      copyDirents(projectId, sources, destination),
+      copyDirents(scope, scope, sources, destination),
     onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = res.succeeded.length;
       const ko = res.failed.length;
       if (ko === 0) showToast(ok === 1 ? '복사되었습니다' : `${ok}개 복사되었습니다`);
