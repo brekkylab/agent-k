@@ -8,7 +8,7 @@ use crate::{
     repository::{RepositoryError, RepositoryResult},
 };
 
-// Db structs
+// ── Db structs ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct DbAutomation {
@@ -59,7 +59,7 @@ pub struct DbAutomationRunEvent {
     pub payload: Option<serde_json::Value>,
 }
 
-// Row → Db helpers
+// ── Row → Db helpers ────────────────────────────────────────────────────────
 
 impl SqliteRepository {
     fn row_to_db_automation(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<DbAutomation> {
@@ -195,7 +195,7 @@ impl SqliteRepository {
         ts.to_rfc3339_opts(SecondsFormat::Millis, true)
     }
 
-    // automations
+    // ── automations ─────────────────────────────────────────────────────────
 
     pub async fn create_automation(
         &self,
@@ -322,7 +322,7 @@ impl SqliteRepository {
         Ok(result.rows_affected() > 0)
     }
 
-    // automation_triggers
+    // ── automation_triggers ─────────────────────────────────────────────────
 
     pub async fn create_trigger(
         &self,
@@ -516,7 +516,7 @@ impl SqliteRepository {
         rows.iter().map(Self::row_to_db_trigger).collect()
     }
 
-    // automation_runs
+    // ── automation_runs ─────────────────────────────────────────────────────
 
     pub async fn create_run(
         &self,
@@ -1080,7 +1080,7 @@ impl SqliteRepository {
         Ok(reaped)
     }
 
-    // automation_run_events
+    // ── automation_run_events ───────────────────────────────────────────────
 
     pub async fn append_event(
         &self,
