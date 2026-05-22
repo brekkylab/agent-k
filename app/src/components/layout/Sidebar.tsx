@@ -218,8 +218,8 @@ export function Sidebar() {
       showToast('새 세션이 만들어졌습니다');
       if (activeProject) {
         navigate({
-          to: '/p/$projectSlug/s/$sessionId',
-          params: { projectSlug: activeProject.slug, sessionId: session.id },
+          to: '/p/$projectSlug/s/$sessionPrefix',
+          params: { projectSlug: activeProject.slug, sessionPrefix: session.id.slice(0, 12) },
         });
       }
     },
@@ -238,9 +238,11 @@ export function Sidebar() {
       if (deletedProjectSlug) {
         await queryClient.invalidateQueries({ queryKey: ['sessions', deletedProjectSlug] });
       }
+      // deletedId is the full UUID; invalidate both full-UUID and prefix-based keys.
       await queryClient.invalidateQueries({ queryKey: ['session', deletedId] });
-      // 지금 보고 있던 세션이 사라졌다면 project home으로 돌려보냄.
-      if (activeSessionId === deletedId && activeProject) {
+      await queryClient.invalidateQueries({ queryKey: ['session', deletedId.slice(0, 12)] });
+      // activeSessionId is now a 12-char prefix — compare against the prefix of the deleted id.
+      if (activeSessionId === deletedId.slice(0, 12) && activeProject) {
         navigate({ to: '/p/$projectSlug', params: { projectSlug: activeProject.slug } });
       }
       showToast('세션이 삭제되었습니다');
@@ -258,8 +260,8 @@ export function Sidebar() {
     navigate({ to: '/p/$projectSlug', params: { projectSlug: slug } });
   }
 
-  function openSession(projectSlug: string, sessionId: string) {
-    navigate({ to: '/p/$projectSlug/s/$sessionId', params: { projectSlug, sessionId } });
+  function openSession(projectSlug: string, sessionPrefix: string) {
+    navigate({ to: '/p/$projectSlug/s/$sessionPrefix', params: { projectSlug, sessionPrefix } });
   }
 
   return (
@@ -388,10 +390,10 @@ export function Sidebar() {
                     key={session.id}
                     className={[
                       'cw-session-row',
-                      session.id === activeSessionId ? 'is-active' : '',
+                      session.id.slice(0, 12) === activeSessionId ? 'is-active' : '',
                       session.unreadCount > 0 ? 'is-unread' : '',
                     ].filter(Boolean).join(' ')}
-                    onClick={() => openSession(activeProject.slug, session.id)}
+                    onClick={() => openSession(activeProject.slug, session.id.slice(0, 12))}
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
@@ -461,7 +463,7 @@ function useActiveProjectId(): string | null {
 }
 
 function useActiveSessionId(): string | null {
-  return useParamFromMatches('sessionId');
+  return useParamFromMatches('sessionPrefix');
 }
 
 function useParamFromMatches(key: string): string | null {

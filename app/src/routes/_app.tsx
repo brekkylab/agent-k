@@ -38,10 +38,11 @@ function AppShell() {
     appWs.connect(token);
     const unsub = appWs.subscribe((event) => {
       if (event.type === 'session_title_updated') {
-        queryClient.setQueryData<Session | undefined>(
-          ['session', event.session_id],
-          (old) => (old ? { ...old, title: event.title } : old),
-        );
+        // Update both full-UUID key (legacy) and 12-char prefix key (current nav)
+        const prefix12 = event.session_id.slice(0, 12);
+        const updater = (old: Session | undefined) => (old ? { ...old, title: event.title } : old);
+        queryClient.setQueryData<Session | undefined>(['session', event.session_id], updater);
+        queryClient.setQueryData<Session | undefined>(['session', prefix12], updater);
         void queryClient.invalidateQueries({ queryKey: ['sessions', event.project_id] });
       }
     });

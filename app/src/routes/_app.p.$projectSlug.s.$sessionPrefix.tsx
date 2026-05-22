@@ -19,9 +19,10 @@ import type { Message, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 
-export const Route = createFileRoute('/_app/p/$projectSlug/s/$sessionId')({
+export const Route = createFileRoute('/_app/p/$projectSlug/s/$sessionPrefix')({
   component: SessionPage,
 });
+
 
 const SUBAGENT_PREFIX = 'subagent_';
 function stripSubagentPrefix(name: string): string {
@@ -29,17 +30,17 @@ function stripSubagentPrefix(name: string): string {
 }
 
 function SessionPage() {
-  const { projectSlug, sessionId } = Route.useParams();
+  const { projectSlug, sessionPrefix } = Route.useParams();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
 
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
-  const session = useQuery({ queryKey: ['session', sessionId], queryFn: () => getSession(sessionId) });
+  const session = useQuery({ queryKey: ['session', sessionPrefix], queryFn: () => getSession(sessionPrefix) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
   const history = useQuery({
-    queryKey: ['messages', sessionId],
-    queryFn: () => listMessages(sessionId),
+    queryKey: ['messages', sessionPrefix],
+    queryFn: () => listMessages(sessionPrefix),
     enabled: Boolean(session.data && currentUser),
   });
 
@@ -53,7 +54,7 @@ function SessionPage() {
     setLiveMessages([]);
     setComposerText('');
     setStreaming(false);
-  }, [sessionId]);
+  }, [sessionPrefix]);
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
   useEffect(() => {
@@ -79,7 +80,7 @@ function SessionPage() {
     const nowIso = new Date().toISOString();
     const userMsg: Message = {
       id: `live-user-${Date.now()}`,
-      sessionId,
+      sessionId: sessionPrefix,
       sender: { kind: 'user', userId: currentUser?.id ?? 'user' },
       createdAt: nowIso,
       body: text,
@@ -88,7 +89,7 @@ function SessionPage() {
     const aiId = `live-ai-${Date.now()}`;
     setLiveMessages((prev) => [...prev, userMsg, {
       id: aiId,
-      sessionId,
+      sessionId: sessionPrefix,
       sender: { kind: 'agent' as const, name: 'agent-k' },
       createdAt: nowIso,
       body: '',
@@ -99,7 +100,7 @@ function SessionPage() {
     const ctrl = new AbortController();
 
     try {
-      for await (const update of streamMessage(sessionId, text, ctrl.signal)) {
+      for await (const update of streamMessage(sessionPrefix, text, ctrl.signal)) {
         const isDone = update.status === 'done';
         const doneOrStreaming = isDone ? 'done' as const : 'streaming' as const;
 
@@ -124,7 +125,7 @@ function SessionPage() {
             } else {
               next = [...next, {
                 id: subId,
-                sessionId,
+                sessionId: sessionPrefix,
                 sender: { kind: 'agent' as const, name: sub.sourceAgent },
                 createdAt: nowIso,
                 body: sub.text,
@@ -147,17 +148,17 @@ function SessionPage() {
     } finally {
       setStreaming(false);
       // Refetch and wait for new history data before clearing live messages to avoid flash.
-      await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+      await queryClient.refetchQueries({ queryKey: ['messages', sessionPrefix] });
       setLiveMessages([]);
-      void queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
     }
-  }, [composerText, streaming, sessionId, projectSlug, currentUser, queryClient, showToast]);
+  }, [composerText, streaming, sessionPrefix, projectSlug, currentUser, queryClient, showToast]);
 
   const shareMutation = useMutation({
-    mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionId, mode),
+    mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+      await queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       showToast('공유 모드가 변경되었습니다');
     },
@@ -247,7 +248,7 @@ function SessionPage() {
         {sess && <SharePill mode={sess.shareMode} />}
         {sess && <p>{shareMeta[sess.shareMode].desc}</p>}
         <h3>Session</h3>
-        <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionId}</p>
+        <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
           project · {project.data?.name ?? '...'}
         </p>

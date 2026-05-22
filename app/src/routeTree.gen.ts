@@ -21,7 +21,7 @@ import { Route as AppPProjectSlugSettingsRouteImport } from './routes/_app.p.$pr
 import { Route as AppPProjectSlugScheduleRouteImport } from './routes/_app.p.$projectSlug.schedule'
 import { Route as AppPProjectSlugMembersRouteImport } from './routes/_app.p.$projectSlug.members'
 import { Route as AppPProjectSlugFilesRouteImport } from './routes/_app.p.$projectSlug.files'
-import { Route as AppPProjectSlugSSessionIdRouteImport } from './routes/_app.p.$projectSlug.s.$sessionId'
+import { Route as AppPProjectSlugSSessionPrefixRouteImport } from './routes/_app.p.$projectSlug.s.$sessionPrefix'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -82,10 +82,10 @@ const AppPProjectSlugFilesRoute = AppPProjectSlugFilesRouteImport.update({
   path: '/files',
   getParentRoute: () => AppPProjectSlugRoute,
 } as any)
-const AppPProjectSlugSSessionIdRoute =
-  AppPProjectSlugSSessionIdRouteImport.update({
-    id: '/s/$sessionId',
-    path: '/s/$sessionId',
+const AppPProjectSlugSSessionPrefixRoute =
+  AppPProjectSlugSSessionPrefixRouteImport.update({
+    id: '/s/$sessionPrefix',
+    path: '/s/$sessionPrefix',
     getParentRoute: () => AppPProjectSlugRoute,
   } as any)
 
@@ -101,7 +101,7 @@ export interface FileRoutesByFullPath {
   '/p/$projectSlug/settings': typeof AppPProjectSlugSettingsRoute
   '/p/$projectSlug/skills': typeof AppPProjectSlugSkillsRoute
   '/p/$projectSlug/': typeof AppPProjectSlugIndexRoute
-  '/p/$projectSlug/s/$sessionId': typeof AppPProjectSlugSSessionIdRoute
+  '/p/$projectSlug/s/$sessionPrefix': typeof AppPProjectSlugSSessionPrefixRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -113,7 +113,7 @@ export interface FileRoutesByTo {
   '/p/$projectSlug/settings': typeof AppPProjectSlugSettingsRoute
   '/p/$projectSlug/skills': typeof AppPProjectSlugSkillsRoute
   '/p/$projectSlug': typeof AppPProjectSlugIndexRoute
-  '/p/$projectSlug/s/$sessionId': typeof AppPProjectSlugSSessionIdRoute
+  '/p/$projectSlug/s/$sessionPrefix': typeof AppPProjectSlugSSessionPrefixRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -129,7 +129,7 @@ export interface FileRoutesById {
   '/_app/p/$projectSlug/settings': typeof AppPProjectSlugSettingsRoute
   '/_app/p/$projectSlug/skills': typeof AppPProjectSlugSkillsRoute
   '/_app/p/$projectSlug/': typeof AppPProjectSlugIndexRoute
-  '/_app/p/$projectSlug/s/$sessionId': typeof AppPProjectSlugSSessionIdRoute
+  '/_app/p/$projectSlug/s/$sessionPrefix': typeof AppPProjectSlugSSessionPrefixRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -145,7 +145,7 @@ export interface FileRouteTypes {
     | '/p/$projectSlug/settings'
     | '/p/$projectSlug/skills'
     | '/p/$projectSlug/'
-    | '/p/$projectSlug/s/$sessionId'
+    | '/p/$projectSlug/s/$sessionPrefix'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -157,7 +157,7 @@ export interface FileRouteTypes {
     | '/p/$projectSlug/settings'
     | '/p/$projectSlug/skills'
     | '/p/$projectSlug'
-    | '/p/$projectSlug/s/$sessionId'
+    | '/p/$projectSlug/s/$sessionPrefix'
   id:
     | '__root__'
     | '/_app'
@@ -172,7 +172,7 @@ export interface FileRouteTypes {
     | '/_app/p/$projectSlug/settings'
     | '/_app/p/$projectSlug/skills'
     | '/_app/p/$projectSlug/'
-    | '/_app/p/$projectSlug/s/$sessionId'
+    | '/_app/p/$projectSlug/s/$sessionPrefix'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -266,11 +266,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPProjectSlugFilesRouteImport
       parentRoute: typeof AppPProjectSlugRoute
     }
-    '/_app/p/$projectSlug/s/$sessionId': {
-      id: '/_app/p/$projectSlug/s/$sessionId'
-      path: '/s/$sessionId'
-      fullPath: '/p/$projectSlug/s/$sessionId'
-      preLoaderRoute: typeof AppPProjectSlugSSessionIdRouteImport
+    '/_app/p/$projectSlug/s/$sessionPrefix': {
+      id: '/_app/p/$projectSlug/s/$sessionPrefix'
+      path: '/s/$sessionPrefix'
+      fullPath: '/p/$projectSlug/s/$sessionPrefix'
+      preLoaderRoute: typeof AppPProjectSlugSSessionPrefixRouteImport
       parentRoute: typeof AppPProjectSlugRoute
     }
   }
@@ -283,7 +283,7 @@ interface AppPProjectSlugRouteChildren {
   AppPProjectSlugSettingsRoute: typeof AppPProjectSlugSettingsRoute
   AppPProjectSlugSkillsRoute: typeof AppPProjectSlugSkillsRoute
   AppPProjectSlugIndexRoute: typeof AppPProjectSlugIndexRoute
-  AppPProjectSlugSSessionIdRoute: typeof AppPProjectSlugSSessionIdRoute
+  AppPProjectSlugSSessionPrefixRoute: typeof AppPProjectSlugSSessionPrefixRoute
 }
 
 const AppPProjectSlugRouteChildren: AppPProjectSlugRouteChildren = {
@@ -293,7 +293,7 @@ const AppPProjectSlugRouteChildren: AppPProjectSlugRouteChildren = {
   AppPProjectSlugSettingsRoute: AppPProjectSlugSettingsRoute,
   AppPProjectSlugSkillsRoute: AppPProjectSlugSkillsRoute,
   AppPProjectSlugIndexRoute: AppPProjectSlugIndexRoute,
-  AppPProjectSlugSSessionIdRoute: AppPProjectSlugSSessionIdRoute,
+  AppPProjectSlugSSessionPrefixRoute: AppPProjectSlugSSessionPrefixRoute,
 }
 
 const AppPProjectSlugRouteWithChildren = AppPProjectSlugRoute._addFileChildren(
