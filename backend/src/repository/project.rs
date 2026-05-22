@@ -114,6 +114,24 @@ impl SqliteRepository {
         rows.iter().map(Self::row_to_db_project).collect()
     }
 
+    pub async fn get_project_id_by_retired_slug(
+        &self,
+        slug: &str,
+    ) -> RepositoryResult<Option<Uuid>> {
+        let row =
+            sqlx::query("SELECT project_id FROM project_slug_history WHERE old_slug = ? LIMIT 1")
+                .bind(slug)
+                .fetch_optional(&self.pool)
+                .await?;
+        match row {
+            Some(r) => Ok(Some(Self::parse_uuid(
+                r.get::<String, _>("project_id"),
+                "project_slug_history.project_id",
+            )?)),
+            None => Ok(None),
+        }
+    }
+
     pub async fn update_project(
         &self,
         id: Uuid,
@@ -127,9 +145,29 @@ impl SqliteRepository {
             .await?
             .ok_or_else(|| RepositoryError::InvalidData(format!("project {id} not found")))?;
 
-        let new_name = name.unwrap_or(current.name);
-        let new_desc = description.unwrap_or(current.description);
-        let new_slug = slug.unwrap_or(current.slug);
+        let new_name = name.unwrap_or(current.name.clone());
+        let new_desc = description.unwrap_or(current.description.clone());
+        let new_slug = slug.unwrap_or_else(|| current.slug.clone());
+        let slug_changed = new_slug != current.slug;
+
+        let mut tx = self.pool.begin().await?;
+
+        if slug_changed {
+            // Preserve the old slug permanently so any link still pointing at it
+            // can resolve back to this project. ON CONFLICT keeps the existing
+            // history entry — a slug that was retired by some other project is
+            // never silently reassigned here.
+            sqlx::query(
+                "INSERT INTO project_slug_history (old_slug, project_id, retired_at) \
+                 VALUES (?, ?, ?) \
+                 ON CONFLICT(old_slug) DO NOTHING",
+            )
+            .bind(&current.slug)
+            .bind(id.to_string())
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         sqlx::query(
             "UPDATE projects SET slug = ?, name = ?, description = ?, updated_at = ? \
@@ -140,9 +178,11 @@ impl SqliteRepository {
         .bind(&new_desc)
         .bind(&now)
         .bind(id.to_string())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| Self::map_db_error(e, "projects.slug"))?;
+
+        tx.commit().await?;
 
         self.get_project(id)
             .await?

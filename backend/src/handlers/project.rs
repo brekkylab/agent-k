@@ -15,7 +15,7 @@ use crate::{
         AddMemberRequest, CreateProjectRequest, ProjectListResponse, ProjectMemberListResponse,
         ProjectMemberResponse, ProjectResponse, UpdateProjectRequest,
     },
-    repository::{RepositoryError, SqliteRepository},
+    repository::{RepositoryError, RepositoryResult, SqliteRepository},
     state::AppState,
 };
 
@@ -23,26 +23,75 @@ use crate::{
 
 /// Resolve a slug to its project UUID.
 ///
-/// Returns 404 if the slug is not found.
-/// Phase 2: retired slug fallback will be inserted here before the 404 branch.
+/// Falls back to the slug history if no active project owns the slug, so
+/// links to a renamed project keep working. Returns 404 only when neither
+/// the active nor the retired lookup finds anything.
 pub async fn resolve_project_id(state: &Arc<AppState>, slug: &str) -> ApiResult<Uuid> {
-    state
+    if let Some(p) = state
         .repository
         .get_project_by_slug(slug)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?
-        .map(|p| p.id)
-        .ok_or_else(|| AppError::not_found("project not found"))
+    {
+        return Ok(p.id);
+    }
+    if let Some(id) = state
+        .repository
+        .get_project_id_by_retired_slug(slug)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+    {
+        return Ok(id);
+    }
+    Err(AppError::not_found("project not found"))
 }
 
-/// Generate a slug that is unique in the projects table.
+/// Whether a slug is available for assignment to a new (or renamed) project.
+///
+/// Considers both active project slugs and retired ones — retired slugs are
+/// permanently reserved so the redirect history stays unambiguous.
+async fn is_slug_taken(repo: &SqliteRepository, candidate: &str) -> RepositoryResult<bool> {
+    if repo.get_project_by_slug(candidate).await?.is_some() {
+        return Ok(true);
+    }
+    if repo
+        .get_project_id_by_retired_slug(candidate)
+        .await?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Reject a slug that another project has already retired.
+///
+/// A retired slug stays bound to whichever project owned it last — links to
+/// the old URL must keep resolving — so a different project cannot claim it.
+/// The project itself is allowed to reuse a slug it had previously retired.
+async fn ensure_slug_not_retired_by_other(
+    repo: &SqliteRepository,
+    slug: &str,
+    self_project_id: Option<Uuid>,
+) -> ApiResult<()> {
+    let owner = repo
+        .get_project_id_by_retired_slug(slug)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    match owner {
+        Some(o) if Some(o) != self_project_id => Err(AppError::conflict("slug already in use")),
+        _ => Ok(()),
+    }
+}
+
+/// Generate a slug that is unique among active and retired project slugs.
 ///
 /// Starts from `slug::slugify(name)`; if that is empty, falls back to
 /// `project-<6-char nanoid>`. Appends `-2`, `-3`, … on collision.
 fn generate_unique_slug<'a>(
     name: &'a str,
     repo: &'a SqliteRepository,
-) -> impl Future<Output = crate::repository::RepositoryResult<String>> + 'a {
+) -> impl Future<Output = RepositoryResult<String>> + 'a {
     let base = {
         let s = slug::slugify(name);
         if s.is_empty() {
@@ -54,7 +103,7 @@ fn generate_unique_slug<'a>(
     async move {
         let mut candidate = base.clone();
         let mut suffix = 2u32;
-        while repo.get_project_by_slug(&candidate).await?.is_some() {
+        while is_slug_taken(repo, &candidate).await? {
             candidate = format!("{base}-{suffix}");
             suffix += 1;
         }
@@ -71,7 +120,10 @@ pub async fn create_project(
     Json(payload): Json<CreateProjectRequest>,
 ) -> ApiResult<(StatusCode, Json<ProjectResponse>)> {
     let slug = match payload.slug {
-        Some(s) => s,
+        Some(s) => {
+            ensure_slug_not_retired_by_other(&state.repository, &s, None).await?;
+            s
+        }
         None => generate_unique_slug(&payload.name, &state.repository)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?,
@@ -142,6 +194,10 @@ pub async fn update_project(
 ) -> ApiResult<Json<ProjectResponse>> {
     let project_id = resolve_project_id(&state, &project_slug).await?;
     require_owner(&state, auth_user.id, project_id).await?;
+
+    if let Some(ref new_slug) = payload.slug {
+        ensure_slug_not_retired_by_other(&state.repository, new_slug, Some(project_id)).await?;
+    }
 
     let updated = state
         .repository
