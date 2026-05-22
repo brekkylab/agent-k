@@ -152,10 +152,10 @@ def seed_rows(db: Path) -> None:
         users,
     )
     projects = [
-        (PROJECT_KLIENT, "KlientCo Q2 분석", "시장 분석 + Q2 보드 보고 자료 정리", OLIVE_ID, ts(1), ts(1)),
-        (PROJECT_GTM, "GTM 재설계 — 2026 H2", "메시지, ICP, launch sequence를 다시 묶는 team project", MILO_ID, ts(2), ts(2)),
+        (PROJECT_KLIENT, "klientco-q2", "KlientCo Q2 분석", "시장 분석 + Q2 보드 보고 자료 정리", OLIVE_ID, ts(1), ts(1)),
+        (PROJECT_GTM, "gtm-2026-h2", "GTM 재설계 — 2026 H2", "메시지, ICP, launch sequence를 다시 묶는 team project", MILO_ID, ts(2), ts(2)),
     ]
-    conn.executemany("INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", projects)
+    conn.executemany("INSERT INTO projects (id, slug, name, description, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", projects)
     members = [
         (PROJECT_KLIENT, MILO_ID, ts(3)),
         (PROJECT_KLIENT, OWEN_ID, ts(4)),
