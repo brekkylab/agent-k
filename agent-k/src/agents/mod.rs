@@ -1,7 +1,7 @@
-mod minerva;
+mod coworker;
 mod router;
 mod speedwagon;
 
-pub use minerva::*;
+pub use coworker::*;
 pub use router::*;
 pub use speedwagon::*;

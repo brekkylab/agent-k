@@ -207,7 +207,7 @@ pub async fn create_session(
     let agent = match build_agent(sandbox).await {
         Ok(a) => a,
         Err(e) => {
-            let _ = ailoy::runenv::remove_persisted(&sandbox_name).await;
+            let _ = Sandbox::remove_persisted(&sandbox_name).await;
             let _ = state.repository.delete_session(session.id).await;
             return Err(AppError::internal(e));
         }
@@ -317,7 +317,7 @@ pub async fn update_session(
 pub(crate) async fn cleanup_session_resources(state: &Arc<AppState>, session_id: Uuid) {
     state.remove_agent(&session_id);
     let sandbox_name = sandbox_name_for(&session_id);
-    if let Err(e) = ailoy::runenv::remove_persisted(&sandbox_name).await {
+    if let Err(e) = Sandbox::remove_persisted(&sandbox_name).await {
         tracing::warn!(%session_id, "failed to remove persisted sandbox: {e}");
     }
 }
@@ -425,7 +425,7 @@ pub async fn fork_session(
         }
         Err(e) => {
             let _ = state.repository.delete_session(new_id).await;
-            let _ = ailoy::runenv::remove_persisted(&new_sandbox_name).await;
+            let _ = Sandbox::remove_persisted(&new_sandbox_name).await;
             Err(AppError::internal(format!("sandbox fork failed: {e}")))
         }
     }
