@@ -2,11 +2,7 @@ use std::path::PathBuf;
 
 use ailoy::message::{Message, Part, Role};
 
-pub struct Case {
-    pub query: Message,
-    pub files: Vec<(Vec<u8>, PathBuf)>,
-    pub shared_files: Vec<(Vec<u8>, PathBuf)>,
-}
+use super::Case;
 
 pub fn get_coworker_cases() -> Vec<Case> {
     vec![
