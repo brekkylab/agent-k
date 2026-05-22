@@ -190,10 +190,8 @@ export function Sidebar() {
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: listProjects });
   // URL에 projectSlug가 있을 때만 활성 프로젝트로 인정한다 — /p 같은 곳에서는
   // sub-nav(Home/Files/.../Sessions)가 보이지 않아야 사용자 멘탈 모델과 일치.
-  const activeProjectSlug = useActiveProjectId();
+  const activeProjectSlug = useActiveProjectSlug();
   const activeProject = (projectsQuery.data ?? []).find((p) => p.slug === activeProjectSlug);
-  // Keep activeProjectId as the UUID for queryKey consistency with the rest of the app.
-  const activeProjectId = activeProject?.id ?? null;
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions', activeProjectSlug],
@@ -321,7 +319,7 @@ export function Sidebar() {
           {(projectsQuery.data ?? []).map((item) => (
             <button
               key={item.id}
-              className={`cw-nav-row cw-project-nav-row ${item.id === activeProjectId ? 'is-active' : ''}`}
+              className={`cw-nav-row cw-project-nav-row ${item.slug === activeProjectSlug ? 'is-active' : ''}`}
               onClick={() => openProject(item.slug)}
             >
               <span className="cw-project-swatch" />
@@ -458,7 +456,7 @@ export function Sidebar() {
   );
 }
 
-function useActiveProjectId(): string | null {
+function useActiveProjectSlug(): string | null {
   return useParamFromMatches('projectSlug');
 }
 

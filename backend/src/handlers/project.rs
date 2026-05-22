@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json,
@@ -88,27 +88,18 @@ async fn ensure_slug_not_retired_by_other(
 ///
 /// Starts from `slug::slugify(name)`; if that is empty, falls back to
 /// `project-<6-char nanoid>`. Appends `-2`, `-3`, … on collision.
-fn generate_unique_slug<'a>(
-    name: &'a str,
-    repo: &'a SqliteRepository,
-) -> impl Future<Output = RepositoryResult<String>> + 'a {
-    let base = {
-        let s = slug::slugify(name);
-        if s.is_empty() {
-            format!("project-{}", nanoid::nanoid!(6))
-        } else {
-            s
-        }
-    };
-    async move {
-        let mut candidate = base.clone();
-        let mut suffix = 2u32;
-        while is_slug_taken(repo, &candidate).await? {
-            candidate = format!("{base}-{suffix}");
-            suffix += 1;
-        }
-        Ok(candidate)
+async fn generate_unique_slug(name: &str, repo: &SqliteRepository) -> RepositoryResult<String> {
+    let mut base = slug::slugify(name);
+    if base.is_empty() {
+        base = format!("project-{}", nanoid::nanoid!(6));
     }
+    let mut candidate = base.clone();
+    let mut suffix = 2u32;
+    while is_slug_taken(repo, &candidate).await? {
+        candidate = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    Ok(candidate)
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
