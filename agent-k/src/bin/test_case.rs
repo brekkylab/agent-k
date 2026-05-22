@@ -9,7 +9,7 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use agent_k::agents::get_coworker_agent;
+use agent_k::agents::{get_coworker_agent, get_deep_research_agent};
 use ailoy::{
     agent::Agent,
     lang_model::LangModelAPISchema,
@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
             .await?
         }
         AgentKind::DeepResearch => {
-            anyhow::bail!("deep-research agent is not implemented yet");
+            get_deep_research_agent(agent_kind.name(), agent_model, ARTIFACT_DIR).await?
         }
     };
     println!(
