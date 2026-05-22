@@ -25,13 +25,13 @@ async fn private_session_not_accessible_to_member() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     let session_id = session.id;
@@ -74,8 +74,7 @@ async fn non_member_cannot_access_any_session() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     common::signup(&app, "charlie", "password123").await;
@@ -114,13 +113,13 @@ async fn shared_readonly_allows_read_but_not_send() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     let session_id = session.id;
@@ -164,13 +163,13 @@ async fn only_creator_can_change_share_mode() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     let session_id = session.id;
@@ -221,12 +220,12 @@ async fn owner_can_access_member_private_session() {
         common::login(&app, "alice", "password123").await
     };
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
 
     let bob_info = common::signup(&app, "bob", "password123").await;
     let bob_id = Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     let session = repo.create_session(project_id, bob_id).await.unwrap();
     let session_id = session.id;
@@ -271,13 +270,13 @@ async fn removed_member_loses_session_access() {
         common::login(&app, "alice", "password123").await
     };
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
 
     let bob_info = common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
     let bob_id = Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     let session = repo.create_session(project_id, bob_id).await.unwrap();
     let session_id = session.id;
@@ -299,7 +298,7 @@ async fn removed_member_loses_session_access() {
     let (status, _) = common::authed(
         &app,
         "DELETE",
-        &format!("/projects/{project_id_str}/members/{bob_id}"),
+        &format!("/projects/{project_slug}/members/{bob_id}"),
         &alice_token,
         None,
     )
@@ -330,13 +329,13 @@ async fn owner_sees_all_sessions_in_project_list() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     let bob_info = common::signup(&app, "bob", "password123").await;
     let bob_id = Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     repo.create_session(project_id, alice_id).await.unwrap();
     repo.create_session(project_id, bob_id).await.unwrap();
@@ -344,7 +343,7 @@ async fn owner_sees_all_sessions_in_project_list() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/projects/{project_slug}/sessions"),
         &alice_token,
         None,
     )
@@ -367,13 +366,13 @@ async fn private_session_not_in_project_list() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     let session_id = session.id;
@@ -381,7 +380,7 @@ async fn private_session_not_in_project_list() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/projects/{project_slug}/sessions"),
         &bob_token,
         None,
     )
@@ -399,7 +398,7 @@ async fn private_session_not_in_project_list() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/projects/{project_slug}/sessions"),
         &bob_token,
         None,
     )
@@ -593,13 +592,13 @@ async fn fork_chat_member_can_fork() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     repo.update_session_share_mode(
@@ -636,13 +635,13 @@ async fn fork_readonly_member_can_fork() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
-    common::add_member(&app, &alice_token, project_id_str, "bob").await;
+    common::add_member(&app, &alice_token, project_slug, "bob").await;
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     repo.update_session_share_mode(

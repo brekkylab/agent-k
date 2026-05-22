@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use axum::{
     Json,
@@ -15,9 +15,54 @@ use crate::{
         AddMemberRequest, CreateProjectRequest, ProjectListResponse, ProjectMemberListResponse,
         ProjectMemberResponse, ProjectResponse, UpdateProjectRequest,
     },
-    repository::RepositoryError,
+    repository::{RepositoryError, SqliteRepository},
     state::AppState,
 };
+
+// ── Slug helpers ──────────────────────────────────────────────────────────────
+
+/// Resolve a slug to its project UUID.
+///
+/// Returns 404 if the slug is not found.
+/// Phase 2: retired slug fallback will be inserted here before the 404 branch.
+pub async fn resolve_project_id(state: &Arc<AppState>, slug: &str) -> ApiResult<Uuid> {
+    state
+        .repository
+        .get_project_by_slug(slug)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .map(|p| p.id)
+        .ok_or_else(|| AppError::not_found("project not found"))
+}
+
+/// Generate a slug that is unique in the projects table.
+///
+/// Starts from `slug::slugify(name)`; if that is empty, falls back to
+/// `project-<6-char nanoid>`. Appends `-2`, `-3`, … on collision.
+fn generate_unique_slug<'a>(
+    name: &'a str,
+    repo: &'a SqliteRepository,
+) -> impl Future<Output = crate::repository::RepositoryResult<String>> + 'a {
+    let base = {
+        let s = slug::slugify(name);
+        if s.is_empty() {
+            format!("project-{}", nanoid::nanoid!(6))
+        } else {
+            s
+        }
+    };
+    async move {
+        let mut candidate = base.clone();
+        let mut suffix = 2u32;
+        while repo.get_project_by_slug(&candidate).await?.is_some() {
+            candidate = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        Ok(candidate)
+    }
+}
+
+// ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// POST /projects
 pub async fn create_project(
@@ -25,13 +70,23 @@ pub async fn create_project(
     Extension(auth_user): Extension<AuthUser>,
     Json(payload): Json<CreateProjectRequest>,
 ) -> ApiResult<(StatusCode, Json<ProjectResponse>)> {
+    let slug = match payload.slug {
+        Some(s) => s,
+        None => generate_unique_slug(&payload.name, &state.repository)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    };
+
     let project = state
         .repository
-        .create_project(payload.name, payload.description, auth_user.id)
+        .create_project(payload.name, payload.description, auth_user.id, slug)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(|e| match e {
+            RepositoryError::UniqueViolation(_) => AppError::conflict("slug already in use"),
+            other => AppError::internal(other.to_string()),
+        })?;
 
-    tracing::info!(id = %project.id, owner = %auth_user.id, "project created");
+    tracing::info!(id = %project.id, slug = %project.slug, owner = %auth_user.id, "project created");
     Ok((StatusCode::CREATED, Json(ProjectResponse::from(project))))
 }
 
@@ -51,12 +106,14 @@ pub async fn list_projects(
     }))
 }
 
-/// GET /projects/{project_id}
+/// GET /projects/{project_slug}
 pub async fn get_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_slug): Path<String>,
 ) -> ApiResult<Json<ProjectResponse>> {
+    let project_id = resolve_project_id(&state, &project_slug).await?;
+
     let project = state
         .repository
         .get_project(project_id)
@@ -76,30 +133,40 @@ pub async fn get_project(
     Ok(Json(ProjectResponse::from(project)))
 }
 
-/// PATCH /projects/{project_id} — owner only
+/// PATCH /projects/{project_slug} — owner only
 pub async fn update_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_slug): Path<String>,
     Json(payload): Json<UpdateProjectRequest>,
 ) -> ApiResult<Json<ProjectResponse>> {
+    let project_id = resolve_project_id(&state, &project_slug).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
     let updated = state
         .repository
-        .update_project(project_id, payload.name, payload.description.map(Some))
+        .update_project(
+            project_id,
+            payload.name,
+            payload.description.map(Some),
+            payload.slug,
+        )
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(|e| match e {
+            RepositoryError::UniqueViolation(_) => AppError::conflict("slug already in use"),
+            other => AppError::internal(other.to_string()),
+        })?;
 
     Ok(Json(ProjectResponse::from(updated)))
 }
 
-/// DELETE /projects/{project_id} — owner only (cascades sessions)
+/// DELETE /projects/{project_slug} — owner only (cascades sessions)
 pub async fn delete_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_slug): Path<String>,
 ) -> ApiResult<StatusCode> {
+    let project_id = resolve_project_id(&state, &project_slug).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
     // Clean up agent + sandbox for every session before the DB cascade removes them.
@@ -130,16 +197,17 @@ pub async fn delete_project(
         }
     }
 
-    tracing::info!(id = %project_id, "project deleted");
+    tracing::info!(id = %project_id, slug = %project_slug, "project deleted");
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// GET /projects/{project_id}/members
+/// GET /projects/{project_slug}/members
 pub async fn list_members(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_slug): Path<String>,
 ) -> ApiResult<Json<ProjectMemberListResponse>> {
+    let project_id = resolve_project_id(&state, &project_slug).await?;
     require_member(&state, auth_user.id, project_id).await?;
 
     let members = state
@@ -161,13 +229,14 @@ pub async fn list_members(
     Ok(Json(ProjectMemberListResponse { items }))
 }
 
-/// POST /projects/{project_id}/members — owner only, body: { username }
+/// POST /projects/{project_slug}/members — owner only, body: { username }
 pub async fn add_member(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_slug): Path<String>,
     Json(payload): Json<AddMemberRequest>,
 ) -> ApiResult<StatusCode> {
+    let project_id = resolve_project_id(&state, &project_slug).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
     let target = state
@@ -190,13 +259,15 @@ pub async fn add_member(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// DELETE /projects/{project_id}/members/{user_id}
+/// DELETE /projects/{project_slug}/members/{user_id}
 /// Owner can remove anyone. Member can only remove themselves (leave).
 pub async fn remove_member(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path((project_id, target_user_id)): Path<(Uuid, Uuid)>,
+    Path((project_slug, target_user_id)): Path<(String, Uuid)>,
 ) -> ApiResult<StatusCode> {
+    let project_id = resolve_project_id(&state, &project_slug).await?;
+
     let is_owner = state
         .repository
         .user_is_project_owner(auth_user.id, project_id)

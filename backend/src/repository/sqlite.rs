@@ -68,15 +68,20 @@ mod tests {
 
     async fn make_project(pool: &sqlx::SqlitePool, owner_id: Uuid) -> Uuid {
         let id = Uuid::new_v4();
+        let slug = format!("test-{}", id.simple());
         let now = SqliteRepository::now_string();
-        sqlx::query("INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) VALUES (?, 'Test Project', NULL, ?, ?, ?)")
-            .bind(id.to_string())
-            .bind(owner_id.to_string())
-            .bind(&now)
-            .bind(&now)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO projects (id, slug, name, description, owner_id, created_at, updated_at) \
+             VALUES (?, ?, 'Test Project', NULL, ?, ?, ?)",
+        )
+        .bind(id.to_string())
+        .bind(&slug)
+        .bind(owner_id.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
         id
     }
 

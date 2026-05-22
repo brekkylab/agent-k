@@ -47,32 +47,32 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             get(handlers::list_projects).post(handlers::create_project),
         )
         .api_route(
-            "/projects/{project_id}",
+            "/projects/{project_slug}",
             get(handlers::get_project)
                 .patch(handlers::update_project)
                 .delete(handlers::delete_project),
         )
         .api_route(
-            "/projects/{project_id}/members",
+            "/projects/{project_slug}/members",
             get(handlers::list_members).post(handlers::add_member),
         )
         .api_route(
-            "/projects/{project_id}/members/{user_id}",
+            "/projects/{project_slug}/members/{user_id}",
             delete(handlers::remove_member),
         )
         .api_route(
-            "/projects/{project_id}/sessions",
+            "/projects/{project_slug}/sessions",
             get(handlers::list_sessions).post(handlers::create_session),
         )
         .api_route(
-            "/projects/{project_id}/dirents",
+            "/projects/{project_slug}/dirents",
             // Body limit disabled only for upload; PATCH batch_op carries a small JSON body.
             post(handlers::upload.layer(axum::extract::DefaultBodyLimit::disable()))
                 .get(handlers::list)
                 .patch(handlers::batch_op),
         )
         .api_route(
-            "/projects/{project_id}/dirents/{*path}",
+            "/projects/{project_slug}/dirents/{*path}",
             get(handlers::get_file).delete(handlers::delete_path),
         )
         .layer(axum::middleware::from_fn_with_state(

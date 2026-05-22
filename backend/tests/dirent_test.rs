@@ -117,7 +117,7 @@ async fn upload_and_list_files() {
     common::signup(&app, "alice", "Password123!").await;
     let token = common::login(&app, "alice", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
 
     let (status, body) = upload_files(
         &app,
@@ -150,7 +150,7 @@ async fn path_traversal_in_upload_goes_to_failed() {
     common::signup(&app, "bob", "Password123!").await;
     let token = common::login(&app, "bob", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
 
     let (status, body) = upload_files(&app, &token, pid, &[("../escape.txt", b"malicious")]).await;
     assert_eq!(status, axum::http::StatusCode::OK, "{body}");
@@ -172,7 +172,7 @@ async fn upload_over_size_limit_goes_to_failed() {
     common::signup(&app, "carol", "Password123!").await;
     let token = common::login(&app, "carol", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
 
     let big = vec![0u8; 20]; // 20 bytes > 10 byte limit
     let (status, body) = upload_files(&app, &token, pid, &[("big.bin", &big)]).await;
@@ -189,7 +189,7 @@ async fn get_file_returns_bytes_and_content_type() {
     common::signup(&app, "dave", "Password123!").await;
     let token = common::login(&app, "dave", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
 
     upload_files(&app, &token, pid, &[("hello.txt", b"world")]).await;
 
@@ -206,7 +206,7 @@ async fn delete_file_removes_it() {
     common::signup(&app, "eve", "Password123!").await;
     let token = common::login(&app, "eve", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
 
     upload_files(&app, &token, pid, &[("to_delete.txt", b"bye")]).await;
 
@@ -232,7 +232,7 @@ async fn delete_directory_is_recursive() {
     common::signup(&app, "frank", "Password123!").await;
     let token = common::login(&app, "frank", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
 
     upload_files(
         &app,
@@ -271,7 +271,7 @@ async fn non_member_gets_403_on_all_endpoints() {
     common::signup(&app, "owner_nm", "Password123!").await;
     let owner_token = common::login(&app, "owner_nm", "Password123!").await;
     let project = common::get_personal_project(&app, &owner_token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
     upload_files(&app, &owner_token, pid, &[("secret.txt", b"secret")]).await;
 
     common::signup(&app, "stranger_nm", "Password123!").await;
@@ -323,7 +323,7 @@ async fn list_prefix_filter_uses_path_component_boundary() {
     common::signup(&app, "grace", "Password123!").await;
     let token = common::login(&app, "grace", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
 
     upload_files(
         &app,
@@ -362,7 +362,7 @@ async fn batch_op_rename_via_move_with_new_name() {
     common::signup(&app, "grace", "Password123!").await;
     let token = common::login(&app, "grace", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
     upload_files(&app, &token, pid, &[("a.txt", b"hi")]).await;
 
     let body = serde_json::json!({
@@ -401,7 +401,7 @@ async fn batch_op_copy_applies_finder_style_suffix() {
     common::signup(&app, "henry", "Password123!").await;
     let token = common::login(&app, "henry", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
     upload_files(&app, &token, pid, &[("note.txt", b"x")]).await;
 
     let copy = |target: &str| {
@@ -441,7 +441,7 @@ async fn batch_op_move_folder_into_descendant_fails() {
     common::signup(&app, "iris", "Password123!").await;
     let token = common::login(&app, "iris", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
     upload_files(&app, &token, pid, &[("Outer/inner/keep.txt", b"y")]).await;
 
     let body = serde_json::json!({
@@ -478,7 +478,7 @@ async fn batch_op_partial_success_on_name_conflict() {
     common::signup(&app, "jay", "Password123!").await;
     let token = common::login(&app, "jay", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
     upload_files(
         &app,
         &token,
@@ -533,7 +533,8 @@ async fn batch_op_all_failed_does_not_materialise_dest_dir() {
     common::signup(&app, "jay", "Password123!").await;
     let token = common::login(&app, "jay", "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let pid = project["id"].as_str().unwrap();
+    let pid = project["slug"].as_str().unwrap();
+    let pid_uuid = project["id"].as_str().unwrap();
 
     // Move two non-existent sources into a destination path that has never
     // been created before. Both sources fail at load_source.
@@ -556,7 +557,7 @@ async fn batch_op_all_failed_does_not_materialise_dest_dir() {
 
     let dest_on_disk = data_root
         .join("projects")
-        .join(pid)
+        .join(pid_uuid)
         .join("uploads")
         .join("phantom-dir");
     assert!(

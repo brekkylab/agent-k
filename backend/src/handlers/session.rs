@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
+    handlers::project::resolve_project_id,
     model::{
         CreateSessionRequest, MessageSender, SendMessageRequest, SendMessageResponse,
         SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
@@ -176,13 +177,15 @@ async fn resolve_agent_for(
 
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
-/// POST /projects/{project_id}/sessions
+/// POST /projects/{project_slug}/sessions
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_slug): Path<String>,
     Json(_payload): Json<CreateSessionRequest>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
+    let project_id = resolve_project_id(&state, &project_slug).await?;
+
     let is_member = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -223,12 +226,14 @@ pub async fn create_session(
     ))
 }
 
-/// GET /projects/{project_id}/sessions
+/// GET /projects/{project_slug}/sessions
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_slug): Path<String>,
 ) -> ApiResult<Json<SessionListResponse>> {
+    let project_id = resolve_project_id(&state, &project_slug).await?;
+
     let is_member = state
         .repository
         .user_in_project(auth_user.id, project_id)

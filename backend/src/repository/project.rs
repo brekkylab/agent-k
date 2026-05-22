@@ -8,6 +8,7 @@ use crate::repository::{RepositoryError, RepositoryResult};
 #[derive(Debug, Clone)]
 pub struct DbProject {
     pub id: Uuid,
+    pub slug: String,
     pub name: String,
     pub description: Option<String>,
     pub owner_id: Uuid,
@@ -26,6 +27,7 @@ impl SqliteRepository {
     fn row_to_db_project(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<DbProject> {
         Ok(DbProject {
             id: Self::parse_uuid(row.get::<String, _>("id"), "projects.id")?,
+            slug: row.get("slug"),
             name: row.get("name"),
             description: row.get("description"),
             owner_id: Self::parse_uuid(row.get::<String, _>("owner_id"), "projects.owner_id")?,
@@ -45,24 +47,28 @@ impl SqliteRepository {
         name: String,
         description: Option<String>,
         owner_id: Uuid,
+        slug: String,
     ) -> RepositoryResult<DbProject> {
         let id = Uuid::new_v4();
         let now = Self::now_string();
         sqlx::query(
-            "INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO projects (id, slug, name, description, owner_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
+        .bind(&slug)
         .bind(&name)
         .bind(&description)
         .bind(owner_id.to_string())
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| Self::map_db_error(e, "projects.slug"))?;
 
         Ok(DbProject {
             id,
+            slug,
             name,
             description,
             owner_id,
@@ -73,7 +79,7 @@ impl SqliteRepository {
 
     pub async fn get_project(&self, id: Uuid) -> RepositoryResult<Option<DbProject>> {
         let row = sqlx::query(
-            "SELECT id, name, description, owner_id, created_at, updated_at \
+            "SELECT id, slug, name, description, owner_id, created_at, updated_at \
              FROM projects WHERE id = ?",
         )
         .bind(id.to_string())
@@ -82,10 +88,21 @@ impl SqliteRepository {
         row.as_ref().map(Self::row_to_db_project).transpose()
     }
 
+    pub async fn get_project_by_slug(&self, slug: &str) -> RepositoryResult<Option<DbProject>> {
+        let row = sqlx::query(
+            "SELECT id, slug, name, description, owner_id, created_at, updated_at \
+             FROM projects WHERE slug = ?",
+        )
+        .bind(slug)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(Self::row_to_db_project).transpose()
+    }
+
     pub async fn list_projects_for_user(&self, user_id: Uuid) -> RepositoryResult<Vec<DbProject>> {
         let uid = user_id.to_string();
         let rows = sqlx::query(
-            "SELECT DISTINCT p.id, p.name, p.description, p.owner_id, p.created_at, p.updated_at
+            "SELECT DISTINCT p.id, p.slug, p.name, p.description, p.owner_id, p.created_at, p.updated_at
              FROM projects p
              LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?1
              WHERE p.owner_id = ?1 OR pm.user_id IS NOT NULL
@@ -102,6 +119,7 @@ impl SqliteRepository {
         id: Uuid,
         name: Option<String>,
         description: Option<Option<String>>,
+        slug: Option<String>,
     ) -> RepositoryResult<DbProject> {
         let now = Self::now_string();
         let current = self
@@ -111,14 +129,20 @@ impl SqliteRepository {
 
         let new_name = name.unwrap_or(current.name);
         let new_desc = description.unwrap_or(current.description);
+        let new_slug = slug.unwrap_or(current.slug);
 
-        sqlx::query("UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?")
-            .bind(&new_name)
-            .bind(&new_desc)
-            .bind(&now)
-            .bind(id.to_string())
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE projects SET slug = ?, name = ?, description = ?, updated_at = ? \
+             WHERE id = ?",
+        )
+        .bind(&new_slug)
+        .bind(&new_name)
+        .bind(&new_desc)
+        .bind(&now)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Self::map_db_error(e, "projects.slug"))?;
 
         self.get_project(id)
             .await?
