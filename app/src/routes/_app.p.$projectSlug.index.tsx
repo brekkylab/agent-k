@@ -18,32 +18,32 @@ import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
-export const Route = createFileRoute('/_app/projects/$projectId/')({
+export const Route = createFileRoute('/_app/p/$projectSlug/')({
   component: ProjectHome,
 });
 
 function ProjectHome() {
-  const { projectId } = Route.useParams();
+  const { projectSlug } = Route.useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
 
-  const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
-  const sessions = useQuery({ queryKey: ['sessions', projectId], queryFn: () => listSessions(projectId) });
-  const members = useQuery({ queryKey: ['members', projectId], queryFn: () => listMembers(projectId) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  const sessions = useQuery({ queryKey: ['sessions', projectSlug], queryFn: () => listSessions(projectSlug) });
+  const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
   const files = useQuery({
-    queryKey: ['dirents', projectId, project.data?.name ?? ''],
-    queryFn: () => listDirents(projectId, project.data?.name ?? 'project'),
+    queryKey: ['dirents', projectSlug, project.data?.name ?? ''],
+    queryFn: () => listDirents(projectSlug, project.data?.name ?? 'project'),
     enabled: Boolean(project.data),
   });
 
   const newSessionMutation = useMutation({
-    mutationFn: () => createSession(projectId),
+    mutationFn: () => createSession(projectSlug),
     onSuccess: async (session) => {
-      await queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       showToast('새 세션이 만들어졌습니다');
-      navigate({ to: '/projects/$projectId/sessions/$sessionId', params: { projectId, sessionId: session.id } });
+      navigate({ to: '/p/$projectSlug/s/$sessionId', params: { projectSlug, sessionId: session.id } });
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
@@ -55,7 +55,7 @@ function ProjectHome() {
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) => deleteSession(sessionId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       await queryClient.invalidateQueries({ queryKey: ['session', pendingDelete?.id] });
       showToast(`세션이 삭제되었습니다`);
       setPendingDelete(null);
@@ -98,7 +98,7 @@ function ProjectHome() {
 
       <div className="cw-section-title">
         <SectionLabel>Sessions · {sessionList.length} visible to you</SectionLabel>
-        <button onClick={() => navigate({ to: '/projects/$projectId/schedule', params: { projectId } })}>
+        <button onClick={() => navigate({ to: '/p/$projectSlug/schedule', params: { projectSlug } })}>
           schedule 자동 발화
         </button>
       </div>
@@ -111,8 +111,8 @@ function ProjectHome() {
               session={session}
               canDelete={canAdministerSession(session, project.data, currentUser)}
               onOpen={() => navigate({
-                to: '/projects/$projectId/sessions/$sessionId',
-                params: { projectId, sessionId: session.id },
+                to: '/p/$projectSlug/s/$sessionId',
+                params: { projectSlug, sessionId: session.id },
               })}
               onRequestDelete={() => setPendingDelete(session)}
             />

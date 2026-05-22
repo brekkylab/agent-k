@@ -19,7 +19,7 @@ import type { Message, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 
-export const Route = createFileRoute('/_app/projects/$projectId/sessions/$sessionId')({
+export const Route = createFileRoute('/_app/p/$projectSlug/s/$sessionId')({
   component: SessionPage,
 });
 
@@ -29,14 +29,14 @@ function stripSubagentPrefix(name: string): string {
 }
 
 function SessionPage() {
-  const { projectId, sessionId } = Route.useParams();
+  const { projectSlug, sessionId } = Route.useParams();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
 
-  const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const session = useQuery({ queryKey: ['session', sessionId], queryFn: () => getSession(sessionId) });
-  const members = useQuery({ queryKey: ['members', projectId], queryFn: () => listMembers(projectId) });
+  const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
   const history = useQuery({
     queryKey: ['messages', sessionId],
     queryFn: () => listMessages(sessionId),
@@ -58,9 +58,9 @@ function SessionPage() {
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
   useEffect(() => {
     if (history.isSuccess) {
-      void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
     }
-  }, [history.isSuccess, history.dataUpdatedAt, projectId, queryClient]);
+  }, [history.isSuccess, history.dataUpdatedAt, projectSlug, queryClient]);
 
   const allMessages = useMemo<Message[]>(() => [
     ...(history.data ?? []),
@@ -150,15 +150,15 @@ function SessionPage() {
       await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
       setLiveMessages([]);
       void queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
-      void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
     }
-  }, [composerText, streaming, sessionId, projectId, currentUser, queryClient, showToast]);
+  }, [composerText, streaming, sessionId, projectSlug, currentUser, queryClient, showToast]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionId, mode),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
-      await queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       showToast('공유 모드가 변경되었습니다');
     },
     onError: (err) => {
@@ -171,8 +171,6 @@ function SessionPage() {
   const userList = members.data ?? [];
   const creator = userList.find((u) => u.id === sess?.creatorId);
   const usersForRender: User[] = [...userList, AI_USER];
-
-
 
   return (
     <div className="cw-session-layout cw-page-enter">

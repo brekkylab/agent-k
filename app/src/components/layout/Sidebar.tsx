@@ -188,15 +188,17 @@ export function Sidebar() {
   }, [cancelClose, revealed, scheduleClose, sidebarMode]);
 
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: listProjects });
-  // URL에 projectId가 있을 때만 활성 프로젝트로 인정한다 — /projects 같은 곳에서는
+  // URL에 projectSlug가 있을 때만 활성 프로젝트로 인정한다 — /p 같은 곳에서는
   // sub-nav(Home/Files/.../Sessions)가 보이지 않아야 사용자 멘탈 모델과 일치.
-  const activeProjectId = useActiveProjectId();
-  const activeProject = (projectsQuery.data ?? []).find((p) => p.id === activeProjectId);
+  const activeProjectSlug = useActiveProjectId();
+  const activeProject = (projectsQuery.data ?? []).find((p) => p.slug === activeProjectSlug);
+  // Keep activeProjectId as the UUID for queryKey consistency with the rest of the app.
+  const activeProjectId = activeProject?.id ?? null;
 
   const sessionsQuery = useQuery({
-    queryKey: ['sessions', activeProjectId],
-    queryFn: () => listSessions(activeProjectId!),
-    enabled: Boolean(activeProjectId),
+    queryKey: ['sessions', activeProjectSlug],
+    queryFn: () => listSessions(activeProjectSlug!),
+    enabled: Boolean(activeProjectSlug),
   });
 
   const activeSessionId = useActiveSessionId();
@@ -207,17 +209,19 @@ export function Sidebar() {
   useEffect(() => {
     const isMobile = window.innerWidth < SIDEBAR_MOBILE_BREAKPOINT;
     if (isMobile || sidebarMode !== 'hidden') setRevealed(false);
-  }, [activeProjectId, activeSessionId, activeRoute, sidebarMode]);
+  }, [activeProjectSlug, activeSessionId, activeRoute, sidebarMode]);
 
   const createSessionMutation = useMutation({
-    mutationFn: (projectId: string) => createSession(projectId),
+    mutationFn: (projectSlug: string) => createSession(projectSlug),
     onSuccess: async (session) => {
-      await queryClient.invalidateQueries({ queryKey: ['sessions', session.projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['sessions', activeProjectSlug] });
       showToast('새 세션이 만들어졌습니다');
-      navigate({
-        to: '/projects/$projectId/sessions/$sessionId',
-        params: { projectId: session.projectId, sessionId: session.id },
-      });
+      if (activeProject) {
+        navigate({
+          to: '/p/$projectSlug/s/$sessionId',
+          params: { projectSlug: activeProject.slug, sessionId: session.id },
+        });
+      }
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
@@ -230,14 +234,14 @@ export function Sidebar() {
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) => deleteSession(sessionId),
     onSuccess: async (_, deletedId) => {
-      const deletedProjectId = pendingDelete?.projectId ?? activeProjectId;
-      if (deletedProjectId) {
-        await queryClient.invalidateQueries({ queryKey: ['sessions', deletedProjectId] });
+      const deletedProjectSlug = activeProjectSlug;
+      if (deletedProjectSlug) {
+        await queryClient.invalidateQueries({ queryKey: ['sessions', deletedProjectSlug] });
       }
       await queryClient.invalidateQueries({ queryKey: ['session', deletedId] });
       // 지금 보고 있던 세션이 사라졌다면 project home으로 돌려보냄.
-      if (activeSessionId === deletedId && activeProjectId) {
-        navigate({ to: '/projects/$projectId', params: { projectId: activeProjectId } });
+      if (activeSessionId === deletedId && activeProject) {
+        navigate({ to: '/p/$projectSlug', params: { projectSlug: activeProject.slug } });
       }
       showToast('세션이 삭제되었습니다');
       setPendingDelete(null);
@@ -250,12 +254,12 @@ export function Sidebar() {
     },
   });
 
-  function openProject(id: string) {
-    navigate({ to: '/projects/$projectId', params: { projectId: id } });
+  function openProject(slug: string) {
+    navigate({ to: '/p/$projectSlug', params: { projectSlug: slug } });
   }
 
-  function openSession(projectId: string, sessionId: string) {
-    navigate({ to: '/projects/$projectId/sessions/$sessionId', params: { projectId, sessionId } });
+  function openSession(projectSlug: string, sessionId: string) {
+    navigate({ to: '/p/$projectSlug/s/$sessionId', params: { projectSlug, sessionId } });
   }
 
   return (
@@ -295,7 +299,7 @@ export function Sidebar() {
       <div className="cw-sidebar-header">
         <button
           className="cw-brand-lockup"
-          onClick={() => navigate({ to: '/projects' })}
+          onClick={() => navigate({ to: '/p' })}
           aria-label="Cowork projects"
         >
           <img src={logoMark} alt="" />
@@ -316,7 +320,7 @@ export function Sidebar() {
             <button
               key={item.id}
               className={`cw-nav-row cw-project-nav-row ${item.id === activeProjectId ? 'is-active' : ''}`}
-              onClick={() => openProject(item.id)}
+              onClick={() => openProject(item.slug)}
             >
               <span className="cw-project-swatch" />
               <span>{item.name}</span>
@@ -329,37 +333,37 @@ export function Sidebar() {
             <div className="cw-project-name">{activeProject.name}</div>
             <button
               className={`cw-nav-row ${activeRoute === 'project' ? 'is-active' : ''}`}
-              onClick={() => openProject(activeProject.id)}
+              onClick={() => openProject(activeProject.slug)}
             >
               <IconPocket tone="home" icon="home" /> <span>Home</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'files' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectId/files', params: { projectId: activeProject.id } })}
+              onClick={() => navigate({ to: '/p/$projectSlug/files', params: { projectSlug: activeProject.slug } })}
             >
               <IconPocket tone="files" icon="folder-open" /> <span>Files</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'skills' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectId/skills', params: { projectId: activeProject.id } })}
+              onClick={() => navigate({ to: '/p/$projectSlug/skills', params: { projectSlug: activeProject.slug } })}
             >
               <IconPocket tone="skills" icon="zap" /> <span>Skills</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'schedule' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectId/schedule', params: { projectId: activeProject.id } })}
+              onClick={() => navigate({ to: '/p/$projectSlug/schedule', params: { projectSlug: activeProject.slug } })}
             >
               <IconPocket tone="schedule" icon="calendar" /> <span>Schedule</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'members' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectId/members', params: { projectId: activeProject.id } })}
+              onClick={() => navigate({ to: '/p/$projectSlug/members', params: { projectSlug: activeProject.slug } })}
             >
               <IconPocket tone="members" icon="users" /> <span>Members</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'settings' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectId/settings', params: { projectId: activeProject.id } })}
+              onClick={() => navigate({ to: '/p/$projectSlug/settings', params: { projectSlug: activeProject.slug } })}
             >
               <IconPocket tone="settings" icon="settings" /> <span>Settings</span>
             </button>
@@ -372,7 +376,7 @@ export function Sidebar() {
               label="Sessions"
               expanded={sessionsExpanded}
               onToggle={toggleSessions}
-              onAdd={() => createSessionMutation.mutate(activeProject.id)}
+              onAdd={() => createSessionMutation.mutate(activeProject.slug)}
               addLabel={createSessionMutation.isPending ? '세션 생성 중…' : '새 Session'}
               addDisabled={createSessionMutation.isPending}
             />
@@ -387,7 +391,7 @@ export function Sidebar() {
                       session.id === activeSessionId ? 'is-active' : '',
                       session.unreadCount > 0 ? 'is-unread' : '',
                     ].filter(Boolean).join(' ')}
-                    onClick={() => openSession(activeProject.id, session.id)}
+                    onClick={() => openSession(activeProject.slug, session.id)}
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
@@ -453,7 +457,7 @@ export function Sidebar() {
 }
 
 function useActiveProjectId(): string | null {
-  return useParamFromMatches('projectId');
+  return useParamFromMatches('projectSlug');
 }
 
 function useActiveSessionId(): string | null {
@@ -478,6 +482,6 @@ function useActiveRouteKey(): 'project' | 'files' | 'skills' | 'schedule' | 'mem
   if (path.endsWith('/schedule')) return 'schedule';
   if (path.endsWith('/members')) return 'members';
   if (path.endsWith('/settings')) return 'settings';
-  if (path.match(/\/projects\/[^/]+$/)) return 'project';
+  if (path.match(/\/p\/[^/]+$/)) return 'project';
   return 'projects';
 }

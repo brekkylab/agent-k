@@ -11,23 +11,23 @@ import { AvatarStack, SectionLabel } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
 import type { Project, Session, User } from '@/domain/types';
 
-function useActiveProjectIdFromRoute(): string | null {
+function useActiveProjectSlugFromRoute(): string | null {
   const state = useRouterState();
   for (const match of state.matches) {
-    const params = match.params as { projectId?: string };
-    if (params.projectId) return params.projectId;
+    const params = match.params as { projectSlug?: string };
+    if (params.projectSlug) return params.projectSlug;
   }
   return null;
 }
 
-export const Route = createFileRoute('/_app/projects/')({
+export const Route = createFileRoute('/_app/p/')({
   component: ProjectsPage,
 });
 
 function ProjectsPage() {
   const navigate = useNavigate();
   const projects = useQuery({ queryKey: ['projects'], queryFn: listProjects });
-  const activeProjectId = useActiveProjectIdFromRoute() ?? projects.data?.[0]?.id ?? null;
+  const activeProjectSlug = useActiveProjectSlugFromRoute() ?? projects.data?.[0]?.slug ?? null;
   const creator = useNewProjectDialog();
 
   return (
@@ -47,8 +47,8 @@ function ProjectsPage() {
           <ProjectCard
             key={project.id}
             project={project}
-            isActive={project.id === activeProjectId}
-            onOpen={() => navigate({ to: '/projects/$projectId', params: { projectId: project.id } })}
+            isActive={project.slug === activeProjectSlug}
+            onOpen={() => navigate({ to: '/p/$projectSlug', params: { projectSlug: project.slug } })}
           />
         ))}
       </div>
@@ -59,8 +59,8 @@ function ProjectsPage() {
 
 function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive: boolean; onOpen: () => void }) {
   const currentUser = useAuthStore((s) => s.currentUser);
-  const members = useQuery({ queryKey: ['members', project.id], queryFn: () => listMembers(project.id) });
-  const sessions = useQuery({ queryKey: ['sessions', project.id], queryFn: () => listSessions(project.id) });
+  const members = useQuery({ queryKey: ['members', project.slug], queryFn: () => listMembers(project.slug) });
+  const sessions = useQuery({ queryKey: ['sessions', project.slug], queryFn: () => listSessions(project.slug) });
   const isOwner = currentUser?.id === project.ownerId;
   const latest = latestUpdated(sessions.data ?? []);
   const memberUsers: User[] = members.data ?? [];

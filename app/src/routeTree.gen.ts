@@ -12,16 +12,16 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
-import { Route as AppProjectsRouteImport } from './routes/_app.projects'
-import { Route as AppProjectsIndexRouteImport } from './routes/_app.projects.index'
-import { Route as AppProjectsProjectIdRouteImport } from './routes/_app.projects.$projectId'
-import { Route as AppProjectsProjectIdIndexRouteImport } from './routes/_app.projects.$projectId.index'
-import { Route as AppProjectsProjectIdSkillsRouteImport } from './routes/_app.projects.$projectId.skills'
-import { Route as AppProjectsProjectIdSettingsRouteImport } from './routes/_app.projects.$projectId.settings'
-import { Route as AppProjectsProjectIdScheduleRouteImport } from './routes/_app.projects.$projectId.schedule'
-import { Route as AppProjectsProjectIdMembersRouteImport } from './routes/_app.projects.$projectId.members'
-import { Route as AppProjectsProjectIdFilesRouteImport } from './routes/_app.projects.$projectId.files'
-import { Route as AppProjectsProjectIdSessionsSessionIdRouteImport } from './routes/_app.projects.$projectId.sessions.$sessionId'
+import { Route as AppPRouteImport } from './routes/_app.p'
+import { Route as AppPIndexRouteImport } from './routes/_app.p.index'
+import { Route as AppPProjectSlugRouteImport } from './routes/_app.p.$projectSlug'
+import { Route as AppPProjectSlugIndexRouteImport } from './routes/_app.p.$projectSlug.index'
+import { Route as AppPProjectSlugSkillsRouteImport } from './routes/_app.p.$projectSlug.skills'
+import { Route as AppPProjectSlugSettingsRouteImport } from './routes/_app.p.$projectSlug.settings'
+import { Route as AppPProjectSlugScheduleRouteImport } from './routes/_app.p.$projectSlug.schedule'
+import { Route as AppPProjectSlugMembersRouteImport } from './routes/_app.p.$projectSlug.members'
+import { Route as AppPProjectSlugFilesRouteImport } from './routes/_app.p.$projectSlug.files'
+import { Route as AppPProjectSlugSSessionIdRouteImport } from './routes/_app.p.$projectSlug.s.$sessionId'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -37,148 +37,142 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppProjectsRoute = AppProjectsRouteImport.update({
-  id: '/projects',
-  path: '/projects',
+const AppPRoute = AppPRouteImport.update({
+  id: '/p',
+  path: '/p',
   getParentRoute: () => AppRoute,
 } as any)
-const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
+const AppPIndexRoute = AppPIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AppProjectsRoute,
+  getParentRoute: () => AppPRoute,
 } as any)
-const AppProjectsProjectIdRoute = AppProjectsProjectIdRouteImport.update({
-  id: '/$projectId',
-  path: '/$projectId',
-  getParentRoute: () => AppProjectsRoute,
+const AppPProjectSlugRoute = AppPProjectSlugRouteImport.update({
+  id: '/$projectSlug',
+  path: '/$projectSlug',
+  getParentRoute: () => AppPRoute,
 } as any)
-const AppProjectsProjectIdIndexRoute =
-  AppProjectsProjectIdIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => AppProjectsProjectIdRoute,
-  } as any)
-const AppProjectsProjectIdSkillsRoute =
-  AppProjectsProjectIdSkillsRouteImport.update({
-    id: '/skills',
-    path: '/skills',
-    getParentRoute: () => AppProjectsProjectIdRoute,
-  } as any)
-const AppProjectsProjectIdSettingsRoute =
-  AppProjectsProjectIdSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AppProjectsProjectIdRoute,
-  } as any)
-const AppProjectsProjectIdScheduleRoute =
-  AppProjectsProjectIdScheduleRouteImport.update({
-    id: '/schedule',
-    path: '/schedule',
-    getParentRoute: () => AppProjectsProjectIdRoute,
-  } as any)
-const AppProjectsProjectIdMembersRoute =
-  AppProjectsProjectIdMembersRouteImport.update({
-    id: '/members',
-    path: '/members',
-    getParentRoute: () => AppProjectsProjectIdRoute,
-  } as any)
-const AppProjectsProjectIdFilesRoute =
-  AppProjectsProjectIdFilesRouteImport.update({
-    id: '/files',
-    path: '/files',
-    getParentRoute: () => AppProjectsProjectIdRoute,
-  } as any)
-const AppProjectsProjectIdSessionsSessionIdRoute =
-  AppProjectsProjectIdSessionsSessionIdRouteImport.update({
-    id: '/sessions/$sessionId',
-    path: '/sessions/$sessionId',
-    getParentRoute: () => AppProjectsProjectIdRoute,
+const AppPProjectSlugIndexRoute = AppPProjectSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppPProjectSlugRoute,
+} as any)
+const AppPProjectSlugSkillsRoute = AppPProjectSlugSkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => AppPProjectSlugRoute,
+} as any)
+const AppPProjectSlugSettingsRoute = AppPProjectSlugSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppPProjectSlugRoute,
+} as any)
+const AppPProjectSlugScheduleRoute = AppPProjectSlugScheduleRouteImport.update({
+  id: '/schedule',
+  path: '/schedule',
+  getParentRoute: () => AppPProjectSlugRoute,
+} as any)
+const AppPProjectSlugMembersRoute = AppPProjectSlugMembersRouteImport.update({
+  id: '/members',
+  path: '/members',
+  getParentRoute: () => AppPProjectSlugRoute,
+} as any)
+const AppPProjectSlugFilesRoute = AppPProjectSlugFilesRouteImport.update({
+  id: '/files',
+  path: '/files',
+  getParentRoute: () => AppPProjectSlugRoute,
+} as any)
+const AppPProjectSlugSSessionIdRoute =
+  AppPProjectSlugSSessionIdRouteImport.update({
+    id: '/s/$sessionId',
+    path: '/s/$sessionId',
+    getParentRoute: () => AppPProjectSlugRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
-  '/projects': typeof AppProjectsRouteWithChildren
-  '/projects/$projectId': typeof AppProjectsProjectIdRouteWithChildren
-  '/projects/': typeof AppProjectsIndexRoute
-  '/projects/$projectId/files': typeof AppProjectsProjectIdFilesRoute
-  '/projects/$projectId/members': typeof AppProjectsProjectIdMembersRoute
-  '/projects/$projectId/schedule': typeof AppProjectsProjectIdScheduleRoute
-  '/projects/$projectId/settings': typeof AppProjectsProjectIdSettingsRoute
-  '/projects/$projectId/skills': typeof AppProjectsProjectIdSkillsRoute
-  '/projects/$projectId/': typeof AppProjectsProjectIdIndexRoute
-  '/projects/$projectId/sessions/$sessionId': typeof AppProjectsProjectIdSessionsSessionIdRoute
+  '/p': typeof AppPRouteWithChildren
+  '/p/$projectSlug': typeof AppPProjectSlugRouteWithChildren
+  '/p/': typeof AppPIndexRoute
+  '/p/$projectSlug/files': typeof AppPProjectSlugFilesRoute
+  '/p/$projectSlug/members': typeof AppPProjectSlugMembersRoute
+  '/p/$projectSlug/schedule': typeof AppPProjectSlugScheduleRoute
+  '/p/$projectSlug/settings': typeof AppPProjectSlugSettingsRoute
+  '/p/$projectSlug/skills': typeof AppPProjectSlugSkillsRoute
+  '/p/$projectSlug/': typeof AppPProjectSlugIndexRoute
+  '/p/$projectSlug/s/$sessionId': typeof AppPProjectSlugSSessionIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/': typeof AppIndexRoute
-  '/projects': typeof AppProjectsIndexRoute
-  '/projects/$projectId/files': typeof AppProjectsProjectIdFilesRoute
-  '/projects/$projectId/members': typeof AppProjectsProjectIdMembersRoute
-  '/projects/$projectId/schedule': typeof AppProjectsProjectIdScheduleRoute
-  '/projects/$projectId/settings': typeof AppProjectsProjectIdSettingsRoute
-  '/projects/$projectId/skills': typeof AppProjectsProjectIdSkillsRoute
-  '/projects/$projectId': typeof AppProjectsProjectIdIndexRoute
-  '/projects/$projectId/sessions/$sessionId': typeof AppProjectsProjectIdSessionsSessionIdRoute
+  '/p': typeof AppPIndexRoute
+  '/p/$projectSlug/files': typeof AppPProjectSlugFilesRoute
+  '/p/$projectSlug/members': typeof AppPProjectSlugMembersRoute
+  '/p/$projectSlug/schedule': typeof AppPProjectSlugScheduleRoute
+  '/p/$projectSlug/settings': typeof AppPProjectSlugSettingsRoute
+  '/p/$projectSlug/skills': typeof AppPProjectSlugSkillsRoute
+  '/p/$projectSlug': typeof AppPProjectSlugIndexRoute
+  '/p/$projectSlug/s/$sessionId': typeof AppPProjectSlugSSessionIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
-  '/_app/projects': typeof AppProjectsRouteWithChildren
+  '/_app/p': typeof AppPRouteWithChildren
   '/_app/': typeof AppIndexRoute
-  '/_app/projects/$projectId': typeof AppProjectsProjectIdRouteWithChildren
-  '/_app/projects/': typeof AppProjectsIndexRoute
-  '/_app/projects/$projectId/files': typeof AppProjectsProjectIdFilesRoute
-  '/_app/projects/$projectId/members': typeof AppProjectsProjectIdMembersRoute
-  '/_app/projects/$projectId/schedule': typeof AppProjectsProjectIdScheduleRoute
-  '/_app/projects/$projectId/settings': typeof AppProjectsProjectIdSettingsRoute
-  '/_app/projects/$projectId/skills': typeof AppProjectsProjectIdSkillsRoute
-  '/_app/projects/$projectId/': typeof AppProjectsProjectIdIndexRoute
-  '/_app/projects/$projectId/sessions/$sessionId': typeof AppProjectsProjectIdSessionsSessionIdRoute
+  '/_app/p/$projectSlug': typeof AppPProjectSlugRouteWithChildren
+  '/_app/p/': typeof AppPIndexRoute
+  '/_app/p/$projectSlug/files': typeof AppPProjectSlugFilesRoute
+  '/_app/p/$projectSlug/members': typeof AppPProjectSlugMembersRoute
+  '/_app/p/$projectSlug/schedule': typeof AppPProjectSlugScheduleRoute
+  '/_app/p/$projectSlug/settings': typeof AppPProjectSlugSettingsRoute
+  '/_app/p/$projectSlug/skills': typeof AppPProjectSlugSkillsRoute
+  '/_app/p/$projectSlug/': typeof AppPProjectSlugIndexRoute
+  '/_app/p/$projectSlug/s/$sessionId': typeof AppPProjectSlugSSessionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/login'
-    | '/projects'
-    | '/projects/$projectId'
-    | '/projects/'
-    | '/projects/$projectId/files'
-    | '/projects/$projectId/members'
-    | '/projects/$projectId/schedule'
-    | '/projects/$projectId/settings'
-    | '/projects/$projectId/skills'
-    | '/projects/$projectId/'
-    | '/projects/$projectId/sessions/$sessionId'
+    | '/p'
+    | '/p/$projectSlug'
+    | '/p/'
+    | '/p/$projectSlug/files'
+    | '/p/$projectSlug/members'
+    | '/p/$projectSlug/schedule'
+    | '/p/$projectSlug/settings'
+    | '/p/$projectSlug/skills'
+    | '/p/$projectSlug/'
+    | '/p/$projectSlug/s/$sessionId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
     | '/'
-    | '/projects'
-    | '/projects/$projectId/files'
-    | '/projects/$projectId/members'
-    | '/projects/$projectId/schedule'
-    | '/projects/$projectId/settings'
-    | '/projects/$projectId/skills'
-    | '/projects/$projectId'
-    | '/projects/$projectId/sessions/$sessionId'
+    | '/p'
+    | '/p/$projectSlug/files'
+    | '/p/$projectSlug/members'
+    | '/p/$projectSlug/schedule'
+    | '/p/$projectSlug/settings'
+    | '/p/$projectSlug/skills'
+    | '/p/$projectSlug'
+    | '/p/$projectSlug/s/$sessionId'
   id:
     | '__root__'
     | '/_app'
     | '/login'
-    | '/_app/projects'
+    | '/_app/p'
     | '/_app/'
-    | '/_app/projects/$projectId'
-    | '/_app/projects/'
-    | '/_app/projects/$projectId/files'
-    | '/_app/projects/$projectId/members'
-    | '/_app/projects/$projectId/schedule'
-    | '/_app/projects/$projectId/settings'
-    | '/_app/projects/$projectId/skills'
-    | '/_app/projects/$projectId/'
-    | '/_app/projects/$projectId/sessions/$sessionId'
+    | '/_app/p/$projectSlug'
+    | '/_app/p/'
+    | '/_app/p/$projectSlug/files'
+    | '/_app/p/$projectSlug/members'
+    | '/_app/p/$projectSlug/schedule'
+    | '/_app/p/$projectSlug/settings'
+    | '/_app/p/$projectSlug/skills'
+    | '/_app/p/$projectSlug/'
+    | '/_app/p/$projectSlug/s/$sessionId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -209,124 +203,122 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/projects': {
-      id: '/_app/projects'
-      path: '/projects'
-      fullPath: '/projects'
-      preLoaderRoute: typeof AppProjectsRouteImport
+    '/_app/p': {
+      id: '/_app/p'
+      path: '/p'
+      fullPath: '/p'
+      preLoaderRoute: typeof AppPRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/projects/': {
-      id: '/_app/projects/'
+    '/_app/p/': {
+      id: '/_app/p/'
       path: '/'
-      fullPath: '/projects/'
-      preLoaderRoute: typeof AppProjectsIndexRouteImport
-      parentRoute: typeof AppProjectsRoute
+      fullPath: '/p/'
+      preLoaderRoute: typeof AppPIndexRouteImport
+      parentRoute: typeof AppPRoute
     }
-    '/_app/projects/$projectId': {
-      id: '/_app/projects/$projectId'
-      path: '/$projectId'
-      fullPath: '/projects/$projectId'
-      preLoaderRoute: typeof AppProjectsProjectIdRouteImport
-      parentRoute: typeof AppProjectsRoute
+    '/_app/p/$projectSlug': {
+      id: '/_app/p/$projectSlug'
+      path: '/$projectSlug'
+      fullPath: '/p/$projectSlug'
+      preLoaderRoute: typeof AppPProjectSlugRouteImport
+      parentRoute: typeof AppPRoute
     }
-    '/_app/projects/$projectId/': {
-      id: '/_app/projects/$projectId/'
+    '/_app/p/$projectSlug/': {
+      id: '/_app/p/$projectSlug/'
       path: '/'
-      fullPath: '/projects/$projectId/'
-      preLoaderRoute: typeof AppProjectsProjectIdIndexRouteImport
-      parentRoute: typeof AppProjectsProjectIdRoute
+      fullPath: '/p/$projectSlug/'
+      preLoaderRoute: typeof AppPProjectSlugIndexRouteImport
+      parentRoute: typeof AppPProjectSlugRoute
     }
-    '/_app/projects/$projectId/skills': {
-      id: '/_app/projects/$projectId/skills'
+    '/_app/p/$projectSlug/skills': {
+      id: '/_app/p/$projectSlug/skills'
       path: '/skills'
-      fullPath: '/projects/$projectId/skills'
-      preLoaderRoute: typeof AppProjectsProjectIdSkillsRouteImport
-      parentRoute: typeof AppProjectsProjectIdRoute
+      fullPath: '/p/$projectSlug/skills'
+      preLoaderRoute: typeof AppPProjectSlugSkillsRouteImport
+      parentRoute: typeof AppPProjectSlugRoute
     }
-    '/_app/projects/$projectId/settings': {
-      id: '/_app/projects/$projectId/settings'
+    '/_app/p/$projectSlug/settings': {
+      id: '/_app/p/$projectSlug/settings'
       path: '/settings'
-      fullPath: '/projects/$projectId/settings'
-      preLoaderRoute: typeof AppProjectsProjectIdSettingsRouteImport
-      parentRoute: typeof AppProjectsProjectIdRoute
+      fullPath: '/p/$projectSlug/settings'
+      preLoaderRoute: typeof AppPProjectSlugSettingsRouteImport
+      parentRoute: typeof AppPProjectSlugRoute
     }
-    '/_app/projects/$projectId/schedule': {
-      id: '/_app/projects/$projectId/schedule'
+    '/_app/p/$projectSlug/schedule': {
+      id: '/_app/p/$projectSlug/schedule'
       path: '/schedule'
-      fullPath: '/projects/$projectId/schedule'
-      preLoaderRoute: typeof AppProjectsProjectIdScheduleRouteImport
-      parentRoute: typeof AppProjectsProjectIdRoute
+      fullPath: '/p/$projectSlug/schedule'
+      preLoaderRoute: typeof AppPProjectSlugScheduleRouteImport
+      parentRoute: typeof AppPProjectSlugRoute
     }
-    '/_app/projects/$projectId/members': {
-      id: '/_app/projects/$projectId/members'
+    '/_app/p/$projectSlug/members': {
+      id: '/_app/p/$projectSlug/members'
       path: '/members'
-      fullPath: '/projects/$projectId/members'
-      preLoaderRoute: typeof AppProjectsProjectIdMembersRouteImport
-      parentRoute: typeof AppProjectsProjectIdRoute
+      fullPath: '/p/$projectSlug/members'
+      preLoaderRoute: typeof AppPProjectSlugMembersRouteImport
+      parentRoute: typeof AppPProjectSlugRoute
     }
-    '/_app/projects/$projectId/files': {
-      id: '/_app/projects/$projectId/files'
+    '/_app/p/$projectSlug/files': {
+      id: '/_app/p/$projectSlug/files'
       path: '/files'
-      fullPath: '/projects/$projectId/files'
-      preLoaderRoute: typeof AppProjectsProjectIdFilesRouteImport
-      parentRoute: typeof AppProjectsProjectIdRoute
+      fullPath: '/p/$projectSlug/files'
+      preLoaderRoute: typeof AppPProjectSlugFilesRouteImport
+      parentRoute: typeof AppPProjectSlugRoute
     }
-    '/_app/projects/$projectId/sessions/$sessionId': {
-      id: '/_app/projects/$projectId/sessions/$sessionId'
-      path: '/sessions/$sessionId'
-      fullPath: '/projects/$projectId/sessions/$sessionId'
-      preLoaderRoute: typeof AppProjectsProjectIdSessionsSessionIdRouteImport
-      parentRoute: typeof AppProjectsProjectIdRoute
+    '/_app/p/$projectSlug/s/$sessionId': {
+      id: '/_app/p/$projectSlug/s/$sessionId'
+      path: '/s/$sessionId'
+      fullPath: '/p/$projectSlug/s/$sessionId'
+      preLoaderRoute: typeof AppPProjectSlugSSessionIdRouteImport
+      parentRoute: typeof AppPProjectSlugRoute
     }
   }
 }
 
-interface AppProjectsProjectIdRouteChildren {
-  AppProjectsProjectIdFilesRoute: typeof AppProjectsProjectIdFilesRoute
-  AppProjectsProjectIdMembersRoute: typeof AppProjectsProjectIdMembersRoute
-  AppProjectsProjectIdScheduleRoute: typeof AppProjectsProjectIdScheduleRoute
-  AppProjectsProjectIdSettingsRoute: typeof AppProjectsProjectIdSettingsRoute
-  AppProjectsProjectIdSkillsRoute: typeof AppProjectsProjectIdSkillsRoute
-  AppProjectsProjectIdIndexRoute: typeof AppProjectsProjectIdIndexRoute
-  AppProjectsProjectIdSessionsSessionIdRoute: typeof AppProjectsProjectIdSessionsSessionIdRoute
+interface AppPProjectSlugRouteChildren {
+  AppPProjectSlugFilesRoute: typeof AppPProjectSlugFilesRoute
+  AppPProjectSlugMembersRoute: typeof AppPProjectSlugMembersRoute
+  AppPProjectSlugScheduleRoute: typeof AppPProjectSlugScheduleRoute
+  AppPProjectSlugSettingsRoute: typeof AppPProjectSlugSettingsRoute
+  AppPProjectSlugSkillsRoute: typeof AppPProjectSlugSkillsRoute
+  AppPProjectSlugIndexRoute: typeof AppPProjectSlugIndexRoute
+  AppPProjectSlugSSessionIdRoute: typeof AppPProjectSlugSSessionIdRoute
 }
 
-const AppProjectsProjectIdRouteChildren: AppProjectsProjectIdRouteChildren = {
-  AppProjectsProjectIdFilesRoute: AppProjectsProjectIdFilesRoute,
-  AppProjectsProjectIdMembersRoute: AppProjectsProjectIdMembersRoute,
-  AppProjectsProjectIdScheduleRoute: AppProjectsProjectIdScheduleRoute,
-  AppProjectsProjectIdSettingsRoute: AppProjectsProjectIdSettingsRoute,
-  AppProjectsProjectIdSkillsRoute: AppProjectsProjectIdSkillsRoute,
-  AppProjectsProjectIdIndexRoute: AppProjectsProjectIdIndexRoute,
-  AppProjectsProjectIdSessionsSessionIdRoute:
-    AppProjectsProjectIdSessionsSessionIdRoute,
+const AppPProjectSlugRouteChildren: AppPProjectSlugRouteChildren = {
+  AppPProjectSlugFilesRoute: AppPProjectSlugFilesRoute,
+  AppPProjectSlugMembersRoute: AppPProjectSlugMembersRoute,
+  AppPProjectSlugScheduleRoute: AppPProjectSlugScheduleRoute,
+  AppPProjectSlugSettingsRoute: AppPProjectSlugSettingsRoute,
+  AppPProjectSlugSkillsRoute: AppPProjectSlugSkillsRoute,
+  AppPProjectSlugIndexRoute: AppPProjectSlugIndexRoute,
+  AppPProjectSlugSSessionIdRoute: AppPProjectSlugSSessionIdRoute,
 }
 
-const AppProjectsProjectIdRouteWithChildren =
-  AppProjectsProjectIdRoute._addFileChildren(AppProjectsProjectIdRouteChildren)
-
-interface AppProjectsRouteChildren {
-  AppProjectsProjectIdRoute: typeof AppProjectsProjectIdRouteWithChildren
-  AppProjectsIndexRoute: typeof AppProjectsIndexRoute
-}
-
-const AppProjectsRouteChildren: AppProjectsRouteChildren = {
-  AppProjectsProjectIdRoute: AppProjectsProjectIdRouteWithChildren,
-  AppProjectsIndexRoute: AppProjectsIndexRoute,
-}
-
-const AppProjectsRouteWithChildren = AppProjectsRoute._addFileChildren(
-  AppProjectsRouteChildren,
+const AppPProjectSlugRouteWithChildren = AppPProjectSlugRoute._addFileChildren(
+  AppPProjectSlugRouteChildren,
 )
 
+interface AppPRouteChildren {
+  AppPProjectSlugRoute: typeof AppPProjectSlugRouteWithChildren
+  AppPIndexRoute: typeof AppPIndexRoute
+}
+
+const AppPRouteChildren: AppPRouteChildren = {
+  AppPProjectSlugRoute: AppPProjectSlugRouteWithChildren,
+  AppPIndexRoute: AppPIndexRoute,
+}
+
+const AppPRouteWithChildren = AppPRoute._addFileChildren(AppPRouteChildren)
+
 interface AppRouteChildren {
-  AppProjectsRoute: typeof AppProjectsRouteWithChildren
+  AppPRoute: typeof AppPRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
-  AppProjectsRoute: AppProjectsRouteWithChildren,
+  AppPRoute: AppPRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
 }
 

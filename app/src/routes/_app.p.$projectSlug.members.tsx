@@ -16,30 +16,30 @@ import { canInviteMembers, canLeaveProject, canRemoveMember } from '@/lib/permis
 import { ApiError } from '@/api/client';
 import type { User } from '@/domain/types';
 
-export const Route = createFileRoute('/_app/projects/$projectId/members')({
+export const Route = createFileRoute('/_app/p/$projectSlug/members')({
   component: MembersPage,
 });
 
 interface RemoveTarget { user: User; isSelfLeave: boolean; }
 
 function MembersPage() {
-  const { projectId } = Route.useParams();
+  const { projectSlug } = Route.useParams();
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((s) => s.currentUser);
   const showToast = useToastStore((s) => s.show);
 
-  const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
-  const members = useQuery({ queryKey: ['members', projectId], queryFn: () => listMembers(projectId) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<RemoveTarget | null>(null);
 
   const removeMutation = useMutation({
-    mutationFn: (userId: string) => removeMember(projectId, userId),
+    mutationFn: (userId: string) => removeMember(projectSlug, userId),
     onSuccess: async (_, removedId) => {
-      await queryClient.invalidateQueries({ queryKey: ['members', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['members', projectSlug] });
       if (removeTarget?.isSelfLeave) {
-        // I left the project — drop me back to /projects.
+        // I left the project — drop me back to /p.
         await queryClient.invalidateQueries({ queryKey: ['projects'] });
         showToast('프로젝트에서 나왔습니다');
         // Note: navigate happens via the parent layout's route guard when
@@ -199,7 +199,7 @@ function MembersPage() {
       )}
 
       {inviteOpen && (
-        <InviteDialog projectId={projectId} onClose={() => setInviteOpen(false)} />
+        <InviteDialog projectId={projectSlug} onClose={() => setInviteOpen(false)} />
       )}
 
       {removeTarget && (

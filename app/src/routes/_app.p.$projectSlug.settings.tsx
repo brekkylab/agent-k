@@ -3,13 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import { getProject } from '@/api/projects';
 import { SectionLabel } from '@/components/uiPrimitives';
 
-export const Route = createFileRoute('/_app/projects/$projectId/settings')({
+export const Route = createFileRoute('/_app/p/$projectSlug/settings')({
   component: SettingsPage,
 });
 
 function SettingsPage() {
-  const { projectId } = Route.useParams();
-  const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
+  const { projectSlug } = Route.useParams();
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
 
   return (
     <section className="cw-page cw-simple-page cw-page-enter">
@@ -19,7 +19,8 @@ function SettingsPage() {
       <div className="cw-simple-stack">
         <code>name: {project.data?.name ?? '—'}</code>
         <code>description: {project.data?.description || '—'}</code>
-        <code>id: {projectId}</code>
+        <code>slug: {projectSlug}</code>
+        <code>id: {project.data?.id ?? '—'}</code>
         <code>owner_id: {project.data?.ownerId ?? '—'}</code>
       </div>
     </section>
