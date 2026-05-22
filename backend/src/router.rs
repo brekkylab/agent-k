@@ -136,6 +136,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/automations/{automation_id}/runs/{run_id}/events",
             get(handlers::list_run_events),
         )
+        .api_route(
+            "/automations/{automation_id}/runs/{run_id}/cancel",
+            post(handlers::cancel_run),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,

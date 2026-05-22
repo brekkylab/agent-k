@@ -316,10 +316,16 @@ async fn try_claim_and_execute(state: &Arc<AppState>) -> Result<bool, String> {
             .schedule_retry(&run, scheduled_for, next_attempt)
             .await
         {
-            Ok(retry_run) => {
+            Ok(Some(retry_run)) => {
                 tracing::info!(
                     run = %run.id, next = %retry_run.id, attempt = next_attempt,
                     "retry scheduled",
+                );
+            }
+            Ok(None) => {
+                tracing::info!(
+                    run = %run.id,
+                    "retry skipped: automation disabled",
                 );
             }
             Err(e) => {

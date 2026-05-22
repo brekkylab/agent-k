@@ -14,6 +14,8 @@ CREATE TABLE automations (
     -- JSON array of strings; future per-step metadata can migrate to objects.
     prompts_json         TEXT NOT NULL DEFAULT '[]',
 
+    enabled              INTEGER NOT NULL DEFAULT 1,
+    
     created_by           TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     created_at           TEXT NOT NULL,
     updated_at           TEXT NOT NULL

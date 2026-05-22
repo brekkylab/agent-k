@@ -17,6 +17,7 @@ pub struct DbAutomation {
     pub name: String,
     pub description: Option<String>,
     pub prompts: Vec<String>,
+    pub enabled: bool,
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -74,6 +75,7 @@ impl SqliteRepository {
             name: row.get("name"),
             description: row.get("description"),
             prompts,
+            enabled: row.get::<i64, _>("enabled") != 0,
             created_by: Self::parse_uuid(
                 row.get::<String, _>("created_by"),
                 "automations.created_by",
@@ -229,6 +231,7 @@ impl SqliteRepository {
             name,
             description,
             prompts,
+            enabled: true,
             created_by,
             created_at: Self::parse_timestamp(now.clone(), "automations.created_at")?,
             updated_at: Self::parse_timestamp(now, "automations.updated_at")?,
@@ -237,7 +240,7 @@ impl SqliteRepository {
 
     pub async fn get_automation(&self, id: Uuid) -> RepositoryResult<Option<DbAutomation>> {
         let row = sqlx::query(
-            "SELECT id, project_id, name, description, prompts_json, created_by, created_at, updated_at \
+            "SELECT id, project_id, name, description, prompts_json, enabled, created_by, created_at, updated_at \
              FROM automations WHERE id = ?",
         )
         .bind(id.to_string())
@@ -251,7 +254,7 @@ impl SqliteRepository {
         project_id: Uuid,
     ) -> RepositoryResult<Vec<DbAutomation>> {
         let rows = sqlx::query(
-            "SELECT id, project_id, name, description, prompts_json, created_by, created_at, updated_at \
+            "SELECT id, project_id, name, description, prompts_json, enabled, created_by, created_at, updated_at \
              FROM automations WHERE project_id = ? ORDER BY created_at DESC",
         )
         .bind(project_id.to_string())
@@ -267,7 +270,7 @@ impl SqliteRepository {
     ) -> RepositoryResult<Vec<DbAutomation>> {
         let uid = requesting_user_id.to_string();
         let rows = sqlx::query(
-            "SELECT a.id, a.project_id, a.name, a.description, a.prompts_json, a.created_by, a.created_at, a.updated_at
+            "SELECT a.id, a.project_id, a.name, a.description, a.prompts_json, a.enabled, a.created_by, a.created_at, a.updated_at
              FROM automations a
              JOIN projects p ON p.id = a.project_id
              WHERE p.owner_id = ?1
@@ -287,6 +290,7 @@ impl SqliteRepository {
         name: Option<String>,
         description: Option<Option<String>>,
         prompts: Option<Vec<String>>,
+        enabled: Option<bool>,
     ) -> RepositoryResult<DbAutomation> {
         let current = self.get_automation(id).await?.ok_or_else(|| {
             RepositoryError::InvalidData(format!("automation {id} not found"))
@@ -295,23 +299,110 @@ impl SqliteRepository {
         let new_desc = description.unwrap_or(current.description);
         let new_prompts = prompts.unwrap_or(current.prompts);
         let new_prompts_json = serde_json::to_string(&new_prompts)?;
+        let new_enabled = enabled.unwrap_or(current.enabled);
         let now = Self::now_string();
+        let disabling = current.enabled && !new_enabled;
+        let enabling = !current.enabled && new_enabled;
+
+        let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "UPDATE automations SET name = ?, description = ?, prompts_json = ?, updated_at = ? \
+            "UPDATE automations SET name = ?, description = ?, prompts_json = ?, enabled = ?, updated_at = ? \
              WHERE id = ?",
         )
         .bind(&new_name)
         .bind(&new_desc)
         .bind(&new_prompts_json)
+        .bind(if new_enabled { 1i64 } else { 0i64 })
         .bind(&now)
         .bind(id.to_string())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        if disabling {
+            Self::cancel_queued_runs_for_automation(&mut tx, id, &now).await?;
+        }
+        if enabling {
+            Self::refresh_cron_triggers_for_automation(&mut tx, id, &now).await?;
+        }
+
+        tx.commit().await?;
 
         self.get_automation(id).await?.ok_or_else(|| {
             RepositoryError::InvalidData("automation disappeared after update".into())
         })
+    }
+
+    /// Events are inserted before the status flip so the bulk UPDATE's
+    /// `WHERE status='queued'` still matches the same row set. Caller owns
+    /// the tx.
+    async fn cancel_queued_runs_for_automation(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        automation_id: Uuid,
+        now: &str,
+    ) -> RepositoryResult<()> {
+        let cancel_payload =
+            serde_json::to_string(&serde_json::json!({ "reason": "automation_disabled" }))?;
+        sqlx::query(
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             SELECT id, ?, 'cancelled', ? FROM automation_runs \
+              WHERE automation_id = ? AND status = 'queued'",
+        )
+        .bind(now)
+        .bind(&cancel_payload)
+        .bind(automation_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query(
+            "UPDATE automation_runs \
+                SET status = 'cancelled', lease_until = NULL, updated_at = ? \
+              WHERE automation_id = ? AND status = 'queued'",
+        )
+        .bind(now)
+        .bind(automation_id.to_string())
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Recompute `next_fire_at` against `now` so a stale fire from the
+    /// disabled window doesn't trip on re-enable. Caller owns the tx.
+    async fn refresh_cron_triggers_for_automation(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        automation_id: Uuid,
+        now: &str,
+    ) -> RepositoryResult<()> {
+        let now_dt = Self::parse_timestamp(now.to_string(), "automations.updated_at")?;
+        let triggers = sqlx::query(
+            "SELECT id, spec_json FROM automation_triggers \
+              WHERE automation_id = ? AND kind = 'cron' AND enabled = 1",
+        )
+        .bind(automation_id.to_string())
+        .fetch_all(&mut **tx)
+        .await?;
+        for row in &triggers {
+            let trig_id: String = row.get("id");
+            let spec_json: String = row.get("spec_json");
+            let spec = crate::model::TriggerSpec::from_db(
+                crate::model::TriggerKind::Cron,
+                &spec_json,
+            )?;
+            let crate::model::TriggerSpec::Cron { expr, tz } = spec else {
+                continue;
+            };
+            let tz_name = tz.as_deref().unwrap_or(crate::cron::default_tz_name());
+            let next = crate::cron::next_fire_after(&expr, tz_name, now_dt)
+                .map_err(RepositoryError::InvalidData)?;
+            sqlx::query(
+                "UPDATE automation_triggers SET next_fire_at = ?, updated_at = ? WHERE id = ?",
+            )
+            .bind(Self::ts_string(next))
+            .bind(now)
+            .bind(&trig_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
     }
 
     pub async fn delete_automation(&self, id: Uuid) -> RepositoryResult<bool> {
@@ -505,10 +596,12 @@ impl SqliteRepository {
     ) -> RepositoryResult<Vec<DbAutomationTrigger>> {
         let now_s = Self::ts_string(now);
         let rows = sqlx::query(
-            "SELECT id, automation_id, kind, spec_json, enabled, next_fire_at, webhook_token_hash, created_at, updated_at \
-             FROM automation_triggers \
-             WHERE enabled = 1 AND kind = 'cron' AND next_fire_at IS NOT NULL AND next_fire_at <= ? \
-             ORDER BY next_fire_at ASC",
+            "SELECT t.id, t.automation_id, t.kind, t.spec_json, t.enabled, t.next_fire_at, t.webhook_token_hash, t.created_at, t.updated_at \
+             FROM automation_triggers t \
+             JOIN automations a ON a.id = t.automation_id \
+             WHERE t.enabled = 1 AND a.enabled = 1 \
+               AND t.kind = 'cron' AND t.next_fire_at IS NOT NULL AND t.next_fire_at <= ? \
+             ORDER BY t.next_fire_at ASC",
         )
         .bind(&now_s)
         .fetch_all(&self.pool)
@@ -595,10 +688,11 @@ impl SqliteRepository {
         .await?;
 
         let run_id = Uuid::new_v4();
-        sqlx::query(
+        let run_res = sqlx::query(
             "INSERT INTO automation_runs \
                (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?, ?)",
+             SELECT ?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?, ? \
+              WHERE EXISTS (SELECT 1 FROM automations WHERE id = ? AND enabled = 1)",
         )
         .bind(run_id.to_string())
         .bind(automation_id.to_string())
@@ -609,9 +703,19 @@ impl SqliteRepository {
         .bind(idempotency_key)
         .bind(&now)
         .bind(&now)
+        .bind(automation_id.to_string())
         .execute(&mut *tx)
         .await
         .map_err(|e| Self::map_db_error(e, "automation_runs.idempotency_key"))?;
+
+        if run_res.rows_affected() == 0 {
+            // EXISTS gate serialised against PATCH disable by SQLite's
+            // single-writer lock; 0 rows means automation went disabled first.
+            tx.rollback().await?;
+            return Err(RepositoryError::Conflict(
+                "automation is disabled".to_string(),
+            ));
+        }
 
         let triggered_str = triggered_payload.map(serde_json::to_string).transpose()?;
         sqlx::query(
@@ -683,10 +787,11 @@ impl SqliteRepository {
         .await?;
 
         let run_id = Uuid::new_v4();
-        sqlx::query(
+        let run_res = sqlx::query(
             "INSERT INTO automation_runs \
                (id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, ?, ?)",
+             SELECT ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, ?, ? \
+              WHERE EXISTS (SELECT 1 FROM automations WHERE id = ? AND enabled = 1)",
         )
         .bind(run_id.to_string())
         .bind(automation_id.to_string())
@@ -695,9 +800,20 @@ impl SqliteRepository {
         .bind(&scheduled_s)
         .bind(&now)
         .bind(&now)
+        .bind(automation_id.to_string())
         .execute(&mut *tx)
         .await
         .map_err(|e| Self::map_db_error(e, "automation_runs.session_id"))?;
+
+        if run_res.rows_affected() == 0 {
+            // Lost race against PATCH disable (serialised by SQLite's
+            // single-writer lock); rollback also drops the next_fire_at
+            // advance so this tick effectively never happened.
+            tx.rollback().await?;
+            return Err(RepositoryError::Conflict(
+                "automation is disabled".to_string(),
+            ));
+        }
 
         let triggered_str = serde_json::to_string(triggered_payload)?;
         sqlx::query(
@@ -745,6 +861,44 @@ impl SqliteRepository {
         })
     }
 
+    /// `Ok(false)` if the row was already terminal. Race-safe vs
+    /// finalize/reaper via shared `WHERE status IN ('queued','running')`
+    /// guard (SQLite single-writer serialises the UPDATEs); worker tears
+    /// down on its next failed `renew_lease`.
+    pub async fn cancel_run(
+        &self,
+        run_id: Uuid,
+        event_payload: &serde_json::Value,
+    ) -> RepositoryResult<bool> {
+        let mut tx = self.pool.begin().await?;
+        let now = Self::now_string();
+        let res = sqlx::query(
+            "UPDATE automation_runs \
+                SET status = 'cancelled', lease_until = NULL, updated_at = ? \
+              WHERE id = ? AND status IN ('queued', 'running')",
+        )
+        .bind(&now)
+        .bind(run_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        if res.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        let payload_str = serde_json::to_string(event_payload)?;
+        sqlx::query(
+            "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+             VALUES (?, ?, 'cancelled', ?)",
+        )
+        .bind(run_id.to_string())
+        .bind(&now)
+        .bind(&payload_str)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     pub async fn get_run(&self, id: Uuid) -> RepositoryResult<Option<DbAutomationRun>> {
         let row = sqlx::query(
             "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at \
@@ -790,9 +944,10 @@ impl SqliteRepository {
             "UPDATE automation_runs \
                 SET status = 'running', lease_until = ?1, updated_at = ?2 \
               WHERE id = ( \
-                SELECT id FROM automation_runs \
-                 WHERE status = 'queued' AND scheduled_for <= ?3 \
-                 ORDER BY scheduled_for ASC LIMIT 1 \
+                SELECT r.id FROM automation_runs r \
+                 JOIN automations a ON a.id = r.automation_id \
+                 WHERE r.status = 'queued' AND r.scheduled_for <= ?3 AND a.enabled = 1 \
+                 ORDER BY r.scheduled_for ASC LIMIT 1 \
               ) \
              RETURNING id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at",
         )
@@ -905,15 +1060,39 @@ impl SqliteRepository {
         previous_run: &DbAutomationRun,
         scheduled_for: DateTime<Utc>,
         next_attempt: i64,
-    ) -> RepositoryResult<DbAutomationRun> {
+    ) -> RepositoryResult<Option<DbAutomationRun>> {
         let mut tx = self.pool.begin().await?;
         let now = Self::now_string();
         let scheduled_s = Self::ts_string(scheduled_for);
 
-        let row = sqlx::query("SELECT project_id, created_by FROM automations WHERE id = ?")
-            .bind(previous_run.automation_id.to_string())
-            .fetch_one(&mut *tx)
+        let row = sqlx::query(
+            "SELECT project_id, created_by, enabled FROM automations WHERE id = ?",
+        )
+        .bind(previous_run.automation_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        let enabled = row.get::<i64, _>("enabled") != 0;
+        if !enabled {
+            // Disabled mid-retry: end the chain but stamp `retry_skipped` so
+            // consumers can tell this from a budget exhaust. Tx is serialised
+            // with PATCH disable by SQLite's single-writer lock — the enabled
+            // SELECT and the event insert are atomic.
+            let payload = serde_json::to_string(&serde_json::json!({
+                "reason": "automation_disabled",
+                "attempt": next_attempt,
+            }))?;
+            sqlx::query(
+                "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
+                 VALUES (?, ?, 'retry_skipped', ?)",
+            )
+            .bind(previous_run.id.to_string())
+            .bind(&now)
+            .bind(&payload)
+            .execute(&mut *tx)
             .await?;
+            tx.commit().await?;
+            return Ok(None);
+        }
         let project_id = Self::parse_uuid(row.get::<String, _>("project_id"), "automations.project_id")?;
         let creator_id = Self::parse_uuid(row.get::<String, _>("created_by"), "automations.created_by")?;
 
@@ -975,7 +1154,7 @@ impl SqliteRepository {
 
         tx.commit().await?;
 
-        Ok(DbAutomationRun {
+        Ok(Some(DbAutomationRun {
             id: run_id,
             automation_id: previous_run.automation_id,
             trigger_id: previous_run.trigger_id,
@@ -987,7 +1166,7 @@ impl SqliteRepository {
             idempotency_key: None,
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
-        })
+        }))
     }
 
     /// Move all `running` rows back to `queued` unconditionally and emit
@@ -995,9 +1174,13 @@ impl SqliteRepository {
     /// recovery — any `running` rows after a process restart are orphaned,
     /// since no in-process worker can still own them.
     pub async fn reap_all_running(&self) -> RepositoryResult<Vec<Uuid>> {
-        let rows = sqlx::query("SELECT id FROM automation_runs WHERE status = 'running'")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT r.id, a.enabled FROM automation_runs r \
+             JOIN automations a ON a.id = r.automation_id \
+             WHERE r.status = 'running'",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         if rows.is_empty() {
             return Ok(vec![]);
         }
@@ -1005,11 +1188,24 @@ impl SqliteRepository {
         let mut reaped = Vec::with_capacity(rows.len());
         for r in &rows {
             let id_s: String = r.get("id");
+            let enabled = r.get::<i64, _>("enabled") != 0;
             let mut tx = self.pool.begin().await?;
+            let (target_status, event_kind, event_payload) = if enabled {
+                ("queued", "lease_lost", None)
+            } else {
+                (
+                    "cancelled",
+                    "cancelled",
+                    Some(serde_json::to_string(
+                        &serde_json::json!({ "reason": "automation_disabled" }),
+                    )?),
+                )
+            };
             let res = sqlx::query(
-                "UPDATE automation_runs SET status = 'queued', lease_until = NULL, updated_at = ? \
+                "UPDATE automation_runs SET status = ?, lease_until = NULL, updated_at = ? \
                  WHERE id = ? AND status = 'running'",
             )
+            .bind(target_status)
             .bind(&updated_at)
             .bind(&id_s)
             .execute(&mut *tx)
@@ -1017,10 +1213,12 @@ impl SqliteRepository {
             if res.rows_affected() == 1 {
                 sqlx::query(
                     "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
-                     VALUES (?, ?, 'lease_lost', NULL)",
+                     VALUES (?, ?, ?, ?)",
                 )
                 .bind(&id_s)
                 .bind(&updated_at)
+                .bind(event_kind)
+                .bind(event_payload.as_deref())
                 .execute(&mut *tx)
                 .await?;
                 tx.commit().await?;
@@ -1037,8 +1235,9 @@ impl SqliteRepository {
     pub async fn reap_expired_leases(&self, now: DateTime<Utc>) -> RepositoryResult<Vec<Uuid>> {
         let now_s = Self::ts_string(now);
         let rows = sqlx::query(
-            "SELECT id FROM automation_runs \
-             WHERE status = 'running' AND lease_until IS NOT NULL AND lease_until < ?",
+            "SELECT r.id, a.enabled FROM automation_runs r \
+             JOIN automations a ON a.id = r.automation_id \
+             WHERE r.status = 'running' AND r.lease_until IS NOT NULL AND r.lease_until < ?",
         )
         .bind(&now_s)
         .fetch_all(&self.pool)
@@ -1052,11 +1251,24 @@ impl SqliteRepository {
         let updated_at = Self::now_string();
         for r in &rows {
             let id_s: String = r.get("id");
+            let enabled = r.get::<i64, _>("enabled") != 0;
             let mut tx = self.pool.begin().await?;
+            let (target_status, event_kind, event_payload) = if enabled {
+                ("queued", "lease_lost", None)
+            } else {
+                (
+                    "cancelled",
+                    "cancelled",
+                    Some(serde_json::to_string(
+                        &serde_json::json!({ "reason": "automation_disabled" }),
+                    )?),
+                )
+            };
             let res = sqlx::query(
-                "UPDATE automation_runs SET status = 'queued', lease_until = NULL, updated_at = ? \
+                "UPDATE automation_runs SET status = ?, lease_until = NULL, updated_at = ? \
                  WHERE id = ? AND status = 'running' AND lease_until < ?",
             )
+            .bind(target_status)
             .bind(&updated_at)
             .bind(&id_s)
             .bind(&now_s)
@@ -1065,10 +1277,12 @@ impl SqliteRepository {
             if res.rows_affected() == 1 {
                 sqlx::query(
                     "INSERT INTO automation_run_events (run_id, ts, kind, payload) \
-                     VALUES (?, ?, 'lease_lost', NULL)",
+                     VALUES (?, ?, ?, ?)",
                 )
                 .bind(&id_s)
                 .bind(&updated_at)
+                .bind(event_kind)
+                .bind(event_payload.as_deref())
                 .execute(&mut *tx)
                 .await?;
                 tx.commit().await?;

@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    auth::AuthUser,
+    auth::{AuthUser, Role},
     error::{ApiResult, AppError},
     model::{
         AutomationListResponse, AutomationResponse, CreateAutomationRequest, CreateTriggerRequest,
@@ -120,6 +120,7 @@ pub async fn update_automation(
             payload.name,
             payload.description.map(Some),
             payload.prompts,
+            payload.enabled,
         )
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
@@ -307,6 +308,9 @@ pub async fn create_run(
     Path(automation_id): Path<Uuid>,
 ) -> ApiResult<(StatusCode, Json<RunResponse>)> {
     let automation = require_automation_access(&state, auth_user.id, automation_id).await?;
+    if !automation.enabled {
+        return Err(AppError::conflict("automation is disabled"));
+    }
 
     let triggered_payload = json!({
         "source": "manual",
@@ -326,7 +330,10 @@ pub async fn create_run(
             None,
         )
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(|e| match e {
+            RepositoryError::Conflict(msg) => AppError::conflict(msg),
+            other => AppError::internal(other.to_string()),
+        })?;
 
     tracing::info!(run = %run.id, automation = %automation_id, "manual run queued");
     Ok((StatusCode::CREATED, Json(run.into())))
@@ -377,6 +384,51 @@ pub async fn list_run_events(
     Ok(Json(EventListResponse {
         items: events.into_iter().map(EventResponse::from).collect(),
     }))
+}
+
+/// POST /automations/{automation_id}/runs/{run_id}/cancel — 403 unless
+/// admin / owner, 409 if already terminal.
+pub async fn cancel_run(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path((automation_id, run_id)): Path<(Uuid, Uuid)>,
+) -> ApiResult<Json<RunResponse>> {
+    let automation = require_automation_access(&state, auth_user.id, automation_id).await?;
+    // Cancel is destructive: tighter than project-member read access.
+    if auth_user.role != Role::Admin && auth_user.id != automation.created_by {
+        return Err(AppError::forbidden(
+            "only the automation owner or an admin can cancel this run",
+        ));
+    }
+    let run = state
+        .repository
+        .get_run(run_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("run not found"))?;
+    if run.automation_id != automation_id {
+        return Err(AppError::not_found("run not found"));
+    }
+    let payload = json!({
+        "reason": "user_requested",
+        "actor_user_id": auth_user.id,
+    });
+    let cancelled = state
+        .repository
+        .cancel_run(run_id, &payload)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !cancelled {
+        return Err(AppError::conflict("run is already in a terminal state"));
+    }
+    let run = state
+        .repository
+        .get_run(run_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::internal("cancelled run disappeared"))?;
+    tracing::info!(run = %run_id, automation = %automation_id, "run cancelled by user");
+    Ok(Json(run.into()))
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -531,6 +583,10 @@ pub async fn fire_webhook_trigger(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::internal("trigger's automation missing"))?;
 
+    if !automation.enabled {
+        return Err(AppError::conflict("automation is disabled"));
+    }
+
     let triggered_payload = json!({
         "source": "webhook",
         "trigger_id": trigger.id.to_string(),
@@ -565,6 +621,7 @@ pub async fn fire_webhook_trigger(
                 })?;
             return Ok(webhook_accepted_response(&existing));
         }
+        Err(RepositoryError::Conflict(msg)) => return Err(AppError::conflict(msg)),
         Err(e) => return Err(AppError::internal(e.to_string())),
     };
 

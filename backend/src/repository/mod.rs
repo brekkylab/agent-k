@@ -39,6 +39,10 @@ pub enum RepositoryError {
 
     #[error("unique constraint violation on {0}")]
     UniqueViolation(String),
+
+    /// Maps to HTTP 409 at the handler layer.
+    #[error("conflict: {0}")]
+    Conflict(String),
 }
 
 pub type RepositoryResult<T> = Result<T, RepositoryError>;

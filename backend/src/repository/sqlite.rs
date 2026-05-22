@@ -381,7 +381,7 @@ mod tests {
         use super::{make_project, make_repo, make_user};
         use crate::{
             model::{EventKind, RunStatus, TriggerKind, TriggerSpec},
-            repository::SessionOrigin,
+            repository::{RepositoryError, SessionOrigin},
         };
 
         async fn fixtures(repo: &crate::repository::SqliteRepository) -> (Uuid, Uuid) {
@@ -418,11 +418,13 @@ mod tests {
                     Some("renamed".to_string()),
                     None,
                     Some(vec!["only one".to_string()]),
+                    None,
                 )
                 .await
                 .unwrap();
             assert_eq!(updated.name, "renamed");
             assert_eq!(updated.prompts, vec!["only one"]);
+            assert!(updated.enabled);
 
             let listed = repo.list_automations_in_project(project_id).await.unwrap();
             assert_eq!(listed.len(), 1);
@@ -583,6 +585,376 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
+        }
+
+        #[tokio::test]
+        async fn disabling_automation_cancels_queued_runs_and_re_enable_does_not_resurrect() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let now = Utc::now();
+            let run = repo
+                .create_run(auto.id, None, session.id, now - ChronoDuration::seconds(1), None)
+                .await
+                .unwrap();
+
+            // Disable: queued row must flip to cancelled + emit cancelled event.
+            repo.update_automation(auto.id, None, None, None, Some(false))
+                .await
+                .unwrap();
+            let after_disable = repo.get_run(run.id).await.unwrap().unwrap();
+            assert_eq!(after_disable.status, RunStatus::Cancelled);
+            let events = repo.list_events_for_run(run.id).await.unwrap();
+            let cancel_evt = events
+                .iter()
+                .find(|e| e.kind == EventKind::Cancelled)
+                .expect("cancelled event written on disable");
+            assert_eq!(
+                cancel_evt.payload.as_ref().unwrap()["reason"],
+                "automation_disabled"
+            );
+
+            // Re-enable must NOT bring it back — the row stays terminal.
+            repo.update_automation(auto.id, None, None, None, Some(true))
+                .await
+                .unwrap();
+            let after_reenable = repo.get_run(run.id).await.unwrap().unwrap();
+            assert_eq!(after_reenable.status, RunStatus::Cancelled);
+            assert!(
+                repo.claim_due_run(now, now + ChronoDuration::minutes(5))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+
+        #[tokio::test]
+        async fn create_run_with_session_rejects_disabled_automation() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            repo.update_automation(auto.id, None, None, None, Some(false))
+                .await
+                .unwrap();
+            let err = repo
+                .create_automation_run_with_session(
+                    auto.id,
+                    project_id,
+                    user_id,
+                    None,
+                    Utc::now(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .expect_err("disabled automation must reject queue insert");
+            assert!(matches!(err, RepositoryError::Conflict(_)));
+        }
+
+        #[tokio::test]
+        async fn fire_cron_trigger_rejects_disabled_automation() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let trigger = repo
+                .create_trigger(
+                    auto.id,
+                    &TriggerSpec::Cron {
+                        expr: "* * * * *".into(),
+                        tz: None,
+                    },
+                    None,
+                    Some(Utc::now()),
+                )
+                .await
+                .unwrap();
+            repo.update_automation(auto.id, None, None, None, Some(false))
+                .await
+                .unwrap();
+            let err = repo
+                .fire_cron_trigger(
+                    auto.id,
+                    project_id,
+                    user_id,
+                    trigger.id,
+                    Utc::now(),
+                    Utc::now() + ChronoDuration::minutes(1),
+                    &serde_json::json!({}),
+                )
+                .await
+                .expect_err("disabled automation must reject cron fire");
+            assert!(matches!(err, RepositoryError::Conflict(_)));
+        }
+
+        #[tokio::test]
+        async fn schedule_retry_returns_none_and_emits_retry_skipped_when_disabled() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let original = repo
+                .create_run(auto.id, None, session.id, Utc::now(), None)
+                .await
+                .unwrap();
+            repo.update_automation(auto.id, None, None, None, Some(false))
+                .await
+                .unwrap();
+            let outcome = repo
+                .schedule_retry(&original, Utc::now() + ChronoDuration::seconds(30), 2)
+                .await
+                .unwrap();
+            assert!(outcome.is_none());
+            let events = repo.list_events_for_run(original.id).await.unwrap();
+            let skipped = events
+                .iter()
+                .find(|e| e.kind == EventKind::RetrySkipped)
+                .expect("retry_skipped event written on previous run");
+            let payload = skipped.payload.as_ref().expect("retry_skipped has payload");
+            assert_eq!(payload["reason"], "automation_disabled");
+            assert_eq!(payload["attempt"], 2);
+        }
+
+        #[tokio::test]
+        async fn cancel_run_flips_queued_and_emits_cancelled_event() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let run = repo
+                .create_run(auto.id, None, session.id, Utc::now(), None)
+                .await
+                .unwrap();
+            let payload = serde_json::json!({
+                "reason": "user_requested",
+                "actor_user_id": user_id,
+            });
+            let cancelled = repo.cancel_run(run.id, &payload).await.unwrap();
+            assert!(cancelled);
+            let after = repo.get_run(run.id).await.unwrap().unwrap();
+            assert_eq!(after.status, RunStatus::Cancelled);
+            assert!(after.lease_until.is_none());
+            let events = repo.list_events_for_run(run.id).await.unwrap();
+            let cancel_evt = events
+                .iter()
+                .find(|e| e.kind == EventKind::Cancelled)
+                .expect("cancelled event emitted");
+            assert_eq!(
+                cancel_evt.payload.as_ref().unwrap()["reason"],
+                "user_requested"
+            );
+        }
+
+        #[tokio::test]
+        async fn cancel_run_flips_running_and_clears_lease() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let now = Utc::now();
+            repo.create_run(auto.id, None, session.id, now - ChronoDuration::seconds(1), None)
+                .await
+                .unwrap();
+            let claimed = repo
+                .claim_due_run(now, now + ChronoDuration::minutes(5))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(claimed.status, RunStatus::Running);
+            assert!(claimed.lease_until.is_some());
+
+            let cancelled = repo
+                .cancel_run(claimed.id, &serde_json::json!({ "reason": "user_requested" }))
+                .await
+                .unwrap();
+            assert!(cancelled);
+            let after = repo.get_run(claimed.id).await.unwrap().unwrap();
+            assert_eq!(after.status, RunStatus::Cancelled);
+            assert!(after.lease_until.is_none());
+
+            // Worker-side guard: renew_lease must refuse the cancelled row so
+            // the heartbeat will tear itself down on its next tick.
+            let still =
+                repo.renew_lease(claimed.id, now + ChronoDuration::minutes(10))
+                    .await
+                    .unwrap();
+            assert!(!still, "renew_lease must reject a cancelled run");
+        }
+
+        #[tokio::test]
+        async fn cancel_run_is_noop_on_terminal_runs() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let now = Utc::now();
+            repo.create_run(auto.id, None, session.id, now - ChronoDuration::seconds(1), None)
+                .await
+                .unwrap();
+            let claimed = repo
+                .claim_due_run(now, now + ChronoDuration::minutes(5))
+                .await
+                .unwrap()
+                .unwrap();
+            repo.finalize_run(claimed.id, RunStatus::Succeeded, EventKind::Succeeded, None)
+                .await
+                .unwrap();
+            let res = repo
+                .cancel_run(claimed.id, &serde_json::json!({ "reason": "user_requested" }))
+                .await
+                .unwrap();
+            assert!(!res, "cancel must be a no-op for already-succeeded runs");
+            let still = repo.get_run(claimed.id).await.unwrap().unwrap();
+            assert_eq!(still.status, RunStatus::Succeeded);
+        }
+
+        #[tokio::test]
+        async fn enabling_automation_refreshes_cron_trigger_next_fire_at() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let stale = Utc::now() - ChronoDuration::hours(24);
+            let trigger = repo
+                .create_trigger(
+                    auto.id,
+                    &TriggerSpec::Cron {
+                        expr: "0 * * * *".into(),
+                        tz: None,
+                    },
+                    None,
+                    Some(stale),
+                )
+                .await
+                .unwrap();
+
+            // Disable + re-enable; cron next_fire_at should move forward.
+            repo.update_automation(auto.id, None, None, None, Some(false))
+                .await
+                .unwrap();
+            let before = Utc::now();
+            repo.update_automation(auto.id, None, None, None, Some(true))
+                .await
+                .unwrap();
+            let refreshed = repo.get_trigger(trigger.id).await.unwrap().unwrap();
+            let next = refreshed.next_fire_at.expect("next_fire_at must be set");
+            assert!(
+                next > before,
+                "refreshed next_fire_at {next} must be > re-enable time {before}",
+            );
+            assert!(
+                next > stale,
+                "refreshed next_fire_at must move past the stale value",
+            );
+        }
+
+        #[tokio::test]
+        async fn reap_cancels_runs_for_disabled_automation() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let session = repo
+                .create_session_with_origin(project_id, user_id, SessionOrigin::Automation)
+                .await
+                .unwrap();
+            let now = Utc::now();
+            repo.create_run(auto.id, None, session.id, now - ChronoDuration::seconds(2), None)
+                .await
+                .unwrap();
+            // Claim it so it transitions running with a short lease.
+            let claimed = repo
+                .claim_due_run(now, now + ChronoDuration::seconds(1))
+                .await
+                .unwrap()
+                .unwrap();
+            // Disable while the run is running. Existing logic only cancels
+            // QUEUED rows on disable, so the running row remains running.
+            repo.update_automation(auto.id, None, None, None, Some(false))
+                .await
+                .unwrap();
+            // Lease expires; reaper must cancel (not requeue) because the
+            // automation is disabled.
+            let reaped = repo
+                .reap_expired_leases(now + ChronoDuration::seconds(5))
+                .await
+                .unwrap();
+            assert_eq!(reaped, vec![claimed.id]);
+            let after = repo.get_run(claimed.id).await.unwrap().unwrap();
+            assert_eq!(after.status, RunStatus::Cancelled);
+            let events = repo.list_events_for_run(claimed.id).await.unwrap();
+            let cancel_evt = events
+                .iter()
+                .find(|e| e.kind == EventKind::Cancelled)
+                .expect("reaper writes cancelled event when automation disabled");
+            assert_eq!(
+                cancel_evt.payload.as_ref().unwrap()["reason"],
+                "automation_disabled"
+            );
+        }
+
+        #[tokio::test]
+        async fn list_due_cron_triggers_skips_disabled_automation() {
+            let repo = make_repo("sqlite::memory:").await;
+            let (project_id, user_id) = fixtures(&repo).await;
+            let auto = repo
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .await
+                .unwrap();
+            let now = Utc::now();
+            let spec = TriggerSpec::Cron {
+                expr: "* * * * *".into(),
+                tz: None,
+            };
+            repo.create_trigger(auto.id, &spec, None, Some(now - ChronoDuration::seconds(10)))
+                .await
+                .unwrap();
+            // Trigger is enabled but its automation is disabled → excluded.
+            repo.update_automation(auto.id, None, None, None, Some(false))
+                .await
+                .unwrap();
+            assert!(repo.list_due_cron_triggers(now).await.unwrap().is_empty());
         }
 
         #[tokio::test]
@@ -858,7 +1230,11 @@ mod tests {
             );
 
             let scheduled = Utc::now() + ChronoDuration::seconds(30);
-            let retry = repo.schedule_retry(&original, scheduled, 2).await.unwrap();
+            let retry = repo
+                .schedule_retry(&original, scheduled, 2)
+                .await
+                .unwrap()
+                .expect("retry scheduled for enabled automation");
 
             // (a) new run inherits automation/trigger, fresh session, attempt+1, queued.
             assert_ne!(retry.id, original.id);

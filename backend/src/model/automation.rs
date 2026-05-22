@@ -3,9 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::repository::{
-    DbAutomation, DbAutomationRun, DbAutomationRunEvent, DbAutomationTrigger,
-};
+use crate::repository::{DbAutomation, DbAutomationRun, DbAutomationRunEvent, DbAutomationTrigger};
 
 // ── automation ──────────────────────────────────────────────────────────────
 
@@ -16,6 +14,7 @@ pub struct AutomationResponse {
     pub name: String,
     pub description: Option<String>,
     pub prompts: Vec<String>,
+    pub enabled: bool,
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -29,6 +28,7 @@ impl From<DbAutomation> for AutomationResponse {
             name: a.name,
             description: a.description,
             prompts: a.prompts,
+            enabled: a.enabled,
             created_by: a.created_by,
             created_at: a.created_at,
             updated_at: a.updated_at,
@@ -51,6 +51,7 @@ pub struct UpdateAutomationRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub prompts: Option<Vec<String>>,
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -196,6 +197,7 @@ pub enum RunStatus {
     Running,
     Succeeded,
     Failed,
+    Cancelled,
 }
 
 impl RunStatus {
@@ -205,6 +207,7 @@ impl RunStatus {
             RunStatus::Running => "running",
             RunStatus::Succeeded => "succeeded",
             RunStatus::Failed => "failed",
+            RunStatus::Cancelled => "cancelled",
         }
     }
 
@@ -214,6 +217,7 @@ impl RunStatus {
             "running" => Some(RunStatus::Running),
             "succeeded" => Some(RunStatus::Succeeded),
             "failed" => Some(RunStatus::Failed),
+            "cancelled" => Some(RunStatus::Cancelled),
             _ => None,
         }
     }
@@ -271,9 +275,11 @@ pub enum EventKind {
     Succeeded,
     Failed,
     RetryScheduled,
+    RetrySkipped,
     LeaseLost,
     StepStarted,
     StepFinished,
+    Cancelled,
 }
 
 impl EventKind {
@@ -285,9 +291,11 @@ impl EventKind {
             EventKind::Succeeded => "succeeded",
             EventKind::Failed => "failed",
             EventKind::RetryScheduled => "retry_scheduled",
+            EventKind::RetrySkipped => "retry_skipped",
             EventKind::LeaseLost => "lease_lost",
             EventKind::StepStarted => "step_started",
             EventKind::StepFinished => "step_finished",
+            EventKind::Cancelled => "cancelled",
         }
     }
 
@@ -299,9 +307,11 @@ impl EventKind {
             "succeeded" => Some(EventKind::Succeeded),
             "failed" => Some(EventKind::Failed),
             "retry_scheduled" => Some(EventKind::RetryScheduled),
+            "retry_skipped" => Some(EventKind::RetrySkipped),
             "lease_lost" => Some(EventKind::LeaseLost),
             "step_started" => Some(EventKind::StepStarted),
             "step_finished" => Some(EventKind::StepFinished),
+            "cancelled" => Some(EventKind::Cancelled),
             _ => None,
         }
     }
