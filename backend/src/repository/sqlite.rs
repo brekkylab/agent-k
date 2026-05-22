@@ -63,7 +63,7 @@ mod tests {
     use super::SqliteRepository;
     use crate::{
         auth::Role as UserRole,
-        repository::{NewUser, UpdateUser},
+        repository::{DbSenderKind, NewSessionMessage, NewUser, UpdateUser},
     };
 
     async fn make_project(pool: &sqlx::SqlitePool, owner_id: Uuid) -> Uuid {
@@ -133,8 +133,19 @@ mod tests {
             session_id = session.id;
 
             let msgs = vec![
-                Message::new(Role::User).with_contents([Part::text("What is 1+1?")]),
-                Message::new(Role::Assistant).with_contents([Part::text("1+1 equals 2.")]),
+                NewSessionMessage {
+                    message: Message::new(Role::User).with_contents([Part::text("What is 1+1?")]),
+                    sender_kind: DbSenderKind::User,
+                    sender_name: None,
+                    sender_user_id: Some(user_id),
+                },
+                NewSessionMessage {
+                    message: Message::new(Role::Assistant)
+                        .with_contents([Part::text("1+1 equals 2.")]),
+                    sender_kind: DbSenderKind::Agent,
+                    sender_name: Some("agent-k".into()),
+                    sender_user_id: None,
+                },
             ];
             repo.append_messages(session_id, &msgs).await.unwrap();
 
@@ -150,10 +161,11 @@ mod tests {
 
             let fetched = repo.get_messages(session_id).await.unwrap();
             assert_eq!(fetched.len(), 2);
-            assert!(matches!(fetched[0].role, Role::User));
-            assert!(matches!(fetched[1].role, Role::Assistant));
+            assert!(matches!(fetched[0].message.role, Role::User));
+            assert!(matches!(fetched[1].message.role, Role::Assistant));
 
             let user_text = fetched[0]
+                .message
                 .contents
                 .iter()
                 .find_map(|p| p.as_text())
@@ -175,7 +187,12 @@ mod tests {
 
         repo.append_messages(
             session_id,
-            &[Message::new(Role::User).with_contents([Part::text("hello")])],
+            &[NewSessionMessage {
+                message: Message::new(Role::User).with_contents([Part::text("hello")]),
+                sender_kind: DbSenderKind::User,
+                sender_name: None,
+                sender_user_id: Some(user_id),
+            }],
         )
         .await
         .unwrap();
@@ -201,14 +218,36 @@ mod tests {
         let sid = session.id;
 
         let batch1 = vec![
-            Message::new(Role::User).with_contents([Part::text("turn1 user")]),
-            Message::new(Role::Assistant).with_contents([Part::text("turn1 assistant")]),
+            NewSessionMessage {
+                message: Message::new(Role::User).with_contents([Part::text("turn1 user")]),
+                sender_kind: DbSenderKind::User,
+                sender_name: None,
+                sender_user_id: Some(user_id),
+            },
+            NewSessionMessage {
+                message: Message::new(Role::Assistant)
+                    .with_contents([Part::text("turn1 assistant")]),
+                sender_kind: DbSenderKind::Agent,
+                sender_name: Some("agent-k".into()),
+                sender_user_id: None,
+            },
         ];
         repo.append_messages(sid, &batch1).await.unwrap();
 
         let batch2 = vec![
-            Message::new(Role::User).with_contents([Part::text("turn2 user")]),
-            Message::new(Role::Assistant).with_contents([Part::text("turn2 assistant")]),
+            NewSessionMessage {
+                message: Message::new(Role::User).with_contents([Part::text("turn2 user")]),
+                sender_kind: DbSenderKind::User,
+                sender_name: None,
+                sender_user_id: Some(user_id),
+            },
+            NewSessionMessage {
+                message: Message::new(Role::Assistant)
+                    .with_contents([Part::text("turn2 assistant")]),
+                sender_kind: DbSenderKind::Agent,
+                sender_name: Some("agent-k".into()),
+                sender_user_id: None,
+            },
         ];
         repo.append_messages(sid, &batch2).await.unwrap();
 
@@ -217,7 +256,7 @@ mod tests {
 
         let texts: Vec<&str> = all
             .iter()
-            .flat_map(|m| m.contents.iter().filter_map(|p| p.as_text()))
+            .flat_map(|m| m.message.contents.iter().filter_map(|p| p.as_text()))
             .collect();
 
         assert_eq!(

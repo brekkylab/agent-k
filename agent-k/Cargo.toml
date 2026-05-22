@@ -7,8 +7,12 @@ edition = "2024"
 path = "src/lib.rs"
 
 [[bin]]
-name = "session"
-path = "src/bin/session.rs"
+name = "run"
+path = "src/bin/run.rs"
+
+[[bin]]
+name = "test_case"
+path = "src/bin/test_case.rs"
 
 [features]
 internal = ["dep:knowledge-base-examples"]
@@ -31,7 +35,7 @@ serde_json = "1"
 strum = { version = "0.27", features = ["derive"] }
 tantivy = "0.22"
 tempfile = "3"
-tokio = { version = "1", features = ["process", "io-util", "rt", "rt-multi-thread", "macros", "fs"] }
+tokio = { version = "1", features = ["process", "io-util", "rt", "rt-multi-thread", "macros", "fs", "signal", "sync"] }
 tokio-stream = "0.1"
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v5"] }

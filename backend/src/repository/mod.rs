@@ -5,7 +5,9 @@ mod user;
 use std::{sync::Arc, time::Duration};
 
 pub use project::{DbProject, DbProjectMember};
-pub use session::{DbSession, SessionAccess, ShareMode};
+pub use session::{
+    DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, SessionAccess, ShareMode,
+};
 pub use sqlite::SqliteRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;

@@ -1,4 +1,4 @@
-use ailoy::message::MessageOutput;
+use ailoy::message::{Message, MessageOutput};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -60,3 +60,22 @@ pub struct SendMessageRequest {
 }
 
 pub type SendMessageResponse = Vec<MessageOutput>;
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MessageSender {
+    User { user_id: Uuid },
+    Agent { name: String },
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub struct SessionMessageResponse {
+    pub message: Message,
+    pub sender: MessageSender,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SessionMessageListResponse {
+    pub items: Vec<SessionMessageResponse>,
+}

@@ -536,7 +536,9 @@ async fn fork_copies_messages() {
         ailoy::message::Message::new(ailoy::message::Role::Assistant)
             .with_contents([ailoy::message::Part::text("hi there")]),
     ];
-    repo.append_messages(session_a.id, &msgs).await.unwrap();
+    repo.append_messages(session_a.id, &common::to_new_msgs(&msgs, alice_id))
+        .await
+        .unwrap();
 
     let (status, body) = common::authed(
         &app,

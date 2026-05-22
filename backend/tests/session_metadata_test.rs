@@ -56,10 +56,13 @@ async fn last_message_at_set_after_messages_appended() {
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     repo.append_messages(
         session.id,
-        &[
-            Message::new(Role::User).with_contents([Part::text("hello")]),
-            Message::new(Role::Assistant).with_contents([Part::text("hi")]),
-        ],
+        &common::to_new_msgs(
+            &[
+                Message::new(Role::User).with_contents([Part::text("hello")]),
+                Message::new(Role::Assistant).with_contents([Part::text("hi")]),
+            ],
+            alice_id,
+        ),
     )
     .await
     .unwrap();
@@ -94,7 +97,10 @@ async fn share_mode_update_does_not_change_last_message_at() {
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     repo.append_messages(
         session.id,
-        &[Message::new(Role::User).with_contents([Part::text("hi")])],
+        &common::to_new_msgs(
+            &[Message::new(Role::User).with_contents([Part::text("hi")])],
+            alice_id,
+        ),
     )
     .await
     .unwrap();
@@ -185,10 +191,13 @@ async fn other_user_sees_unread_messages_until_they_read() {
     // Append messages directly — simulates alice's side without going through send_message
     repo.append_messages(
         session.id,
-        &[
-            Message::new(Role::User).with_contents([Part::text("Hey bob!")]),
-            Message::new(Role::Assistant).with_contents([Part::text("hello")]),
-        ],
+        &common::to_new_msgs(
+            &[
+                Message::new(Role::User).with_contents([Part::text("Hey bob!")]),
+                Message::new(Role::Assistant).with_contents([Part::text("hello")]),
+            ],
+            alice_id,
+        ),
     )
     .await
     .unwrap();
@@ -241,7 +250,10 @@ async fn list_sessions_includes_metadata() {
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     repo.append_messages(
         session.id,
-        &[Message::new(Role::User).with_contents([Part::text("test")])],
+        &common::to_new_msgs(
+            &[Message::new(Role::User).with_contents([Part::text("test")])],
+            alice_id,
+        ),
     )
     .await
     .unwrap();
@@ -296,10 +308,13 @@ async fn fork_inherits_title_and_has_zero_unread() {
         .unwrap();
     repo.append_messages(
         source.id,
-        &[
-            Message::new(Role::User).with_contents([Part::text("hello")]),
-            Message::new(Role::Assistant).with_contents([Part::text("world")]),
-        ],
+        &common::to_new_msgs(
+            &[
+                Message::new(Role::User).with_contents([Part::text("hello")]),
+                Message::new(Role::Assistant).with_contents([Part::text("world")]),
+            ],
+            alice_id,
+        ),
     )
     .await
     .unwrap();
@@ -452,10 +467,13 @@ async fn repository_mark_and_count_unread() {
     // Append 2 messages
     repo.append_messages(
         session.id,
-        &[
-            Message::new(Role::User).with_contents([Part::text("msg1")]),
-            Message::new(Role::Assistant).with_contents([Part::text("msg2")]),
-        ],
+        &common::to_new_msgs(
+            &[
+                Message::new(Role::User).with_contents([Part::text("msg1")]),
+                Message::new(Role::Assistant).with_contents([Part::text("msg2")]),
+            ],
+            alice_id,
+        ),
     )
     .await
     .unwrap();
@@ -472,7 +490,10 @@ async fn repository_mark_and_count_unread() {
     // Append 1 more message
     repo.append_messages(
         session.id,
-        &[Message::new(Role::Assistant).with_contents([Part::text("new")])],
+        &common::to_new_msgs(
+            &[Message::new(Role::Assistant).with_contents([Part::text("new")])],
+            alice_id,
+        ),
     )
     .await
     .unwrap();
@@ -546,10 +567,13 @@ async fn clear_message_history_resets_metadata() {
 
     repo.append_messages(
         session.id,
-        &[
-            Message::new(Role::User).with_contents([Part::text("hello")]),
-            Message::new(Role::Assistant).with_contents([Part::text("hi")]),
-        ],
+        &common::to_new_msgs(
+            &[
+                Message::new(Role::User).with_contents([Part::text("hello")]),
+                Message::new(Role::Assistant).with_contents([Part::text("hi")]),
+            ],
+            alice_id,
+        ),
     )
     .await
     .unwrap();
