@@ -46,9 +46,7 @@ impl Provider {
                 api_key: std::env::var(BRAVE_API_KEY_ENV).ok(),
             },
             other => {
-                log::warn!(
-                    "{PROVIDER_ENV}=\"{other}\" not recognised, falling back to brave"
-                );
+                log::warn!("{PROVIDER_ENV}=\"{other}\" not recognised, falling back to brave");
                 Self::Brave {
                     client,
                     api_key: std::env::var(BRAVE_API_KEY_ENV).ok(),

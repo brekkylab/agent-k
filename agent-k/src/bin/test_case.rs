@@ -174,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
         case_no
     );
 
-    if let Err(e) = stream_turn(&mut agent, case.query).await {
+    if let Err(e) = stream_turn(&mut agent, case.query, agent_kind.log_prefix()).await {
         println!("[error] {e}");
     }
 
@@ -233,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
                         let input = line.trim().to_string();
                         if !input.is_empty() {
                             let query = Message::new(Role::User).with_contents([Part::text(&input)]);
-                            if let Err(e) = stream_turn(&mut agent, query).await {
+                            if let Err(e) = stream_turn(&mut agent, query, agent_kind.log_prefix()).await {
                                 println!("[error] {e}");
                             }
                         }
@@ -277,7 +277,7 @@ fn write_files(dir: &str, files: &[(Vec<u8>, std::path::PathBuf)]) -> anyhow::Re
     Ok(())
 }
 
-async fn stream_turn(agent: &mut Agent, query: Message) -> anyhow::Result<()> {
+async fn stream_turn(agent: &mut Agent, query: Message, log_prefix: &str) -> anyhow::Result<()> {
     let mut stream = agent.run(query);
     while let Some(event) = stream.next().await {
         let event = event?;
@@ -297,7 +297,7 @@ async fn stream_turn(agent: &mut Agent, query: Message) -> anyhow::Result<()> {
                         if let Some((_id, name, args)) = tc.as_function() {
                             let args_json = serde_json::to_string(args)
                                 .unwrap_or_else(|_| "<unprintable>".into());
-                            println!("[coworker] tool: {name} {args_json}");
+                            println!("[{log_prefix}] tool: {name} {args_json}");
                         }
                     }
                 }
@@ -305,10 +305,10 @@ async fn stream_turn(agent: &mut Agent, query: Message) -> anyhow::Result<()> {
             Role::Tool => {
                 for part in &msg.contents {
                     if let Some(t) = part.as_text() {
-                        println!("[coworker] tool result: {t}");
+                        println!("[{log_prefix}] tool result: {t}");
                     } else if let Some(v) = part.as_value() {
                         let s = serde_json::to_string(v).unwrap_or_else(|_| "<unprintable>".into());
-                        println!("[coworker] tool result: {s}");
+                        println!("[{log_prefix}] tool result: {s}");
                     }
                 }
             }
