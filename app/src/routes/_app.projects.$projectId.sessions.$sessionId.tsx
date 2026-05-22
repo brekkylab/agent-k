@@ -14,7 +14,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { shareMeta } from '@/domain/metadata';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
-import { AI_USER } from '@/api/transformers';
+import { AI_USER, SUBAGENT_PREFIX } from '@/api/transformers';
 import { formatMessageTime, formatMessageTimeFull } from '@/lib/formatMessageTime';
 import type { Message, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
@@ -28,7 +28,6 @@ export const Route = createFileRoute('/_app/projects/$projectId/sessions/$sessio
   component: SessionPage,
 });
 
-const SUBAGENT_PREFIX = 'subagent_';
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
 }

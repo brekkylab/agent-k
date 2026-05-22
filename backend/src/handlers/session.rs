@@ -29,8 +29,7 @@ use crate::{
     state::AppState,
 };
 
-// const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
-const DEFAULT_MODEL: &str = "openai/gpt-5.4-nano";
+const DEFAULT_MODEL: &str = "openai/gpt-5.4";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
 

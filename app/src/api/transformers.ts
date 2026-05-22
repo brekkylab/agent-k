@@ -1,6 +1,8 @@
 // Map raw backend payloads to the app-live domain types used in views.
 // Default values for missing metadata (intent, references, etc.) are filled here.
 
+export const SUBAGENT_PREFIX = 'subagent_';
+
 import type { FileAsset, Message, MessageSender, Project, Session, ToolCallInvocation, User } from '@/domain/types';
 import type { AiloyPart, AiloyToolCall, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser, SessionMessageItem } from './backend-types';
 
@@ -170,38 +172,47 @@ export function collapseToolMessages(
     }
   }
 
-  return items.map((it, idx) => {
+  const messages: Message[] = [];
+
+  for (const [idx, it] of items.entries()) {
     if (it.message.role === 'tool') {
-      // Prefer the DB-persisted sender name (clean, no prefix) over the tool_call
-      // function name, which may carry the subagent_ tool-descriptor prefix.
+      const toolCallId = it.message.id;
+      const toolName = toolCallId ? toolCallNames.get(toolCallId) : undefined;
+      // Non-subagent tool results are inlined into the tool call <details> — skip the bubble.
+      // Subagent results keep their own bubble (matches streaming behaviour).
+      if (!toolName?.startsWith(SUBAGENT_PREFIX)) continue;
+
       const senderName = it.sender.kind === 'agent'
         ? it.sender.name
-        : (it.message.id ? toolCallNames.get(it.message.id) : null) ?? 'tool';
-      return {
-        id: it.message.id || `${sessionId}-tool-${idx}`,
+        : toolName ?? 'tool';
+      messages.push({
+        id: toolCallId || `${sessionId}-tool-${idx}`,
         sessionId,
         sender: { kind: 'agent' as const, name: senderName },
         createdAt: it.created_at,
         body: extractText(it.message.contents),
         status: 'done' as const,
-      };
+      });
+      continue;
     }
 
     const baseMsg = toMessageItem(it, sessionId, idx);
     if (baseMsg.toolCalls) {
-      // Inline result only for tool calls whose result is NOT shown as a separate bubble
-      // (i.e. non-subagent system tools). Subagent tool calls keep result=undefined so
-      // MessageBubble can render them as "@name <query>" once the subagent bubble exists.
-      return {
+      messages.push({
         ...baseMsg,
         toolCalls: baseMsg.toolCalls.map((tc) => ({
           ...tc,
-          result: toolBodies.has(tc.id) ? undefined : undefined,
+          result: !tc.name.startsWith(SUBAGENT_PREFIX) && toolBodies.has(tc.id)
+            ? toolBodies.get(tc.id)!
+            : undefined,
         })),
-      };
+      });
+    } else {
+      messages.push(baseMsg);
     }
-    return baseMsg;
-  });
+  }
+
+  return messages;
 }
 
 export function toFileAsset(entry: BackendDirent, projectId: string, projectName: string): FileAsset {

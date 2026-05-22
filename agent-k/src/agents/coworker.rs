@@ -124,8 +124,8 @@ pub async fn get_coworker_agent_with_opts(
         .replace("{{NAME}}", name.as_ref())
         .replace("{{TIME}}", &now_utc_iso8601())
         .replace("{{HOME}}", "/workspace")
-        .replace("{{INPUTS}}", &"/inputs")
-        .replace("{{SHARED_DATA}}", &"/shared_data")
+        .replace("{{INPUTS}}", &"/workspace/attached")
+        .replace("{{SHARED_DATA}}", &"/workspace/shared")
         .replace("{{ARTIFACTS}}", "/workspace/artifacts")
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
