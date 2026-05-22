@@ -106,7 +106,7 @@ export function NewProjectDialog({ existingNames, onClose }: NewProjectDialogPro
             disabled={pending}
             aria-invalid={submitError !== null}
             aria-describedby={submitError ? 'cw-new-project-error' : undefined}
-            maxLength={120}
+            maxLength={100}
           />
         </label>
         <label className="cw-field">
