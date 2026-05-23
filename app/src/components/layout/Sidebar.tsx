@@ -25,6 +25,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useNewProjectDialog } from '@/components/NewProjectDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { canAdministerSession } from '@/lib/permissions';
+import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
@@ -217,7 +218,7 @@ export function Sidebar() {
       if (activeProject) {
         navigate({
           to: '/p/$projectSlug/s/$sessionPrefix',
-          params: { projectSlug: activeProject.slug, sessionPrefix: session.id.slice(0, 12) },
+          params: { projectSlug: activeProject.slug, sessionPrefix: shortSessionId(session.id) },
         });
       }
     },
@@ -238,9 +239,9 @@ export function Sidebar() {
       }
       // deletedId is the full UUID; invalidate both full-UUID and prefix-based keys.
       await queryClient.invalidateQueries({ queryKey: ['session', deletedId] });
-      await queryClient.invalidateQueries({ queryKey: ['session', deletedId.slice(0, 12)] });
+      await queryClient.invalidateQueries({ queryKey: ['session', shortSessionId(deletedId)] });
       // activeSessionId is now a 12-char prefix — compare against the prefix of the deleted id.
-      if (activeSessionId === deletedId.slice(0, 12) && activeProject) {
+      if (activeSessionId === shortSessionId(deletedId) && activeProject) {
         navigate({ to: '/p/$projectSlug', params: { projectSlug: activeProject.slug } });
       }
       showToast('세션이 삭제되었습니다');
@@ -388,10 +389,10 @@ export function Sidebar() {
                     key={session.id}
                     className={[
                       'cw-session-row',
-                      session.id.slice(0, 12) === activeSessionId ? 'is-active' : '',
+                      shortSessionId(session.id) === activeSessionId ? 'is-active' : '',
                       session.unreadCount > 0 ? 'is-unread' : '',
                     ].filter(Boolean).join(' ')}
-                    onClick={() => openSession(activeProject.slug, session.id.slice(0, 12))}
+                    onClick={() => openSession(activeProject.slug, shortSessionId(session.id))}
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}

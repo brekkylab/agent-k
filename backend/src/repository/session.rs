@@ -637,15 +637,17 @@ impl SqliteRepository {
 
     /// Look up a session by a UUID prefix string.
     ///
-    /// Accepts any non-empty prefix; LIKE-based scan reuses the PK index.
-    /// Returns `Unique` when exactly one row matches, `Ambiguous` when two or
-    /// more match (LIMIT 2 makes this O(1) past the first hit), `None` when
-    /// nothing matches.
+    /// Accepts a hex-only prefix (`aaaaaaaa2222`) or a hyphenated prefix
+    /// (`aaaaaaaa-2222`); both map to the same LIKE pattern against the
+    /// hyphenated form stored in `sessions.id`. The PK index handles the
+    /// prefix scan. Returns `Unique` for exactly one match, `Ambiguous` for
+    /// two or more (LIMIT 2 keeps this O(1) past the first hit), `None` for
+    /// no match.
     pub async fn lookup_session_by_prefix(
         &self,
         prefix: &str,
     ) -> RepositoryResult<PrefixLookup> {
-        let pattern = format!("{prefix}%");
+        let pattern = format!("{}%", hyphenate_uuid_prefix(prefix));
         let rows = sqlx::query("SELECT id FROM sessions WHERE id LIKE ? LIMIT 2")
             .bind(&pattern)
             .fetch_all(&self.pool)
@@ -664,5 +666,46 @@ impl SqliteRepository {
                 Ok(PrefixLookup::Ambiguous(ids))
             }
         }
+    }
+}
+
+/// Reinsert UUID hyphens at the canonical 8-4-4-4-12 positions when the prefix
+/// doesn't already contain any. Lets URLs use a hex-only short id while DB
+/// rows stay in the standard hyphenated form.
+fn hyphenate_uuid_prefix(prefix: &str) -> String {
+    if prefix.contains('-') {
+        return prefix.to_string();
+    }
+    let mut out = String::with_capacity(prefix.len() + 4);
+    for (i, c) in prefix.chars().enumerate() {
+        if matches!(i, 8 | 12 | 16 | 20) {
+            out.push('-');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::hyphenate_uuid_prefix;
+
+    #[test]
+    fn hex_only_prefix_gets_hyphens() {
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa"), "aaaaaaaa");
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa1"), "aaaaaaaa-1");
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa2222"), "aaaaaaaa-2222");
+        assert_eq!(
+            hyphenate_uuid_prefix("aaaaaaaa22224222"),
+            "aaaaaaaa-2222-4222",
+        );
+    }
+
+    #[test]
+    fn hyphenated_prefix_passes_through() {
+        assert_eq!(
+            hyphenate_uuid_prefix("aaaaaaaa-2222"),
+            "aaaaaaaa-2222",
+        );
     }
 }

@@ -14,6 +14,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { useAuthStore } from '@/stores/auth';
 import { canAdministerSession } from '@/lib/permissions';
+import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
@@ -43,7 +44,7 @@ function ProjectHome() {
     onSuccess: async (session) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       showToast('새 세션이 만들어졌습니다');
-      navigate({ to: '/p/$projectSlug/s/$sessionPrefix', params: { projectSlug, sessionPrefix: session.id.slice(0, 12) } });
+      navigate({ to: '/p/$projectSlug/s/$sessionPrefix', params: { projectSlug, sessionPrefix: shortSessionId(session.id) } });
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
@@ -112,7 +113,7 @@ function ProjectHome() {
               canDelete={canAdministerSession(session, project.data, currentUser)}
               onOpen={() => navigate({
                 to: '/p/$projectSlug/s/$sessionPrefix',
-                params: { projectSlug, sessionPrefix: session.id.slice(0, 12) },
+                params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
               })}
               onRequestDelete={() => setPendingDelete(session)}
             />

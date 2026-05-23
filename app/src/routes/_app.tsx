@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useLayoutStore } from '@/stores/layout';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { appWs } from '@/api/ws';
+import { shortSessionId } from '@/lib/sessionId';
 import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app')({
@@ -39,10 +40,10 @@ function AppShell() {
     const unsub = appWs.subscribe((event) => {
       if (event.type === 'session_title_updated') {
         // Update both full-UUID key (legacy) and 12-char prefix key (current nav)
-        const prefix12 = event.session_id.slice(0, 12);
+        const prefix = shortSessionId(event.session_id);
         const updater = (old: Session | undefined) => (old ? { ...old, title: event.title } : old);
         queryClient.setQueryData<Session | undefined>(['session', event.session_id], updater);
-        queryClient.setQueryData<Session | undefined>(['session', prefix12], updater);
+        queryClient.setQueryData<Session | undefined>(['session', prefix], updater);
         void queryClient.invalidateQueries({ queryKey: ['sessions', event.project_id] });
       }
     });
