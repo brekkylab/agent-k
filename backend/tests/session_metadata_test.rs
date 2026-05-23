@@ -393,6 +393,7 @@ async fn first_message_stream_broadcasts_title_via_websocket() {
 /// send_message on the first message triggers fire-and-forget LLM title generation.
 /// The title should be stored within a reasonable time after the response returns.
 #[tokio::test]
+#[ignore = "requires ANTHROPIC_API_KEY"]
 async fn send_message_generates_title_via_llm() {
     dotenvy::dotenv().ok();
     common::setup_provider().await;
