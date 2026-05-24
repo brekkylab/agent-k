@@ -1,12 +1,14 @@
 mod auth;
+mod automation;
 mod dirent;
 mod document;
 mod project;
-mod session;
+pub(crate) mod session;
 mod user;
 mod ws;
 
 pub use auth::*;
+pub use automation::*;
 pub use dirent::*;
 pub use document::*;
 pub use project::*;

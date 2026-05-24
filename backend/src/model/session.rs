@@ -5,11 +5,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::repository::DbSession;
-pub use crate::repository::ShareMode;
+pub use crate::repository::{SessionOrigin, ShareMode};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CreateSessionRequest {}
+pub struct CreateSessionRequest {
+    pub project_id: Uuid,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +25,7 @@ pub struct SessionResponse {
     pub project_id: Uuid,
     pub creator_id: Uuid,
     pub share_mode: ShareMode,
+    pub origin: SessionOrigin,
     pub title: Option<String>,
     pub last_message_at: Option<DateTime<Utc>>,
     pub last_message_snippet: Option<String>,
@@ -38,6 +41,7 @@ impl SessionResponse {
             project_id: s.project_id,
             creator_id: s.creator_id,
             share_mode: s.share_mode,
+            origin: s.origin,
             title: s.title,
             last_message_at: s.last_message_at,
             last_message_snippet: s.last_message_snippet,
