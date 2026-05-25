@@ -2,8 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@/components/Icon';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { summarizeCron } from '@/components/SchedulePicker';
+import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, listRuns, listTriggers } from '@/api/automations';
+import { listMessages } from '@/api/messages';
+import type { Automation, Message, Run, Trigger } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectId/automation/')({
   component: AutomationsPage,
@@ -11,169 +17,13 @@ export const Route = createFileRoute('/_app/projects/$projectId/automation/')({
 
 type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 type TriggerKind = 'cron' | 'webhook' | 'manual';
-type EventKind =
-  | 'triggered' | 'queued' | 'started'
-  | 'succeeded' | 'failed' | 'retry_scheduled'
-  | 'lease_lost' | 'step_started' | 'step_finished';
 
-interface CronTriggerInfo { kind: 'cron'; expr: string; tz: string; nextLabel?: string }
-interface WebhookTriggerInfo { kind: 'webhook'; tokenPreview: string; lastFiredLabel?: string }
-interface ManualTriggerInfo { kind: 'manual'; actorLabel: string }
-type TriggerInfo = CronTriggerInfo | WebhookTriggerInfo | ManualTriggerInfo;
-
-interface MockAutomation {
-  id: string;
-  name: string;
-  description: string;
-  triggers: TriggerInfo[];
-  lastRunStatus: RunStatus;
-  disabled?: boolean;
-}
-
-interface MockRun {
-  id: string;
-  automationId: string;
-  status: RunStatus;
-  trigger: TriggerInfo;
-  scheduledFor: string;
-  durationLabel: string;
-  whenLabel: string;
-  attempt: number;
-}
-
-interface MockPreviewMessage {
-  id: number;
-  role: 'user' | 'assistant' | 'system';
-  body: string;
-}
-
-interface MockEvent {
-  id: number;
-  ts: string;
-  kind: EventKind;
-  detail?: string;
-}
-
-const AUTOMATIONS: MockAutomation[] = [
-  {
-    id: 'a1', name: 'Daily summary',
-    description: 'Recap yesterday\'s sessions',
-    triggers: [{ kind: 'cron', expr: '0 10 * * *', tz: 'Asia/Seoul', nextLabel: '10:00 (14분 후)' }],
-    lastRunStatus: 'running',
-  },
-  {
-    id: 'a2', name: 'Weekly digest',
-    description: 'Friday rollup to email',
-    triggers: [{ kind: 'cron', expr: '0 9 * * 5', tz: 'Asia/Seoul', nextLabel: '금 09:00' }],
-    lastRunStatus: 'succeeded',
-  },
-  {
-    id: 'a3', name: 'On-call ping',
-    description: 'External webhook hand-off',
-    triggers: [{ kind: 'webhook', tokenPreview: 'whk_••••e8f2', lastFiredLabel: '어제 08:11' }],
-    lastRunStatus: 'failed',
-    disabled: true,
-  },
-  {
-    id: 'a4', name: 'Backfill ledger',
-    description: 'Manual one-shot reruns',
-    triggers: [{ kind: 'manual', actorLabel: 'olive' }],
-    lastRunStatus: 'succeeded',
-  },
-];
-
-const CRON_DAILY:  CronTriggerInfo    = { kind: 'cron',    expr: '0 10 * * *', tz: 'Asia/Seoul', nextLabel: '10:00 (14분 후)' };
-const CRON_WEEKLY: CronTriggerInfo    = { kind: 'cron',    expr: '0 9 * * 5',  tz: 'Asia/Seoul', nextLabel: '금 09:00' };
-const WEBHOOK:     WebhookTriggerInfo = { kind: 'webhook', tokenPreview: 'whk_••••e8f2', lastFiredLabel: '어제 08:11' };
-const MANUAL:      ManualTriggerInfo  = { kind: 'manual',  actorLabel: 'olive' };
-
-const RUNS: MockRun[] = [
-  { id: 'r1', automationId: 'a1', status: 'running',   trigger: CRON_DAILY,  scheduledFor: '10:00', durationLabel: '2m',  whenLabel: '3분 전',  attempt: 1 },
-  { id: 'r2', automationId: 'a2', status: 'succeeded', trigger: CRON_WEEKLY, scheduledFor: '09:00', durationLabel: '45s', whenLabel: '2시간 전', attempt: 1 },
-  { id: 'r3', automationId: 'a3', status: 'failed',    trigger: WEBHOOK,     scheduledFor: '08:11', durationLabel: '1m',  whenLabel: '어제',    attempt: 2 },
-  { id: 'r4', automationId: 'a1', status: 'queued',    trigger: CRON_DAILY,  scheduledFor: '11:00', durationLabel: '—',   whenLabel: 'queued',  attempt: 1 },
-  { id: 'r5', automationId: 'a4', status: 'succeeded', trigger: MANUAL,      scheduledFor: '어제',  durationLabel: '12s', whenLabel: '어제',    attempt: 1 },
-  { id: 'r6',  automationId: 'a2', status: 'succeeded', trigger: CRON_WEEKLY, scheduledFor: '지난주',  durationLabel: '48s', whenLabel: '7일 전',   attempt: 1 },
-  { id: 'r7',  automationId: 'a1', status: 'succeeded', trigger: CRON_DAILY,  scheduledFor: '10:00',   durationLabel: '1m 10s', whenLabel: '어제',     attempt: 2 },
-  { id: 'r8',  automationId: 'a2', status: 'failed',    trigger: CRON_WEEKLY, scheduledFor: '09:00',   durationLabel: '20s',    whenLabel: '지난주',   attempt: 4 },
-  { id: 'r9',  automationId: 'a3', status: 'succeeded', trigger: WEBHOOK,     scheduledFor: '12:30',   durationLabel: '8s',     whenLabel: '어제',     attempt: 5 },
-  { id: 'r10', automationId: 'a4', status: 'succeeded', trigger: MANUAL,      scheduledFor: '어제',    durationLabel: '22s',    whenLabel: '어제',     attempt: 2 },
-  { id: 'r11', automationId: 'a1', status: 'succeeded', trigger: CRON_DAILY,  scheduledFor: '10:00',   durationLabel: '1m 5s',  whenLabel: '그저께',   attempt: 3 },
-  { id: 'r12', automationId: 'a2', status: 'succeeded', trigger: CRON_WEEKLY, scheduledFor: '09:00',   durationLabel: '50s',    whenLabel: '2주 전',   attempt: 5 },
-  { id: 'r13', automationId: 'a3', status: 'failed',    trigger: WEBHOOK,     scheduledFor: '07:55',   durationLabel: '30s',    whenLabel: '3일 전',   attempt: 4 },
-  { id: 'r14', automationId: 'a4', status: 'succeeded', trigger: MANUAL,      scheduledFor: '지난주',  durationLabel: '15s',    whenLabel: '지난주',   attempt: 3 },
-  { id: 'r15', automationId: 'a1', status: 'queued',    trigger: CRON_DAILY,  scheduledFor: '11:00',   durationLabel: '—',      whenLabel: 'scheduled',attempt: 5 },
-  { id: 'r16', automationId: 'a2', status: 'succeeded', trigger: CRON_WEEKLY, scheduledFor: '09:00',   durationLabel: '44s',    whenLabel: '3주 전',   attempt: 6 },
-];
-
-const PREVIEW_BY_RUN: Record<string, MockPreviewMessage[]> = {
-  r1: [
-    { id: 1, role: 'system',    body: 'Trigger: cron `0 10 * * *` · Asia/Seoul' },
-    { id: 2, role: 'user',      body: '어제(2026-05-20) 진행된 세션을 요약해줘.' },
-    { id: 3, role: 'assistant', body: '어제 활동 요약을 시작합니다…\n\n총 **5건의 세션**을 확인했습니다.\n- Klient kickoff (Olive, 14:02)\n- GTM brainstorm (Milo, 15:30)\n- Q2 plan review (Owen, 16:45)\n\n나머지 항목은 두 번째 프롬프트에서 정리합니다.' },
-  ],
-  r2: [
-    { id: 1, role: 'system',    body: 'Trigger: cron `0 9 * * 5` · Asia/Seoul' },
-    { id: 2, role: 'user',      body: '이번 주 핵심 결정 사항을 정리해줘.' },
-    { id: 3, role: 'assistant', body: '이번 주 핵심 결정\n\n1. **GTM 전환** — 1차 타깃은 mid-market로 확정\n2. **Q2 OKR** — 매출 목표 +18%\n3. **온콜 로테이션** — 페이저 정책 개정안 합의' },
-  ],
-  r3: [
-    { id: 1, role: 'system',    body: 'Trigger: webhook bearer=***' },
-    { id: 2, role: 'user',      body: '인시던트 INC-4471에 대한 상황 요약을 작성해.' },
-    { id: 3, role: 'assistant', body: '실패: 업스트림에서 **502 Bad Gateway**가 발생했습니다.\n시도 1 — 재시도 예산 초과, 시도 2 — 동일한 502.\n사람이 한 번 확인이 필요합니다.' },
-  ],
-  r4: [
-    { id: 1, role: 'system', body: '이 run은 아직 큐에 있습니다 — 결과 없음.' },
-  ],
-  r5: [
-    { id: 1, role: 'system',    body: 'Trigger: manual run by olive' },
-    { id: 2, role: 'user',      body: '5/15~5/19 누락된 ledger 항목을 다시 처리해.' },
-    { id: 3, role: 'assistant', body: '**10건**의 누락 항목을 재처리했습니다.\n성공 9건, 충돌 1건 (`txn-2026-05-17-031`).' },
-  ],
-  r6: [
-    { id: 1, role: 'system',    body: '이전 주차 요약 — 참고용' },
-    { id: 2, role: 'assistant', body: '주요 변경 없음. 매출 추이 안정적, 신규 risk 없음.' },
-  ],
-};
-
-const EVENTS_BY_RUN: Record<string, MockEvent[]> = {
-  r1: [
-    { id: 1, ts: '10:00:00', kind: 'triggered',    detail: 'trigger=cron 0 10 * * *' },
-    { id: 2, ts: '10:00:00', kind: 'queued' },
-    { id: 3, ts: '10:00:02', kind: 'started',      detail: 'worker=worker-0' },
-    { id: 4, ts: '10:00:02', kind: 'step_started', detail: 'prompt[0] · "어제 세션 요약"' },
-    { id: 5, ts: '10:01:30', kind: 'step_finished',detail: 'tokens=1,182 (in 420 / out 762)' },
-    { id: 6, ts: '10:01:30', kind: 'step_started', detail: 'prompt[1] · "오늘 우선순위 추출"' },
-  ],
-  r2: [
-    { id: 1, ts: '09:00:00', kind: 'triggered' },
-    { id: 2, ts: '09:00:00', kind: 'queued' },
-    { id: 3, ts: '09:00:01', kind: 'started' },
-    { id: 4, ts: '09:00:42', kind: 'succeeded', detail: 'tokens=812' },
-  ],
-  r3: [
-    { id: 1, ts: '08:11:03', kind: 'triggered',       detail: 'webhook bearer=***' },
-    { id: 2, ts: '08:11:03', kind: 'queued' },
-    { id: 3, ts: '08:11:05', kind: 'started' },
-    { id: 4, ts: '08:11:58', kind: 'failed',          detail: 'tool_call exceeded retry budget' },
-    { id: 5, ts: '08:12:00', kind: 'retry_scheduled', detail: 'attempt=2 in 30s' },
-    { id: 6, ts: '08:12:30', kind: 'started' },
-    { id: 7, ts: '08:13:12', kind: 'failed',          detail: 'upstream 502' },
-  ],
-  r4: [{ id: 1, ts: '—', kind: 'queued', detail: 'scheduled for 11:00' }],
-  r5: [
-    { id: 1, ts: '14:22', kind: 'triggered', detail: 'manual run by olive' },
-    { id: 2, ts: '14:22', kind: 'started' },
-    { id: 3, ts: '14:22', kind: 'succeeded' },
-  ],
-  r6: [
-    { id: 1, ts: '09:00', kind: 'triggered' },
-    { id: 2, ts: '09:00', kind: 'started' },
-    { id: 3, ts: '09:00', kind: 'succeeded' },
-  ],
-};
+interface RunEventLike { id: number; ts: string; kind: string; detail?: string }
 
 const PAGE_SIZE = 15;
+const MAX_PAGES_ALL = 10;
+const ALL_MODE_CAP = PAGE_SIZE * MAX_PAGES_ALL;
+const SINGLE_MODE_CAP = 200;
 
 const STATUS_LABEL: Record<RunStatus, string> = {
   queued: 'Queued', running: 'Running', succeeded: 'Succeeded', failed: 'Failed', cancelled: 'Cancelled',
@@ -182,6 +32,89 @@ const STATUS_LABEL: Record<RunStatus, string> = {
 const TRIGGER_LABEL: Record<TriggerKind, string> = {
   cron: 'schedule', webhook: 'webhook', manual: 'manual',
 };
+
+function formatRunWhen(run: Run): string {
+  const t = Date.parse(run.createdAt);
+  if (Number.isNaN(t)) return run.createdAt.slice(0, 10);
+  const diffSec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (diffSec < 60) return '방금';
+  const min = Math.round(diffSec / 60);
+  if (min < 60) return `${min}분 전`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}시간 전`;
+  const day = Math.round(hr / 24);
+  if (day < 7) return day === 1 ? '어제' : `${day}일 전`;
+  return run.createdAt.slice(0, 10);
+}
+
+function formatRunDuration(run: Run): string {
+  if (run.status === 'queued') return '—';
+  if (run.status === 'running') return '진행중';
+  const start = Date.parse(run.createdAt);
+  const end = Date.parse(run.updatedAt);
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '—';
+  const sec = Math.max(0, Math.round((end - start) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+}
+
+function formatScheduledAt(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso.slice(0, 16).replace('T', ' ');
+  const diffSec = Math.round((t - Date.now()) / 1000);
+  if (diffSec < 0) {
+    const ago = -diffSec;
+    if (ago < 60) return '방금';
+    const min = Math.round(ago / 60);
+    if (min < 60) return `${min}분 전`;
+    const hr = Math.round(min / 60);
+    if (hr < 24) return `${hr}시간 전`;
+    const day = Math.round(hr / 24);
+    return day === 1 ? '어제' : `${day}일 전`;
+  }
+  if (diffSec < 60) return '곧';
+  const min = Math.round(diffSec / 60);
+  if (min < 60) return `${min}분 후`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}시간 후`;
+  const day = Math.round(hr / 24);
+  if (day === 1) return '내일';
+  if (day < 7) return `${day}일 후`;
+  return iso.slice(0, 10);
+}
+
+function shortRunId(run: Run): string {
+  return run.id.slice(0, 6);
+}
+
+function formatEventTime(iso: string): string {
+  // ISO → HH:MM:SS; fall back to first 19 chars if Date.parse fails.
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso.slice(11, 19) || iso;
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+}
+
+function formatEventPayload(payload: unknown): string | undefined {
+  if (payload == null) return undefined;
+  if (typeof payload === 'string') return payload;
+  try {
+    const s = JSON.stringify(payload);
+    return s.length > 200 ? `${s.slice(0, 200)}…` : s;
+  } catch {
+    return undefined;
+  }
+}
+
+function triggerSummaryText(t: Trigger): string {
+  if (t.spec.kind === 'cron') {
+    const cron = summarizeCron(t.spec.expr);
+    return t.spec.tz ? `${cron}\n${t.spec.tz}` : `${cron}\nUTC`;
+  }
+  return `whk_${t.id.slice(0, 6)}`;
+}
 
 function AutomationsPage() {
   const { projectId } = Route.useParams();
@@ -192,32 +125,184 @@ function AutomationsPage() {
   const [triggerFilter, setTriggerFilter] = useState<TriggerKind | 'all'>('all');
   const [page, setPage] = useState(0);
 
+  const automationsQuery = useQuery({
+    queryKey: ['automations', projectId],
+    queryFn: () => listAutomations(projectId),
+  });
+  const automations: Automation[] = automationsQuery.data ?? [];
   const automationById = useMemo(
-    () => Object.fromEntries(AUTOMATIONS.map((a) => [a.id, a])),
-    [],
+    () => Object.fromEntries(automations.map((a) => [a.id, a])),
+    [automations],
   );
+  const queryClient = useQueryClient();
+  const runQueries = useQueries({
+    queries: automations.map((a) => ({
+      queryKey: ['runs', a.id],
+      queryFn: () => listRuns(a.id),
+      // Poll while any run in this automation is still in-flight.
+      refetchInterval: (q: { state: { data?: Run[] } }) =>
+        (q.state.data ?? []).some((r) => r.status === 'queued' || r.status === 'running')
+          ? 4000 : false,
+    })),
+  });
+  const triggerQueries = useQueries({
+    queries: automations.map((a) => ({
+      queryKey: ['triggers', a.id],
+      queryFn: () => listTriggers(a.id),
+    })),
+  });
+  const runsDataKey = runQueries.map((q) => q.dataUpdatedAt).join('|');
+  const triggersDataKey = triggerQueries.map((q) => q.dataUpdatedAt).join('|');
+  const allRuns: Run[] = useMemo(() => {
+    const flat = runQueries.flatMap((q) => q.data ?? []);
+    const sorted = [...flat].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return sorted.slice(0, ALL_MODE_CAP);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runsDataKey]);
 
-  const visibleRuns = useMemo(() => RUNS.filter((run) => {
-    if (selectedAutomationId && run.automationId !== selectedAutomationId) return false;
+  const isSingleMode = selectedAutomationId !== null;
+  const fanOutForSelected: Run[] = useMemo(() => {
+    if (!isSingleMode) return [];
+    const idx = automations.findIndex((a) => a.id === selectedAutomationId);
+    return idx >= 0 ? runQueries[idx]?.data ?? [] : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSingleMode, selectedAutomationId, runsDataKey, automations]);
+  const fanOutCount = fanOutForSelected.length;
+  const topUpQuery = useQuery({
+    queryKey: ['runs', selectedAutomationId, 'topup', fanOutCount],
+    queryFn: () => listRuns(selectedAutomationId!, {
+      limit: SINGLE_MODE_CAP - fanOutCount,
+      offset: fanOutCount,
+    }),
+    enabled: isSingleMode && fanOutCount > 0 && fanOutCount < SINGLE_MODE_CAP,
+    refetchInterval: (q) =>
+      (q.state.data ?? []).some((r) => r.status === 'queued' || r.status === 'running')
+        ? 4000 : false,
+  });
+  const triggerById: Record<string, Trigger> = useMemo(
+    () => Object.fromEntries(triggerQueries.flatMap((q) => q.data ?? []).map((t) => [t.id, t])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [triggersDataKey],
+  );
+  // allRuns is already sorted desc by createdAt; the first occurrence per
+  // automationId is its latest run.
+  const lastRunByAutomation: Record<string, Run> = useMemo(() => {
+    const map: Record<string, Run> = {};
+    for (const r of allRuns) {
+      if (!map[r.automationId]) map[r.automationId] = r;
+    }
+    return map;
+  }, [allRuns]);
+
+  const [cancelledIds, setCancelledIds] = useState<Set<string>>(new Set());
+  const cancelMutation = useMutation({
+    mutationFn: ({ automationId, runId }: { automationId: string; runId: string }) =>
+      cancelRunApi(automationId, runId),
+    onSuccess: (_, vars) => {
+      void queryClient.invalidateQueries({ queryKey: ['runs', vars.automationId] });
+    },
+  });
+  const requestCancel = (run: Run) => {
+    setCancelledIds((prev) => new Set(prev).add(run.id));
+    cancelMutation.mutate({ automationId: run.automationId, runId: run.id });
+  };
+
+  const effectiveStatus = (run: Run): RunStatus =>
+    cancelledIds.has(run.id) ? 'cancelled' : run.status;
+
+  const runTriggerKind = (run: Run): TriggerKind => {
+    if (!run.triggerId) return 'manual';
+    const t = triggerById[run.triggerId];
+    return (t?.kind as TriggerKind) ?? 'manual';
+  };
+
+  const isDisabled = (id: string) => {
+    const a = automationById[id];
+    return a ? !a.enabled : false;
+  };
+
+  const displayRuns: Run[] = isSingleMode
+    ? [...fanOutForSelected, ...(topUpQuery.data ?? [])]
+    : allRuns;
+  const visibleRuns = useMemo(() => displayRuns.filter((run) => {
+    if (!isSingleMode && selectedAutomationId && run.automationId !== selectedAutomationId) return false;
     if (statusFilter !== 'all' && effectiveStatus(run) !== statusFilter) return false;
-    if (triggerFilter !== 'all' && run.trigger.kind !== triggerFilter) return false;
+    if (triggerFilter !== 'all' && runTriggerKind(run) !== triggerFilter) return false;
     return true;
-  }), [selectedAutomationId, statusFilter, triggerFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [displayRuns, isSingleMode, selectedAutomationId, statusFilter, triggerFilter, cancelledIds, triggerById]);
 
-  const totalPages = Math.max(1, Math.ceil(visibleRuns.length / PAGE_SIZE));
-  // Reset to first page when filters or selection narrow the list past the current page.
+  // Retry chains: the LATEST run in a chain (the head — nothing else points
+  // to it via previousRunId) shows at depth 0; older attempts are listed
+  // underneath at depth 1 (flat, no progressive nesting).
+  const groupedRows = useMemo(() => {
+    const visibleById = new Map(visibleRuns.map((r) => [r.id, r]));
+    const pointedTo = new Set<string>();
+    for (const r of visibleRuns) {
+      if (r.previousRunId && visibleById.has(r.previousRunId)) pointedTo.add(r.previousRunId);
+    }
+    const out: { run: Run; depth: number }[] = [];
+    for (const r of visibleRuns) {
+      if (pointedTo.has(r.id)) continue;
+      out.push({ run: r, depth: 0 });
+      let cursor = r.previousRunId;
+      while (cursor && visibleById.has(cursor)) {
+        const prev = visibleById.get(cursor)!;
+        out.push({ run: prev, depth: 1 });
+        cursor = prev.previousRunId;
+      }
+    }
+    return out;
+  }, [visibleRuns]);
+
   useEffect(() => { setPage(0); }, [selectedAutomationId, statusFilter, triggerFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(groupedRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
-  const pagedRuns = useMemo(
-    () => visibleRuns.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
-    [visibleRuns, safePage],
+  const pagedRows = useMemo(
+    () => groupedRows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
+    [groupedRows, safePage],
   );
+
+  const triggersByAutomation: Record<string, Trigger[]> = useMemo(() => {
+    const map: Record<string, Trigger[]> = {};
+    for (const t of Object.values(triggerById)) {
+      const arr = map[t.automationId] ?? [];
+      arr.push(t);
+      map[t.automationId] = arr;
+    }
+    return map;
+  }, [triggerById]);
 
   const selectedAutomation = selectedAutomationId ? automationById[selectedAutomationId] : null;
-  const selectedRun = selectedRunId ? RUNS.find((r) => r.id === selectedRunId) ?? null : null;
-  const previewMessages = (selectedRunId ? PREVIEW_BY_RUN[selectedRunId] ?? [] : [])
-    .filter((m) => m.role !== 'system');
-  const runEvents = selectedRunId ? EVENTS_BY_RUN[selectedRunId] ?? [] : [];
+  const selectedRun: Run | null = selectedRunId
+    ? allRuns.find((r) => r.id === selectedRunId) ?? null
+    : null;
+  const messagesQuery = useQuery({
+    queryKey: ['messages', selectedRun?.sessionId],
+    queryFn: () => listMessages(selectedRun!.sessionId),
+    enabled: Boolean(selectedRun),
+  });
+  const selectedRunLive = selectedRun
+    ? selectedRun.status === 'queued' || selectedRun.status === 'running'
+    : false;
+  const eventsQuery = useQuery({
+    queryKey: ['runEvents', selectedRun?.automationId, selectedRun?.id],
+    queryFn: () => listRunEvents(selectedRun!.automationId, selectedRun!.id),
+    enabled: Boolean(selectedRun),
+    // Poll the audit log while the selected run is still in-flight.
+    refetchInterval: selectedRunLive ? 4000 : false,
+  });
+  const previewMessages: Message[] = messagesQuery.data ?? [];
+  const runEvents: RunEventLike[] = useMemo(
+    () => (eventsQuery.data ?? []).map((e) => ({
+      id: e.id,
+      ts: formatEventTime(e.ts),
+      kind: e.kind,
+      detail: formatEventPayload(e.payload),
+    })),
+    [eventsQuery.data],
+  );
 
   const toggleRun = (runId: string) => {
     setSelectedRunId((prev) => (prev === runId ? null : runId));
@@ -230,41 +315,33 @@ function AutomationsPage() {
     });
   };
 
+  const manualRunMutation = useMutation({
+    mutationFn: (automationId: string) => createRun(automationId),
+    onSuccess: (_, automationId) => {
+      void queryClient.invalidateQueries({ queryKey: ['runs', automationId] });
+    },
+  });
+  const [pendingManualRun, setPendingManualRun] = useState<Automation | null>(null);
   const triggerManualRun = (automationId: string) => {
-    // Mock action — would POST /automations/:id/runs in the real impl.
-    // eslint-disable-next-line no-console
-    console.info('[mock] manual run requested', automationId);
+    if (manualRunMutation.isPending) return;
+    const target = automationById[automationId];
+    if (!target) return;
+    setPendingManualRun(target);
   };
-
-  // Cancellation is purely client-side mock — backend would expose a
-  // `DELETE /automations/:id/runs/:run_id` (or similar) endpoint.
-  const [cancelledIds, setCancelledIds] = useState<Set<string>>(new Set());
-
-  // Automation-level disable, initialized from the mock data. In production
-  // this maps to PATCH /automations/{id} with { enabled: false }.
-  const [disabledIds] = useState<Set<string>>(
-    () => new Set(AUTOMATIONS.filter((a) => a.disabled).map((a) => a.id)),
-  );
-  const isDisabled = (id: string) => disabledIds.has(id);
-  const effectiveStatus = (run: MockRun): RunStatus =>
-    cancelledIds.has(run.id) ? 'cancelled' : run.status;
-  const cancelRun = (runId: string) => {
-    setCancelledIds((prev) => {
-      const next = new Set(prev);
-      next.add(runId);
-      return next;
-    });
-    // eslint-disable-next-line no-console
-    console.info('[mock] cancel run', runId);
+  const confirmManualRun = () => {
+    if (!pendingManualRun) return;
+    manualRunMutation.mutate(pendingManualRun.id);
+    setPendingManualRun(null);
   };
 
   // Below this viewport, drop the right-side drawer column and expand the
   // selected row inline within the runs list instead.
   const isWide = useWideLayout('(min-width: 1440px)');
 
-  const renderRunDetail = (run: MockRun) => {
+  const renderRunDetail = (run: Run) => {
     const status = effectiveStatus(run);
     const cancellable = status === 'queued' || status === 'running';
+    const trigger = run.triggerId ? triggerById[run.triggerId] ?? null : null;
     return (
     <>
       <header className="cw-run-drawer-head">
@@ -272,15 +349,19 @@ function AutomationsPage() {
           <div className="cw-run-drawer-title">
             <StatusDot status={status} />
             <strong>{automationById[run.automationId]?.name}</strong>
-            <span className="cw-run-attempt">#{run.attempt}</span>
+            <span className="cw-run-attempt">#{shortRunId(run)}</span>
           </div>
           <div className="cw-run-drawer-meta">
-            <TriggerBadge trigger={run.trigger} placement="below-start" />
+            <TriggerBadge trigger={trigger} placement="below-start" />
             <span>{STATUS_LABEL[status]}</span>
             <span>·</span>
-            <span>{run.whenLabel}</span>
+            <span>{formatRunWhen(run)}</span>
             <span>·</span>
-            <span>duration {run.durationLabel}</span>
+            {status === 'queued' ? (
+              <span>scheduled {formatScheduledAt(run.scheduledFor)}</span>
+            ) : (
+              <span>duration {formatRunDuration(run)}</span>
+            )}
           </div>
         </div>
         <div className="cw-run-drawer-actions">
@@ -288,7 +369,7 @@ function AutomationsPage() {
             <button
               type="button"
               className="cw-btn-secondary cw-btn-destructive cw-run-cancel"
-              onClick={() => cancelRun(run.id)}
+              onClick={() => requestCancel(run)}
               title="실행 취소"
             >
               <Icon name="x" size={14} /> Cancel
@@ -310,7 +391,7 @@ function AutomationsPage() {
           <p className="cw-run-preview-empty">이 run에는 표시할 세션 내용이 없습니다.</p>
         ) : (
           previewMessages.map((msg) => {
-            const isAi = msg.role === 'assistant';
+            const isAi = msg.sender.kind === 'agent';
             return (
               <article
                 key={msg.id}
@@ -320,7 +401,7 @@ function AutomationsPage() {
                 <div className="cw-message-body">
                   <div className="cw-message-meta">
                     <b>{isAi ? 'Agent' : 'Prompt'}</b>
-                    <time>{run.whenLabel}</time>
+                    <time>{formatRunWhen(run)}</time>
                   </div>
                   <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
                     {isAi
@@ -400,11 +481,11 @@ function AutomationsPage() {
             onClick={() => setSelectedAutomationId(null)}
           >
             <span className="cw-rail-name">All automations</span>
-            <span className="cw-rail-count">{RUNS.length}</span>
+            <span className="cw-rail-count">{allRuns.length}</span>
           </button>
 
-          {AUTOMATIONS.map((automation) => {
-            const runCount = RUNS.filter((r) => r.automationId === automation.id).length;
+          {automations.map((automation) => {
+            const runCount = allRuns.filter((r) => r.automationId === automation.id).length;
             const active = selectedAutomationId === automation.id;
             return (
               <div
@@ -421,7 +502,7 @@ function AutomationsPage() {
                   }
                 }}
               >
-                <StatusDot status={automation.lastRunStatus} compact />
+                <StatusDot status={lastRunByAutomation[automation.id]?.status ?? 'queued'} compact />
                 <span className="cw-rail-name">{automation.name}</span>
                 {isDisabled(automation.id) && (
                   <span className="cw-rail-off" title="비활성화됨">Off</span>
@@ -441,6 +522,24 @@ function AutomationsPage() {
                   />
                 </span>
                 <span className="cw-rail-count">{runCount}</span>
+                <div className="cw-rail-extra">
+                  {automation.description && (
+                    <p className="cw-rail-desc">{automation.description}</p>
+                  )}
+                  <ul className="cw-rail-trigger-summary">
+                    {(triggersByAutomation[automation.id] ?? []).length === 0 ? (
+                      <li>
+                        <span className="cw-trigger-badge cw-trigger-manual">manual only</span>
+                        <span className="cw-rail-trigger-meta">트리거 없음</span>
+                      </li>
+                    ) : triggersByAutomation[automation.id].map((t) => (
+                      <li key={t.id}>
+                        <span className={`cw-trigger-badge cw-trigger-${t.kind}`}>{t.kind === 'cron' ? 'schedule' : t.kind}</span>
+                        <span className="cw-rail-trigger-meta">{triggerSummaryText(t)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             );
           })}
@@ -452,7 +551,7 @@ function AutomationsPage() {
             {selectedAutomation && (
               <div className="cw-runs-context">
                 <strong>{selectedAutomation.name}</strong>
-                <span>{selectedAutomation.description}</span>
+                <span>{selectedAutomation.description ?? ''}</span>
               </div>
             )}
             <FilterSelect<RunStatus | 'all'>
@@ -479,6 +578,15 @@ function AutomationsPage() {
                 { value: 'manual',  label: 'manual' },
               ]}
             />
+            {(statusFilter !== 'all' || triggerFilter !== 'all') && (
+              <button
+                type="button"
+                className="cw-filter-reset"
+                onClick={() => { setStatusFilter('all'); setTriggerFilter('all'); }}
+              >
+                <Icon name="rotate-ccw" size={12} /> reset filter
+              </button>
+            )}
             <span className="cw-runs-count">{visibleRuns.length} runs</span>
           </div>
 
@@ -490,9 +598,10 @@ function AutomationsPage() {
             </div>
           ) : (
             <ul className="cw-runs-list">
-              {pagedRuns.map((run) => {
+              {pagedRows.map(({ run, depth }) => {
                 const automation = automationById[run.automationId];
                 const active = selectedRunId === run.id;
+                const isRetry = depth > 0;
                 const chevronRot = isWide
                   ? (active ? 180 : 0)     // wide: < selected, > not
                   : (active ? -90 : 90);   // narrow: ^ selected, v not
@@ -500,17 +609,22 @@ function AutomationsPage() {
                   <li key={run.id}>
                     <button
                       type="button"
-                      className={`cw-run-row ${active ? 'is-active' : ''}`}
+                      className={`cw-run-row ${active ? 'is-active' : ''} ${isRetry ? 'is-retry' : ''}`}
+                      style={isRetry ? { paddingLeft: 16 + depth * 24 } : undefined}
                       onClick={() => toggleRun(run.id)}
                     >
                       <StatusDot status={effectiveStatus(run)} />
                       <span className="cw-run-title">
                         <strong>{automation?.name ?? '(deleted)'}</strong>
-                        <span className="cw-run-attempt">#{run.attempt}</span>
+                        <span className="cw-run-attempt">#{shortRunId(run)}</span>
                       </span>
-                      <TriggerBadge trigger={run.trigger} />
-                      <span className="cw-run-duration">{run.durationLabel}</span>
-                      <span className="cw-run-when">{run.whenLabel}</span>
+                      <TriggerBadge trigger={run.triggerId ? triggerById[run.triggerId] ?? null : null} />
+                      <span className="cw-run-duration">
+                        {effectiveStatus(run) === 'queued'
+                          ? formatScheduledAt(run.scheduledFor)
+                          : formatRunDuration(run)}
+                      </span>
+                      <span className="cw-run-when">{formatRunWhen(run)}</span>
                       <Icon
                         name="chevron-right"
                         size={14}
@@ -565,6 +679,18 @@ function AutomationsPage() {
           </aside>
         )}
       </div>
+
+      {pendingManualRun && (
+        <ConfirmDialog
+          title="수동 실행 확인"
+          body={`'${pendingManualRun.name}' automation을 지금 한 번 실행할까요?`}
+          confirmLabel="실행"
+          pending={manualRunMutation.isPending}
+          onConfirm={confirmManualRun}
+          onClose={() => setPendingManualRun(null)}
+          confirmOnEnter
+        />
+      )}
     </section>
   );
 }
@@ -580,7 +706,8 @@ function TriggerBadge({
   trigger,
   placement = 'below',
 }: {
-  trigger: TriggerInfo;
+  /** `null` ⇒ manual run (no backing trigger row). */
+  trigger: Trigger | null;
   placement?: TriggerPlacement;
 }) {
   const badgeRef = useRef<HTMLSpanElement | null>(null);
@@ -611,18 +738,25 @@ function TriggerBadge({
     };
   }, [open, recompute]);
 
+  const kind: TriggerKind = trigger?.kind ?? 'manual';
+  const label = TRIGGER_LABEL[kind];
+
+  if (!trigger) {
+    return <span className={`cw-trigger-badge cw-trigger-${kind}`}>{label}</span>;
+  }
+
   return (
     <>
       <span
         ref={badgeRef}
-        className={`cw-trigger-badge cw-trigger-${trigger.kind} cw-trigger-badge-host`}
+        className={`cw-trigger-badge cw-trigger-${kind} cw-trigger-badge-host`}
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         tabIndex={0}
       >
-        {TRIGGER_LABEL[trigger.kind]}
+        {label}
       </span>
       {open && coords && createPortal(
         <span
@@ -630,22 +764,20 @@ function TriggerBadge({
           role="tooltip"
           style={{ top: coords.top, left: coords.left }}
         >
-          <span className="cw-trigger-popover-row"><b>{TRIGGER_LABEL[trigger.kind]}</b></span>
-          {trigger.kind === 'cron' && (
+          <span className="cw-trigger-popover-row"><b>{label}</b></span>
+          {trigger.spec.kind === 'cron' && (
             <>
-              <span className="cw-trigger-popover-row"><span>expr</span><code>{trigger.expr}</code></span>
-              <span className="cw-trigger-popover-row"><span>tz</span><code>{trigger.tz}</code></span>
-              {trigger.nextLabel && <span className="cw-trigger-popover-row"><span>next</span><code>{trigger.nextLabel}</code></span>}
+              <span className="cw-trigger-popover-row"><span>when</span><code>{summarizeCron(trigger.spec.expr)}</code></span>
+              {trigger.spec.tz && (
+                <span className="cw-trigger-popover-row"><span>tz</span><code>{trigger.spec.tz}</code></span>
+              )}
+              {trigger.nextFireAt && (
+                <span className="cw-trigger-popover-row"><span>next</span><code>{trigger.nextFireAt.slice(0, 16).replace('T', ' ')}</code></span>
+              )}
             </>
           )}
-          {trigger.kind === 'webhook' && (
-            <>
-              <span className="cw-trigger-popover-row"><span>token</span><code>{trigger.tokenPreview}</code></span>
-              {trigger.lastFiredLabel && <span className="cw-trigger-popover-row"><span>last</span><code>{trigger.lastFiredLabel}</code></span>}
-            </>
-          )}
-          {trigger.kind === 'manual' && (
-            <span className="cw-trigger-popover-row"><span>by</span><code>{trigger.actorLabel}</code></span>
+          {trigger.spec.kind === 'webhook' && (
+            <span className="cw-trigger-popover-row"><span>token</span><code>whk_{trigger.id.slice(0, 6)}</code></span>
           )}
         </span>,
         document.body,

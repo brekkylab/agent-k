@@ -503,14 +503,13 @@ function useParamFromMatches(key: string): string | null {
   return null;
 }
 
-function useActiveRouteKey(): 'project' | 'files' | 'skills' | 'automation' | 'schedule' | 'members' | 'settings' | 'session' | 'projects' {
+function useActiveRouteKey(): 'project' | 'files' | 'skills' | 'automation' | 'members' | 'settings' | 'session' | 'projects' {
   const state = useRouterState();
   const path = state.location.pathname;
   if (path.includes('/sessions/')) return 'session';
   if (path.endsWith('/files')) return 'files';
   if (path.endsWith('/skills')) return 'skills';
   if (/\/automation(\/|$)/.test(path)) return 'automation';
-  if (/\/schedule(\/|$)/.test(path)) return 'schedule';
   if (path.endsWith('/members')) return 'members';
   if (path.endsWith('/settings')) return 'settings';
   if (path.match(/\/projects\/[^/]+$/)) return 'project';

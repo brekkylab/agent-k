@@ -1,83 +1,198 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@/components/Icon';
 import { SchedulePicker, summarizeCron, type SchedulePickerValue } from '@/components/SchedulePicker';
 import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import {
+  createTrigger as createTriggerApi,
+  deleteAutomation as deleteAutomationApi,
+  deleteTrigger as deleteTriggerApi,
+  getAutomation,
+  listTriggers,
+  updateAutomation as updateAutomationApi,
+  updateTrigger as updateTriggerApi,
+} from '@/api/automations';
+import type { Trigger, TriggerSpec } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectId/automation/$automationId')({
   component: AutomationSettingsPage,
 });
 
-type TriggerEntry =
-  | { id: string; kind: 'cron';    expr: string; tz: string; enabled: boolean }
-  | { id: string; kind: 'webhook'; tokenPreview: string;     enabled: boolean };
-
-interface MockAutomationDetail {
-  id: string;
-  name: string;
-  description: string;
-  prompts: string[];
-  triggers: TriggerEntry[];
-  disabled?: boolean;
-}
-
-const MOCK_DETAILS: Record<string, MockAutomationDetail> = {
-  a1: {
-    id: 'a1',
-    name: 'Daily summary',
-    description: 'Recap yesterday\'s sessions and surface today\'s priorities.',
-    prompts: [
-      '어제 진행된 세션을 1-2줄 요약으로 정리해줘.',
-      '오늘 우선순위 항목 3개를 뽑아줘.',
-    ],
-    triggers: [
-      { id: 't1', kind: 'cron', expr: '0 10 * * *', tz: 'Asia/Seoul', enabled: true },
-    ],
-  },
-  a2: {
-    id: 'a2',
-    name: 'Weekly digest',
-    description: 'Friday rollup to email.',
-    prompts: ['이번 주 핵심 결정 사항을 정리해줘.'],
-    triggers: [
-      { id: 't2', kind: 'cron', expr: '0 9 * * 5', tz: 'Asia/Seoul', enabled: true },
-    ],
-  },
-  a3: {
-    id: 'a3',
-    name: 'On-call ping',
-    description: 'External webhook hand-off.',
-    prompts: ['인시던트 내용을 받아 1줄 요약과 담당자를 추정해줘.'],
-    triggers: [
-      { id: 't3', kind: 'webhook', tokenPreview: 'whk_••••e8f2', enabled: true },
-    ],
-    disabled: true,
-  },
-  a4: {
-    id: 'a4',
-    name: 'Backfill ledger',
-    description: 'Manual one-shot reruns for missed ledger entries.',
-    prompts: ['주어진 기간의 누락 ledger 항목을 다시 처리해줘.'],
-    triggers: [],
-  },
-};
-
 function AutomationSettingsPage() {
   const { projectId, automationId } = Route.useParams();
   const navigate = useNavigate();
-  const detail = MOCK_DETAILS[automationId];
+  const queryClient = useQueryClient();
 
-  const [name, setName] = useState(detail?.name ?? '');
-  const [description, setDescription] = useState(detail?.description ?? '');
-  const [enabled, setEnabled] = useState(!detail?.disabled);
-  const [prompts, setPrompts] = useState<string[]>(detail?.prompts ?? ['']);
-  const [triggers, setTriggers] = useState<TriggerEntry[]>(detail?.triggers ?? []);
+  const automationQuery = useQuery({
+    queryKey: ['automation', automationId],
+    queryFn: () => getAutomation(automationId),
+  });
+  const triggersQuery = useQuery({
+    queryKey: ['triggers', automationId],
+    queryFn: () => listTriggers(automationId),
+  });
+
+  const automation = automationQuery.data;
+  const triggers: Trigger[] = triggersQuery.data ?? [];
+
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [prompts, setPrompts] = useState<string[]>(['']);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (!automation) return;
+    if (syncedAt === automation.updatedAt) return;
+    setName(automation.name);
+    setDescription(automation.description ?? '');
+    setPrompts(automation.prompts.length > 0 ? automation.prompts : ['']);
+    setSyncedAt(automation.updatedAt);
+  }, [automation, syncedAt]);
 
   const goBack = () => {
     navigate({ to: '/projects/$projectId/automation', params: { projectId } });
   };
 
-  if (!detail) {
+  // ── Mutations ───────────────────────────────────────────────────────────
+  const invalidateAutomation = () => {
+    void queryClient.invalidateQueries({ queryKey: ['automation', automationId] });
+    void queryClient.invalidateQueries({ queryKey: ['automations', projectId] });
+  };
+  const invalidateTriggers = () => {
+    void queryClient.invalidateQueries({ queryKey: ['triggers', automationId] });
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: () => updateAutomationApi(automationId, {
+      name,
+      description: description.trim() ? description : null,
+      prompts: prompts.filter((p) => p.trim().length > 0),
+    }),
+    onSuccess: () => {
+      invalidateAutomation();
+      goBack();
+    },
+  });
+
+  const [revealedToken, setRevealedToken] = useState<string | null>(null);
+  const [revealedTriggerId, setRevealedTriggerId] = useState<string | null>(null);
+  const [discardArmed, setDiscardArmed] = useState(false);
+  const closeReveal = () => {
+    setRevealedToken(null);
+    setRevealedTriggerId(null);
+    setDiscardArmed(false);
+  };
+
+  const createTriggerMutation = useMutation({
+    mutationFn: (spec: TriggerSpec) => createTriggerApi(automationId, spec),
+    onSuccess: (created) => {
+      invalidateTriggers();
+      if (created.webhookToken) {
+        setRevealedTriggerId(created.trigger.id);
+        setRevealedToken(created.webhookToken);
+      }
+      resetDraft();
+    },
+  });
+
+  const toggleAutomationEnabledMutation = useMutation({
+    mutationFn: (next: boolean) => updateAutomationApi(automationId, { enabled: next }),
+    onSuccess: () => invalidateAutomation(),
+  });
+
+  const deleteAutomationMutation = useMutation({
+    mutationFn: () => deleteAutomationApi(automationId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['automations', projectId] });
+      goBack();
+    },
+  });
+
+  const updateTriggerMutation = useMutation({
+    mutationFn: (vars: { triggerId: string; patch: { spec?: TriggerSpec; enabled?: boolean } }) =>
+      updateTriggerApi(automationId, vars.triggerId, vars.patch),
+    onSuccess: () => invalidateTriggers(),
+  });
+
+  const deleteTriggerMutation = useMutation({
+    mutationFn: (triggerId: string) => deleteTriggerApi(automationId, triggerId),
+    onSuccess: () => invalidateTriggers(),
+  });
+
+  // ── Prompts ─────────────────────────────────────────────────────────────
+  const updatePrompt = (i: number, value: string) => {
+    setPrompts((p) => p.map((line, idx) => (idx === i ? value : line)));
+  };
+  const addPrompt = () => setPrompts((p) => [...p, '']);
+  const removePrompt = (i: number) => setPrompts((p) => p.filter((_, idx) => idx !== i));
+
+  // ── Trigger row actions ─────────────────────────────────────────────────
+  const [pendingTriggerDeleteId, setPendingTriggerDeleteId] = useState<string | null>(null);
+  const removeTrigger = (id: string) => {
+    if (pendingTriggerDeleteId !== id) {
+      setPendingTriggerDeleteId(id);
+      return;
+    }
+    setPendingTriggerDeleteId(null);
+    deleteTriggerMutation.mutate(id);
+  };
+  const toggleTriggerEnabled = (t: Trigger) =>
+    updateTriggerMutation.mutate({ triggerId: t.id, patch: { enabled: !t.enabled } });
+
+  // ── Add-trigger draft ───────────────────────────────────────────────────
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [draftKind, setDraftKind] = useState<'cron' | 'webhook'>('cron');
+  const [draftSchedule, setDraftSchedule] = useState<SchedulePickerValue>({ expr: '0 9 * * 1,2,3,4,5', tz: 'Asia/Seoul' });
+  const resetDraft = () => {
+    setShowAddForm(false);
+    setDraftKind('cron');
+    setDraftSchedule({ expr: '0 9 * * 1,2,3,4,5', tz: 'Asia/Seoul' });
+  };
+  const [showDeleteAutomationConfirm, setShowDeleteAutomationConfirm] = useState(false);
+  const submitDraft = () => {
+    if (draftKind === 'cron') {
+      createTriggerMutation.mutate({
+        kind: 'cron',
+        expr: draftSchedule.expr || '0 * * * *',
+        tz: draftSchedule.tz || null,
+      });
+    } else {
+      createTriggerMutation.mutate({ kind: 'webhook' });
+    }
+  };
+
+  // ── Inline cron edit ────────────────────────────────────────────────────
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editSchedule, setEditSchedule] = useState<SchedulePickerValue>({ expr: '', tz: '' });
+  const startEdit = (t: Trigger) => {
+    if (t.spec.kind !== 'cron') return;
+    setEditingId(t.id);
+    setEditSchedule({ expr: t.spec.expr, tz: t.spec.tz ?? '' });
+  };
+  const cancelEdit = () => setEditingId(null);
+  const saveEdit = () => {
+    const t = triggers.find((x) => x.id === editingId);
+    if (!t || t.spec.kind !== 'cron') { setEditingId(null); return; }
+    updateTriggerMutation.mutate({
+      triggerId: t.id,
+      patch: { spec: { kind: 'cron', expr: editSchedule.expr || t.spec.expr, tz: editSchedule.tz || t.spec.tz } },
+    });
+    setEditingId(null);
+  };
+
+  // ── Loading / not-found ────────────────────────────────────────────────
+  if (automationQuery.isLoading) {
+    return (
+      <section className="cw-page cw-automation-settings cw-page-enter">
+        <button className="cw-btn-secondary cw-back-link" type="button" onClick={goBack}>
+          <Icon name="arrow-left" size={14} /> Automations
+        </button>
+        <p>로딩 중…</p>
+      </section>
+    );
+  }
+  if (!automation) {
     return (
       <section className="cw-page cw-automation-settings cw-page-enter">
         <button className="cw-btn-secondary cw-back-link" type="button" onClick={goBack}>
@@ -89,68 +204,7 @@ function AutomationSettingsPage() {
     );
   }
 
-  const updatePrompt = (i: number, value: string) => {
-    setPrompts((p) => p.map((line, idx) => (idx === i ? value : line)));
-  };
-  const addPrompt = () => setPrompts((p) => [...p, '']);
-  const removePrompt = (i: number) => setPrompts((p) => p.filter((_, idx) => idx !== i));
-
-  const removeTrigger = (id: string) => setTriggers((prev) => prev.filter((t) => t.id !== id));
-  const toggleEnabled = (id: string) =>
-    setTriggers((prev) => prev.map((t) => (t.id === id ? { ...t, enabled: !t.enabled } : t)));
-
-  // Add-trigger form state — collapsed by default, opens on "Add trigger".
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [draftKind, setDraftKind] = useState<'cron' | 'webhook'>('cron');
-  const [draftSchedule, setDraftSchedule] = useState<SchedulePickerValue>({ expr: '0 9 * * 1,2,3,4,5', tz: 'Asia/Seoul' });
-  const resetDraft = () => {
-    setShowAddForm(false);
-    setDraftKind('cron');
-    setDraftSchedule({ expr: '0 9 * * 1', tz: 'Asia/Seoul' });
-  };
-  const [revealedToken, setRevealedToken] = useState<string | null>(null);
-  const submitDraft = () => {
-    const id = `t-${Date.now().toString(36)}`;
-    if (draftKind === 'cron') {
-      const next: TriggerEntry = {
-        id, kind: 'cron',
-        expr: draftSchedule.expr || '0 * * * *',
-        tz: draftSchedule.tz || 'Asia/Seoul',
-        enabled: true,
-      };
-      setTriggers((prev) => [...prev, next]);
-      resetDraft();
-    } else {
-      const fullToken = generateWebhookToken();
-      const next: TriggerEntry = {
-        id, kind: 'webhook',
-        tokenPreview: `whk_••••${fullToken.slice(-4)}`,
-        enabled: true,
-      };
-      setTriggers((prev) => [...prev, next]);
-      resetDraft();
-      setRevealedToken(fullToken);
-    }
-  };
-
-  // Inline edit state for an existing trigger row.
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editSchedule, setEditSchedule] = useState<SchedulePickerValue>({ expr: '', tz: '' });
-  const startEdit = (t: TriggerEntry) => {
-    setEditingId(t.id);
-    if (t.kind === 'cron') setEditSchedule({ expr: t.expr, tz: t.tz });
-  };
-  const cancelEdit = () => setEditingId(null);
-  const saveEdit = () => {
-    setTriggers((prev) =>
-      prev.map((t) => {
-        if (t.id !== editingId) return t;
-        if (t.kind === 'cron') return { ...t, expr: editSchedule.expr || t.expr, tz: editSchedule.tz || t.tz };
-        return t;
-      }),
-    );
-    setEditingId(null);
-  };
+  const enabled = automation.enabled;
 
   return (
     <section className="cw-page cw-automation-settings cw-page-enter">
@@ -160,11 +214,19 @@ function AutomationSettingsPage() {
 
       <header className="cw-page-head">
         <div>
-          <h1>{detail.name}</h1>
+          <h1>{automation.name}</h1>
           <p>이 automation의 이름·프롬프트·트리거를 관리합니다.</p>
         </div>
         <div>
-          <button className="cw-btn-primary" type="button">Save changes</button>
+          <button className="cw-btn-secondary" type="button" onClick={goBack}>Cancel</button>
+          <button
+            className="cw-btn-primary"
+            type="button"
+            onClick={() => saveMutation.mutate()}
+            disabled={saveMutation.isPending}
+          >
+            {saveMutation.isPending ? 'Saving…' : 'Save changes'}
+          </button>
         </div>
       </header>
 
@@ -184,7 +246,8 @@ function AutomationSettingsPage() {
               <input
                 type="checkbox"
                 checked={enabled}
-                onChange={(e) => setEnabled(e.target.checked)}
+                onChange={(e) => toggleAutomationEnabledMutation.mutate(e.target.checked)}
+                disabled={toggleAutomationEnabledMutation.isPending}
               />
               <span className="cw-toggle-slider" />
               <span className="cw-toggle-label">{enabled ? 'On' : 'Off'}</span>
@@ -255,6 +318,7 @@ function AutomationSettingsPage() {
               </button>
             )}
           </header>
+          <p className="cw-settings-hint">트리거 추가/수정/삭제는 즉시 반영됩니다. Save changes는 automation 본문만 저장합니다.</p>
 
           {showAddForm && (
             <div className="cw-trigger-draft">
@@ -297,8 +361,13 @@ function AutomationSettingsPage() {
 
               <div className="cw-trigger-draft-actions">
                 <button className="cw-btn-secondary" type="button" onClick={resetDraft}>Cancel</button>
-                <button className="cw-btn-primary" type="button" onClick={submitDraft}>
-                  <Icon name="check" size={14} /> Add
+                <button
+                  className="cw-btn-primary"
+                  type="button"
+                  onClick={submitDraft}
+                  disabled={createTriggerMutation.isPending}
+                >
+                  <Icon name="check" size={14} /> {createTriggerMutation.isPending ? 'Adding…' : 'Add'}
                 </button>
               </div>
             </div>
@@ -310,19 +379,23 @@ function AutomationSettingsPage() {
             <ul className="cw-trigger-list">
               {triggers.map((trigger) => {
                 const isEditing = editingId === trigger.id;
+                const isCron = trigger.spec.kind === 'cron';
                 return (
                   <li key={trigger.id} className={`cw-trigger-row ${isEditing ? 'is-editing' : ''}`}>
-                    {isEditing && trigger.kind === 'cron' ? (
+                    {isEditing && isCron ? (
                       <>
                         <header className="cw-trigger-edit-head">
                           <span className="cw-trigger-badge cw-trigger-cron">schedule</span>
                           <label className="cw-trigger-enabled">
-                            <input
-                              type="checkbox"
-                              checked={trigger.enabled}
-                              onChange={() => toggleEnabled(trigger.id)}
-                            />
                             <span>{trigger.enabled ? 'enabled' : 'disabled'}</span>
+                            <span className="cw-switch">
+                              <input
+                                type="checkbox"
+                                checked={trigger.enabled}
+                                onChange={() => toggleTriggerEnabled(trigger)}
+                              />
+                              <span className="cw-switch-track" aria-hidden />
+                            </span>
                           </label>
                           <button
                             className="cw-trigger-action"
@@ -330,6 +403,7 @@ function AutomationSettingsPage() {
                             aria-label="Save"
                             onClick={saveEdit}
                             title="Save"
+                            disabled={updateTriggerMutation.isPending}
                           >
                             <Icon name="check" size={14} />
                           </button>
@@ -350,44 +424,49 @@ function AutomationSettingsPage() {
                     ) : (
                       <>
                         <span className={`cw-trigger-badge cw-trigger-${trigger.kind}`}>
-                          {trigger.kind === 'cron' ? 'schedule' : trigger.kind}
+                          {isCron ? 'schedule' : trigger.kind}
                         </span>
-                        {trigger.kind === 'cron' ? (
+                        {trigger.spec.kind === 'cron' ? (
                           <>
-                            <span className="cw-trigger-summary">{summarizeCron(trigger.expr)}</span>
-                            <span className="cw-trigger-meta">{trigger.tz}</span>
+                            <span className="cw-trigger-summary">{summarizeCron(trigger.spec.expr)}</span>
+                            <span className="cw-trigger-meta">{trigger.spec.tz ?? 'UTC'}</span>
                           </>
                         ) : (
                           <>
-                            <code className="cw-trigger-expr">{trigger.tokenPreview}</code>
+                            <code className="cw-trigger-expr">whk_{trigger.id.slice(0, 6)}</code>
                             <span className="cw-trigger-meta">bearer token</span>
                           </>
                         )}
                         <label className="cw-trigger-enabled">
-                          <input
-                            type="checkbox"
-                            checked={trigger.enabled}
-                            onChange={() => toggleEnabled(trigger.id)}
-                          />
                           <span>{trigger.enabled ? 'enabled' : 'disabled'}</span>
+                          <span className="cw-switch">
+                            <input
+                              type="checkbox"
+                              checked={trigger.enabled}
+                              onChange={() => toggleTriggerEnabled(trigger)}
+                            />
+                            <span className="cw-switch-track" aria-hidden />
+                          </span>
                         </label>
                         <button
                           className="cw-trigger-action"
                           type="button"
                           aria-label="Edit trigger"
                           onClick={() => startEdit(trigger)}
-                          disabled={trigger.kind === 'webhook'}
-                          title={trigger.kind === 'webhook' ? '웹훅은 편집 불가' : 'Edit'}
+                          disabled={!isCron}
+                          title={!isCron ? '웹훅은 편집 불가' : 'Edit'}
                         >
                           <Icon name="settings" size={14} />
                         </button>
                         <button
-                          className="cw-trigger-action"
+                          className={`cw-trigger-action${pendingTriggerDeleteId === trigger.id ? ' is-armed' : ''}`}
                           type="button"
-                          aria-label="Delete trigger"
+                          aria-label={pendingTriggerDeleteId === trigger.id ? '한 번 더 눌러 삭제' : 'Delete trigger'}
                           onClick={() => removeTrigger(trigger.id)}
                         >
-                          <Icon name="trash" size={14} />
+                          {pendingTriggerDeleteId === trigger.id
+                            ? '한 번 더 눌러 삭제'
+                            : <Icon name="trash" size={14} />}
                         </button>
                       </>
                     )}
@@ -401,7 +480,12 @@ function AutomationSettingsPage() {
         <section className="cw-settings-card cw-settings-danger">
           <h2>Danger zone</h2>
           <p>이 automation을 삭제하면 실행 이력과 webhook 토큰이 모두 사라집니다.</p>
-          <button className="cw-btn-secondary cw-btn-destructive" type="button">
+          <button
+            className="cw-btn-secondary cw-btn-destructive"
+            type="button"
+            onClick={() => setShowDeleteAutomationConfirm(true)}
+            disabled={deleteAutomationMutation.isPending}
+          >
             <Icon name="trash" size={14} /> Delete automation
           </button>
         </section>
@@ -411,20 +495,31 @@ function AutomationSettingsPage() {
         <WebhookTokenDialog
           token={revealedToken}
           curlSample={`curl -X POST \\\n  -H 'Authorization: Bearer ${revealedToken}' \\\n  https://api.example.com/webhooks/automations`}
-          onClose={() => setRevealedToken(null)}
+          onClose={closeReveal}
+          onDiscard={revealedTriggerId ? () => {
+            if (!discardArmed) {
+              setDiscardArmed(true);
+              return;
+            }
+            const tid = revealedTriggerId;
+            closeReveal();
+            deleteTriggerMutation.mutate(tid);
+          } : undefined}
+          discardLabel={discardArmed ? '한 번 더 눌러 삭제' : '트리거 삭제'}
+          discardArmed={discardArmed}
+        />
+      )}
+      {showDeleteAutomationConfirm && (
+        <ConfirmDialog
+          title="Automation 삭제"
+          body={`'${automation.name}' automation을 정말 삭제할까요? 실행 이력과 webhook 토큰이 모두 사라집니다.`}
+          confirmLabel="삭제"
+          destructive
+          pending={deleteAutomationMutation.isPending}
+          onConfirm={() => deleteAutomationMutation.mutate()}
+          onClose={() => setShowDeleteAutomationConfirm(false)}
         />
       )}
     </section>
   );
-}
-
-function generateWebhookToken(): string {
-  const bytes = new Uint8Array(24);
-  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-  return `whk_${hex}`;
 }

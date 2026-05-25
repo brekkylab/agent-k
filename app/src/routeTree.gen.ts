@@ -21,7 +21,11 @@ import { Route as AppProjectsProjectIdSettingsRouteImport } from './routes/_app.
 import { Route as AppProjectsProjectIdScheduleRouteImport } from './routes/_app.projects.$projectId.schedule'
 import { Route as AppProjectsProjectIdMembersRouteImport } from './routes/_app.projects.$projectId.members'
 import { Route as AppProjectsProjectIdFilesRouteImport } from './routes/_app.projects.$projectId.files'
+import { Route as AppProjectsProjectIdAutomationRouteImport } from './routes/_app.projects.$projectId.automation'
+import { Route as AppProjectsProjectIdAutomationIndexRouteImport } from './routes/_app.projects.$projectId.automation.index'
 import { Route as AppProjectsProjectIdSessionsSessionIdRouteImport } from './routes/_app.projects.$projectId.sessions.$sessionId'
+import { Route as AppProjectsProjectIdAutomationNewRouteImport } from './routes/_app.projects.$projectId.automation.new'
+import { Route as AppProjectsProjectIdAutomationAutomationIdRouteImport } from './routes/_app.projects.$projectId.automation.$automationId'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -88,11 +92,35 @@ const AppProjectsProjectIdFilesRoute =
     path: '/files',
     getParentRoute: () => AppProjectsProjectIdRoute,
   } as any)
+const AppProjectsProjectIdAutomationRoute =
+  AppProjectsProjectIdAutomationRouteImport.update({
+    id: '/automation',
+    path: '/automation',
+    getParentRoute: () => AppProjectsProjectIdRoute,
+  } as any)
+const AppProjectsProjectIdAutomationIndexRoute =
+  AppProjectsProjectIdAutomationIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppProjectsProjectIdAutomationRoute,
+  } as any)
 const AppProjectsProjectIdSessionsSessionIdRoute =
   AppProjectsProjectIdSessionsSessionIdRouteImport.update({
     id: '/sessions/$sessionId',
     path: '/sessions/$sessionId',
     getParentRoute: () => AppProjectsProjectIdRoute,
+  } as any)
+const AppProjectsProjectIdAutomationNewRoute =
+  AppProjectsProjectIdAutomationNewRouteImport.update({
+    id: '/new',
+    path: '/new',
+    getParentRoute: () => AppProjectsProjectIdAutomationRoute,
+  } as any)
+const AppProjectsProjectIdAutomationAutomationIdRoute =
+  AppProjectsProjectIdAutomationAutomationIdRouteImport.update({
+    id: '/$automationId',
+    path: '/$automationId',
+    getParentRoute: () => AppProjectsProjectIdAutomationRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -101,13 +129,17 @@ export interface FileRoutesByFullPath {
   '/projects': typeof AppProjectsRouteWithChildren
   '/projects/$projectId': typeof AppProjectsProjectIdRouteWithChildren
   '/projects/': typeof AppProjectsIndexRoute
+  '/projects/$projectId/automation': typeof AppProjectsProjectIdAutomationRouteWithChildren
   '/projects/$projectId/files': typeof AppProjectsProjectIdFilesRoute
   '/projects/$projectId/members': typeof AppProjectsProjectIdMembersRoute
   '/projects/$projectId/schedule': typeof AppProjectsProjectIdScheduleRoute
   '/projects/$projectId/settings': typeof AppProjectsProjectIdSettingsRoute
   '/projects/$projectId/skills': typeof AppProjectsProjectIdSkillsRoute
   '/projects/$projectId/': typeof AppProjectsProjectIdIndexRoute
+  '/projects/$projectId/automation/$automationId': typeof AppProjectsProjectIdAutomationAutomationIdRoute
+  '/projects/$projectId/automation/new': typeof AppProjectsProjectIdAutomationNewRoute
   '/projects/$projectId/sessions/$sessionId': typeof AppProjectsProjectIdSessionsSessionIdRoute
+  '/projects/$projectId/automation/': typeof AppProjectsProjectIdAutomationIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -119,7 +151,10 @@ export interface FileRoutesByTo {
   '/projects/$projectId/settings': typeof AppProjectsProjectIdSettingsRoute
   '/projects/$projectId/skills': typeof AppProjectsProjectIdSkillsRoute
   '/projects/$projectId': typeof AppProjectsProjectIdIndexRoute
+  '/projects/$projectId/automation/$automationId': typeof AppProjectsProjectIdAutomationAutomationIdRoute
+  '/projects/$projectId/automation/new': typeof AppProjectsProjectIdAutomationNewRoute
   '/projects/$projectId/sessions/$sessionId': typeof AppProjectsProjectIdSessionsSessionIdRoute
+  '/projects/$projectId/automation': typeof AppProjectsProjectIdAutomationIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -129,13 +164,17 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/projects/$projectId': typeof AppProjectsProjectIdRouteWithChildren
   '/_app/projects/': typeof AppProjectsIndexRoute
+  '/_app/projects/$projectId/automation': typeof AppProjectsProjectIdAutomationRouteWithChildren
   '/_app/projects/$projectId/files': typeof AppProjectsProjectIdFilesRoute
   '/_app/projects/$projectId/members': typeof AppProjectsProjectIdMembersRoute
   '/_app/projects/$projectId/schedule': typeof AppProjectsProjectIdScheduleRoute
   '/_app/projects/$projectId/settings': typeof AppProjectsProjectIdSettingsRoute
   '/_app/projects/$projectId/skills': typeof AppProjectsProjectIdSkillsRoute
   '/_app/projects/$projectId/': typeof AppProjectsProjectIdIndexRoute
+  '/_app/projects/$projectId/automation/$automationId': typeof AppProjectsProjectIdAutomationAutomationIdRoute
+  '/_app/projects/$projectId/automation/new': typeof AppProjectsProjectIdAutomationNewRoute
   '/_app/projects/$projectId/sessions/$sessionId': typeof AppProjectsProjectIdSessionsSessionIdRoute
+  '/_app/projects/$projectId/automation/': typeof AppProjectsProjectIdAutomationIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -145,13 +184,17 @@ export interface FileRouteTypes {
     | '/projects'
     | '/projects/$projectId'
     | '/projects/'
+    | '/projects/$projectId/automation'
     | '/projects/$projectId/files'
     | '/projects/$projectId/members'
     | '/projects/$projectId/schedule'
     | '/projects/$projectId/settings'
     | '/projects/$projectId/skills'
     | '/projects/$projectId/'
+    | '/projects/$projectId/automation/$automationId'
+    | '/projects/$projectId/automation/new'
     | '/projects/$projectId/sessions/$sessionId'
+    | '/projects/$projectId/automation/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -163,7 +206,10 @@ export interface FileRouteTypes {
     | '/projects/$projectId/settings'
     | '/projects/$projectId/skills'
     | '/projects/$projectId'
+    | '/projects/$projectId/automation/$automationId'
+    | '/projects/$projectId/automation/new'
     | '/projects/$projectId/sessions/$sessionId'
+    | '/projects/$projectId/automation'
   id:
     | '__root__'
     | '/_app'
@@ -172,13 +218,17 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/projects/$projectId'
     | '/_app/projects/'
+    | '/_app/projects/$projectId/automation'
     | '/_app/projects/$projectId/files'
     | '/_app/projects/$projectId/members'
     | '/_app/projects/$projectId/schedule'
     | '/_app/projects/$projectId/settings'
     | '/_app/projects/$projectId/skills'
     | '/_app/projects/$projectId/'
+    | '/_app/projects/$projectId/automation/$automationId'
+    | '/_app/projects/$projectId/automation/new'
     | '/_app/projects/$projectId/sessions/$sessionId'
+    | '/_app/projects/$projectId/automation/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -272,6 +322,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectIdFilesRouteImport
       parentRoute: typeof AppProjectsProjectIdRoute
     }
+    '/_app/projects/$projectId/automation': {
+      id: '/_app/projects/$projectId/automation'
+      path: '/automation'
+      fullPath: '/projects/$projectId/automation'
+      preLoaderRoute: typeof AppProjectsProjectIdAutomationRouteImport
+      parentRoute: typeof AppProjectsProjectIdRoute
+    }
+    '/_app/projects/$projectId/automation/': {
+      id: '/_app/projects/$projectId/automation/'
+      path: '/'
+      fullPath: '/projects/$projectId/automation/'
+      preLoaderRoute: typeof AppProjectsProjectIdAutomationIndexRouteImport
+      parentRoute: typeof AppProjectsProjectIdAutomationRoute
+    }
     '/_app/projects/$projectId/sessions/$sessionId': {
       id: '/_app/projects/$projectId/sessions/$sessionId'
       path: '/sessions/$sessionId'
@@ -279,10 +343,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectIdSessionsSessionIdRouteImport
       parentRoute: typeof AppProjectsProjectIdRoute
     }
+    '/_app/projects/$projectId/automation/new': {
+      id: '/_app/projects/$projectId/automation/new'
+      path: '/new'
+      fullPath: '/projects/$projectId/automation/new'
+      preLoaderRoute: typeof AppProjectsProjectIdAutomationNewRouteImport
+      parentRoute: typeof AppProjectsProjectIdAutomationRoute
+    }
+    '/_app/projects/$projectId/automation/$automationId': {
+      id: '/_app/projects/$projectId/automation/$automationId'
+      path: '/$automationId'
+      fullPath: '/projects/$projectId/automation/$automationId'
+      preLoaderRoute: typeof AppProjectsProjectIdAutomationAutomationIdRouteImport
+      parentRoute: typeof AppProjectsProjectIdAutomationRoute
+    }
   }
 }
 
+interface AppProjectsProjectIdAutomationRouteChildren {
+  AppProjectsProjectIdAutomationAutomationIdRoute: typeof AppProjectsProjectIdAutomationAutomationIdRoute
+  AppProjectsProjectIdAutomationNewRoute: typeof AppProjectsProjectIdAutomationNewRoute
+  AppProjectsProjectIdAutomationIndexRoute: typeof AppProjectsProjectIdAutomationIndexRoute
+}
+
+const AppProjectsProjectIdAutomationRouteChildren: AppProjectsProjectIdAutomationRouteChildren =
+  {
+    AppProjectsProjectIdAutomationAutomationIdRoute:
+      AppProjectsProjectIdAutomationAutomationIdRoute,
+    AppProjectsProjectIdAutomationNewRoute:
+      AppProjectsProjectIdAutomationNewRoute,
+    AppProjectsProjectIdAutomationIndexRoute:
+      AppProjectsProjectIdAutomationIndexRoute,
+  }
+
+const AppProjectsProjectIdAutomationRouteWithChildren =
+  AppProjectsProjectIdAutomationRoute._addFileChildren(
+    AppProjectsProjectIdAutomationRouteChildren,
+  )
+
 interface AppProjectsProjectIdRouteChildren {
+  AppProjectsProjectIdAutomationRoute: typeof AppProjectsProjectIdAutomationRouteWithChildren
   AppProjectsProjectIdFilesRoute: typeof AppProjectsProjectIdFilesRoute
   AppProjectsProjectIdMembersRoute: typeof AppProjectsProjectIdMembersRoute
   AppProjectsProjectIdScheduleRoute: typeof AppProjectsProjectIdScheduleRoute
@@ -293,6 +393,8 @@ interface AppProjectsProjectIdRouteChildren {
 }
 
 const AppProjectsProjectIdRouteChildren: AppProjectsProjectIdRouteChildren = {
+  AppProjectsProjectIdAutomationRoute:
+    AppProjectsProjectIdAutomationRouteWithChildren,
   AppProjectsProjectIdFilesRoute: AppProjectsProjectIdFilesRoute,
   AppProjectsProjectIdMembersRoute: AppProjectsProjectIdMembersRoute,
   AppProjectsProjectIdScheduleRoute: AppProjectsProjectIdScheduleRoute,

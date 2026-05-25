@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@/components/Icon';
 import { SchedulePicker, type SchedulePickerValue } from '@/components/SchedulePicker';
 import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
+import { createAutomation, createTrigger, deleteAutomation } from '@/api/automations';
+import { ApiError } from '@/api/client';
 
 export const Route = createFileRoute('/_app/projects/$projectId/automation/new')({
   component: NewAutomationPage,
@@ -33,17 +36,69 @@ function NewAutomationPage() {
   const removePrompt = (i: number) => setPrompts((p) => p.filter((_, idx) => idx !== i));
 
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
+  const [createdAutomationId, setCreatedAutomationId] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const discardMutation = useMutation({
+    mutationFn: (id: string) => deleteAutomation(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['automations', projectId] });
+    },
+  });
+  const handleDiscard = () => {
+    const id = createdAutomationId;
+    if (!id) return;
+    setRevealedToken(null);
+    setCreatedAutomationId(null);
+    discardMutation.mutate(id);
+  };
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const automation = await createAutomation({
+        projectId,
+        name: name.trim(),
+        description: description.trim() ? description.trim() : null,
+        prompts: prompts.filter((p) => p.trim().length > 0),
+      });
+      if (triggerKind === 'cron') {
+        await createTrigger(automation.id, {
+          kind: 'cron',
+          expr: schedule.expr,
+          tz: schedule.tz || null,
+        });
+        return { automationId: automation.id, webhookToken: null as string | null };
+      }
+      if (triggerKind === 'webhook') {
+        const created = await createTrigger(automation.id, { kind: 'webhook' });
+        return { automationId: automation.id, webhookToken: created.webhookToken };
+      }
+      return { automationId: automation.id, webhookToken: null as string | null };
+    },
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: ['automations', projectId] });
+      if (result.webhookToken) {
+        setCreatedAutomationId(result.automationId);
+        setRevealedToken(result.webhookToken);
+      } else {
+        goBack();
+      }
+    },
+    onError: (err) => {
+      setSubmitError(
+        err instanceof ApiError ? err.message
+          : err instanceof Error ? err.message
+          : 'create failed',
+      );
+    },
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canSubmit) return;
-    // Mock submit — real impl posts to /automations then optionally /triggers.
-    // eslint-disable-next-line no-console
-    console.info('[mock] create automation', { name, description, prompts, triggerKind, schedule });
-    if (triggerKind === 'webhook') {
-      setRevealedToken(generateWebhookToken());
-      return;
-    }
-    goBack();
+    if (!canSubmit || createMutation.isPending) return;
+    setSubmitError(null);
+    createMutation.mutate();
   };
 
   return (
@@ -60,8 +115,12 @@ function NewAutomationPage() {
           </div>
           <div>
             <button className="cw-btn-secondary" type="button" onClick={goBack}>Cancel</button>
-            <button className="cw-btn-primary" type="submit" disabled={!canSubmit}>
-              <Icon name="check" size={14} /> Create
+            <button
+              className="cw-btn-primary"
+              type="submit"
+              disabled={!canSubmit || createMutation.isPending}
+            >
+              <Icon name="check" size={14} /> {createMutation.isPending ? 'Creating…' : 'Create'}
             </button>
           </div>
         </header>
@@ -182,24 +241,21 @@ function NewAutomationPage() {
         </div>
       </form>
 
+      {submitError && (
+        <p className="cw-settings-hint" role="alert" style={{ color: 'var(--cw-destructive)', marginTop: 12 }}>
+          생성 실패: {submitError}
+        </p>
+      )}
+
       {revealedToken && (
         <WebhookTokenDialog
           token={revealedToken}
           curlSample={`curl -X POST \\\n  -H 'Authorization: Bearer ${revealedToken}' \\\n  https://api.example.com/webhooks/automations`}
-          onClose={() => { setRevealedToken(null); goBack(); }}
+          onClose={() => { setRevealedToken(null); setCreatedAutomationId(null); goBack(); }}
+          onDiscard={createdAutomationId ? handleDiscard : undefined}
+          discardLabel="취소"
         />
       )}
     </section>
   );
-}
-
-function generateWebhookToken(): string {
-  const bytes = new Uint8Array(24);
-  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-  return `whk_${hex}`;
 }
