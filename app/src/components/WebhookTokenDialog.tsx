@@ -1,9 +1,3 @@
-// One-time webhook token reveal dialog. The plaintext bearer token is only
-// available immediately after creating a webhook trigger — subsequent reads
-// from the backend never include it (only a masked preview). This modal
-// reinforces that "save it now" constraint with a copy button and explicit
-// acknowledgment to dismiss.
-
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '@/components/Icon';
@@ -12,17 +6,22 @@ export function WebhookTokenDialog({
   token,
   curlSample,
   onClose,
+  onDiscard,
+  discardLabel = '생성 취소',
+  discardArmed = false,
 }: {
   token: string;
-  /** Optional ready-made curl example showing the token in use. */
   curlSample?: string;
   onClose: () => void;
+  onDiscard?: () => void;
+  discardLabel?: string;
+  discardArmed?: boolean;
 }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [curlCopied, setCurlCopied] = useState(false);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // Esc closes (only after acknowledge to avoid accidental dismissal).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && acknowledged) onClose();
@@ -37,6 +36,16 @@ export function WebhookTokenDialog({
       await navigator.clipboard.writeText(token);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* clipboard unavailable; user can still select-and-copy manually */
+    }
+  };
+  const copyCurl = async () => {
+    if (!curlSample) return;
+    try {
+      await navigator.clipboard.writeText(curlSample);
+      setCurlCopied(true);
+      window.setTimeout(() => setCurlCopied(false), 1800);
     } catch {
       /* clipboard unavailable; user can still select-and-copy manually */
     }
@@ -70,7 +79,7 @@ export function WebhookTokenDialog({
             onClick={copy}
             aria-label="토큰 복사"
           >
-            <Icon name={copied ? 'check' : 'download'} size={14} />
+            <Icon name={copied ? 'check' : 'copy'} size={14} />
             {copied ? '복사됨' : 'Copy'}
           </button>
         </div>
@@ -81,7 +90,18 @@ export function WebhookTokenDialog({
               <Icon name="chevron-right" size={14} />
               호출 예시 (curl)
             </summary>
-            <pre>{curlSample}</pre>
+            <div className="cw-token-curl-body">
+              <pre>{curlSample}</pre>
+              <button
+                type="button"
+                className="cw-token-curl-copy"
+                onClick={copyCurl}
+                aria-label="curl 명령 복사"
+              >
+                <Icon name={curlCopied ? 'check' : 'copy'} size={12} />
+                {curlCopied ? '복사됨' : 'Copy'}
+              </button>
+            </div>
           </details>
         )}
 
@@ -95,6 +115,15 @@ export function WebhookTokenDialog({
         </label>
 
         <footer className="cw-webhook-actions">
+          {onDiscard && (
+            <button
+              type="button"
+              className={`cw-btn-secondary cw-btn-destructive${discardArmed ? ' is-armed' : ''}`}
+              onClick={onDiscard}
+            >
+              {discardLabel}
+            </button>
+          )}
           <button
             ref={closeBtnRef}
             type="button"

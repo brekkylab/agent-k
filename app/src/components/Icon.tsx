@@ -5,8 +5,8 @@ export type IconName =
   | 'message-square' | 'file-text' | 'file' | 'sheet' | 'image' | 'search' | 'plus'
   | 'send' | 'sparkles' | 'check' | 'chevron' | 'zap' | 'calendar' | 'circle-play' | 'rocket' | 'artifact'
   | 'shield' | 'x' | 'arrow-left' | 'analysis' | 'brainstorm' | 'writing'
-  | 'recap' | 'general' | 'more' | 'upload' | 'trash' | 'download'
-  | 'list' | 'grid' | 'chevron-right' | 'chevron-left'
+  | 'recap' | 'general' | 'more' | 'upload' | 'trash' | 'download' | 'copy'
+  | 'list' | 'grid' | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left'
   | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio';
 
 type PreviewIconName =
@@ -15,7 +15,7 @@ type PreviewIconName =
   | 'settings' | 'plus' | 'chevron-down' | 'chevron-right' | 'chevron-left' | 'more-horizontal' | 'check'
   | 'x' | 'arrow-left' | 'send' | 'search' | 'file-text' | 'file-spreadsheet'
   | 'file' | 'image' | 'sparkles' | 'shield-check' | 'zap' | 'calendar' | 'circle-play' | 'rocket'
-  | 'trash-2' | 'download' | 'list' | 'grid-3x3'
+  | 'trash-2' | 'download' | 'copy' | 'list' | 'grid-3x3' | 'rotate-ccw' | 'corner-down-left'
   | 'file-code' | 'file-archive' | 'file-video' | 'file-audio';
 
 const previewIconPath: Record<PreviewIconName, string> = {
@@ -51,6 +51,9 @@ const previewIconPath: Record<PreviewIconName, string> = {
   rocket: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
   'trash-2': '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  'corner-down-left': '<polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/>',
   list: '<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>',
   'grid-3x3': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>',
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
@@ -98,6 +101,9 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   upload: 'plus',
   trash: 'trash-2',
   download: 'download',
+  copy: 'copy',
+  'rotate-ccw': 'rotate-ccw',
+  'corner-down-left': 'corner-down-left',
   list: 'list',
   grid: 'grid-3x3',
   'chevron-right': 'chevron-right',
