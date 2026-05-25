@@ -21,12 +21,15 @@ export interface Project {
   memberIds: UserId[];
 }
 
+export type SessionOrigin = 'user' | 'automation';
+
 export interface Session {
   id: SessionId;
   projectId: ProjectId;
   title: string;
   creatorId: UserId;
   shareMode: ShareMode;
+  origin: SessionOrigin;
   intent: SessionIntent;
   updatedAt: string;
   lastMessageAt: string | null;

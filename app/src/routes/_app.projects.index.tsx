@@ -62,7 +62,8 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
   const members = useQuery({ queryKey: ['members', project.id], queryFn: () => listMembers(project.id) });
   const sessions = useQuery({ queryKey: ['sessions', project.id], queryFn: () => listSessions(project.id) });
   const isOwner = currentUser?.id === project.ownerId;
-  const latest = latestUpdated(sessions.data ?? []);
+  const userSessions = (sessions.data ?? []).filter((s) => s.origin === 'user');
+  const latest = latestUpdated(userSessions);
   const memberUsers: User[] = members.data ?? [];
 
   return (
@@ -77,7 +78,7 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
       <p className="cw-project-card-desc">{project.description || '설명 없음'}</p>
       <div className="cw-project-card-footer">
         <AvatarStack users={memberUsers} />
-        <span className="cw-card-stats">{sessions.data?.length ?? 0}개 세션 · {latest}</span>
+        <span className="cw-card-stats">{userSessions.length}개 세션 · {latest}</span>
       </div>
     </button>
   );
