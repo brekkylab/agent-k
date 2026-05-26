@@ -25,41 +25,127 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-loading { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: var(--cw-space-3); color: var(--cw-fg-3); }
 .cw-loading img { width: 36px; height: 36px; animation: cw-enter .32s ease both; }
 
-.cw-app-shell { display: grid; grid-template-columns: var(--cw-sidebar-w) minmax(0, 1fr); height: 100vh; height: 100dvh; overflow: hidden; background: var(--cw-bg); color: var(--cw-fg-1); }
+/* Register --cw-sidebar-w as a typed length so its 0px ↔ Npx change between
+   hidden/expanded modes is *interpolated* by the browser. Plain CSS variables
+   do not animate; declaring @property turns it into an animatable token. */
+@property --cw-sidebar-w {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+
+.cw-app-shell {
+  display: grid;
+  grid-template-columns: var(--cw-sidebar-w) minmax(0, 1fr);
+  height: 100vh; height: 100dvh;
+  overflow: hidden;
+  background: var(--cw-bg);
+  color: var(--cw-fg-1);
+  transition: --cw-sidebar-w 220ms ease;
+}
+/* While the user is actively dragging the resizer, every pointermove pushes a
+   new width into the store. A 220ms transition there would lag and feel rubbery —
+   kill the transition mid-drag and let pixels track the cursor 1:1. */
+body.is-resizing-sidebar .cw-app-shell { transition: none; }
 .cw-sidebar-app { grid-column: 1; }
 .cw-main-shell { grid-column: 2; min-width: 0; overflow: auto; display: flex; flex-direction: column; }
 
-.cw-sidebar-app { position: relative; width: 100%; height: 100vh; height: 100dvh; background: var(--cw-bg-subtle); border-right: 1px solid var(--cw-border); padding: 14px 10px 10px; display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+/* Sidebar is fixed in BOTH modes so the expanded ↔ hidden transition is a pure
+   property animation (top/left/bottom/height/radius/shadow/border) with no
+   position-jump. The main shell still reserves a column via --cw-sidebar-w in
+   grid-template-columns, so when expanded the fixed sidebar lines up exactly
+   with that reserved column. */
+.cw-sidebar-app {
+  position: fixed; top: 0; left: 0;
+  width: var(--cw-sidebar-floating-w);
+  height: 100vh; height: 100dvh;
+  background: var(--cw-bg-subtle);
+  border-right: 1px solid var(--cw-border);
+  padding: 14px 10px 10px;
+  display: flex; flex-direction: column; gap: 2px;
+  overflow: hidden;
+  z-index: 10;
+}
 .cw-sidebar-header { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-bottom: 12px; }
 .cw-sidebar-header .cw-brand-lockup { flex: 1; min-width: 0; padding: 6px 8px; }
+
+/* Explicit collapse button — Notion-style affordance to drop the sidebar to
+   hidden mode without dragging. Lives in the header next to the brand lockup. */
+.cw-sidebar-collapse-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent;
+  color: var(--cw-fg-3);
+  border-radius: var(--cw-radius-sm);
+  cursor: pointer; flex-shrink: 0;
+  transition: background 120ms, color 120ms;
+}
+.cw-sidebar-collapse-btn:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+/* Outline-style: the same header toggle button doubles as the expand-pin
+   action when the sidebar is in hidden mode + revealed (floating). The icon
+   and aria-label flip in JS — see Sidebar.tsx. We do NOT hide the button in
+   hidden mode anymore; it just rides along with the floating panel. */
 
 .cw-sidebar-resizer { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: ew-resize; z-index: 5; touch-action: none; }
 .cw-sidebar-resizer::after { content: ''; position: absolute; top: 0; right: 2px; width: 2px; height: 100%; background: transparent; transition: background 120ms; }
 .cw-sidebar-resizer:hover::after { background: color-mix(in oklch, var(--cw-accent) 70%, transparent); }
+/* Option B: resizer stays alive in hidden mode too. Dragging adjusts the
+   floating panel width but does NOT auto-pin (handled in JS). */
 
 body.is-resizing-sidebar { cursor: ew-resize; user-select: none; }
 body.is-resizing-sidebar .cw-sidebar-resizer::after { background: color-mix(in oklch, var(--cw-accent) 90%, transparent); }
 body.is-resizing-sidebar * { cursor: ew-resize !important; user-select: none !important; }
 
-/* Hidden mode — sidebar floats off-screen (translateX -100%), main takes full width.
-   Hover on the left edge trigger slides it back in as a floating overlay. */
-.cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app {
-  position: fixed; left: 0; top: 0;
-  width: var(--cw-sidebar-w-min);
-  height: 100vh; height: 100dvh;
-  transform: translateX(-100%);
-  transition: transform 220ms ease;
-  z-index: 50;
-  box-shadow: var(--cw-shadow-popover);
+/* Unified transition graph on the (always-fixed) sidebar. Two distinct kinds
+   of state change have to look different:
+   1) expanded ↔ hidden — inset/height/radius/shadow/border change → full
+      property animation (panel transforms into floating card).
+   2) hidden + revealed ↔ hidden + not revealed — only transform changes →
+      panel slides in/out horizontally with no vertical motion at all. */
+.cw-sidebar-app {
+  transform: translateX(0);
+  transition: transform 220ms ease, top 220ms ease, left 220ms ease,
+              bottom 220ms ease, height 220ms ease, width 220ms ease,
+              box-shadow 220ms ease, border-radius 220ms ease,
+              border-right-width 220ms ease;
 }
-.cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app.is-revealed { transform: translateX(0); }
+/* During an active resize drag every property must follow the cursor pixel-for-pixel
+   with NO interpolation. Mirror each rule that sets transition on the sidebar and
+   prefix with the drag class so specificity always wins — no !important needed. */
+body.is-resizing-sidebar .cw-sidebar-app,
+body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app,
+body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app.is-revealed {
+  transition: none;
+}
+
+/* Hidden mode — floating Notion-style panel. Now that the desktop hamburger
+   is gone (mobile-only), the top inset goes back to a symmetric 8px so the
+   panel reads as a centered floating card. Panel is offscreen via translateX
+   until is-revealed flips on. Notice transform is the ONLY property that
+   differs between hidden and hidden.is-revealed — that is what makes reveal
+   open/close pure-horizontal with zero vertical motion. */
+.cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app {
+  top: 8px; bottom: 8px; left: 6px;
+  height: auto;
+  border-right: 0;
+  border-radius: var(--cw-radius-xl);
+  box-shadow: var(--cw-shadow-lg);
+  transform: translateX(-100%);
+  z-index: 50;
+}
+.cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app.is-revealed {
+  transform: translateX(0);
+}
+
 .cw-sidebar-edge-trigger {
   position: fixed; left: 0; top: 0;
   width: 8px; height: 100vh; height: 100dvh;
   z-index: 49;
 }
 
-/* Mobile hamburger + backdrop — hidden on desktop, only used at narrow viewports. */
+/* Hamburger is mobile-only (Outline pattern on desktop). The DOM element stays
+   so the mobile media query below can pick it up as a drawer toggle. On desktop
+   the in-sidebar header toggle + the left edge-trigger handle all reveal cases. */
 .cw-sidebar-hamburger { display: none; }
 .cw-sidebar-backdrop { display: none; }
 

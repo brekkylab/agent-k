@@ -55,7 +55,14 @@ function AppShell() {
     <div
       className="cw-app-shell"
       data-sidebar-mode={sidebarMode}
-      style={{ '--cw-sidebar-w': `${sidebarWidth}px` } as React.CSSProperties}
+      style={{
+        // grid column width — collapses to 0 in hidden mode so main goes full bleed.
+        '--cw-sidebar-w': `${sidebarWidth}px`,
+        // sidebar's own width — always tracks expandedWidth so the floating reveal
+        // matches whatever width the user has set. Option B: drag in hidden adjusts
+        // this too, the panel just doesn't auto-pin back to expanded.
+        '--cw-sidebar-floating-w': `${expandedWidth}px`,
+      } as React.CSSProperties}
     >
       <Sidebar />
       <main className="cw-main-shell cw-scroll-quiet">

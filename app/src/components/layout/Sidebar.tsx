@@ -18,7 +18,6 @@ import {
   isSidebarRevealHoldPoint,
   useLayoutStore,
   SIDEBAR_MOBILE_BREAKPOINT,
-  SIDEBAR_REVEAL_WIDTH,
 } from '@/stores/layout';
 import { useToastStore } from '@/components/Toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -37,45 +36,46 @@ function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => v
     (e: React.PointerEvent<HTMLDivElement>) => {
       e.preventDefault();
       const startX = e.clientX;
-      const { sidebarMode, expandedWidth } = useLayoutStore.getState();
-      // When hidden, the floating overlay shows at REVEAL_WIDTH, so the user's hand
-      // is already at that x-coordinate — start from there so dragging is 1:1.
-      const startW = sidebarMode === 'hidden' ? SIDEBAR_REVEAL_WIDTH : expandedWidth;
-      let lastW = startW;
+      // Resizer is only mounted in expanded mode (CSS hides it when hidden),
+      // so we always start from the persisted expandedWidth — no hidden branch.
+      const startW = useLayoutStore.getState().expandedWidth;
       let lastClientX = e.clientX;
       document.body.classList.add('is-resizing-sidebar');
 
       function onMove(ev: PointerEvent) {
-        const w = startW + (ev.clientX - startX);
-        // Re-read the current mode every move so hysteresis tracks the live state:
-        // if the user drags into hidden mid-drag, the next move's threshold flips
-        // up to SIDEBAR_EXPAND_ABOVE, matching the "I'm in hidden now" mental model.
-        const liveHidden = useLayoutStore.getState().sidebarMode === 'hidden';
-        const nextMode = getSidebarModeForDrag(w, liveHidden);
-        lastW = w;
         lastClientX = ev.clientX;
+        const w = startW + (ev.clientX - startX);
+        const currentMode = useLayoutStore.getState().sidebarMode;
+        if (currentMode === 'hidden') {
+          // Option B in hidden: drag adjusts the floating panel width only —
+          // it must NOT auto-pin back to expanded. The width persists, so when
+          // the user later expands via the hamburger / header button, the pin
+          // lands at exactly the width they dragged to.
+          setExpandedWidth(w);
+          return;
+        }
+        const nextMode = getSidebarModeForDrag(w);
         if (nextMode === 'hidden') {
-          // Keep the sidebar on screen as a floating reveal so the user's grip on
-          // the resizer survives the mode flip — release decides if it stays open.
+          // drag-to-hide: keep the panel revealed so the user sees it float
+          // (CSS will apply the floating inset style for this case).
           setSidebarMode('hidden');
           setRevealed(true);
         } else {
-          setSidebarMode('expanded');
           setExpandedWidth(w);  // store clamps to [MIN, MAX]
-          setRevealed(false);
         }
       }
       function onUp() {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         document.body.classList.remove('is-resizing-sidebar');
-        const liveHidden = useLayoutStore.getState().sidebarMode === 'hidden';
-        const modeAfterRelease = getSidebarModeForDrag(lastW, liveHidden);
-        setSidebarMode(modeAfterRelease);
-        // Keep reveal open only if the cursor is still resting on the floating
-        // sidebar (or its exit buffer) at release time. lastClientY unused: vertical
-        // bounds are the full viewport.
-        setRevealed(modeAfterRelease === 'hidden' && isSidebarRevealHoldPoint(lastClientX));
+        // If drag ended in hidden, decide whether the floating reveal sticks based
+        // on where the cursor was released (within the floating panel + buffer).
+        if (useLayoutStore.getState().sidebarMode === 'hidden') {
+          // Read the latest expandedWidth so the hold region matches the panel
+          // width the user just dragged to.
+          const w = useLayoutStore.getState().expandedWidth;
+          setRevealed(isSidebarRevealHoldPoint(lastClientX, w));
+        }
       }
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
@@ -147,11 +147,30 @@ export function Sidebar() {
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
   const sidebarMode = useLayoutStore((s) => s.sidebarMode);
+  const setSidebarMode = useLayoutStore((s) => s.setSidebarMode);
   const projectsExpanded = useLayoutStore((s) => s.projectsExpanded);
   const sessionsExpanded = useLayoutStore((s) => s.sessionsExpanded);
   const toggleProjects = useLayoutStore((s) => s.toggleProjects);
   const toggleSessions = useLayoutStore((s) => s.toggleSessions);
   const [revealed, setRevealed] = useState(false);
+  // Button-toggled hide hands off to the floating-reveal hold logic: the user's
+  // cursor is still inside the sidebar at click time, so we stay revealed and let
+  // the width-only hold check decide closure as the cursor leaves horizontally.
+  // Drag-to-hide already keeps reveal=true via SidebarResizer.onMove; this aligns
+  // the button path with that behavior.
+  const collapseSidebar = useCallback(() => {
+    setRevealed(true);
+    setSidebarMode('hidden');
+  }, [setSidebarMode]);
+  const expandSidebar = useCallback(() => {
+    setRevealed(false);
+    setSidebarMode('expanded');
+  }, [setSidebarMode]);
+  // Hamburger is mobile-only (Outline pattern on desktop). On mobile this is a
+  // drawer toggle — sidebar-mode is not involved. Desktop CSS hides the button.
+  const onHamburgerClick = useCallback(() => {
+    setRevealed((v) => !v);
+  }, []);
   // Grace delay before closing on mouse-leave so brief excursions outside the
   // floating sidebar don't snap it shut. ~250ms feels intentional but not sticky.
   const closeTimerRef = useRef<number | null>(null);
@@ -167,7 +186,10 @@ export function Sidebar() {
   }, [cancelClose]);
   const scheduleClose = useCallback((point?: { clientX: number }) => {
     cancelClose();
-    if (point && isSidebarRevealHoldPoint(point.clientX)) return;
+    if (point) {
+      const w = useLayoutStore.getState().expandedWidth;
+      if (isSidebarRevealHoldPoint(point.clientX, w)) return;
+    }
     closeTimerRef.current = window.setTimeout(() => setRevealed(false), 250);
   }, [cancelClose]);
   useEffect(() => cancelClose, [cancelClose]);
@@ -176,7 +198,10 @@ export function Sidebar() {
     if (sidebarMode !== 'hidden' || !revealed) return;
 
     function onPointerMove(ev: PointerEvent) {
-      if (isSidebarRevealHoldPoint(ev.clientX)) {
+      // Width-only: y is intentionally ignored. Read latest width every move
+      // so dragging the panel wider during reveal also expands the hold area.
+      const w = useLayoutStore.getState().expandedWidth;
+      if (isSidebarRevealHoldPoint(ev.clientX, w)) {
         cancelClose();
       } else {
         scheduleClose();
@@ -270,7 +295,7 @@ export function Sidebar() {
       <button
         type="button"
         className="cw-sidebar-hamburger"
-        onClick={() => setRevealed((v) => !v)}
+        onClick={onHamburgerClick}
         aria-label={revealed ? '사이드바 닫기' : '사이드바 열기'}
         aria-expanded={revealed}
       >
@@ -300,6 +325,15 @@ export function Sidebar() {
         >
           <img src={logoMark} alt="" />
           <strong>Cowork</strong>
+        </button>
+        <button
+          type="button"
+          className="cw-sidebar-collapse-btn"
+          onClick={sidebarMode === 'hidden' ? expandSidebar : collapseSidebar}
+          aria-label={sidebarMode === 'hidden' ? '사이드바 고정' : '사이드바 접기'}
+          title={sidebarMode === 'hidden' ? '사이드바 고정' : '사이드바 접기'}
+        >
+          <Icon name={sidebarMode === 'hidden' ? 'chevron-right' : 'chevron-left'} size={16} />
         </button>
       </div>
 
