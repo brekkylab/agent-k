@@ -3,7 +3,8 @@
 @import "highlight.js/styles/atom-one-light.css";
 
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100%; }
+/* App is a fixed-viewport shell: nothing outside cw-app-shell should ever scroll. */
+html, body, #root { height: 100%; overflow: hidden; }
 body { margin: 0; min-width: 320px; background: var(--cw-bg); }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
@@ -24,14 +25,201 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-loading { min-height: 100vh; display: grid; place-items: center; align-content: center; gap: var(--cw-space-3); color: var(--cw-fg-3); }
 .cw-loading img { width: 36px; height: 36px; animation: cw-enter .32s ease both; }
 
-.cw-app-shell { display: grid; grid-template-columns: var(--cw-sidebar-w) minmax(0, 1fr); height: 100vh; overflow: hidden; background: var(--cw-bg); color: var(--cw-fg-1); }
-.cw-main-shell { min-width: 0; overflow: auto; display: flex; flex-direction: column; }
+/* Register --cw-sidebar-w as a typed length so its 0px ↔ Npx change between
+   hidden/expanded modes is *interpolated* by the browser. Plain CSS variables
+   do not animate; declaring @property turns it into an animatable token. */
+@property --cw-sidebar-w {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
 
-.cw-sidebar-app { width: var(--cw-sidebar-w); height: 100vh; overflow-y: auto; background: var(--cw-bg-subtle); border-right: 1px solid var(--cw-border); padding: 14px 10px 10px; display: flex; flex-direction: column; }
-.cw-brand-lockup { display: flex; align-items: center; gap: 9px; border: 0; background: transparent; padding: 6px 8px 18px; border-radius: var(--cw-radius-md); }
+.cw-app-shell {
+  display: grid;
+  grid-template-columns: var(--cw-sidebar-w) minmax(0, 1fr);
+  height: 100vh; height: 100dvh;
+  overflow: hidden;
+  background: var(--cw-bg);
+  color: var(--cw-fg-1);
+  transition: --cw-sidebar-w 220ms ease;
+}
+/* While the user is actively dragging the resizer, every pointermove pushes a
+   new width into the store. A 220ms transition there would lag and feel rubbery —
+   kill the transition mid-drag and let pixels track the cursor 1:1. */
+body.is-resizing-sidebar .cw-app-shell { transition: none; }
+.cw-sidebar-app { grid-column: 1; }
+.cw-main-shell { grid-column: 2; min-width: 0; overflow: auto; display: flex; flex-direction: column; }
+
+/* Sidebar is fixed in BOTH modes so the expanded ↔ hidden transition is a pure
+   property animation (top/left/bottom/height/radius/shadow/border) with no
+   position-jump. The main shell still reserves a column via --cw-sidebar-w in
+   grid-template-columns, so when expanded the fixed sidebar lines up exactly
+   with that reserved column. */
+.cw-sidebar-app {
+  position: fixed; top: 0; left: 0;
+  width: var(--cw-sidebar-floating-w);
+  height: 100vh; height: 100dvh;
+  background: var(--cw-bg-subtle);
+  border-right: 1px solid var(--cw-border);
+  padding: 14px 10px 10px;
+  display: flex; flex-direction: column; gap: 2px;
+  overflow: hidden;
+  z-index: 10;
+}
+.cw-sidebar-header { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-bottom: 12px; }
+.cw-sidebar-header .cw-brand-lockup { flex: 1; min-width: 0; padding: 6px 8px; }
+
+/* Explicit collapse button — Notion-style affordance to drop the sidebar to
+   hidden mode without dragging. Lives in the header next to the brand lockup. */
+.cw-sidebar-collapse-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent;
+  color: var(--cw-fg-3);
+  border-radius: var(--cw-radius-sm);
+  cursor: pointer; flex-shrink: 0;
+  transition: background 120ms, color 120ms;
+}
+.cw-sidebar-collapse-btn:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+/* Outline-style: the same header toggle button doubles as the expand-pin
+   action when the sidebar is in hidden mode + revealed (floating). The icon
+   and aria-label flip in JS — see Sidebar.tsx. We do NOT hide the button in
+   hidden mode anymore; it just rides along with the floating panel. */
+
+.cw-sidebar-resizer { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: ew-resize; z-index: 5; touch-action: none; }
+.cw-sidebar-resizer::after { content: ''; position: absolute; top: 0; right: 2px; width: 2px; height: 100%; background: transparent; transition: background 120ms; }
+.cw-sidebar-resizer:hover::after { background: color-mix(in oklch, var(--cw-accent) 70%, transparent); }
+/* Option B: resizer stays alive in hidden mode too. Dragging adjusts the
+   floating panel width but does NOT auto-pin (handled in JS). */
+
+body.is-resizing-sidebar { cursor: ew-resize; user-select: none; }
+body.is-resizing-sidebar .cw-sidebar-resizer::after { background: color-mix(in oklch, var(--cw-accent) 90%, transparent); }
+body.is-resizing-sidebar * { cursor: ew-resize !important; user-select: none !important; }
+
+/* Unified transition graph on the (always-fixed) sidebar. Two distinct kinds
+   of state change have to look different:
+   1) expanded ↔ hidden — inset/height/radius/shadow/border change → full
+      property animation (panel transforms into floating card).
+   2) hidden + revealed ↔ hidden + not revealed — only transform changes →
+      panel slides in/out horizontally with no vertical motion at all. */
+.cw-sidebar-app {
+  transform: translateX(0);
+  transition: transform 220ms ease, top 220ms ease, left 220ms ease,
+              bottom 220ms ease, height 220ms ease, width 220ms ease,
+              box-shadow 220ms ease, border-radius 220ms ease,
+              border-right-width 220ms ease;
+}
+/* During an active resize drag every property must follow the cursor pixel-for-pixel
+   with NO interpolation. Mirror each rule that sets transition on the sidebar and
+   prefix with the drag class so specificity always wins — no !important needed. */
+body.is-resizing-sidebar .cw-sidebar-app,
+body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app,
+body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app.is-revealed {
+  transition: none;
+}
+
+/* Hidden mode — floating Notion-style panel. Now that the desktop hamburger
+   is gone (mobile-only), the top inset goes back to a symmetric 8px so the
+   panel reads as a centered floating card. Panel is offscreen via translateX
+   until is-revealed flips on. Notice transform is the ONLY property that
+   differs between hidden and hidden.is-revealed — that is what makes reveal
+   open/close pure-horizontal with zero vertical motion. */
+.cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app {
+  top: 8px; bottom: 8px; left: 6px;
+  height: auto;
+  border-right: 0;
+  border-radius: var(--cw-radius-xl);
+  box-shadow: var(--cw-shadow-lg);
+  transform: translateX(-100%);
+  z-index: 50;
+}
+.cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-app.is-revealed {
+  transform: translateX(0);
+}
+
+.cw-sidebar-edge-trigger {
+  position: fixed; left: 0; top: 0;
+  width: 8px; height: 100vh; height: 100dvh;
+  z-index: 49;
+}
+
+/* Hamburger is mobile-only (Outline pattern on desktop). The DOM element stays
+   so the mobile media query below can pick it up as a drawer toggle. On desktop
+   the in-sidebar header toggle + the left edge-trigger handle all reveal cases. */
+.cw-sidebar-hamburger { display: none; }
+.cw-sidebar-backdrop { display: none; }
+
+@media (max-width: 767px) {
+  /* On mobile, the sidebar is always a floating drawer regardless of mode. */
+  .cw-app-shell { grid-template-columns: 0 minmax(0, 1fr); }
+  .cw-sidebar-app {
+    position: fixed; left: 0; top: 0;
+    width: min(85vw, 300px);
+    height: 100vh; height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 220ms ease;
+    z-index: 50;
+    box-shadow: var(--cw-shadow-popover);
+    padding: 14px 10px 10px;
+    border-right: 1px solid var(--cw-border);
+  }
+  .cw-sidebar-app.is-revealed { transform: translateX(0); }
+  /* Mobile drag-resize is awkward; hide the resizer and edge trigger. */
+  .cw-sidebar-resizer,
+  .cw-sidebar-edge-trigger { display: none; }
+  .cw-sidebar-hamburger {
+    display: inline-flex;
+    position: fixed; top: 10px; left: 10px;
+    width: 36px; height: 36px;
+    align-items: center; justify-content: center;
+    border: 1px solid var(--cw-border);
+    background: var(--cw-bg);
+    color: var(--cw-fg-1);
+    border-radius: var(--cw-radius-md);
+    z-index: 51;
+    box-shadow: var(--cw-shadow-sm);
+  }
+  .cw-sidebar-backdrop {
+    display: block;
+    position: fixed; inset: 0;
+    background: oklch(0.15 0.01 60 / 0.32);
+    z-index: 48;
+    animation: cw-rise .14s ease both;
+  }
+}
+
+.cw-sidebar-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.cw-sidebar-user-area { flex-shrink: 0; margin-top: auto; }
+
+.cw-section-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 4px 4px; position: sticky; top: 0; background: var(--cw-bg-subtle); z-index: 2; }
+.cw-section-toggle { display: inline-flex; align-items: center; gap: 5px; background: transparent; border: 0; padding: 4px 6px; color: var(--cw-fg-3); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; font-weight: 500; cursor: pointer; border-radius: var(--cw-radius-sm); flex: 1; min-width: 0; }
+.cw-section-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-section-toggle:hover { color: var(--cw-fg-1); background: var(--cw-bg-muted); }
+.cw-section-chevron { flex-shrink: 0; transition: transform 160ms ease; }
+.cw-section-chevron.is-open { transform: rotate(90deg); }
+.cw-section-add { width: 22px; height: 22px; border: 0; background: transparent; color: var(--cw-fg-3); border-radius: var(--cw-radius-sm); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: background 120ms, color 120ms; }
+.cw-section-add:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+.cw-section-add:disabled { opacity: 0.4; cursor: default; }
+
+/* Section collapsed (toggle off): hide normal rows, but keep .is-active everywhere
+   and .is-unread for sessions visible. */
+.cw-projects-list[data-expanded="false"] .cw-nav-row:not(.is-active),
+.cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread) { display: none; }
+
+/* Quiet scrollbar — transparent by default. Pointer hover snaps to a faint tone
+   instantly. Focus is intentionally NOT a trigger so clicking a row and leaving
+   the area hides the scrollbar even though keyboard focus remains. */
+.cw-scroll-quiet { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.cw-scroll-quiet:hover { scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 40%, transparent) transparent; }
+.cw-scroll-quiet::-webkit-scrollbar { width: 8px; height: 8px; }
+.cw-scroll-quiet::-webkit-scrollbar-track { background: transparent; }
+.cw-scroll-quiet::-webkit-scrollbar-thumb { background-color: transparent; border-radius: 4px; }
+.cw-scroll-quiet:hover::-webkit-scrollbar-thumb { background-color: color-mix(in oklch, var(--cw-fg-3) 40%, transparent); }
+
+.cw-brand-lockup { display: flex; align-items: center; gap: 9px; border: 0; background: transparent; padding: 6px 8px 18px; border-radius: var(--cw-radius-md); min-width: 0; }
 .cw-brand-lockup:hover { background: var(--cw-bg-muted); }
-.cw-brand-lockup img:first-child { width: 28px; height: 28px; }
-.cw-brand-lockup strong { color: var(--cw-fg-1); font-size: 22px; line-height: 1; letter-spacing: -0.035em; font-weight: 650; }
+.cw-brand-lockup img:first-child { width: 28px; height: 28px; flex-shrink: 0; }
+.cw-brand-lockup strong { color: var(--cw-fg-1); font-size: 22px; line-height: 1; letter-spacing: -0.035em; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-section-label-app { padding: 10px 8px 5px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--cw-fg-3); font-weight: 500; }
 .cw-nav-list, .cw-session-rail { display: flex; flex-direction: column; gap: 1px; }
 .cw-nav-row, .cw-session-row { width: 100%; min-height: 31px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: var(--cw-radius-md); background: transparent; color: var(--cw-fg-2); padding: 6px 8px; text-align: left; font-size: 13px; transition: background 120ms, color 120ms, transform 120ms; }
@@ -42,17 +230,18 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-nav-row span, .cw-session-row span:not(.auto-dot):not(.cw-pocket):not(.cw-session-menu-wrap) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-session-row .cw-session-title { flex: 1; min-width: 0; }
 .cw-session-menu-wrap { flex-shrink: 0; margin-left: auto; }
-.cw-project-block { margin-top: 24px; }
-.cw-project-name { padding: 10px 8px 5px; font-size: 11px; color: var(--cw-fg-2); font-weight: 600; }
-.cw-session-rail { }
+.cw-project-block { margin-top: 16px; }
+.cw-project-name { padding: 10px 8px 5px; font-size: 11px; color: var(--cw-fg-2); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-session-rail { padding-bottom: 6px; }
 .cw-session-row { min-height: 28px; padding: 5px 8px; font-size: 12.5px; color: var(--cw-fg-3); }
 .cw-session-row.is-active { background: color-mix(in oklch, var(--cw-accent) 12%, var(--cw-bg-subtle)); color: var(--cw-fg-1); font-weight: 600; }
 .cw-session-row.is-unread { color: var(--cw-fg-1); font-weight: 600; }
 .auto-dot { margin-left: auto; color: var(--cw-accent); font-size: 10px; }
-.cw-sidebar-user { margin-top: auto; border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
+.cw-sidebar-user { border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
 .cw-sidebar-user-meta { min-width: 0; }
 .cw-sidebar-user-meta b { display: block; font-size: 13px; color: var(--cw-fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-sidebar-user-meta span { display: block; font-family: var(--cw-font-mono); font-size: 10px; color: var(--cw-fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 
 .cw-page { width: min(1084px, calc(100% - 80px)); margin: 0 auto; padding: 36px 0 72px; }
 .cw-page-enter { animation: cw-enter .26s ease both; }
@@ -105,8 +294,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-live { display: inline-flex; align-items: center; gap: 8px; color: var(--cw-ok); font-size: 13px; }
 .cw-live span { width: 8px; height: 8px; border-radius: 999px; background: var(--cw-ok); animation: cw-ping 1s steps(2, start) infinite; }
 .cw-artifacts-panel { display: flex; flex-direction: column; gap: 2px; }
-.cw-artifacts-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 0 6px; font-size: 12px; color: var(--cw-fg-2); }
-.cw-artifacts-actions .cw-btn-secondary { min-height: 24px; padding: 3px 8px; font-size: 11px; }
+.cw-artifacts-header { display: flex; align-items: center; gap: 5px; width: 100%; background: transparent; border: 0; padding: 3px 2px; border-radius: var(--cw-radius-sm); font-size: 12px; font-weight: 500; color: var(--cw-ink-2); cursor: pointer; text-align: left; transition: color 100ms; }
+.cw-artifacts-header:hover { color: var(--cw-ink); }
+.cw-artifacts-count { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 99px; background: var(--cw-bg-muted); font-size: 10.5px; color: var(--cw-ink-3); }
+.cw-artifacts-selrow { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 1px 4px; font-size: 11px; color: var(--cw-ink-3); }
+.cw-artifacts-selrow .cw-artifact-menu-wrap > button { opacity: 1; }
 .cw-artifact-row { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 4px; border-radius: var(--cw-radius-sm); font-size: 12.5px; transition: background 100ms; }
 .cw-artifact-row:hover { background: var(--cw-bg-muted); }
 .cw-artifact-name { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cw-fg-1); }
@@ -264,6 +456,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-grid-card.is-selected .cw-grid-card-meta { color: var(--cw-ink-3); }
 .cw-grid-card:focus-visible { outline: 2px solid var(--cw-accent-line); outline-offset: 2px; }
 .cw-grid-card-icon { width: 56px; height: 56px; display: inline-grid; place-items: center; border-radius: 12px; background: color-mix(in oklch, var(--cw-cozy-honey) 14%, var(--cw-paper)); color: oklch(0.5 0.13 75); }
+.cw-grid-card-icon--file { background: transparent; }
 .cw-grid-card-name { font-size: 12.5px; font-weight: 500; color: var(--cw-ink); text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-grid-card-meta { font-size: 10.5px; color: var(--cw-ink-4); font-family: var(--cw-font-mono); }
 .cw-grid-card-more { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--cw-ink-4); cursor: pointer; opacity: 0; transition: opacity 120ms, background 120ms, color 120ms; }

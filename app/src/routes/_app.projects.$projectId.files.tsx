@@ -28,6 +28,7 @@ import {
 } from '@/api/dirents';
 import { getProject } from '@/api/projects';
 import { Icon } from '@/components/Icon';
+import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FolderPickerDialog } from '@/components/FolderPickerDialog';
 import { NewFolderDialog } from '@/components/NewFolderDialog';
@@ -39,8 +40,6 @@ import {
   ancestorPaths,
   buildFolderTree,
   countDescendants,
-  fileTypeClass,
-  fileTypeIcon,
   listDirectChildren,
   nameOf,
   type FolderNode,
@@ -997,13 +996,6 @@ interface RowProps {
   onDragStart: (ev: React.DragEvent, e: BackendDirent) => void;
 }
 
-function iconClass(entry: BackendDirent): string {
-  return entry.kind === 'dir' ? 'cw-file-folder' : fileTypeClass(nameOf(entry));
-}
-
-function iconName(entry: BackendDirent): 'folder' | ReturnType<typeof fileTypeIcon> {
-  return entry.kind === 'dir' ? 'folder' : fileTypeIcon(nameOf(entry));
-}
 
 function folderSubtitle(entry: BackendDirent, entries: BackendDirent[]): string {
   if (entry.kind !== 'dir') return '';
@@ -1090,9 +1082,10 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onOpen(entry); } }}
     >
-      <span className={`cw-pocket ${iconClass(entry)}`}>
-        <Icon name={iconName(entry)} size={14} />
-      </span>
+      {isDir
+        ? <span className="cw-pocket cw-file-folder"><Icon name="folder" size={14} /></span>
+        : <FileTypeIcon filename={nameOf(entry)} size={18} />
+      }
       <span className="cw-file-main">
         <span className="name">{nameOf(entry)}</span>
         <span className="meta">
@@ -1132,9 +1125,10 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onOpen(entry); } }}
     >
-      <div className={`cw-grid-card-icon ${iconClass(entry)}`}>
-        <Icon name={iconName(entry)} size={28} />
-      </div>
+      {isDir
+        ? <div className="cw-grid-card-icon cw-file-folder"><Icon name="folder" size={28} /></div>
+        : <div className="cw-grid-card-icon cw-grid-card-icon--file"><FileTypeIcon filename={nameOf(entry)} size={44} /></div>
+      }
       <div className="cw-grid-card-name" title={nameOf(entry)}>{nameOf(entry)}</div>
       <div className="cw-grid-card-meta">
         {showPath

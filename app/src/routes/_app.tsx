@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getToken } from '@/api/client';
 import { getMe } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
+import { useLayoutStore } from '@/stores/layout';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { appWs } from '@/api/ws';
 import type { Session } from '@/domain/types';
@@ -17,6 +18,9 @@ export const Route = createFileRoute('/_app')({
 
 function AppShell() {
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
+  const sidebarMode = useLayoutStore((s) => s.sidebarMode);
+  const expandedWidth = useLayoutStore((s) => s.expandedWidth);
+  const sidebarWidth = sidebarMode === 'expanded' ? expandedWidth : 0;
   const queryClient = useQueryClient();
   const me = useQuery({
     queryKey: ['me'],
@@ -48,9 +52,20 @@ function AppShell() {
   }, [queryClient]);
 
   return (
-    <div className="cw-app-shell">
+    <div
+      className="cw-app-shell"
+      data-sidebar-mode={sidebarMode}
+      style={{
+        // grid column width — collapses to 0 in hidden mode so main goes full bleed.
+        '--cw-sidebar-w': `${sidebarWidth}px`,
+        // sidebar's own width — always tracks expandedWidth so the floating reveal
+        // matches whatever width the user has set. Option B: drag in hidden adjusts
+        // this too, the panel just doesn't auto-pin back to expanded.
+        '--cw-sidebar-floating-w': `${expandedWidth}px`,
+      } as React.CSSProperties}
+    >
       <Sidebar />
-      <main className="cw-main-shell">
+      <main className="cw-main-shell cw-scroll-quiet">
         <Outlet />
       </main>
     </div>

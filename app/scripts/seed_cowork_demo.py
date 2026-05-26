@@ -35,7 +35,9 @@ PROJECT_KLIENT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 PROJECT_GTM = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 SESSION_Q2 = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 SESSION_DECISION = "aaaaaaaa-2222-4222-8222-aaaaaaaaaaaa"
+SESSION_ATTACHED = "aaaaaaaa-3333-4333-8333-aaaaaaaaaaaa"  # message with attachment
 SESSION_GTM = "bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb"
+SESSION_REPORT = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"   # session with artifacts
 
 
 def now(offset: int = 0) -> str:
@@ -106,8 +108,9 @@ def reset_paths(db: Path, data_root: Path) -> None:
     data_root.mkdir(parents=True, exist_ok=True)
 
 
-def write_uploads(data_root: Path) -> None:
-    files = {
+def write_files(data_root: Path) -> None:
+    # ── shared files (previously "uploads") ──────────────────────────────────
+    shared_files = {
         PROJECT_KLIENT: {
             "Market research/Q2 market report.md": "# Q2 market report\n\nSMB renewal cycle shortened by 18%. Proof-led onboarding language is recommended.\n",
             "Market research/Competitor scan raw.csv": "vendor,tier,signal\nNorthstar,usage-based,enterprise\nAtlas,seat-minimum,enterprise\n",
@@ -119,8 +122,60 @@ def write_uploads(data_root: Path) -> None:
             "Launch/ICP message matrix.csv": "icp,message\nMid-market,proof-led onboarding\nEnterprise,governance narrative\n",
         },
     }
-    for project_id, entries in files.items():
-        root = data_root / "projects" / project_id / "uploads"
+    for project_id, entries in shared_files.items():
+        root = data_root / "projects" / project_id / "shared"
+        for rel, content in entries.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+    # ── inputs: per-session attached files ───────────────────────────────────
+    inputs_files = {
+        # SESSION_ATTACHED: user attached a raw survey CSV before asking for analysis
+        (PROJECT_KLIENT, SESSION_ATTACHED): {
+            "survey_raw.csv": (
+                "respondent_id,renewal_intent,pain_point\n"
+                "R001,renew,onboarding too long\n"
+                "R002,churn,pricing unclear\n"
+                "R003,renew,great support\n"
+                "R004,churn,missing integrations\n"
+                "R005,renew,easy to use\n"
+            ),
+        },
+    }
+    for (project_id, session_id), entries in inputs_files.items():
+        root = data_root / "projects" / project_id / "sessions" / session_id / "inputs"
+        for rel, content in entries.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+    # ── artifacts: agent-generated output files ───────────────────────────────
+    artifact_files = {
+        # SESSION_REPORT: agent produced a GTM summary report
+        (PROJECT_GTM, SESSION_REPORT): {
+            "GTM_summary_report.md": (
+                "# GTM 재설계 요약 보고서\n\n"
+                "## ICP 우선순위\n"
+                "1. Mid-market — proof-led onboarding\n"
+                "2. Enterprise — governance narrative\n\n"
+                "## 런치 타임라인\n"
+                "- 7월 말: 소프트 런치 (Mid-market)\n"
+                "- 8월 중: 엔터프라이즈 appendix 추가\n\n"
+                "## 권장 액션\n"
+                "- ICP별 메시지 매트릭스를 sales deck에 반영\n"
+                "- 엔터프라이즈 증거 자료 확보 우선\n"
+            ),
+            "ICP_comparison_table.csv": (
+                "icp,priority,message,evidence_needed\n"
+                "Mid-market,1,proof-led onboarding,case study x2\n"
+                "Enterprise,2,governance narrative,security audit report\n"
+                "SMB,3,ease of use,short video demo\n"
+            ),
+        },
+    }
+    for (project_id, session_id), entries in artifact_files.items():
+        root = data_root / "projects" / project_id / "sessions" / session_id / "artifacts"
         for rel, content in entries.items():
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,33 +236,70 @@ def seed_rows(db: Path) -> None:
             ts(11), ts(33),
         ),
         (
+            SESSION_ATTACHED, PROJECT_KLIENT, OLIVE_ID, "shared_chat",
+            "설문 데이터 분석 요청",
+            ts(36),
+            "survey_raw.csv 기반으로 이탈 위험 응답자의 공통 pain point를 추출하면 'pricing unclear'와 'missing integrations'가 주요 원인입니다.",
+            ts(12), ts(36),
+        ),
+        (
             SESSION_GTM, PROJECT_GTM, MILO_ID, "shared_chat",
             "H2 ICP 메시지 순서 검토",
-            ts(34),
+            ts(37),
             "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어.",
-            ts(12), ts(34),
+            ts(13), ts(37),
+        ),
+        (
+            SESSION_REPORT, PROJECT_GTM, MILO_ID, "shared_chat",
+            "GTM 요약 보고서 생성",
+            ts(40),
+            "GTM_summary_report.md와 ICP_comparison_table.csv를 Artifacts에 저장했습니다. 보고서에는 ICP 우선순위와 런치 타임라인이 포함되어 있습니다.",
+            ts(14), ts(40),
         ),
     ]
     conn.executemany(
         "INSERT INTO sessions (id, project_id, creator_id, share_mode, title, last_message_at, last_message_snippet, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         sessions,
     )
-    # (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id)
-    def user_msg(session_id: str, text: str, creator_id: str, t: str):
-        return (session_id, message_json("user", text), t, "user", None, creator_id)
+
+    # Global paths for attached files (stored in session_messages.attachments as JSON array)
+    attached_input_path = f"projects/{PROJECT_KLIENT}/sessions/{SESSION_ATTACHED}/inputs/survey_raw.csv"
+
+    # (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments_json)
+    def user_msg(session_id: str, text: str, creator_id: str, t: str, attachments: list[str] | None = None):
+        return (session_id, message_json("user", text), t, "user", None, creator_id, json.dumps(attachments or []))
 
     def agent_msg(session_id: str, text: str, t: str):
-        return (session_id, message_json("assistant", text), t, "agent", "agent-k", None)
+        return (session_id, message_json("assistant", text), t, "agent", "agent-k", None, "[]")
 
     messages = [
+        # SESSION_Q2
         user_msg(SESSION_Q2, "Q2 시장 보고를 어디서 시작하면 좋을까? Files → Market research에 자료가 정리되어 있어.", OLIVE_ID, ts(30)),
         agent_msg(SESSION_Q2, "수요 측 갱신 압박부터 보고, 경쟁사 스캔과 교차 검증하면 좋을 것 같아요. SMB 갱신 사이클이 18% 단축됐다는 신호가 가장 강합니다.", ts(31)),
+        # SESSION_DECISION
         user_msg(SESSION_DECISION, "오늘 결정된 내용을 board memo에 붙일 수 있게 누적해줘.", OLIVE_ID, ts(32)),
         agent_msg(SESSION_DECISION, "현재 결정 스레드는 SMB retention을 최우선으로 두는 방향입니다. 메모 v3에 'market evidence for SMB retention priority' 슬롯을 채울 준비가 됐어요.", ts(33)),
-        user_msg(SESSION_GTM, "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어.", MILO_ID, ts(34)),
+        # SESSION_ATTACHED — user attached a CSV, agent referenced it
+        user_msg(
+            SESSION_ATTACHED,
+            "첨부한 설문 데이터에서 이탈 위험 응답자들의 공통 pain point를 찾아줘.",
+            OLIVE_ID,
+            ts(35),
+            attachments=[attached_input_path],
+        ),
+        agent_msg(SESSION_ATTACHED, "survey_raw.csv 기반으로 이탈 위험 응답자의 공통 pain point를 추출하면 'pricing unclear'와 'missing integrations'가 주요 원인입니다.", ts(36)),
+        # SESSION_GTM
+        user_msg(SESSION_GTM, "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어.", MILO_ID, ts(37)),
+        # SESSION_REPORT — agent produced artifact files
+        user_msg(SESSION_REPORT, "ICP 우선순위와 런치 타임라인을 정리한 보고서를 artifacts에 저장해줘.", MILO_ID, ts(38)),
+        agent_msg(
+            SESSION_REPORT,
+            "GTM_summary_report.md와 ICP_comparison_table.csv를 Artifacts에 저장했습니다. 보고서에는 ICP 우선순위와 런치 타임라인이 포함되어 있습니다.",
+            ts(40),
+        ),
     ]
     conn.executemany(
-        "INSERT INTO session_messages (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session_messages (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
         messages,
     )
     conn.commit()
@@ -229,7 +321,7 @@ def main() -> None:
     else:
         run_create_admin(db)
     seed_rows(db)
-    write_uploads(data_root)
+    write_files(data_root)
     print("Cowork demo seed ready")
     print(f"DATABASE_URL=sqlite://{db}")
     print(f"AGENT_K_DATA_ROOT={data_root}")

@@ -51,17 +51,18 @@ function PickerNode({
     <>
       <div
         className={`cw-tree-row${isSelected ? ' is-selected' : ''}${isDisabled ? ' is-disabled' : ''}`}
-        style={{ paddingLeft: 8 + depth * 14 }}
+        style={{ paddingLeft: 2 + depth * 8 }}
       >
-        <button
-          type="button"
-          className="cw-tree-chevron"
-          aria-label={isOpen ? '접기' : '펼치기'}
-          onClick={(e) => { e.stopPropagation(); onToggle(node.path); }}
-          style={{ visibility: hasChildren ? 'visible' : 'hidden' }}
-        >
-          <Icon name={isOpen ? 'chevron' : 'chevron-right'} size={12} />
-        </button>
+        {hasChildren ? (
+          <button
+            type="button"
+            className="cw-tree-chevron"
+            aria-label={isOpen ? '접기' : '펼치기'}
+            onClick={(e) => { e.stopPropagation(); onToggle(node.path); }}
+          >
+            <Icon name={isOpen ? 'chevron' : 'chevron-right'} size={12} />
+          </button>
+        ) : null}
         <button
           type="button"
           className="cw-tree-label"
@@ -181,14 +182,11 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
             <>
               <div
                 className={`cw-tree-row${selected === '' ? ' is-selected' : ''}`}
-                style={{ paddingLeft: 8 }}
+                style={{ paddingLeft: 2 }}
               >
-                <span className="cw-tree-chevron" style={{ visibility: 'hidden' }}>
-                  <Icon name="chevron-right" size={12} />
-                </span>
                 <button type="button" className="cw-tree-label" onClick={() => setSelected('')}>
                   <Icon name="folder" size={14} />
-                  <span>공유 파일 루트</span>
+                  <span>/</span>
                 </button>
               </div>
               {tree.map((node) => (

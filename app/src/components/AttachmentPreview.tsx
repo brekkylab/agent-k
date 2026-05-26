@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchFileBlob, downloadFileByGlobalPath } from '@/api/dirents';
 import { Icon } from './Icon';
+import { FileTypeIcon } from './FileTypeIcon';
 
 interface Props { globalPath: string; }
 
@@ -48,7 +49,7 @@ export function AttachmentPreview({ globalPath }: Props) {
       onClick={() => void downloadFileByGlobalPath(globalPath)}
       title={`Download ${filename}`}
     >
-      <Icon name="file-text" size={13} />
+      <FileTypeIcon filename={filename} size={16} />
       <span>{filename}</span>
     </button>
   );

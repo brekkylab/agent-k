@@ -330,7 +330,6 @@ function SessionPage() {
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
           project · {project.data?.name ?? '...'}
         </p>
-        <h3>Artifacts</h3>
         <ArtifactsPanel
           projectId={projectId}
           sessionId={sessionId}
