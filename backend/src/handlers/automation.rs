@@ -84,7 +84,10 @@ pub async fn list_automations(
             .map_err(|e| AppError::internal(e.to_string()))?,
     };
     Ok(Json(AutomationListResponse {
-        items: automations.into_iter().map(AutomationResponse::from).collect(),
+        items: automations
+            .into_iter()
+            .map(AutomationResponse::from)
+            .collect(),
     }))
 }
 
@@ -264,7 +267,12 @@ pub async fn update_trigger(
 
     let updated = state
         .repository
-        .update_trigger(trigger_id, payload.spec.as_ref(), payload.enabled, next_fire_at)
+        .update_trigger(
+            trigger_id,
+            payload.spec.as_ref(),
+            payload.enabled,
+            next_fire_at,
+        )
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
@@ -433,11 +441,7 @@ pub async fn cancel_run(
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-async fn require_member(
-    state: &Arc<AppState>,
-    user_id: Uuid,
-    project_id: Uuid,
-) -> ApiResult<()> {
+async fn require_member(state: &Arc<AppState>, user_id: Uuid, project_id: Uuid) -> ApiResult<()> {
     let exists = state
         .repository
         .get_project(project_id)
@@ -659,7 +663,6 @@ fn sha256_hex(s: impl AsRef<[u8]>) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
-
 
 #[cfg(test)]
 mod tests {

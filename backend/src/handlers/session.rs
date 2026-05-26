@@ -1,5 +1,6 @@
 use std::{convert::Infallible, sync::Arc};
 
+use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use aide::NoApi;
 use ailoy::{
     agent::Agent,
@@ -14,8 +15,6 @@ use axum::{
 };
 use futures_util::StreamExt;
 use uuid::Uuid;
-
-use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 
 use crate::{
     auth::AuthUser,
@@ -119,7 +118,11 @@ pub(crate) fn attribute_messages(
                 sender_kind,
                 sender_name,
                 sender_user_id,
-                attachments: if i == 0 { user_attachments.clone() } else { vec![] },
+                attachments: if i == 0 {
+                    user_attachments.clone()
+                } else {
+                    vec![]
+                },
             },
         )
         .collect()

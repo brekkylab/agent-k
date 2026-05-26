@@ -19,9 +19,7 @@ pub fn default_tz_name() -> &'static str {
             Ok(name) => match name.parse::<Tz>() {
                 Ok(_) => name,
                 Err(e) => {
-                    tracing::warn!(
-                        "invalid AGENT_K_DEFAULT_TZ '{name}': {e}; falling back to UTC"
-                    );
+                    tracing::warn!("invalid AGENT_K_DEFAULT_TZ '{name}': {e}; falling back to UTC");
                     "UTC".to_string()
                 }
             },
@@ -79,8 +77,9 @@ fn validate_five_field(expr: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::TimeZone;
+
+    use super::*;
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
