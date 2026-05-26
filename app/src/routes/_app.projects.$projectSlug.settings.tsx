@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { getProjectBySlug } from '@/api/projects';
+import { getProject } from '@/api/projects';
 import { SectionLabel } from '@/components/uiPrimitives';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/settings')({
@@ -9,7 +9,7 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/settings')({
 
 function SettingsPage() {
   const { projectSlug } = Route.useParams();
-  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProjectBySlug(projectSlug) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
 
   return (
     <section className="cw-page cw-simple-page cw-page-enter">

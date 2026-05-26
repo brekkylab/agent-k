@@ -225,13 +225,13 @@ async fn resolve_session_id(state: &Arc<AppState>, session_ref: &str) -> ApiResu
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
 /// POST /sessions
-/// body must include `project_id`; user must be a member of that project.
+/// body must include `project_id` (UUID or slug); user must be a member of that project.
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Json(payload): Json<CreateSessionRequest>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
-    let project_id = payload.project_id;
+    let project_id = super::project::resolve_project_id(&state, &payload.project_id).await?;
     let is_member = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -275,7 +275,8 @@ pub async fn create_session(
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct ListSessionsQuery {
-    pub project_id: Option<Uuid>,
+    /// Project UUID, active slug, or retired slug — backend resolves all three.
+    pub project_id: Option<String>,
 }
 
 /// GET /sessions?project_id=...
@@ -286,7 +287,8 @@ pub async fn list_sessions(
     axum::extract::Query(q): axum::extract::Query<ListSessionsQuery>,
 ) -> ApiResult<Json<SessionListResponse>> {
     let sessions = match q.project_id {
-        Some(project_id) => {
+        Some(project_ref) => {
+            let project_id = super::project::resolve_project_id(&state, &project_ref).await?;
             let is_member = state
                 .repository
                 .user_in_project(auth_user.id, project_id)

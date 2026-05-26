@@ -1,20 +1,17 @@
 import { request } from './client';
 import type { BackendSession } from './backend-types';
-import { resolveProjectId } from './projectId';
 import { toSession } from './transformers';
 import type { Session, ShareMode } from '@/domain/types';
 
-export async function listSessions(projectSlugOrId: string): Promise<Session[]> {
-  const projectId = await resolveProjectId(projectSlugOrId);
-  const res = await request<{ items: BackendSession[] }>(`/sessions?project_id=${encodeURIComponent(projectId)}`);
+export async function listSessions(projectRef: string): Promise<Session[]> {
+  const res = await request<{ items: BackendSession[] }>(`/sessions?project_id=${encodeURIComponent(projectRef)}`);
   return res.items.map(toSession);
 }
 
-export async function createSession(projectSlugOrId: string): Promise<Session> {
-  const projectId = await resolveProjectId(projectSlugOrId);
+export async function createSession(projectRef: string): Promise<Session> {
   const raw = await request<BackendSession>(`/sessions`, {
     method: 'POST',
-    body: { project_id: projectId },
+    body: { project_id: projectRef },
   });
   return toSession(raw);
 }

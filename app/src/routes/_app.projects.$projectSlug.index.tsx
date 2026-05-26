@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getProjectBySlug, listMembers } from '@/api/projects';
+import { getProject, listMembers } from '@/api/projects';
 import { createSession, deleteSession, listSessions } from '@/api/sessions';
 import { listDirents } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
@@ -30,7 +30,7 @@ function ProjectHome() {
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
 
-  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProjectBySlug(projectSlug) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const sessions = useQuery({ queryKey: ['sessions', projectSlug], queryFn: () => listSessions(projectSlug) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
   const files = useQuery({

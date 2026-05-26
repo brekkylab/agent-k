@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getProjectBySlug, listMembers, removeMember } from '@/api/projects';
+import { getProject, listMembers, removeMember } from '@/api/projects';
 import { Avatar, EmptyState, SectionLabel } from '@/components/uiPrimitives';
 import { Icon } from '@/components/Icon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -28,7 +28,7 @@ function MembersPage() {
   const currentUser = useAuthStore((s) => s.currentUser);
   const showToast = useToastStore((s) => s.show);
 
-  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProjectBySlug(projectSlug) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
 
   const [inviteOpen, setInviteOpen] = useState(false);

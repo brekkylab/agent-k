@@ -24,7 +24,7 @@ import {
   uploadFiles,
   type DirentBatchResult,
 } from '@/api/dirents';
-import { getProjectBySlug } from '@/api/projects';
+import { getProject } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FolderPickerDialog } from '@/components/FolderPickerDialog';
@@ -58,7 +58,7 @@ function FilesPage() {
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
-  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProjectBySlug(projectSlug) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const dirents = useQuery({
     queryKey: ['dirents', projectSlug],
     queryFn: () => listDirentsRaw(projectSlug),

@@ -12,6 +12,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use super::project::resolve_project_id;
 use crate::{
     auth::AuthUser,
     error::{ApiError, ApiResult, AppError},
@@ -59,14 +60,14 @@ fn has_path_prefix(rel: &str, prefix: &str) -> bool {
     rel == prefix || rel.starts_with(&format!("{prefix}/"))
 }
 
-/// POST /projects/{project_id}/dirents
+/// POST /projects/{project_ref}/dirents
 pub async fn upload(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    AxumPath(project_id): AxumPath<Uuid>,
+    AxumPath(project_ref): AxumPath<String>,
     NoApi(mut multipart): NoApi<Multipart>,
 ) -> ApiResult<Json<DirentBatchResult>> {
-
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     let in_project = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -222,14 +223,14 @@ pub async fn upload(
     }))
 }
 
-/// GET /projects/{project_id}/dirents
+/// GET /projects/{project_ref}/dirents
 pub async fn list(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    AxumPath(project_id): AxumPath<Uuid>,
+    AxumPath(project_ref): AxumPath<String>,
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<ListResponse>> {
-
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     let in_project = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -347,13 +348,13 @@ pub async fn list(
     }))
 }
 
-/// GET /projects/{project_id}/dirents/{*path}
+/// GET /projects/{project_ref}/dirents/{*path}
 pub async fn get_file(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    AxumPath((project_id, path_str)): AxumPath<(Uuid, String)>,
+    AxumPath((project_ref, path_str)): AxumPath<(String, String)>,
 ) -> ApiResult<axum::response::Response> {
-
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     let in_project = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -400,13 +401,13 @@ pub async fn get_file(
         .map_err(|e| AppError::internal(format!("failed to build response: {e}")))?)
 }
 
-/// DELETE /projects/{project_id}/dirents/{*path}
+/// DELETE /projects/{project_ref}/dirents/{*path}
 pub async fn delete_path(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    AxumPath((project_id, path_str)): AxumPath<(Uuid, String)>,
+    AxumPath((project_ref, path_str)): AxumPath<(String, String)>,
 ) -> ApiResult<StatusCode> {
-
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     let in_project = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -690,14 +691,14 @@ async fn copy_one(uploads_root: &Path, src_rel: &str, dest_dir: &Path) -> Result
     build_dirent(uploads_root, &new_host).await
 }
 
-/// PATCH /projects/{project_id}/dirents — batch move/copy operations.
+/// PATCH /projects/{project_ref}/dirents — batch move/copy operations.
 pub async fn batch_op(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    AxumPath(project_id): AxumPath<Uuid>,
+    AxumPath(project_ref): AxumPath<String>,
     Json(body): Json<DirentBatchOp>,
 ) -> ApiResult<Json<DirentBatchResult>> {
-
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     let in_project = state
         .repository
         .user_in_project(auth_user.id, project_id)
