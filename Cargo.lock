@@ -35,6 +35,7 @@ dependencies = [
  "knowledge-base-examples",
  "log",
  "regex",
+ "reqwest 0.13.3",
  "serde",
  "serde_json",
  "strum 0.27.2",
@@ -148,7 +149,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=633e1e591e1b06a3c7f4f642176915bbae0ebafc#633e1e591e1b06a3c7f4f642176915bbae0ebafc"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=5b82c957262425311e0c9182a442c15e497e0892#5b82c957262425311e0c9182a442c15e497e0892"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -163,6 +164,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "hex",
+ "html-to-markdown-rs",
  "image",
  "indexmap 2.14.0",
  "infer",
