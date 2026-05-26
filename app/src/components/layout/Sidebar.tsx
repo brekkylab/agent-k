@@ -411,7 +411,7 @@ export function Sidebar() {
               addDisabled={createSessionMutation.isPending}
             />
             <div className="cw-sessions-list" data-expanded={sessionsExpanded ? 'true' : 'false'}>
-              {(sessionsQuery.data ?? []).map((session) => {
+              {(sessionsQuery.data ?? []).filter((s) => s.origin === 'user').map((session) => {
                 const canDelete = canAdministerSession(session, activeProject, currentUser);
                 return (
                   <div

@@ -71,7 +71,7 @@ function ProjectHome() {
 
   const memberList = members.data ?? [];
   const fileList = (files.data ?? []).filter((f) => f.type !== 'folder');
-  const sessionList = sessions.data ?? [];
+  const sessionList = (sessions.data ?? []).filter((s) => s.origin === 'user');
 
   return (
     <section className="cw-page cw-page-enter">
