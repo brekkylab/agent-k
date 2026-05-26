@@ -1,4 +1,5 @@
 import { ApiError, getBaseUrl, getToken, request } from './client';
+import { resolveProjectId } from './projectId';
 import type {
   BackendDirent,
   BackendDirentBatchOp,
@@ -13,7 +14,8 @@ function encodePath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
-export async function listDirents(projectId: string, projectName: string, recursive = true): Promise<FileAsset[]> {
+export async function listDirents(projectSlugOrId: string, projectName: string, recursive = true): Promise<FileAsset[]>  {
+  const projectId = await resolveProjectId(projectSlugOrId);
   const res = await request<{ entries: BackendDirent[] }>(
     `/projects/${projectId}/dirents?recursive=${recursive}`,
   );
@@ -22,14 +24,16 @@ export async function listDirents(projectId: string, projectName: string, recurs
 
 // Raw entries — preferred for tree navigation in the Files page where
 // the unmodified backend path is needed for both display and mutations.
-export async function listDirentsRaw(projectId: string, recursive = true): Promise<BackendDirent[]> {
+export async function listDirentsRaw(projectSlugOrId: string, recursive = true): Promise<BackendDirent[]>  {
+  const projectId = await resolveProjectId(projectSlugOrId);
   const res = await request<{ entries: BackendDirent[] }>(
     `/projects/${projectId}/dirents?recursive=${recursive}`,
   );
   return res.entries;
 }
 
-export async function uploadFile(projectId: string, file: File, targetPath: string): Promise<DirentBatchResult> {
+export async function uploadFile(projectSlugOrId: string, file: File, targetPath: string): Promise<DirentBatchResult>  {
+  const projectId = await resolveProjectId(projectSlugOrId);
   return uploadFiles(projectId, [{ file, targetPath }]);
 }
 
@@ -37,9 +41,10 @@ export async function uploadFile(projectId: string, file: File, targetPath: stri
 // file independently and returns { succeeded, failed } so callers can show
 // partial-failure UI without parsing per-file errors out of a single message.
 export async function uploadFiles(
-  projectId: string,
+  projectSlugOrId: string,
   items: Array<{ file: File; targetPath: string }>,
 ): Promise<DirentBatchResult> {
+  const projectId = await resolveProjectId(projectSlugOrId);
   const form = new FormData();
   for (const { file, targetPath } of items) {
     const renamed = new File([file], targetPath, { type: file.type });
@@ -52,7 +57,8 @@ export async function uploadFiles(
   });
 }
 
-export async function createFolder(projectId: string, folderPath: string): Promise<void> {
+export async function createFolder(projectSlugOrId: string, folderPath: string): Promise<void>  {
+  const projectId = await resolveProjectId(projectSlugOrId);
   const cleaned = folderPath.replace(/^\/+|\/+$/g, '');
   const placeholder = new File([''], `${cleaned}/.keep`, { type: 'text/plain' });
   const form = new FormData();
@@ -63,11 +69,12 @@ export async function createFolder(projectId: string, folderPath: string): Promi
 // Collection-level batch op (move/copy). Rename is just a single-source move
 // with new_name set.
 export async function moveDirents(
-  projectId: string,
+  projectSlugOrId: string,
   sources: string[],
   destination: string,
   newName?: string,
 ): Promise<DirentBatchResult> {
+  const projectId = await resolveProjectId(projectSlugOrId);
   const body: BackendDirentBatchOp = {
     op: 'move',
     sources,
@@ -81,10 +88,11 @@ export async function moveDirents(
 }
 
 export async function copyDirents(
-  projectId: string,
+  projectSlugOrId: string,
   sources: string[],
   destination: string,
 ): Promise<DirentBatchResult> {
+  const projectId = await resolveProjectId(projectSlugOrId);
   const body: BackendDirentBatchOp = { op: 'copy', sources, destination };
   return request<DirentBatchResult>(`/projects/${projectId}/dirents`, {
     method: 'PATCH',
@@ -92,13 +100,15 @@ export async function copyDirents(
   });
 }
 
-export async function deleteDirent(projectId: string, path: string): Promise<void> {
+export async function deleteDirent(projectSlugOrId: string, path: string): Promise<void>  {
+  const projectId = await resolveProjectId(projectSlugOrId);
   await request(`/projects/${projectId}/dirents/${encodePath(path)}`, { method: 'DELETE' });
 }
 
 // Authenticated download. <a href> can't carry the Authorization header, so
 // we fetch the blob ourselves and trigger a download via a synthetic anchor.
-export async function downloadFile(projectId: string, path: string): Promise<void> {
+export async function downloadFile(projectSlugOrId: string, path: string): Promise<void>  {
+  const projectId = await resolveProjectId(projectSlugOrId);
   const url = `${getBaseUrl()}/projects/${projectId}/dirents/${encodePath(path)}`;
   const headers = new Headers();
   const token = getToken();

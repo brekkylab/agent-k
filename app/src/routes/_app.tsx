@@ -7,7 +7,6 @@ import { useAuthStore } from '@/stores/auth';
 import { useLayoutStore } from '@/stores/layout';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { appWs } from '@/api/ws';
-import { shortSessionId } from '@/lib/sessionId';
 import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app')({
@@ -39,11 +38,10 @@ function AppShell() {
     appWs.connect(token);
     const unsub = appWs.subscribe((event) => {
       if (event.type === 'session_title_updated') {
-        // Update both full-UUID key (legacy) and 12-char prefix key (current nav)
-        const prefix = shortSessionId(event.session_id);
-        const updater = (old: Session | undefined) => (old ? { ...old, title: event.title } : old);
-        queryClient.setQueryData<Session | undefined>(['session', event.session_id], updater);
-        queryClient.setQueryData<Session | undefined>(['session', prefix], updater);
+        queryClient.setQueryData<Session | undefined>(
+          ['session', event.session_id],
+          (old) => (old ? { ...old, title: event.title } : old),
+        );
         void queryClient.invalidateQueries({ queryKey: ['sessions', event.project_id] });
       }
     });
@@ -57,7 +55,14 @@ function AppShell() {
     <div
       className="cw-app-shell"
       data-sidebar-mode={sidebarMode}
-      style={{ '--cw-sidebar-w': `${sidebarWidth}px` } as React.CSSProperties}
+      style={{
+        // grid column width — collapses to 0 in hidden mode so main goes full bleed.
+        '--cw-sidebar-w': `${sidebarWidth}px`,
+        // sidebar's own width — always tracks expandedWidth so the floating reveal
+        // matches whatever width the user has set. Option B: drag in hidden adjusts
+        // this too, the panel just doesn't auto-pin back to expanded.
+        '--cw-sidebar-floating-w': `${expandedWidth}px`,
+      } as React.CSSProperties}
     >
       <Sidebar />
       <main className="cw-main-shell cw-scroll-quiet">

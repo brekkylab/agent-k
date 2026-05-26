@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getProject, listMembers } from '@/api/projects';
+import { getProjectBySlug, listMembers } from '@/api/projects';
 import { createSession, deleteSession, listSessions } from '@/api/sessions';
 import { listDirents } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
@@ -19,7 +19,7 @@ import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
-export const Route = createFileRoute('/_app/p/$projectSlug/')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/')({
   component: ProjectHome,
 });
 
@@ -30,7 +30,7 @@ function ProjectHome() {
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
 
-  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProjectBySlug(projectSlug) });
   const sessions = useQuery({ queryKey: ['sessions', projectSlug], queryFn: () => listSessions(projectSlug) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
   const files = useQuery({
@@ -44,7 +44,7 @@ function ProjectHome() {
     onSuccess: async (session) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       showToast('새 세션이 만들어졌습니다');
-      navigate({ to: '/p/$projectSlug/s/$sessionPrefix', params: { projectSlug, sessionPrefix: shortSessionId(session.id) } });
+      navigate({ to: '/projects/$projectSlug/sessions/$sessionPrefix', params: { projectSlug, sessionPrefix: shortSessionId(session.id) } });
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
@@ -71,7 +71,7 @@ function ProjectHome() {
 
   const memberList = members.data ?? [];
   const fileList = (files.data ?? []).filter((f) => f.type !== 'folder');
-  const sessionList = sessions.data ?? [];
+  const sessionList = (sessions.data ?? []).filter((s) => s.origin === 'user');
 
   return (
     <section className="cw-page cw-page-enter">
@@ -99,7 +99,7 @@ function ProjectHome() {
 
       <div className="cw-section-title">
         <SectionLabel>Sessions · {sessionList.length} visible to you</SectionLabel>
-        <button onClick={() => navigate({ to: '/p/$projectSlug/schedule', params: { projectSlug } })}>
+        <button onClick={() => navigate({ to: '/projects/$projectSlug/schedule', params: { projectSlug } })}>
           schedule 자동 발화
         </button>
       </div>
@@ -112,7 +112,7 @@ function ProjectHome() {
               session={session}
               canDelete={canAdministerSession(session, project.data, currentUser)}
               onOpen={() => navigate({
-                to: '/p/$projectSlug/s/$sessionPrefix',
+                to: '/projects/$projectSlug/sessions/$sessionPrefix',
                 params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
               })}
               onRequestDelete={() => setPendingDelete(session)}

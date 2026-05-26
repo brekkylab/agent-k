@@ -20,7 +20,7 @@ function useActiveProjectSlugFromRoute(): string | null {
   return null;
 }
 
-export const Route = createFileRoute('/_app/p/')({
+export const Route = createFileRoute('/_app/projects/')({
   component: ProjectsPage,
 });
 
@@ -48,7 +48,7 @@ function ProjectsPage() {
             key={project.id}
             project={project}
             isActive={project.slug === activeProjectSlug}
-            onOpen={() => navigate({ to: '/p/$projectSlug', params: { projectSlug: project.slug } })}
+            onOpen={() => navigate({ to: '/projects/$projectSlug', params: { projectSlug: project.slug } })}
           />
         ))}
       </div>
@@ -62,7 +62,8 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
   const members = useQuery({ queryKey: ['members', project.slug], queryFn: () => listMembers(project.slug) });
   const sessions = useQuery({ queryKey: ['sessions', project.slug], queryFn: () => listSessions(project.slug) });
   const isOwner = currentUser?.id === project.ownerId;
-  const latest = latestUpdated(sessions.data ?? []);
+  const userSessions = (sessions.data ?? []).filter((s) => s.origin === 'user');
+  const latest = latestUpdated(userSessions);
   const memberUsers: User[] = members.data ?? [];
 
   return (
@@ -77,7 +78,7 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
       <p className="cw-project-card-desc">{project.description || '설명 없음'}</p>
       <div className="cw-project-card-footer">
         <AvatarStack users={memberUsers} />
-        <span className="cw-card-stats">{sessions.data?.length ?? 0}개 세션 · {latest}</span>
+        <span className="cw-card-stats">{userSessions.length}개 세션 · {latest}</span>
       </div>
     </button>
   );

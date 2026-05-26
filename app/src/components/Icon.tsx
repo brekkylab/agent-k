@@ -6,13 +6,13 @@ export type IconName =
   | 'send' | 'sparkles' | 'check' | 'chevron' | 'zap' | 'calendar' | 'artifact'
   | 'shield' | 'x' | 'arrow-left' | 'analysis' | 'brainstorm' | 'writing'
   | 'recap' | 'general' | 'more' | 'upload' | 'trash' | 'download'
-  | 'list' | 'grid' | 'chevron-right'
+  | 'list' | 'grid' | 'chevron-right' | 'chevron-left'
   | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio';
 
 type PreviewIconName =
   | 'lock' | 'eye' | 'message-square' | 'messages-square' | 'clipboard-list'
   | 'lightbulb' | 'pencil' | 'home' | 'folder' | 'folder-open' | 'users'
-  | 'settings' | 'plus' | 'chevron-down' | 'chevron-right' | 'more-horizontal' | 'check'
+  | 'settings' | 'plus' | 'chevron-down' | 'chevron-right' | 'chevron-left' | 'more-horizontal' | 'check'
   | 'x' | 'arrow-left' | 'send' | 'search' | 'file-text' | 'file-spreadsheet'
   | 'file' | 'image' | 'sparkles' | 'shield-check' | 'zap' | 'calendar'
   | 'trash-2' | 'download' | 'list' | 'grid-3x3'
@@ -52,6 +52,7 @@ const previewIconPath: Record<PreviewIconName, string> = {
   list: '<line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/>',
   'grid-3x3': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>',
   'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  'chevron-left': '<path d="m15 18-6-6 6-6"/>',
   /* Lucide file family. file-text and file-spreadsheet already exist above. */
   'file-code': '<path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M5 12V4a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H7.5"/><path d="m10 13-3 3 3 3"/><path d="m14 13 3 3-3 3"/>',
   'file-archive': '<path d="M10 12v-1"/><path d="M10 18v-2"/><path d="M10 7V6"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h2.5"/><circle cx="10" cy="20" r="2"/>',
@@ -96,6 +97,7 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   list: 'list',
   grid: 'grid-3x3',
   'chevron-right': 'chevron-right',
+  'chevron-left': 'chevron-left',
   /* PDF doesn't have its own Lucide glyph — reuse file-text and let colour
      (cw-file-pdf rose tint) carry the type signal. */
   'file-pdf': 'file-text',

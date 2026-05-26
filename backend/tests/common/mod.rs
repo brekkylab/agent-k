@@ -219,9 +219,9 @@ pub async fn post_session_authed(app: &axum::Router, token: &str, project_id: &s
     let (status, body) = authed(
         app,
         "POST",
-        &format!("/projects/{project_id}/sessions"),
+        "/sessions",
         token,
-        Some(serde_json::json!({})),
+        Some(serde_json::json!({ "project_id": project_id })),
     )
     .await;
     assert_eq!(

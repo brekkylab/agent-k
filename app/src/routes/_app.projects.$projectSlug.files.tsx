@@ -24,7 +24,7 @@ import {
   uploadFiles,
   type DirentBatchResult,
 } from '@/api/dirents';
-import { getProject } from '@/api/projects';
+import { getProjectBySlug } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FolderPickerDialog } from '@/components/FolderPickerDialog';
@@ -49,7 +49,7 @@ type ViewMode = 'list' | 'grid';
 const VIEW_KEY = 'cowork.files.viewMode';
 const DRAG_THRESHOLD = 5; // px — under this we treat mousedown as click
 
-export const Route = createFileRoute('/_app/p/$projectSlug/files')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/files')({
   component: FilesPage,
 });
 
@@ -58,7 +58,7 @@ function FilesPage() {
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
-  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProjectBySlug(projectSlug) });
   const dirents = useQuery({
     queryKey: ['dirents', projectSlug],
     queryFn: () => listDirentsRaw(projectSlug),

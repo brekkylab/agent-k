@@ -8,7 +8,7 @@ type Mode = 'login' | 'signup';
 
 export const Route = createFileRoute('/login')({
   beforeLoad: () => {
-    if (getToken()) throw redirect({ to: '/p' });
+    if (getToken()) throw redirect({ to: '/projects' });
   },
   component: LoginPage,
 });
@@ -42,7 +42,7 @@ function LoginPage() {
       }
       const me = await getMe();
       setCurrentUser(me);
-      navigate({ to: '/p' });
+      navigate({ to: '/projects' });
     } catch (err) {
       setError(messageOf(err, mode));
     } finally {

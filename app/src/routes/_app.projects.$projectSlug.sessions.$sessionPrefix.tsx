@@ -6,7 +6,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, streamMessage } from '@/api/messages';
-import { getProject, listMembers } from '@/api/projects';
+import { getProjectBySlug, listMembers } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconPocket, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
@@ -19,7 +19,7 @@ import type { Message, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 
-export const Route = createFileRoute('/_app/p/$projectSlug/s/$sessionPrefix')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   component: SessionPage,
 });
 
@@ -35,7 +35,7 @@ function SessionPage() {
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
 
-  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProjectBySlug(projectSlug) });
   const session = useQuery({ queryKey: ['session', sessionPrefix], queryFn: () => getSession(sessionPrefix) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
   const history = useQuery({

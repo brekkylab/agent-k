@@ -37,11 +37,14 @@ export interface BackendMember {
   added_at: string;
 }
 
+export type BackendSessionOrigin = 'user' | 'automation';
+
 export interface BackendSession {
   id: string;
   project_id: string;
   creator_id: string;
   share_mode: ShareMode;
+  origin: BackendSessionOrigin;
   title: string | null;
   last_message_at: string | null;
   last_message_snippet: string | null;

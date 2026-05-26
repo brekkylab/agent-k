@@ -76,6 +76,7 @@ export function toSession(backend: BackendSession): Session {
     title: backend.title ?? '새 대화',
     creatorId: backend.creator_id,
     shareMode: backend.share_mode,
+    origin: backend.origin,
     intent: 'general',
     updatedAt: compactDate(backend.updated_at),
     lastMessageAt: backend.last_message_at,

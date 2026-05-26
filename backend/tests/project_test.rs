@@ -37,7 +37,7 @@ async fn non_member_cannot_access_project() {
     common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = alice_project["id"].as_str().unwrap();
 
     // bob signs up
     common::signup(&app, "bob", "password123").await;
@@ -47,7 +47,7 @@ async fn non_member_cannot_access_project() {
     let (status, _) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_slug}"),
+        &format!("/projects/{project_id}"),
         &bob_token,
         None,
     )
@@ -66,7 +66,7 @@ async fn owner_can_invite_and_remove_member() {
     common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = alice_project["id"].as_str().unwrap();
     let alice_id = alice_project["owner_id"].as_str().unwrap();
 
     let bob_info = common::signup(&app, "bob", "password123").await;
@@ -74,13 +74,13 @@ async fn owner_can_invite_and_remove_member() {
     let bob_id = bob_info["id"].as_str().unwrap();
 
     // alice invites bob → 204
-    common::add_member(&app, &alice_token, project_slug, "bob").await;
+    common::add_member(&app, &alice_token, project_id, "bob").await;
 
     // bob can now access project → 200
     let (status, _) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_slug}"),
+        &format!("/projects/{project_id}"),
         &bob_token,
         None,
     )
@@ -95,7 +95,7 @@ async fn owner_can_invite_and_remove_member() {
     let (status, body) = common::authed(
         &app,
         "DELETE",
-        &format!("/projects/{project_slug}/members/{alice_id}"),
+        &format!("/projects/{project_id}/members/{alice_id}"),
         &bob_token,
         None,
     )
@@ -110,7 +110,7 @@ async fn owner_can_invite_and_remove_member() {
     let (status, body) = common::authed(
         &app,
         "DELETE",
-        &format!("/projects/{project_slug}/members/{bob_id}"),
+        &format!("/projects/{project_id}/members/{bob_id}"),
         &alice_token,
         None,
     )
@@ -125,7 +125,7 @@ async fn owner_can_invite_and_remove_member() {
     let (status, _) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_slug}"),
+        &format!("/projects/{project_id}"),
         &bob_token,
         None,
     )
@@ -148,7 +148,7 @@ async fn member_cannot_invite() {
     common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = alice_project["id"].as_str().unwrap();
 
     common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
@@ -156,13 +156,13 @@ async fn member_cannot_invite() {
     common::signup(&app, "charlie", "password123").await;
 
     // alice invites bob
-    common::add_member(&app, &alice_token, project_slug, "bob").await;
+    common::add_member(&app, &alice_token, project_id, "bob").await;
 
     // bob tries to invite charlie → 403
     let (status, body) = common::authed(
         &app,
         "POST",
-        &format!("/projects/{project_slug}/members"),
+        &format!("/projects/{project_id}/members"),
         &bob_token,
         Some(serde_json::json!({ "username": "charlie" })),
     )
@@ -184,8 +184,8 @@ async fn project_delete_cascades_sessions() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_slug = alice_project["slug"].as_str().unwrap();
-    let project_id = uuid::Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let project_id_str = alice_project["id"].as_str().unwrap();
+    let project_id = uuid::Uuid::parse_str(project_id_str).unwrap();
     let alice_id = uuid::Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     // seed a session directly via the repository (no agent required)
@@ -211,7 +211,7 @@ async fn project_delete_cascades_sessions() {
     let (status, body) = common::authed(
         &app,
         "DELETE",
-        &format!("/projects/{project_slug}"),
+        &format!("/projects/{project_id_str}"),
         &alice_token,
         None,
     )
@@ -250,10 +250,10 @@ async fn project_delete_cleans_up_agents_in_state() {
     common::signup(&app, "alice", "password123").await;
     let token = common::login(&app, "alice", "password123").await;
     let project = common::get_personal_project(&app, &token).await;
-    let project_slug = project["slug"].as_str().unwrap();
+    let project_id = project["id"].as_str().unwrap();
 
     // Create session via HTTP — this registers an agent in AppState.
-    let session_id = common::post_session_authed(&app, &token, project_slug).await;
+    let session_id = common::post_session_authed(&app, &token, project_id).await;
     assert!(
         state.get_agent(&session_id).is_some(),
         "agent must be in state after session creation"
@@ -263,7 +263,7 @@ async fn project_delete_cleans_up_agents_in_state() {
     let (status, body) = common::authed(
         &app,
         "DELETE",
-        &format!("/projects/{project_slug}"),
+        &format!("/projects/{project_id}"),
         &token,
         None,
     )
@@ -285,14 +285,14 @@ async fn member_sees_own_sessions_in_project_list_but_not_others() {
     let alice_info = common::signup(&app, "alice", "password123").await;
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_slug = alice_project["slug"].as_str().unwrap();
-    let project_id = uuid::Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let project_id_str = alice_project["id"].as_str().unwrap();
+    let project_id = uuid::Uuid::parse_str(project_id_str).unwrap();
     let alice_id = uuid::Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     let bob_info = common::signup(&app, "bob", "password123").await;
     let bob_token = common::login(&app, "bob", "password123").await;
     let bob_id = uuid::Uuid::parse_str(bob_info["id"].as_str().unwrap()).unwrap();
-    common::add_member(&app, &alice_token, project_slug, "bob").await;
+    common::add_member(&app, &alice_token, project_id_str, "bob").await;
 
     repo.create_session(project_id, alice_id).await.unwrap();
     repo.create_session(project_id, bob_id).await.unwrap();
@@ -301,7 +301,7 @@ async fn member_sees_own_sessions_in_project_list_but_not_others() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_slug}/sessions"),
+        &format!("/sessions?project_id={project_id_str}"),
         &alice_token,
         None,
     )
@@ -317,7 +317,7 @@ async fn member_sees_own_sessions_in_project_list_but_not_others() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_slug}/sessions"),
+        &format!("/sessions?project_id={project_id_str}"),
         &bob_token,
         None,
     )
@@ -342,13 +342,13 @@ async fn owner_leave_is_blocked() {
     let alice_token = common::login(&app, "alice", "password123").await;
     let alice_id = alice_info["id"].as_str().unwrap();
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = alice_project["id"].as_str().unwrap();
 
     // alice tries to remove herself from her own project → 400
     let (status, body) = common::authed(
         &app,
         "DELETE",
-        &format!("/projects/{project_slug}/members/{alice_id}"),
+        &format!("/projects/{project_id}/members/{alice_id}"),
         &alice_token,
         None,
     )

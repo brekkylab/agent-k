@@ -182,13 +182,41 @@ pub async fn list_projects(
     }))
 }
 
-/// GET /projects/{project_slug}
+/// GET /projects/by-slug/{slug}
+///
+/// Resolve a slug (active or retired) to the current project. Frontend uses
+/// this to redirect from retired-slug URLs to the active project's URL.
+/// Returns the same `ProjectResponse` as GET /projects/{id} — the response's
+/// `id`/`slug` fields tell the caller whether a redirect is needed.
+pub async fn get_project_by_slug(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<ProjectResponse>> {
+    let project_id = resolve_project_id(&state, &slug).await?;
+    let project = state
+        .repository
+        .get_project(project_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("project not found"))?;
+    let is_member = state
+        .repository
+        .user_in_project(auth_user.id, project_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !is_member {
+        return Err(AppError::forbidden("not a member of this project"));
+    }
+    Ok(Json(ProjectResponse::from(project)))
+}
+
+/// GET /projects/{project_id}
 pub async fn get_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_slug): Path<String>,
+    Path(project_id): Path<Uuid>,
 ) -> ApiResult<Json<ProjectResponse>> {
-    let project_id = resolve_project_id(&state, &project_slug).await?;
 
     let project = state
         .repository
@@ -209,14 +237,13 @@ pub async fn get_project(
     Ok(Json(ProjectResponse::from(project)))
 }
 
-/// PATCH /projects/{project_slug} — owner only
+/// PATCH /projects/{project_id} — owner only
 pub async fn update_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_slug): Path<String>,
+    Path(project_id): Path<Uuid>,
     Json(payload): Json<UpdateProjectRequest>,
 ) -> ApiResult<Json<ProjectResponse>> {
-    let project_id = resolve_project_id(&state, &project_slug).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
     if let Some(ref new_slug) = payload.slug {
@@ -241,13 +268,12 @@ pub async fn update_project(
     Ok(Json(ProjectResponse::from(updated)))
 }
 
-/// DELETE /projects/{project_slug} — owner only (cascades sessions)
+/// DELETE /projects/{project_id} — owner only (cascades sessions)
 pub async fn delete_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_slug): Path<String>,
+    Path(project_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let project_id = resolve_project_id(&state, &project_slug).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
     // Clean up agent + sandbox for every session before the DB cascade removes them.
@@ -278,17 +304,16 @@ pub async fn delete_project(
         }
     }
 
-    tracing::info!(id = %project_id, slug = %project_slug, "project deleted");
+    tracing::info!(id = %project_id, "project deleted");
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// GET /projects/{project_slug}/members
+/// GET /projects/{project_id}/members
 pub async fn list_members(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_slug): Path<String>,
+    Path(project_id): Path<Uuid>,
 ) -> ApiResult<Json<ProjectMemberListResponse>> {
-    let project_id = resolve_project_id(&state, &project_slug).await?;
     require_member(&state, auth_user.id, project_id).await?;
 
     let members = state
@@ -310,14 +335,13 @@ pub async fn list_members(
     Ok(Json(ProjectMemberListResponse { items }))
 }
 
-/// POST /projects/{project_slug}/members — owner only, body: { username }
+/// POST /projects/{project_id}/members — owner only, body: { username }
 pub async fn add_member(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_slug): Path<String>,
+    Path(project_id): Path<Uuid>,
     Json(payload): Json<AddMemberRequest>,
 ) -> ApiResult<StatusCode> {
-    let project_id = resolve_project_id(&state, &project_slug).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
     let target = state
@@ -340,14 +364,13 @@ pub async fn add_member(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// DELETE /projects/{project_slug}/members/{user_id}
+/// DELETE /projects/{project_id}/members/{user_id}
 /// Owner can remove anyone. Member can only remove themselves (leave).
 pub async fn remove_member(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path((project_slug, target_user_id)): Path<(String, Uuid)>,
+    Path((project_id, target_user_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<StatusCode> {
-    let project_id = resolve_project_id(&state, &project_slug).await?;
 
     let is_owner = state
         .repository

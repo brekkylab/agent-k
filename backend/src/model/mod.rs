@@ -1,9 +1,11 @@
+mod automation;
 mod dirent;
 mod document;
 mod project;
 mod session;
 mod user;
 
+pub use automation::*;
 pub use dirent::*;
 pub use document::*;
 pub use project::*;
