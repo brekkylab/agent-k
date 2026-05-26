@@ -189,7 +189,7 @@ function NewAutomationPage() {
             <div className="cw-trigger-picker" role="radiogroup" aria-label="Initial trigger">
               {(['cron', 'webhook', 'none'] as InitialTriggerKind[]).map((kind) => {
                 const active = triggerKind === kind;
-                const label = kind === 'cron' ? 'Schedule'
+                const label = kind === 'cron' ? 'Recurring'
                   : kind === 'webhook' ? 'Webhook'
                   : 'None (수동 전용)';
                 const sub = kind === 'cron' ? '일정에 따라 반복 실행'

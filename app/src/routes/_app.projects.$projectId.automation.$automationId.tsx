@@ -325,7 +325,7 @@ function AutomationSettingsPage() {
               <div className="cw-trigger-picker" role="radiogroup" aria-label="Trigger kind">
                 {(['cron', 'webhook'] as const).map((kind) => {
                   const active = draftKind === kind;
-                  const label = kind === 'cron' ? 'Schedule' : 'Webhook';
+                  const label = kind === 'cron' ? 'Recurring' : 'Webhook';
                   const sub = kind === 'cron' ? '일정에 따라 반복 실행' : '외부 시스템에서 호출';
                   return (
                     <label key={kind} className={`cw-trigger-option ${active ? 'is-active' : ''}`}>
@@ -385,7 +385,7 @@ function AutomationSettingsPage() {
                     {isEditing && isCron ? (
                       <>
                         <header className="cw-trigger-edit-head">
-                          <span className="cw-trigger-badge cw-trigger-cron">schedule</span>
+                          <span className="cw-trigger-badge cw-trigger-cron">recurring</span>
                           <label className="cw-trigger-enabled">
                             <span>{trigger.enabled ? 'enabled' : 'disabled'}</span>
                             <span className="cw-switch">
@@ -424,7 +424,7 @@ function AutomationSettingsPage() {
                     ) : (
                       <>
                         <span className={`cw-trigger-badge cw-trigger-${trigger.kind}`}>
-                          {isCron ? 'schedule' : trigger.kind}
+                          {isCron ? 'recurring' : trigger.kind}
                         </span>
                         {trigger.spec.kind === 'cron' ? (
                           <>
