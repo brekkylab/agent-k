@@ -172,7 +172,9 @@
   --cw-space-10: 40px;
 
   /* ── Layout constants ────────────────────────────────────────────────── */
-  --cw-sidebar-w:        200px;
+  --cw-sidebar-w:        240px;
+  --cw-sidebar-w-min:    180px;
+  --cw-sidebar-w-max:    420px;
   --cw-content-max:      1180px;
   --cw-chat-max:         760px;
 
