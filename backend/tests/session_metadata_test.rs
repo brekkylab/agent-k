@@ -23,9 +23,9 @@ async fn new_session_has_null_last_message_at_and_title() {
     let (status, body) = common::authed(
         &app,
         "POST",
-        &format!("/projects/{project_id}/sessions"),
+        "/sessions",
         &token,
-        Some(serde_json::json!({})),
+        Some(serde_json::json!({ "project_id": project_id })),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "create session failed: {body}");
@@ -264,7 +264,7 @@ async fn list_sessions_includes_metadata() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/sessions?project_id={project_id_str}"),
         &alice_token,
         None,
     )

@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::{
     cron::next_fire_after,
-    handlers::session::{attribute_messages, build_agent, build_sandbox},
+    handlers::session::{attribute_messages, build_agent, build_runenv},
     model::{EventKind, RunStatus, TriggerSpec},
     repository::DbAutomationRun,
     state::AppState,
@@ -395,8 +395,8 @@ async fn execute_run(
         .await
         .map_err(|e| e.to_string())?;
 
-    let sandbox = build_sandbox(state, automation.project_id, run.session_id).await?;
-    let agent = build_agent(sandbox).await?;
+    let runenv = build_runenv(state, automation.project_id, run.session_id).await?;
+    let agent = build_agent(state, automation.project_id, runenv).await?;
     state.insert_agent(run.session_id, agent);
 
     for (idx, prompt) in automation.prompts.iter().enumerate() {

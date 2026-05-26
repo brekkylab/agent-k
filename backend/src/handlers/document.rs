@@ -29,12 +29,14 @@ pub struct ListDocumentsQuery {
 
 pub async fn list_documents(
     State(state): State<Arc<AppState>>,
+    Path(project_id): Path<Uuid>,
     Query(query): Query<ListDocumentsQuery>,
 ) -> ApiResult<Json<Vec<DocumentResponse>>> {
     let page = query.page.unwrap_or(0);
     let page_size = query.page_size.unwrap_or(50);
 
-    let store = state.store.read().await;
+    let store = state.get_store(project_id).await;
+    let store = store.read().await;
     let docs = store
         .list(false, page, page_size)
         .map_err(|e| AppError::internal(e.to_string()))?;
@@ -44,9 +46,10 @@ pub async fn list_documents(
 
 pub async fn get_document(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
+    Path((project_id, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<DocumentResponse>> {
-    let store = state.store.read().await;
+    let store = state.get_store(project_id).await;
+    let store = store.read().await;
     match store.get(id) {
         Some(doc) => Ok(Json(DocumentResponse::from(doc))),
         None => Err(AppError::not_found("document not found")),
@@ -66,6 +69,7 @@ fn parse_filetype(filename: &str) -> Result<FileType, String> {
 
 pub async fn ingest_document(
     State(state): State<Arc<AppState>>,
+    Path(project_id): Path<Uuid>,
     NoApi(mut multipart): NoApi<Multipart>,
 ) -> ApiResult<(StatusCode, Json<BatchIngestResponse>)> {
     let mut valid_items: Vec<(Vec<u8>, FileType)> = Vec::new();
@@ -107,7 +111,8 @@ pub async fn ingest_document(
         ));
     }
 
-    let mut store = state.store.write().await;
+    let store = state.get_store(project_id).await;
+    let mut store = store.write().await;
     let result = store
         .ingest_many(valid_items)
         .await
@@ -145,9 +150,10 @@ pub async fn ingest_document(
 
 pub async fn purge_document(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
+    Path((project_id, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<StatusCode> {
-    let mut store = state.store.write().await;
+    let store = state.get_store(project_id).await;
+    let mut store = store.write().await;
     match store
         .purge(id)
         .map_err(|e| AppError::internal(e.to_string()))?
@@ -162,6 +168,7 @@ pub async fn purge_document(
 
 pub async fn purge_documents(
     State(state): State<Arc<AppState>>,
+    Path(project_id): Path<Uuid>,
     Json(payload): Json<BulkPurgeRequest>,
 ) -> ApiResult<(StatusCode, Json<BatchPurgeResponse>)> {
     if payload.ids.is_empty() {
@@ -183,7 +190,8 @@ pub async fn purge_documents(
         }
     }
 
-    let mut store = state.store.write().await;
+    let store = state.get_store(project_id).await;
+    let mut store = store.write().await;
     let result = store.purge_many(ids);
     drop(store);
 

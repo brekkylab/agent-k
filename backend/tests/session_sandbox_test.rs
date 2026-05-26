@@ -19,14 +19,9 @@ use common::{
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 async fn make_state() -> Arc<AppState> {
-    let store = make_test_store();
+    let _ = make_test_store();
     let data_root = std::env::temp_dir().join(format!("agent-k-sandbox-{}", uuid::Uuid::new_v4()));
-    Arc::new(AppState::new(
-        make_repo().await,
-        store,
-        test_jwt_config(),
-        data_root,
-    ))
+    Arc::new(AppState::new(make_repo().await, test_jwt_config(), data_root))
 }
 
 // ── sandbox isolation ─────────────────────────────────────────────────────────

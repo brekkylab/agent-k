@@ -2,22 +2,14 @@ mod cli;
 
 use std::{path::PathBuf, sync::Arc};
 
-use agent_k::{
-    agents::{
-        get_calculate_tool_func, get_find_in_document_tool_func, get_search_document_tool_func,
-    },
-    knowledge_base::Store,
-};
-use agent_k_backend::{auth, repository, router, state::AppState, worker};
+use agent_k_backend::{auth, ingest_worker, repository, router, state::AppState, worker};
 use aide::{
     axum::ApiRouter,
     openapi::{Info, OpenApi},
     scalar::Scalar,
 };
-use ailoy::agent::default_provider_mut;
 use axum::{Extension, response::IntoResponse};
 use clap::Parser;
-use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::cli::{Cli, Command, ServeArgs, ServeMode};
@@ -76,27 +68,12 @@ async fn run_server(mode: ServeMode) -> std::io::Result<()> {
         auth::bootstrap_admin_if_needed(&repo).await;
     }
 
-    let store_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
-    let store = Arc::new(RwLock::new(
-        Store::new(&store_path).expect("speedwagon store init"),
-    ));
-
-    // Tool registration is required for both modes — workers execute agents
-    // directly, and the API can also drive inline agent invocations.
-    {
-        let mut provider = default_provider_mut();
-        provider
-            .tools
-            .insert_func("calculate", get_calculate_tool_func());
-        provider.tools.insert_func(
-            "search_document",
-            get_search_document_tool_func(store.clone()),
-        );
-        provider.tools.insert_func(
-            "find_in_document",
-            get_find_in_document_tool_func(store.clone()),
-        );
-    }
+    // Per-project Speedwagon stores live under data_root/projects/{id}/.speedwagon
+    // and are created lazily by AppState::get_store. Tools are no longer
+    // registered against the process-wide default provider — build_agent
+    // constructs a per-call provider so each session sees only its project's
+    // corpus. ailoy's default ToolProvider still supplies the built-in
+    // web_search/python/bash factories.
 
     let data_root = std::env::var("AGENT_K_DATA_ROOT")
         .map(PathBuf::from)
@@ -105,7 +82,7 @@ async fn run_server(mode: ServeMode) -> std::io::Result<()> {
     tracing::info!("data root: {}", data_root.display());
     tracing::info!("serve mode: {:?}", mode);
 
-    let app_state = Arc::new(AppState::new(repo, store, jwt, data_root));
+    let app_state = Arc::new(AppState::new(repo, jwt, data_root));
 
     if mode.runs_worker() {
         let worker_count = std::env::var("AGENT_K_WORKER_COUNT")
@@ -115,6 +92,13 @@ async fn run_server(mode: ServeMode) -> std::io::Result<()> {
         worker::spawn_workers(app_state.clone(), worker_count);
         worker::spawn_housekeeper(app_state.clone());
         worker::spawn_cron_ticker(app_state.clone());
+
+        let ingest_worker_count = std::env::var("AGENT_K_INGEST_WORKER_COUNT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1usize);
+        ingest_worker::spawn_ingest_workers(app_state.clone(), ingest_worker_count);
+        ingest_worker::spawn_ingest_housekeeper(app_state.clone());
     }
 
     if mode.runs_api() {

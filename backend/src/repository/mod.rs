@@ -1,4 +1,5 @@
 mod automation;
+mod ingest;
 mod project;
 mod session;
 mod sqlite;
@@ -8,6 +9,7 @@ use std::{sync::Arc, time::Duration};
 pub use automation::{
     DbAutomation, DbAutomationRun, DbAutomationRunEvent, DbAutomationTrigger,
 };
+pub use ingest::{DbIngestJob, DbProjectDocument};
 pub use project::{DbProject, DbProjectMember};
 pub use session::{
     DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, SessionAccess, SessionOrigin,

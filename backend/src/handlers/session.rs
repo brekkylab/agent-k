@@ -37,6 +37,29 @@ pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     format!("session-{}", &s[..12])
 }
 
+/// Pick the runenv for a session. When `AGENT_K_DISABLE_SANDBOX=1` is set
+/// (local E2E, no microsandbox / docker available), fall back to
+/// `RunEnv::local()`. The coworker's shell/python tools then run on the host
+/// instead of inside a container — fine for local dev, NOT for production.
+pub(crate) async fn build_runenv(
+    state: &Arc<AppState>,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<RunEnv, String> {
+    if std::env::var("AGENT_K_DISABLE_SANDBOX")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        tracing::warn!(
+            project = %project_id,
+            session = %session_id,
+            "AGENT_K_DISABLE_SANDBOX=1 set; using RunEnv::local() (no isolation)"
+        );
+        return Ok(RunEnv::local());
+    }
+    build_sandbox(state, project_id, session_id).await
+}
+
 pub(crate) async fn build_sandbox(
     state: &Arc<AppState>,
     project_id: Uuid,
@@ -68,7 +91,11 @@ pub(crate) async fn build_sandbox(
     RunEnv::sandbox(cfg).await.map_err(|e| e.to_string())
 }
 
-pub(crate) async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
+pub(crate) async fn build_agent(
+    state: &Arc<AppState>,
+    project_id: Uuid,
+    runenv: RunEnv,
+) -> Result<Agent, String> {
     // TODO: Remove the subagent. This is added for testing frontend UI.
     let math_spec = AgentSpec::new(DEFAULT_MODEL)
         .instruction(
@@ -83,10 +110,35 @@ pub(crate) async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
             skills: vec![],
         });
 
+    // Speedwagon subagent: answers questions over the project's auto-ingested
+    // document corpus. The corpus is built from files the user has uploaded
+    // via `POST /projects/{id}/dirents` and queued by the ingest worker.
+    let speedwagon_spec = agent_k::agents::SpeedwagonSpec::new()
+        .model(DEFAULT_MODEL)
+        .with_web_search()
+        .card(AgentCard {
+            name: "speedwagon".into(),
+            description: "Answer questions about the documents uploaded to this \
+                project. Use for factual lookups over the uploaded corpus, with \
+                web_search as fallback when the corpus does not cover the question."
+                .into(),
+            skills: vec![],
+        })
+        .into_spec();
+
+    // Per-call AgentProvider: ailoy's default ToolProvider auto-registers the
+    // built-in tools (bash, python_repl, web_search, ...), and we layer the
+    // project's Speedwagon corpus tools on top via `build_tools`. This is the
+    // ToolProvider that both the parent agent and every subagent (math,
+    // speedwagon) see — subagents inherit `provider` from the parent.
+    let store = state.get_store(project_id).await;
+    let mut provider = ailoy::agent::AgentProvider::new();
+    provider.tools = agent_k::agents::build_tools(store);
+
     AgentBuilder::new(DEFAULT_MODEL)
         .instruction(concat!(
             "You are a versatile assistant with access to code execution tools ",
-            "(bash, python), web search, and a math subagent. ",
+            "(bash, python), web search, and two subagents (math, speedwagon). ",
             "Your working directory is /workspace, which is read-write — you can freely ",
             "create, edit, and delete files there for intermediate work, scripts, and results. ",
             "Project files uploaded by the user are available read-only at /workspace/.uploads/. ",
@@ -95,13 +147,19 @@ pub(crate) async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
             "To modify or analyse uploaded files, copy them into /workspace first. ",
             "New uploads appear in /workspace/.uploads immediately without restarting. ",
             "You MUST delegate ALL math and numeric problems to the math tool. ",
+            "For questions about the contents of uploaded documents (facts, quotes, ",
+            "data from the user's files), delegate to the speedwagon subagent — it ",
+            "has search/find/read tools over the indexed corpus and can fall back to ",
+            "web_search when the corpus does not cover the question. ",
             "Use bash and python tools for computation, data analysis, and code execution tasks. ",
             "Only skip tools for greetings or casual conversation.",
         ))
         .system_tools()
         .web_search_tool(vec![])
+        .provider(provider)
         .runenv(runenv)
         .subagent(math_spec)
+        .subagent(speedwagon_spec)
         .build()
         .map_err(|e| e.to_string())
 }
@@ -179,11 +237,11 @@ async fn resolve_agent_for(
         .map_err(|e| AppError::internal(e.to_string()))?;
     let history: Vec<Message> = rows.into_iter().map(|r| r.message).collect();
 
-    let sandbox = build_sandbox(state, project_id, session_id)
+    let runenv = build_runenv(state, project_id, session_id)
         .await
         .map_err(|e| AppError::internal(e))?;
 
-    let mut agent = build_agent(sandbox)
+    let mut agent = build_agent(state, project_id, runenv)
         .await
         .map_err(|e| AppError::internal(e))?;
 
@@ -223,14 +281,14 @@ pub async fn create_session(
         .map_err(|e| AppError::internal(e.to_string()))?;
 
     let sandbox_name = sandbox_name_for(&session.id);
-    let sandbox = match build_sandbox(&state, project_id, session.id).await {
+    let runenv = match build_runenv(&state, project_id, session.id).await {
         Ok(s) => s,
         Err(e) => {
             let _ = state.repository.delete_session(session.id).await;
             return Err(AppError::internal(e));
         }
     };
-    let agent = match build_agent(sandbox).await {
+    let agent = match build_agent(&state, project_id, runenv).await {
         Ok(a) => a,
         Err(e) => {
             let _ = Sandbox::remove_persisted(&sandbox_name).await;

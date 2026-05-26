@@ -3,7 +3,6 @@ mod common;
 
 use std::sync::Arc;
 
-use agent_k::{agents::build_tools, knowledge_base::Store};
 use agent_k_backend::{repository, router::get_router, state::AppState};
 use aide::openapi::OpenApi;
 use ailoy::{agent::default_provider_mut, lang_model::LangModelProvider};
@@ -12,18 +11,17 @@ use common::{
     bulk_purge_documents, extract_text, get_personal_project, ingest_documents, list_documents,
     login, post_session_authed, send_message, signup, test_jwt_config,
 };
-use tokio::sync::RwLock;
 
 #[tokio::test]
 #[ignore = "requires OPENAI_API_KEY"]
 async fn test_ingest_message_purge_cycle() {
     dotenvy::dotenv().ok();
 
-    let store_path = std::env::temp_dir().join(format!("agent-k-e2e-{}", uuid::Uuid::new_v4()));
-    let store = Arc::new(RwLock::new(
-        Store::new(store_path).expect("test store init"),
-    ));
-
+    // Pre-multi-tenancy: this test predates per-project Stores and the
+    // build_agent-owned provider. Models are still registered against the
+    // default LangModelProvider so `build_agent` can resolve them; tools are
+    // built per-call inside `build_agent` from `AppState::get_store(...)`, so
+    // we no longer prime `default_provider_mut().tools`.
     {
         let mut provider = default_provider_mut();
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
@@ -31,19 +29,29 @@ async fn test_ingest_message_purge_cycle() {
                 .models
                 .insert("openai/*".into(), LangModelProvider::openai(key));
         }
-        provider.tools = build_tools(store.clone());
     }
 
     let repo = repository::create_repository("sqlite::memory:")
         .await
         .expect("test repo init");
     let data_root = std::env::temp_dir().join(format!("agent-k-e2e-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
+    let state = Arc::new(AppState::new(repo, test_jwt_config(), data_root));
     let app = get_router(state).finish_api(&mut OpenApi::default());
 
-    // ── Ingest two documents via multipart ───────────────────────────────────
+    // ── Create user, project, session ────────────────────────────────────────
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = get_personal_project(&app, &token).await;
+    let project_id_str = project["id"].as_str().unwrap();
+    let project_id: uuid::Uuid = project_id_str.parse().expect("project id is a Uuid");
+    let session_id = post_session_authed(&app, &token, project_id_str).await;
+
+    // ── Ingest two documents into this project's Store ──────────────────────
     let batch = ingest_documents(
         &app,
+        &token,
+        project_id,
         &[
             (
                 "freedonia.md",
@@ -62,14 +70,6 @@ async fn test_ingest_message_purge_cycle() {
         .iter()
         .map(|d| d["id"].as_str().unwrap())
         .collect();
-
-    // ── Create user and session ──────────────────────────────────────────────
-    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
-    signup(&app, &username, "Password123!").await;
-    let token = login(&app, &username, "Password123!").await;
-    let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
-    let session_id = post_session_authed(&app, &token, project_id).await;
 
     // ── Question about document 1 (Freedonia) ────────────────────────────────
     let outputs = send_message(
@@ -100,13 +100,14 @@ async fn test_ingest_message_purge_cycle() {
     );
 
     // ── Bulk purge both documents ─────────────────────────────────────────────
-    let (purge_status, purge_resp) = bulk_purge_documents(&app, &doc_ids).await;
+    let (purge_status, purge_resp) =
+        bulk_purge_documents(&app, &token, project_id, &doc_ids).await;
     assert_eq!(purge_status, StatusCode::OK);
     let purged = purge_resp["purged"].as_array().unwrap();
     assert_eq!(purged.len(), 2, "both documents should be purged");
 
     // ── Verify documents are gone ────────────────────────────────────────────
-    let docs = list_documents(&app).await;
+    let docs = list_documents(&app, &token, project_id).await;
     assert!(docs.is_empty(), "document list should be empty after purge");
 
     // ── Post-purge question (agent should still respond, just without KB) ────

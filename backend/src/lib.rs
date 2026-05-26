@@ -3,6 +3,7 @@ pub mod cron;
 pub mod error;
 pub mod events;
 pub mod handlers;
+pub mod ingest_worker;
 pub mod model;
 pub mod repository;
 pub mod router;

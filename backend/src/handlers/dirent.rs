@@ -204,6 +204,24 @@ pub async fn upload(
             .ok()
             .and_then(|m| m.modified().ok())
             .map(DateTime::<Utc>::from);
+
+        // Auto-ingest: queue PDF/MD/TXT files for the background worker. Failures
+        // here do not roll back the upload — the file is on disk regardless and
+        // the user can re-trigger by re-uploading.
+        if crate::model::is_ingestable_filename(&filename) {
+            if let Err(e) = state
+                .repository
+                .enqueue_ingest_job(project_id, &filename)
+                .await
+            {
+                tracing::warn!(
+                    project = %project_id,
+                    path = %filename,
+                    "failed to enqueue ingest job: {e}"
+                );
+            }
+        }
+
         succeeded.push(Dirent {
             path: filename,
             kind: DirentKind::File,
@@ -433,6 +451,10 @@ pub async fn delete_path(
     }
 
     if meta.is_dir() {
+        // Directory deletion does not currently walk the tree to purge per-file
+        // project_documents entries. Files under a removed dir become orphan
+        // rows; a future migration / reaper sweeps them. Single-file delete
+        // does clean up below.
         tokio::fs::remove_dir_all(&host_path)
             .await
             .map_err(|e| AppError::internal(format!("failed to remove directory: {e}")))?;
@@ -440,6 +462,46 @@ pub async fn delete_path(
         tokio::fs::remove_file(&host_path)
             .await
             .map_err(|e| AppError::internal(format!("failed to remove file: {e}")))?;
+
+        // Auto-ingest cleanup: drop the project_documents row + ingest_job, and
+        // remove the document from the agent-k Store if one was indexed. Best
+        // effort — log and continue on individual failures.
+        match state
+            .repository
+            .delete_project_document(project_id, &path_str)
+            .await
+        {
+            Ok(Some(document_id)) => match Uuid::parse_str(&document_id) {
+                Ok(uuid) => {
+                    let store = state.get_store(project_id).await;
+                    let mut store = store.write().await;
+                    if let Err(e) = store.purge(uuid) {
+                        tracing::warn!(
+                            project = %project_id,
+                            path = %path_str,
+                            doc = %document_id,
+                            "failed to purge document from store: {e}"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        project = %project_id,
+                        path = %path_str,
+                        doc = %document_id,
+                        "invalid document_id (not a Uuid): {e}"
+                    );
+                }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    project = %project_id,
+                    path = %path_str,
+                    "failed to delete project_document row: {e}"
+                );
+            }
+        }
     }
 
     tracing::info!(project = %project_id, path = %path_str, "dirent deleted");

@@ -147,15 +147,19 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
 
     let document_routes = ApiRouter::new()
         .api_route(
-            "/documents",
+            "/projects/{project_id}/documents",
             get(handlers::list_documents)
                 .post(handlers::ingest_document)
                 .delete(handlers::purge_documents),
         )
         .api_route(
-            "/documents/{id}",
+            "/projects/{project_id}/documents/{id}",
             get(handlers::get_document).delete(handlers::purge_document),
-        );
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_required,
+        ));
 
     // Auth-exempt route: webhook firing is gated only on the bearer token.
     // The token IS the identifier — trigger is resolved by its stored hash,
