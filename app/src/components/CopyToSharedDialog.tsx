@@ -3,6 +3,7 @@
 // pick a destination folder before confirming the copy.
 
 import { useMemo, useRef, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { copyDirents, listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
 import { buildFolderTree, type FolderNode } from '@/domain/files';
@@ -155,7 +156,7 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div
       className="cw-dialog-backdrop"
       role="dialog"
@@ -218,6 +219,7 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
