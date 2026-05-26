@@ -255,6 +255,23 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-btn-primary:hover { background: var(--cw-primary-hover); }
 .cw-btn-secondary { background: var(--cw-bg); color: var(--cw-fg-1); border: 1px solid var(--cw-border); }
 .cw-btn-secondary:hover { border-color: var(--cw-border-hover); background: var(--cw-bg-muted); }
+
+/* Ghost icon-only button — base for IconButton primitive. Modifiers (e.g.
+   .cw-rail-action) layer on top to override size or add row-hover gating. */
+.cw-icon-button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--cw-ink-3); border-radius: 6px; padding: 0; cursor: pointer; transition: background 120ms, color 120ms; }
+.cw-icon-button:hover { background: var(--cw-paper-3); color: var(--cw-ink-1); }
+.cw-icon-button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Expandable variant: 30×30 square that grows on hover to reveal the label.
+   Label uses max-width transition so width animates smoothly with content. */
+.cw-icon-button.is-expandable { width: auto; min-width: 30px; justify-content: flex-start; }
+.cw-icon-button.is-expandable .cw-icon-button-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex: 0 0 30px; }
+.cw-icon-button.is-expandable .cw-icon-button-label { max-width: 0; overflow: hidden; white-space: nowrap; font-size: 12px; font-weight: 500; padding: 0; transition: max-width 180ms ease, padding 180ms ease; }
+.cw-icon-button.is-expandable:hover .cw-icon-button-label,
+.cw-icon-button.is-expandable.is-armed .cw-icon-button-label { max-width: 200px; padding-right: 10px; }
+/* Armed (two-click confirm) state. Primary-tone bg to read as a CTA: "this
+   click executes". Disarms on mouse-leave (handled in JS). */
+.cw-icon-button.is-armed,
+.cw-icon-button.is-armed:hover { background: var(--cw-primary); color: var(--cw-fg-on-primary); }
 .wide { width: 100%; }
 
 .cw-project-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -1468,24 +1485,24 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .cw-rail-trigger-meta { color: var(--cw-ink-3); white-space: pre-line; line-height: 1.4; }
 .cw-rail-trigger-none { font-style: italic; color: var(--cw-ink-4); }
+/* Rail-action layers over .cw-icon-button: smaller (24×24), uses radius-sm,
+   hidden by default and revealed only when the parent row is hovered/active
+   (the visibility selectors below). The opacity transition is added on top
+   of the base button transition so reveal animates. */
 .cw-rail-action {
-  border: 0;
-  background: transparent;
-  color: var(--cw-ink-3);
   width: 24px;
   height: 24px;
   flex: 0 0 24px;
   border-radius: var(--cw-radius-sm);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   opacity: 0;
   transition: opacity 120ms, background 120ms, color 120ms;
 }
-.cw-rail-row-automation:hover .cw-rail-action { opacity: 1; transition-delay: 300ms; }
-.cw-rail-row-automation:focus-within .cw-rail-action { opacity: 1; transition-delay: 0s; }
-.cw-rail-row-automation.is-active .cw-rail-action { opacity: 1; transition-delay: 0s; }
+/* 300ms delay applies ONLY to opacity so the action's own hover bg/color
+   respond immediately once it's visible. (Single transition-delay value
+   would cascade across all transitioned properties.) */
+.cw-rail-row-automation:hover .cw-rail-action { opacity: 1; transition-delay: 300ms, 0s, 0s; }
+.cw-rail-row-automation:focus-within .cw-rail-action { opacity: 1; transition-delay: 0s, 0s, 0s; }
+.cw-rail-row-automation.is-active .cw-rail-action { opacity: 1; transition-delay: 0s, 0s, 0s; }
 .cw-rail-action:hover { background: var(--cw-paper-4); color: var(--cw-ink); }
 
 /* Rail header: large "Automations" title + icon create button */

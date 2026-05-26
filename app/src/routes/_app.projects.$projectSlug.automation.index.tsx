@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@/components/Icon';
+import { IconButton } from '@/components/uiPrimitives';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { summarizeCron } from '@/components/SchedulePicker';
@@ -794,22 +794,16 @@ function RailAction({
   onClick: () => void;
   disabled?: boolean;
 }) {
-  const handle = (e: MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    if (disabled) return;
-    onClick();
-  };
   return (
-    <button
-      type="button"
-      className="cw-rail-action"
-      title={label}
-      aria-label={label}
+    <IconButton
+      icon={icon}
+      label={label}
+      onClick={onClick}
       disabled={disabled}
-      onClick={handle}
-    >
-      <Icon name={icon} size={13} />
-    </button>
+      className="cw-rail-action"
+      iconSize={13}
+      stopPropagation
+    />
   );
 }
 

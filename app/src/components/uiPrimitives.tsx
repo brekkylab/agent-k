@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
 import { shareMeta } from '../domain/metadata';
 import type { ShareMode, User } from '../domain/types';
@@ -68,3 +68,75 @@ export function ActivityRow({ title, date, children }: { title: string; date: st
 export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?: boolean }) { return <span className={`cw-share-pill ${shareMeta[mode].className}`}><Icon name={shareMeta[mode].icon} size={compact ? 11 : 12} />{compact ? shareMeta[mode].shortLabel : shareMeta[mode].label}</span>; }
 
 export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mode: ShareMode) => void }) { return <label className={`cw-share-select ${shareMeta[mode].className}`}><Icon name={shareMeta[mode].icon} /><select value={mode} onChange={(event) => onChange(event.target.value as ShareMode)}>{(Object.keys(shareMeta) as ShareMode[]).map((key) => <option key={key} value={key}>{shareMeta[key].label}</option>)}</select></label>; }
+
+/// Ghost icon-only button. Base style ships in `.cw-icon-button` (globals.css);
+/// pass `className` to layer modifier classes (e.g. `cw-rail-action` adds
+/// row-hover gating and smaller sizing). `label` is the aria-label (required
+/// for accessibility); `title` overrides the hover tooltip when it should
+/// differ from the label.
+/// `stopPropagation` is for buttons sitting inside a clickable parent row.
+/// Pass `expandedText` to turn the button into a 30×30 square that grows on
+/// hover to reveal that text — opt-in is implicit (presence of the prop).
+/// `confirmText` makes the button two-click: first click arms (and shows
+/// this text), second click fires `onClick`. Mousing off the armed button
+/// disarms it.
+export function IconButton({
+  icon,
+  label,
+  title,
+  onClick,
+  disabled = false,
+  className,
+  iconSize = 15,
+  stopPropagation = false,
+  expandedText,
+  confirmText,
+}: {
+  icon: IconName;
+  label: string;
+  title?: string;
+  onClick: () => void;
+  disabled?: boolean;
+  className?: string;
+  iconSize?: number;
+  stopPropagation?: boolean;
+  expandedText?: string;
+  confirmText?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  const useConfirm = Boolean(confirmText) && !disabled;
+  // Expandable layout when either the consumer opted in (via expandedText) or
+  // the button is currently armed (so the confirmation text has room to show).
+  const expandable = Boolean(expandedText) || armed;
+  const visibleText = armed ? confirmText : (expandedText ?? label);
+  const cls = `cw-icon-button${expandable ? ' is-expandable' : ''}${armed ? ' is-armed' : ''}${className ? ` ${className}` : ''}`;
+  return (
+    <button
+      type="button"
+      aria-label={armed && confirmText ? confirmText : label}
+      title={armed && confirmText ? confirmText : (title ?? label)}
+      onClick={(e) => {
+        if (stopPropagation) e.stopPropagation();
+        if (disabled) return;
+        if (useConfirm && !armed) {
+          setArmed(true);
+          return;
+        }
+        setArmed(false);
+        onClick();
+      }}
+      onMouseLeave={armed ? () => setArmed(false) : undefined}
+      disabled={disabled}
+      className={cls}
+    >
+      {expandable ? (
+        <>
+          <span className="cw-icon-button-icon"><Icon name={icon} size={iconSize} /></span>
+          <span className="cw-icon-button-label">{visibleText}</span>
+        </>
+      ) : (
+        <Icon name={icon} size={iconSize} />
+      )}
+    </button>
+  );
+}
