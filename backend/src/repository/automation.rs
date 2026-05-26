@@ -62,6 +62,32 @@ pub struct DbAutomationRunEvent {
 
 // ── Row → Db helpers ────────────────────────────────────────────────────────
 
+/// Deterministic title for automation-created sessions. Avoids LLM-driven
+/// `generate_session_title` for automation runs — operators want to scan run
+/// history by automation/trigger/schedule, not by message content. Setting
+/// `title` at INSERT time also short-circuits the `need_title` gate in
+/// `send_message*` handlers (which only generate when `title.is_none()`).
+fn automation_session_title(
+    automation_name: &str,
+    trigger_kind: &str,
+    scheduled_for: DateTime<Utc>,
+) -> String {
+    // DB stores 'cron' for the trigger kind, but in user-visible labels we use
+    // 'recurring' — pairs cleanly against 'webhook' (event-driven) and
+    // 'manual' (user-driven) on the kind axis. Keep this in sync with the
+    // frontend label mapping.
+    let kind_label = match trigger_kind {
+        "cron" => "recurring",
+        other => other,
+    };
+    format!(
+        "{} · {} · {}",
+        automation_name,
+        kind_label,
+        scheduled_for.format("%Y-%m-%d %H:%M"),
+    )
+}
+
 impl SqliteRepository {
     fn row_to_db_automation(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<DbAutomation> {
         let prompts_json: String = row.get("prompts_json");
@@ -674,14 +700,33 @@ impl SqliteRepository {
         let now = Self::now_string();
         let scheduled_s = Self::ts_string(scheduled_for);
 
+        let automation_name: String = sqlx::query_scalar(
+            "SELECT name FROM automations WHERE id = ?",
+        )
+        .bind(automation_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        let trigger_kind_label: String = match trigger_id {
+            Some(tid) => sqlx::query_scalar(
+                "SELECT kind FROM automation_triggers WHERE id = ?",
+            )
+            .bind(tid.to_string())
+            .fetch_one(&mut *tx)
+            .await?,
+            None => "manual".to_string(),
+        };
+        let session_title =
+            automation_session_title(&automation_name, &trigger_kind_label, scheduled_for);
+
         let session_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', 'automation', ?, ?)",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
+        .bind(&session_title)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
@@ -773,14 +818,24 @@ impl SqliteRepository {
         let scheduled_s = Self::ts_string(scheduled_for);
         let next_s = Self::ts_string(next_fire_at);
 
+        let automation_name: String = sqlx::query_scalar(
+            "SELECT name FROM automations WHERE id = ?",
+        )
+        .bind(automation_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        let session_title =
+            automation_session_title(&automation_name, "cron", scheduled_for);
+
         let session_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', 'automation', ?, ?)",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
+        .bind(&session_title)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
@@ -1066,7 +1121,7 @@ impl SqliteRepository {
         let scheduled_s = Self::ts_string(scheduled_for);
 
         let row = sqlx::query(
-            "SELECT project_id, created_by, enabled FROM automations WHERE id = ?",
+            "SELECT project_id, created_by, enabled, name FROM automations WHERE id = ?",
         )
         .bind(previous_run.automation_id.to_string())
         .fetch_one(&mut *tx)
@@ -1095,15 +1150,28 @@ impl SqliteRepository {
         }
         let project_id = Self::parse_uuid(row.get::<String, _>("project_id"), "automations.project_id")?;
         let creator_id = Self::parse_uuid(row.get::<String, _>("created_by"), "automations.created_by")?;
+        let automation_name: String = row.get("name");
+        let trigger_kind_label: String = match previous_run.trigger_id {
+            Some(tid) => sqlx::query_scalar(
+                "SELECT kind FROM automation_triggers WHERE id = ?",
+            )
+            .bind(tid.to_string())
+            .fetch_one(&mut *tx)
+            .await?,
+            None => "manual".to_string(),
+        };
+        let session_title =
+            automation_session_title(&automation_name, &trigger_kind_label, scheduled_for);
 
         let session_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', 'automation', ?, ?)",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
+        .bind(&session_title)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
