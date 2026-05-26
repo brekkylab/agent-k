@@ -84,6 +84,38 @@ async fn ensure_slug_not_retired_by_other(
     }
 }
 
+/// Validate a user-provided slug against the same shape `slug::slugify` produces.
+///
+/// The server-generated path is always safe by construction; this guard mirrors
+/// the same rule for explicit slugs that arrive via the API contract, so seed
+/// scripts and any future rename UI cannot quietly stash a malformed slug in
+/// the database (`my/project`, `한글`, leading/trailing hyphens, etc.).
+fn validate_explicit_slug(s: &str) -> ApiResult<()> {
+    if s.is_empty() || s.len() > 64 {
+        return Err(AppError::bad_request("slug must be 1-64 characters"));
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
+        return Err(AppError::bad_request(
+            "slug must start and end with an alphanumeric character",
+        ));
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(AppError::bad_request(
+            "slug must contain only lowercase letters, digits, and hyphens",
+        ));
+    }
+    if s.contains("--") {
+        return Err(AppError::bad_request(
+            "slug cannot contain consecutive hyphens",
+        ));
+    }
+    Ok(())
+}
+
 /// Generate a slug that is unique among active and retired project slugs.
 ///
 /// Starts from `slug::slugify(name)`; if that is empty, falls back to
@@ -112,6 +144,7 @@ pub async fn create_project(
 ) -> ApiResult<(StatusCode, Json<ProjectResponse>)> {
     let slug = match payload.slug {
         Some(s) => {
+            validate_explicit_slug(&s)?;
             ensure_slug_not_retired_by_other(&state.repository, &s, None).await?;
             s
         }
@@ -187,6 +220,7 @@ pub async fn update_project(
     require_owner(&state, auth_user.id, project_id).await?;
 
     if let Some(ref new_slug) = payload.slug {
+        validate_explicit_slug(new_slug)?;
         ensure_slug_not_retired_by_other(&state.repository, new_slug, Some(project_id)).await?;
     }
 
@@ -412,5 +446,57 @@ async fn require_owner(state: &Arc<AppState>, user_id: Uuid, project_id: Uuid) -
         Err(AppError::forbidden("owner access required"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod slug_validation_tests {
+    use super::validate_explicit_slug;
+
+    #[test]
+    fn accepts_well_formed_slugs() {
+        for ok in [
+            "a",
+            "p1",
+            "my-project",
+            "klient-co-q2",
+            "project-1234",
+            "abc123-xyz",
+        ] {
+            assert!(
+                validate_explicit_slug(ok).is_ok(),
+                "expected {ok:?} to be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_empty_and_oversized() {
+        assert!(validate_explicit_slug("").is_err());
+        let too_long = "a".repeat(65);
+        assert!(validate_explicit_slug(&too_long).is_err());
+    }
+
+    #[test]
+    fn rejects_uppercase_and_non_ascii() {
+        assert!(validate_explicit_slug("MyProject").is_err());
+        assert!(validate_explicit_slug("한글-슬러그").is_err());
+        assert!(validate_explicit_slug("project-🚀").is_err());
+    }
+
+    #[test]
+    fn rejects_path_breaking_characters() {
+        assert!(validate_explicit_slug("my project").is_err()); // space
+        assert!(validate_explicit_slug("my/project").is_err()); // slash
+        assert!(validate_explicit_slug("my?project").is_err()); // query
+        assert!(validate_explicit_slug("my.project").is_err()); // dot
+    }
+
+    #[test]
+    fn rejects_edge_hyphens_and_doubles() {
+        assert!(validate_explicit_slug("-leading").is_err());
+        assert!(validate_explicit_slug("trailing-").is_err());
+        assert!(validate_explicit_slug("my--project").is_err());
+        assert!(validate_explicit_slug("-").is_err());
     }
 }
