@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
-import { intentMeta, shareMeta } from '../domain/metadata';
-import type { SessionIntent, ShareMode, User } from '../domain/types';
+import { shareMeta } from '../domain/metadata';
+import type { ShareMode, User } from '../domain/types';
 
 export function EmptyState({
   title,
@@ -35,11 +35,6 @@ export function SectionLabel({ children }: { children: ReactNode }) {
   return <div className="cw-section-label-app">{children}</div>;
 }
 
-export function IntentIcon({ intent, force = false }: { intent: SessionIntent; force?: boolean }) {
-  if (intent === 'general' && !force) return <span className="cw-intent-dot" />;
-  return <span className={`cw-pocket cw-intent-${intent}`}><Icon name={intentMeta[intent].icon} size={14} /></span>;
-}
-
 export function Avatar({ user, small = false }: { user: User; small?: boolean }) {
   return <span className={`cw-avatar-app ${small ? 'small' : ''}`} style={{ background: user.color }}>{user.avatar}</span>;
 }
@@ -69,8 +64,6 @@ export function byId<T extends { id: string }>(items: T[], id: string): T {
 export function InfoRow({ icon, title, meta, children }: { icon: IconName; title: string; meta: string; children: ReactNode }) { return <article className="cw-info-row"><IconPocket tone="neutral" icon={icon} /><div><b>{title}</b><p>{children}</p></div><span>{meta}</span></article>; }
 
 export function ActivityRow({ title, date, children }: { title: string; date: string; children: ReactNode }) { return <article className="cw-activity-row"><span><Icon name="recap" /></span><div><b>{title}</b><p>{children}</p></div><time>{date}</time></article>; }
-
-export function IntentBadge({ intent }: { intent: SessionIntent }) { return <span className="cw-intent-badge"><IntentIcon intent={intent} force />{intentMeta[intent].label}</span>; }
 
 export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?: boolean }) { return <span className={`cw-share-pill ${shareMeta[mode].className}`}><Icon name={shareMeta[mode].icon} size={compact ? 11 : 12} />{compact ? shareMeta[mode].shortLabel : shareMeta[mode].label}</span>; }
 

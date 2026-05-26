@@ -9,7 +9,7 @@ import { listMessages, streamMessage } from '@/api/messages';
 import { getProject, listMembers } from '@/api/projects';
 import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
-import { Avatar, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
+import { Avatar, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { shareMeta } from '@/domain/metadata';
@@ -251,7 +251,6 @@ function SessionPage() {
             </p>
           </div>
           <div className="cw-session-head-actions">
-            {sess && <IntentBadge intent={sess.intent} />}
             {sess && (
               <ShareSelect mode={sess.shareMode} onChange={(mode) => shareMutation.mutate(mode)} />
             )}

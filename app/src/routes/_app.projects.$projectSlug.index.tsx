@@ -7,7 +7,7 @@ import { getProject, listMembers } from '@/api/projects';
 import { createSession, deleteSession, listSessions } from '@/api/sessions';
 import { listDirents } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
-import { ActivityRow, AvatarStack, EmptyState, InfoRow, IntentIcon, SectionLabel, SharePill } from '@/components/uiPrimitives';
+import { ActivityRow, AvatarStack, EmptyState, InfoRow, SectionLabel, SharePill } from '@/components/uiPrimitives';
 import { timeAgo } from '@/lib/timeAgo';
 import { useToastStore } from '@/components/Toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -178,7 +178,6 @@ function SessionCard({
     >
       <div className="cw-session-card-head">
         <span className="cw-session-card-title">
-          <IntentIcon intent={session.intent} force />
           <SessionTitleText title={session.title} />
         </span>
         <span className="cw-session-right">
