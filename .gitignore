@@ -41,7 +41,11 @@ CLAUDE.md
 **/.omc/
 .superpowers/
 .playwright-mcp/
-docs/superpowers/
+# docs/ is local-only by default; new files added under docs/ are not tracked.
+# Files that were already tracked (conventions.md, api-design-issues.md, etc.)
+# remain tracked unaffected; force-add (`git add -f`) anything genuinely new.
+docs/
+docs/agents/
 
 # Others
 test
