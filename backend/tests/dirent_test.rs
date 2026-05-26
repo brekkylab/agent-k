@@ -744,3 +744,114 @@ async fn cross_scope_move_rejected() {
         "cross-scope move must be rejected with 400: {resp}"
     );
 }
+
+// ── Access-control tests ──────────────────────────────────────────────────────
+
+/// A project member with ChatMember access to a shared session must NOT be able
+/// to upload files to that session's inputs scope (only Admins/creators may).
+#[tokio::test]
+async fn chat_member_cannot_upload_to_session_inputs() {
+    let (app, repo, state) = common::make_app_repo_state().await;
+    let data_root = state.data_root.clone();
+
+    // Alice: session creator
+    common::signup(&app, "cm_alice", "Password123!").await;
+    let alice_token = common::login(&app, "cm_alice", "Password123!").await;
+    let project = common::get_personal_project(&app, &alice_token).await;
+    let pid = project["id"].as_str().unwrap();
+    let pid_uuid = uuid::Uuid::parse_str(pid).unwrap();
+    let (_, me) = common::authed(&app, "GET", "/me", &alice_token, None).await;
+    let alice_uid = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
+
+    let sid = create_session_direct(&repo, pid_uuid, alice_uid).await;
+
+    // Share the session so Bob can join as ChatMember.
+    common::update_share_mode(&app, &alice_token, sid, "shared_chat").await;
+
+    // Bob: a project member who joins as ChatMember.
+    common::signup(&app, "cm_bob", "Password123!").await;
+    let bob_token = common::login(&app, "cm_bob", "Password123!").await;
+    common::add_member(&app, &alice_token, pid, "cm_bob").await;
+
+    // Ensure the session inputs directory exists.
+    let inputs_dir = data_root
+        .join("projects")
+        .join(pid_uuid.to_string())
+        .join("sessions")
+        .join(sid.to_string())
+        .join("inputs");
+    std::fs::create_dir_all(&inputs_dir).unwrap();
+
+    // Bob tries to upload to Alice's session inputs — must be 403.
+    let (boundary, body) = common::build_multipart_body(&[("inject.txt", b"evil content")]);
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/dirents?path=projects/{pid}/sessions/{sid}/inputs"
+        ))
+        .header("authorization", format!("Bearer {bob_token}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::FORBIDDEN,
+        "ChatMember must not be allowed to upload to session inputs"
+    );
+
+    // Alice (Admin) can still upload to her own inputs.
+    let (boundary, body) = common::build_multipart_body(&[("file.txt", b"legit")]);
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/dirents?path=projects/{pid}/sessions/{sid}/inputs"
+        ))
+        .header("authorization", format!("Bearer {alice_token}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::OK,
+        "Admin (session creator) must be able to upload to inputs"
+    );
+}
+
+/// A non-member must receive 403 on the PATCH /dirents (batch copy/move) endpoint.
+#[tokio::test]
+async fn non_member_gets_403_on_patch_endpoint() {
+    let (state, _tmp) = make_state_with_dir().await;
+    let app = common::make_app_with_state(state);
+
+    common::signup(&app, "nm_patch_owner", "Password123!").await;
+    let owner_token = common::login(&app, "nm_patch_owner", "Password123!").await;
+    let project = common::get_personal_project(&app, &owner_token).await;
+    let pid = project["id"].as_str().unwrap();
+
+    // Seed a file to use as a copy source.
+    upload_files(&app, &owner_token, pid, &[("seed.txt", b"data")]).await;
+
+    common::signup(&app, "nm_patch_stranger", "Password123!").await;
+    let stranger_token = common::login(&app, "nm_patch_stranger", "Password123!").await;
+
+    let body = serde_json::json!({
+        "op": "copy",
+        "sources": [format!("projects/{pid}/shared/seed.txt")],
+        "destination": format!("projects/{pid}/shared/copy"),
+    });
+    let (status, resp) =
+        common::authed(&app, "PATCH", "/dirents", &stranger_token, Some(body)).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::FORBIDDEN,
+        "PATCH /dirents must return 403 for non-members: {resp}"
+    );
+}

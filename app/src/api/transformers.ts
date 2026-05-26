@@ -134,10 +134,7 @@ export function toMessageItem(
         }))
       : undefined;
 
-  const rawBody = extractText(a.contents);
-  const body = sender.kind === 'user'
-    ? rawBody.replace(/\n\n\[Attached files[^\]]*\]$/, '')
-    : rawBody;
+  const body = extractText(a.contents);
 
   return {
     id: a.id || `${sessionId}-h-${idx}`,

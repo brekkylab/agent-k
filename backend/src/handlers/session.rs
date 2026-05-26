@@ -89,6 +89,62 @@ pub(crate) async fn build_session_agent(
     .map_err(|e| e.to_string())
 }
 
+/// Builds the LLM hint note for attached files, using the correct sandbox path per scope.
+///
+/// - `inputs/` is bind-mounted flat at `GUEST_ATTACHED_DIR`, so only the basename is needed.
+/// - `shared/` is bind-mounted at `GUEST_SHARED_DIR` preserving directory structure, so the
+///   full tail path (relative to the shared root) is needed.
+pub fn build_attachment_note(attachments: &[String]) -> String {
+    let hints = attachments
+        .iter()
+        .filter_map(|path| {
+            parse_dirent_path(path).ok().map(|parsed| {
+                let tail = parsed.tail.to_string_lossy();
+                match &parsed.scope {
+                    DirentScope::Inputs { .. } => {
+                        let name = parsed
+                            .tail
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| tail.into_owned());
+                        format!("{GUEST_ATTACHED_DIR}/{name}")
+                    }
+                    DirentScope::Shared { .. } | DirentScope::Artifacts { .. } => {
+                        format!("{GUEST_SHARED_DIR}/{tail}")
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[Attached files: {hints}]")
+}
+
+/// Re-injects the attachment note into a stored user message when reconstructing LLM history.
+///
+/// Messages are persisted without the note so the frontend can display clean content.
+/// This restores the note for the agent's context on the next run.
+pub fn inject_attachment_note(mut msg: Message, attachments: &[String]) -> Message {
+    if attachments.is_empty() {
+        return msg;
+    }
+    let current_text = msg
+        .contents
+        .iter()
+        .filter_map(|p| {
+            if let Part::Text { text } = p {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let note = build_attachment_note(attachments);
+    msg.contents = vec![Part::text(format!("{current_text}\n\n{note}"))];
+    msg
+}
+
 /// Attribute each persisted message to a sender using `MessageOutput` metadata.
 ///
 /// `agent.get_history()[prev_len..]` always starts with the user query (pushed
@@ -167,7 +223,12 @@ async fn resolve_agent_for(
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
-    let history: Vec<Message> = rows.into_iter().map(|r| r.message).collect();
+    // Messages are stored without the attachment note; re-inject it so the agent sees
+    // the correct file hints when replaying history.
+    let history: Vec<Message> = rows
+        .into_iter()
+        .map(|r| inject_attachment_note(r.message, &r.attachments))
+        .collect();
 
     let mut agent = build_session_agent(state, project_id, session_id)
         .await
@@ -206,9 +267,14 @@ async fn validate_attachments(
         }
         enforce_scope_access(state, auth_user, &parsed.scope, false).await?;
         let host_path = scope_root(state, &parsed.scope).join(&parsed.tail);
-        let meta = tokio::fs::metadata(&host_path)
+        let meta = tokio::fs::symlink_metadata(&host_path)
             .await
             .map_err(|_| AppError::not_found(format!("attachment not found: {path}")))?;
+        if meta.is_symlink() {
+            return Err(AppError::bad_request(format!(
+                "attachment path must not be a symlink: {path}"
+            )));
+        }
         if !meta.is_file() {
             return Err(AppError::bad_request(format!(
                 "attachment must be a file: {path}"
@@ -243,20 +309,7 @@ pub async fn create_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let sandbox_name = sandbox_name_for(&session.id);
-    let agent = match build_session_agent(&state, project_id, session.id).await {
-        Ok(a) => a,
-        Err(e) => {
-            let _ = Sandbox::remove_persisted(&sandbox_name).await;
-            let session_rt = session_root(&state, project_id, session.id);
-            let _ = tokio::fs::remove_dir_all(&session_rt).await;
-            let _ = state.repository.delete_session(session.id).await;
-            return Err(AppError::internal(e));
-        }
-    };
-    state.insert_agent(session.id, agent);
-
-    tracing::info!(id = %session.id, sandbox = %sandbox_name, "session created");
+    tracing::info!(id = %session.id, "session created");
     Ok((
         StatusCode::CREATED,
         Json(SessionResponse::from_db(session, 0)),
@@ -635,18 +688,12 @@ pub async fn send_message(
     )
     .await?;
 
+    let raw_content = payload.content.clone();
     let content_with_note = if attachments.is_empty() {
-        payload.content.clone()
+        raw_content.clone()
     } else {
-        let names = attachments
-            .iter()
-            .map(|p| p.split('/').next_back().unwrap_or(p))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(
-            "{}\n\n[Attached files (available in sandbox at {GUEST_ATTACHED_DIR}/<name> or {GUEST_SHARED_DIR}/<name>): {names}]",
-            payload.content
-        )
+        let note = build_attachment_note(&attachments);
+        format!("{raw_content}\n\n{note}")
     };
 
     // Spawn title generation immediately — runs concurrently with the agent run
@@ -684,7 +731,15 @@ pub async fn send_message(
         outputs.push(item.map_err(|e| AppError::internal(e.to_string()))?);
     }
     drop(run);
-    let new_messages = agent.get_history()[prev_len..].to_vec();
+    // Strip the attachment note before persisting — it is stored clean and re-injected
+    // from the `attachments` column when history is replayed, so the note never appears
+    // in the raw message body returned to the frontend.
+    let mut new_messages = agent.get_history()[prev_len..].to_vec();
+    if !attachments.is_empty() {
+        if let Some(first) = new_messages.first_mut() {
+            first.contents = vec![Part::text(raw_content)];
+        }
+    }
     drop(agent);
 
     let to_persist = attribute_messages(new_messages, &outputs, auth_user.id, attachments);
@@ -734,18 +789,12 @@ pub async fn send_message_stream(
     )
     .await?;
 
+    let raw_content = payload.content.clone();
     let content_with_note = if attachments.is_empty() {
-        payload.content.clone()
+        raw_content.clone()
     } else {
-        let names = attachments
-            .iter()
-            .map(|p| p.split('/').next_back().unwrap_or(p))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(
-            "{}\n\n[Attached files (available in sandbox at {GUEST_ATTACHED_DIR}/<name> or {GUEST_SHARED_DIR}/<name>): {names}]",
-            payload.content
-        )
+        let note = build_attachment_note(&attachments);
+        format!("{raw_content}\n\n{note}")
     };
 
     let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
@@ -822,8 +871,16 @@ pub async fn send_message_stream(
             return;
         }
 
-        let new_msgs = agent.get_history()[prev_len..].to_vec();
+        let mut new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);  // Release OwnedMutexGuard
+
+        // Strip the attachment note before persisting — clean content is stored in DB and the
+        // note is reconstructed from the `attachments` column when history is replayed.
+        if !attachments.is_empty() {
+            if let Some(first) = new_msgs.first_mut() {
+                first.contents = vec![Part::text(raw_content.clone())];
+            }
+        }
 
         let to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id, attachments.clone());
 

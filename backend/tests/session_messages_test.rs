@@ -5,7 +5,12 @@ mod common;
 
 use std::sync::Arc;
 
-use agent_k_backend::{repository, state::AppState};
+use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
+use agent_k_backend::{
+    handlers::{build_attachment_note, inject_attachment_note},
+    repository,
+    state::AppState,
+};
 use ailoy::message::{Message, Part, Role};
 use common::{
     SessionGuard, authed, clear_message_history, clear_message_history_status, get_message_history,
@@ -504,4 +509,301 @@ async fn clear_messages_also_clears_in_memory_agent_history() {
 
     let db_count = repo.get_messages(id).await.unwrap().len();
     assert_eq!(db_count, 0, "DB messages must be empty after clear");
+}
+
+// ── Security / validation tests ───────────────────────────────────────────────
+
+/// Sending an unknown field in the message payload must be rejected with 422
+/// (deny_unknown_fields). This prevents silent data loss where e.g. a typo
+/// like "attachment" instead of "attachments" would be silently ignored.
+#[tokio::test]
+async fn send_message_rejects_unknown_fields() {
+    dotenvy::dotenv().ok();
+    setup_provider().await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
+    let repo = repository::create_repository(&db_url).await.unwrap();
+    let app = make_app_with_repo(repo);
+
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap().to_string();
+    let session_id = post_session_authed(&app, &token, &project_id).await;
+
+    // "attachment" (singular) is a typo for "attachments" — should be rejected.
+    let (status, _) = authed(
+        &app,
+        "POST",
+        &format!("/sessions/{session_id}/messages"),
+        &token,
+        Some(serde_json::json!({
+            "content": "hello",
+            "attachment": "projects/some-path/file.txt"
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown field 'attachment' must be rejected with 422"
+    );
+}
+
+/// A symlink placed in a session's inputs directory must be rejected by
+/// validate_attachments, preventing sandbox escape via symlink traversal.
+#[tokio::test]
+async fn symlink_as_attachment_is_rejected() {
+    dotenvy::dotenv().ok();
+    setup_provider().await;
+
+    let data_root = tempfile::tempdir().unwrap();
+    let repo = repository::create_repository("sqlite::memory:")
+        .await
+        .unwrap();
+    let store = common::make_test_store();
+    let state = Arc::new(AppState::new(
+        repo.clone(),
+        store,
+        common::test_jwt_config(),
+        data_root.path().to_path_buf(),
+    ));
+    let app = make_app_with_state(state);
+
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let pid = project["id"].as_str().unwrap();
+    let pid_uuid = uuid::Uuid::parse_str(pid).unwrap();
+    let (_, me) = authed(&app, "GET", "/me", &token, None).await;
+    let uid = uuid::Uuid::parse_str(me["id"].as_str().unwrap()).unwrap();
+
+    let session_id = repo
+        .create_session(pid_uuid, uid)
+        .await
+        .expect("create session")
+        .id;
+
+    // Create inputs directory and place a symlink inside it.
+    let inputs_dir = data_root
+        .path()
+        .join("projects")
+        .join(pid_uuid.to_string())
+        .join("sessions")
+        .join(session_id.to_string())
+        .join("inputs");
+    std::fs::create_dir_all(&inputs_dir).unwrap();
+    let target = data_root.path().join("outside_sandbox.txt");
+    std::fs::write(&target, b"secret").unwrap();
+    std::os::unix::fs::symlink(&target, inputs_dir.join("evil")).unwrap();
+
+    let attachment_path = format!("projects/{pid}/sessions/{session_id}/inputs/evil");
+    let (status, body) = authed(
+        &app,
+        "POST",
+        &format!("/sessions/{session_id}/messages"),
+        &token,
+        Some(serde_json::json!({
+            "content": "read the file",
+            "attachments": [attachment_path]
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "symlink attachment must be rejected with 400: {body}"
+    );
+    assert!(
+        body.to_string().contains("symlink"),
+        "error must mention symlink: {body}"
+    );
+}
+
+/// Messages stored in the DB must not contain the [Attached files ...] note in
+/// their body — the note is reconstructed at LLM-context time from the separate
+/// `attachments` column and must never be exposed to the frontend.
+#[tokio::test]
+async fn attachment_note_not_present_in_stored_message_body() {
+    dotenvy::dotenv().ok();
+    setup_provider().await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_url = format!("sqlite://{}", dir.path().join("test.db").display());
+    let repo = repository::create_repository(&db_url).await.unwrap();
+    let app = make_app_with_repo(repo.clone());
+
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    let info = signup(&app, &username, "Password123!").await;
+    let user_id = uuid::Uuid::parse_str(info["id"].as_str().unwrap()).unwrap();
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap().to_string();
+    let session_id = post_session_authed(&app, &token, &project_id).await;
+
+    // Simulate what the handler now stores: clean content + attachments metadata,
+    // with NO [Attached files ...] text embedded in the message body.
+    let clean_content = "Can you summarise this document?";
+    repo.append_messages(
+        session_id,
+        &[repository::NewSessionMessage {
+            message: ailoy::message::Message::new(ailoy::message::Role::User)
+                .with_contents([ailoy::message::Part::text(clean_content)]),
+            sender_kind: repository::DbSenderKind::User,
+            sender_name: None,
+            sender_user_id: Some(user_id),
+            attachments: vec![format!(
+                "projects/{project_id}/sessions/{session_id}/inputs/report.pdf"
+            )],
+        }],
+    )
+    .await
+    .unwrap();
+
+    // The GET endpoint must return the clean body without any injected note.
+    let history = get_message_history(&app, session_id, &token).await;
+    let items = history["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+
+    let msg_body = items[0]["message"]["contents"][0]["text"]
+        .as_str()
+        .expect("text content");
+    assert_eq!(
+        msg_body, clean_content,
+        "stored message body must be clean user text, got: {msg_body}"
+    );
+    assert!(
+        !msg_body.contains("[Attached files"),
+        "attachment note must not appear in stored message body: {msg_body}"
+    );
+
+    // The attachments field must still be present alongside the clean content.
+    let attachments = items[0]["attachments"]
+        .as_array()
+        .expect("attachments array");
+    assert_eq!(attachments.len(), 1, "attachment path must be preserved");
+}
+
+// ── Attachment note (build_attachment_note / inject_attachment_note) ──────────
+
+fn pid() -> &'static str {
+    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+}
+fn sid() -> &'static str {
+    "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+}
+fn inputs_path(filename: &str) -> String {
+    format!("projects/{}/sessions/{}/inputs/{}", pid(), sid(), filename)
+}
+fn shared_path(rel: &str) -> String {
+    format!("projects/{}/shared/{}", pid(), rel)
+}
+fn message_text(msg: &Message) -> String {
+    msg.contents
+        .iter()
+        .filter_map(|p| {
+            if let Part::Text { text } = p {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+#[test]
+fn build_attachment_note_inputs_uses_basename_only() {
+    let note = build_attachment_note(&[inputs_path("report.pdf")]);
+    assert!(
+        note.contains(&format!("{GUEST_ATTACHED_DIR}/report.pdf")),
+        "expected GUEST_ATTACHED_DIR/basename, got: {note}"
+    );
+    assert!(
+        !note.contains("sessions"),
+        "full session path must not appear in inputs hint: {note}"
+    );
+}
+
+#[test]
+fn build_attachment_note_shared_preserves_full_tail() {
+    let note = build_attachment_note(&[shared_path("Market research/Q2 report.md")]);
+    assert!(
+        note.contains(&format!("{GUEST_SHARED_DIR}/Market research/Q2 report.md")),
+        "expected GUEST_SHARED_DIR/<full-tail>, got: {note}"
+    );
+    assert!(
+        !note.contains("projects/"),
+        "scope prefix must be stripped from shared hint: {note}"
+    );
+}
+
+#[test]
+fn build_attachment_note_mixed_scopes() {
+    let note = build_attachment_note(&[inputs_path("data.csv"), shared_path("ref/schema.json")]);
+    assert!(
+        note.contains(&format!("{GUEST_ATTACHED_DIR}/data.csv")),
+        "{note}"
+    );
+    assert!(
+        note.contains(&format!("{GUEST_SHARED_DIR}/ref/schema.json")),
+        "{note}"
+    );
+}
+
+#[test]
+fn build_attachment_note_empty_returns_empty_hint() {
+    let note = build_attachment_note(&[]);
+    assert!(note.contains("[Attached files:"), "{note}");
+    assert!(!note.contains(GUEST_ATTACHED_DIR), "{note}");
+}
+
+#[test]
+fn inject_attachment_note_appends_note_to_text() {
+    let msg = Message::new(Role::User).with_contents([Part::text("Hello")]);
+    let result = inject_attachment_note(msg, &[inputs_path("file.txt")]);
+    let text = message_text(&result);
+    assert!(
+        text.starts_with("Hello\n\n"),
+        "note must be appended after a blank line: {text}"
+    );
+    assert!(
+        text.contains("[Attached files:"),
+        "note must be present: {text}"
+    );
+    assert!(
+        text.contains(&format!("{GUEST_ATTACHED_DIR}/file.txt")),
+        "hint must use correct guest path: {text}"
+    );
+}
+
+#[test]
+fn inject_attachment_note_noop_for_empty_attachments() {
+    let msg = Message::new(Role::User).with_contents([Part::text("Hello")]);
+    let result = inject_attachment_note(msg, &[]);
+    assert_eq!(message_text(&result), "Hello");
+}
+
+#[test]
+fn inject_attachment_note_preserves_message_role_and_id() {
+    let mut msg = Message::new(Role::User).with_contents([Part::text("hi")]);
+    msg.id = Some("test-id".to_string());
+    let result = inject_attachment_note(msg, &[inputs_path("x.txt")]);
+    assert_eq!(result.role, Role::User);
+    assert_eq!(result.id.as_deref(), Some("test-id"));
+}
+
+#[test]
+fn inject_then_re_inject_is_idempotent_on_text_prefix() {
+    let original = "Summarise this document";
+    let msg = Message::new(Role::User).with_contents([Part::text(original)]);
+    let after_first = inject_attachment_note(msg, &[inputs_path("doc.pdf")]);
+    let text = message_text(&after_first);
+    assert!(
+        text.starts_with(original),
+        "original text must remain as prefix: {text}"
+    );
 }

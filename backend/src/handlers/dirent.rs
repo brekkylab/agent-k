@@ -232,8 +232,26 @@ pub(crate) async fn enforce_scope_access(
         DirentScope::Inputs {
             project_id,
             session_id,
+        } => {
+            let result = state
+                .repository
+                .get_session_with_authz(*session_id, auth_user.id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            let (session, access) =
+                result.ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+            if session.project_id != *project_id {
+                return Err(AppError::not_found("session not in project"));
+            }
+            // Inputs writes are restricted to session admins (creator or project owner).
+            // ChatMembers can read inputs but cannot inject files into the agent workspace.
+            if write && !matches!(access, SessionAccess::Admin) {
+                return Err(AppError::forbidden(
+                    "only session owners can upload to session inputs",
+                ));
+            }
         }
-        | DirentScope::Artifacts {
+        DirentScope::Artifacts {
             project_id,
             session_id,
         } => {

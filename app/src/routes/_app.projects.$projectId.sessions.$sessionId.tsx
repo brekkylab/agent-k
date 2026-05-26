@@ -119,7 +119,7 @@ function SessionPage() {
 
   const send = useCallback(async () => {
     const text = composerText.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || hasUploadingAttachments) return;
 
     const attachmentPaths = pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
