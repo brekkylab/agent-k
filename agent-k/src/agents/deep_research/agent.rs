@@ -44,8 +44,7 @@ Sequential is correct only when a later call genuinely depends on an earlier res
 - You are running in a container environment with internet access.
 
 ## Information
-- Current time: {{TIME}}
-- OS: {{OS}}"#;
+- Current time: {{TIME}}"#;
 
 fn ensure_api_search_registered() {
     let mut provider = default_provider_mut();
@@ -104,8 +103,7 @@ pub async fn get_deep_research_agent(
 
     let inst = DEEP_RESEARCH_INSTRUCTION
         .replace("{{NAME}}", name.as_ref())
-        .replace("{{TIME}}", &now_utc_iso8601())
-        .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
+        .replace("{{TIME}}", &now_utc_iso8601());
 
     ensure_api_search_registered();
 
