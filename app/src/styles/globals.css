@@ -1751,14 +1751,21 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   max-height: calc(100vh - 32px);
   overflow: auto;
 }
+/* Grid so title shares row 1 with actions while meta sits on its own row 2
+   spanning full width — the actions' hover-expand only competes with title
+   for row-1 space, never with meta. */
 .cw-run-drawer-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  row-gap: 6px;
+  align-items: center;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--cw-line-soft);
 }
+.cw-run-drawer-head > .cw-run-drawer-title { grid-column: 1; grid-row: 1; min-width: 0; }
+.cw-run-drawer-head > .cw-run-drawer-actions { grid-column: 2; grid-row: 1; }
+.cw-run-drawer-head > .cw-run-drawer-meta { grid-column: 1 / -1; grid-row: 2; }
 .cw-run-drawer-title { display: inline-flex; align-items: center; gap: 8px; }
 .cw-run-drawer-title strong { font-size: 14px; font-weight: 650; color: var(--cw-ink); }
 .cw-run-drawer-meta {
@@ -1766,7 +1773,6 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 6px;
   font-size: 12px;
   color: var(--cw-ink-3);
 }

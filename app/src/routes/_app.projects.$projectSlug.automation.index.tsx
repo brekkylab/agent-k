@@ -10,6 +10,7 @@ import { summarizeCron } from '@/components/SchedulePicker';
 import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, listRuns, listTriggers } from '@/api/automations';
 import { listMessages } from '@/api/messages';
 import { formatMessageTime } from '@/lib/formatMessageTime';
+import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import type { Automation, Message, Run, Trigger } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')({
@@ -321,6 +322,7 @@ function AutomationsPage() {
       void queryClient.invalidateQueries({ queryKey: ['runs', automationId] });
     },
   });
+  const duplicateMutation = useDuplicateSession({ navigateOnSuccess: true });
   const [pendingManualRun, setPendingManualRun] = useState<Automation | null>(null);
   const triggerManualRun = (automationId: string) => {
     if (manualRunMutation.isPending) return;
@@ -345,26 +347,20 @@ function AutomationsPage() {
     return (
     <>
       <header className="cw-run-drawer-head">
-        <div>
-          <div className="cw-run-drawer-title">
-            <StatusDot status={status} />
-            <strong>{automationById[run.automationId]?.name}</strong>
-            <span className="cw-run-attempt">#{shortRunId(run)}</span>
-          </div>
-          <div className="cw-run-drawer-meta">
-            <TriggerBadge trigger={trigger} placement="below-start" />
-            <span>{STATUS_LABEL[status]}</span>
-            <span>·</span>
-            <span>{formatRunWhen(run)}</span>
-            <span>·</span>
-            {status === 'queued' ? (
-              <span>scheduled {formatScheduledAt(run.scheduledFor)}</span>
-            ) : (
-              <span>duration {formatRunDuration(run)}</span>
-            )}
-          </div>
+        <div className="cw-run-drawer-title">
+          <StatusDot status={status} />
+          <strong>{automationById[run.automationId]?.name}</strong>
+          <span className="cw-run-attempt">#{shortRunId(run)}</span>
         </div>
         <div className="cw-run-drawer-actions">
+          <IconButton
+            icon="sticky-notes"
+            label="이 run의 세션 복제"
+            title="이 run의 세션을 복제"
+            expandedText="세션으로 복제"
+            confirmText="한 번 더 눌러 복제"
+            onClick={() => duplicateMutation.mutate(run.sessionId)}
+          />
           {cancellable && (
             <button
               type="button"
@@ -383,6 +379,18 @@ function AutomationsPage() {
           >
             <Icon name="x" size={16} />
           </button>
+        </div>
+        <div className="cw-run-drawer-meta">
+          <TriggerBadge trigger={trigger} placement="below-start" />
+          <span>{STATUS_LABEL[status]}</span>
+          <span>·</span>
+          <span>{formatRunWhen(run)}</span>
+          <span>·</span>
+          {status === 'queued' ? (
+            <span>scheduled {formatScheduledAt(run.scheduledFor)}</span>
+          ) : (
+            <span>duration {formatRunDuration(run)}</span>
+          )}
         </div>
       </header>
 

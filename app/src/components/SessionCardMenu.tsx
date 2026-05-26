@@ -8,12 +8,14 @@ import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
 
 interface SessionCardMenuProps {
-  onDelete: () => void;
+  onDuplicate?: () => void;
+  onDelete?: () => void;
 }
 
 interface MenuRect { top: number; left: number; }
 
-export function SessionCardMenu({ onDelete }: SessionCardMenuProps) {
+export function SessionCardMenu({ onDuplicate, onDelete }: SessionCardMenuProps) {
+  if (!onDuplicate && !onDelete) return null;
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<MenuRect | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -100,27 +102,58 @@ export function SessionCardMenu({ onDelete }: SessionCardMenuProps) {
             zIndex: 100,
           }}
         >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={(e) => { e.stopPropagation(); setOpen(false); onDelete(); }}
-            style={{
-              display: 'block',
-              width: '100%',
-              textAlign: 'left',
-              padding: '7px 10px',
-              border: 0,
-              background: 'transparent',
-              color: 'var(--cw-destructive)',
-              fontSize: 12.5,
-              borderRadius: 'var(--cw-radius-sm)',
-              cursor: 'pointer',
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--cw-paper-3)'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
-          >
-            세션 삭제
-          </button>
+          {onDuplicate && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(e) => { e.stopPropagation(); setOpen(false); onDuplicate(); }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                textAlign: 'left',
+                padding: '7px 10px',
+                border: 0,
+                background: 'transparent',
+                color: 'var(--cw-ink-1)',
+                fontSize: 12.5,
+                borderRadius: 'var(--cw-radius-sm)',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--cw-paper-3)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+            >
+              <Icon name="sticky-notes" size={13} />
+              세션 복제
+            </button>
+          )}
+          {onDelete && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(e) => { e.stopPropagation(); setOpen(false); onDelete(); }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                textAlign: 'left',
+                padding: '7px 10px',
+                border: 0,
+                background: 'transparent',
+                color: 'var(--cw-destructive)',
+                fontSize: 12.5,
+                borderRadius: 'var(--cw-radius-sm)',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--cw-paper-3)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+            >
+              <Icon name="trash" size={13} />
+              세션 삭제
+            </button>
+          )}
         </div>,
         document.body,
       )}

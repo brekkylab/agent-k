@@ -25,6 +25,7 @@ import { useNewProjectDialog } from '@/components/NewProjectDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { canAdministerSession } from '@/lib/permissions';
 import { shortSessionId } from '@/lib/sessionId';
+import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
@@ -254,6 +255,7 @@ export function Sidebar() {
   });
 
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
+  const [pendingDuplicate, setPendingDuplicate] = useState<Session | null>(null);
   const projectCreator = useNewProjectDialog();
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) => deleteSession(sessionId),
@@ -278,6 +280,8 @@ export function Sidebar() {
       showToast(`세션 삭제 실패: ${msg}`);
     },
   });
+
+  const duplicateMutation = useDuplicateSession();
 
   function openProject(slug: string) {
     navigate({ to: '/projects/$projectSlug', params: { projectSlug: slug } });
@@ -439,11 +443,12 @@ export function Sidebar() {
                     )}
                     <SessionTitleText title={session.title} />
                     {session.isAutoAppend && <span className="auto-dot">●</span>}
-                    {canDelete && (
-                      <span className="cw-session-menu-wrap">
-                        <SessionCardMenu onDelete={() => setPendingDelete(session)} />
-                      </span>
-                    )}
+                    <span className="cw-session-menu-wrap">
+                      <SessionCardMenu
+                        onDuplicate={() => setPendingDuplicate(session)}
+                        onDelete={canDelete ? () => setPendingDelete(session) : undefined}
+                      />
+                    </span>
                   </div>
                 );
               })}
@@ -481,6 +486,20 @@ export function Sidebar() {
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(pendingDelete.id)}
           onClose={() => setPendingDelete(null)}
+        />
+      )}
+
+      {pendingDuplicate && (
+        <ConfirmDialog
+          title="세션을 복제하시겠어요?"
+          body={`"${pendingDuplicate.title}"의 메시지와 sandbox 상태를 새 세션으로 복제합니다.`}
+          confirmLabel="복제"
+          pending={duplicateMutation.isPending}
+          onConfirm={() => {
+            duplicateMutation.mutate(pendingDuplicate.id);
+            setPendingDuplicate(null);
+          }}
+          onClose={() => setPendingDuplicate(null)}
         />
       )}
 

@@ -9,7 +9,7 @@ import { listMessages, streamMessage } from '@/api/messages';
 import { getProject, listMembers } from '@/api/projects';
 import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
-import { Avatar, SharePill, ShareSelect } from '@/components/uiPrimitives';
+import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { shareMeta } from '@/domain/metadata';
@@ -25,6 +25,7 @@ import { AttachmentChip } from '@/components/AttachmentChip';
 import { AttachmentPreview } from '@/components/AttachmentPreview';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useDuplicateSession } from '@/lib/useDuplicateSession';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   component: SessionPage,
@@ -219,6 +220,8 @@ function SessionPage() {
     }
   }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
 
+  const duplicateMutation = useDuplicateSession({ navigateOnSuccess: true });
+
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
     onSuccess: async () => {
@@ -251,6 +254,16 @@ function SessionPage() {
             </p>
           </div>
           <div className="cw-session-head-actions">
+            {sess && (
+              <IconButton
+                icon="sticky-notes"
+                label="세션 복제"
+                title="Duplicate session"
+                expandedText="세션 복제"
+                confirmText="한 번 더 눌러 복제"
+                onClick={() => duplicateMutation.mutate(sessionId)}
+              />
+            )}
             {sess && (
               <ShareSelect mode={sess.shareMode} onChange={(mode) => shareMutation.mutate(mode)} />
             )}
