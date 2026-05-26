@@ -341,7 +341,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cw-intent-grid button span:last-child { grid-column: 2; color: var(--cw-fg-3); font-size: 12px; }
 .cw-intent-grid button.is-active { border-color: var(--cw-accent-line); background: var(--cw-accent-soft); }
 
-@keyframes cw-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes cw-enter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cw-rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes cw-ping { 50% { opacity: .25; } }
 

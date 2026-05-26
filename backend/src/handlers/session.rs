@@ -35,7 +35,7 @@ const DEFAULT_MODEL: &str = "openai/gpt-5.4";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
 
-fn sandbox_name_for(id: &Uuid) -> String {
+pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
     format!("session-{}", &s[..12])
 }
@@ -63,7 +63,7 @@ fn session_dirs(
     (root.join("inputs"), shared, root.join("artifacts"))
 }
 
-async fn build_session_agent(
+pub(crate) async fn build_session_agent(
     state: &Arc<AppState>,
     project_id: Uuid,
     session_id: Uuid,
@@ -99,6 +99,32 @@ async fn build_session_agent(
 /// depth-0 outputs via `source_agent` (set by ailoy's `stamp_source_agent`).
 ///
 /// Depth ≥ 1 outputs are skipped because ailoy does not push them into history.
+/// Pair each message in `messages` with its sender attribution derived from
+/// the agent run's `outputs`. The first message is the user query;
+/// subsequent agent messages are tagged with `source_agent` when present.
+pub(crate) fn attribute_messages(
+    messages: Vec<Message>,
+    outputs: &[MessageOutput],
+    user_id: Uuid,
+    user_attachments: Vec<String>,
+) -> Vec<NewSessionMessage> {
+    let senders = classify_senders_from_outputs(outputs, user_id);
+    messages
+        .into_iter()
+        .zip(senders)
+        .enumerate()
+        .map(
+            |(i, (message, (sender_kind, sender_name, sender_user_id)))| NewSessionMessage {
+                message,
+                sender_kind,
+                sender_name,
+                sender_user_id,
+                attachments: if i == 0 { user_attachments.clone() } else { vec![] },
+            },
+        )
+        .collect()
+}
+
 fn classify_senders_from_outputs(
     outputs: &[MessageOutput],
     user_id: Uuid,
@@ -191,13 +217,14 @@ async fn validate_attachments(
 
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
-/// POST /projects/{project_id}/sessions
+/// POST /sessions
+/// body must include `project_id`; user must be a member of that project.
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
-    Json(_payload): Json<CreateSessionRequest>,
+    Json(payload): Json<CreateSessionRequest>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
+    let project_id = payload.project_id;
     let is_member = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -233,26 +260,41 @@ pub async fn create_session(
     ))
 }
 
-/// GET /projects/{project_id}/sessions
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct ListSessionsQuery {
+    pub project_id: Option<Uuid>,
+}
+
+/// GET /sessions?project_id=...
+/// `project_id` is optional — omit to list all sessions across projects the user can access.
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    axum::extract::Query(q): axum::extract::Query<ListSessionsQuery>,
 ) -> ApiResult<Json<SessionListResponse>> {
-    let is_member = state
-        .repository
-        .user_in_project(auth_user.id, project_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    if !is_member {
-        return Err(AppError::forbidden("not a member of this project"));
-    }
-
-    let sessions = state
-        .repository
-        .list_sessions_in_project(project_id, auth_user.id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let sessions = match q.project_id {
+        Some(project_id) => {
+            let is_member = state
+                .repository
+                .user_in_project(auth_user.id, project_id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            if !is_member {
+                return Err(AppError::forbidden("not a member of this project"));
+            }
+            state
+                .repository
+                .list_sessions_in_project(project_id, auth_user.id)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?
+        }
+        None => state
+            .repository
+            .list_sessions_for_user(auth_user.id)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    };
 
     let session_ids: Vec<Uuid> = sessions.iter().map(|s| s.id).collect();
     let unread_map = state
@@ -642,21 +684,7 @@ pub async fn send_message(
     let new_messages = agent.get_history()[prev_len..].to_vec();
     drop(agent);
 
-    let senders = classify_senders_from_outputs(&outputs, auth_user.id);
-    let to_persist: Vec<NewSessionMessage> = new_messages
-        .into_iter()
-        .zip(senders)
-        .enumerate()
-        .map(
-            |(i, (message, (sender_kind, sender_name, sender_user_id)))| NewSessionMessage {
-                message,
-                sender_kind,
-                sender_name,
-                sender_user_id,
-                attachments: if i == 0 { attachments.clone() } else { vec![] },
-            },
-        )
-        .collect();
+    let to_persist = attribute_messages(new_messages, &outputs, auth_user.id, attachments);
 
     state
         .repository
@@ -794,19 +822,7 @@ pub async fn send_message_stream(
         let new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);  // Release OwnedMutexGuard
 
-        let senders = classify_senders_from_outputs(&depth0_outputs, sender_id);
-        let to_persist: Vec<NewSessionMessage> = new_msgs
-            .into_iter()
-            .zip(senders)
-            .enumerate()
-            .map(|(i, (message, (sender_kind, sender_name, sender_user_id)))| NewSessionMessage {
-                message,
-                sender_kind,
-                sender_name,
-                sender_user_id,
-                attachments: if i == 0 { attachments.clone() } else { vec![] },
-            })
-            .collect();
+        let to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id, attachments.clone());
 
         if let Err(e) = repo.append_messages(session_id, &to_persist).await {
             tracing::error!(%session_id, "failed to persist messages: {e}");

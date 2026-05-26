@@ -1,5 +1,5 @@
 use agent_k_backend::{auth, repository};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 
 #[derive(Parser)]
@@ -11,8 +11,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Run the HTTP server (default when no subcommand is given)
-    Serve,
+    /// Run the HTTP server and/or worker loops (default when no subcommand is given)
+    Serve(ServeArgs),
     /// Create an admin user (idempotent: errors on duplicate username)
     CreateAdmin {
         #[arg(long)]
@@ -22,6 +22,33 @@ pub enum Command {
         #[arg(long)]
         display_name: Option<String>,
     },
+}
+
+#[derive(Args, Default, Clone)]
+pub struct ServeArgs {
+    /// Which components to run in this process.
+    #[arg(long, value_enum, default_value_t = ServeMode::All)]
+    pub mode: ServeMode,
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum ServeMode {
+    /// HTTP API only — no worker / housekeeper / cron ticker.
+    Api,
+    /// Worker + housekeeper + cron ticker only — no HTTP listener.
+    Worker,
+    /// Both API and worker loops in the same process (default).
+    #[default]
+    All,
+}
+
+impl ServeMode {
+    pub fn runs_api(self) -> bool {
+        matches!(self, ServeMode::Api | ServeMode::All)
+    }
+    pub fn runs_worker(self) -> bool {
+        matches!(self, ServeMode::Worker | ServeMode::All)
+    }
 }
 
 pub async fn run_create_admin(username: String, password: String, display_name: Option<String>) {
