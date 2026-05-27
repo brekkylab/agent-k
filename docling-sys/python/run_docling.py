@@ -26,13 +26,18 @@ DEFAULT_OPTIONS = {
 }
 
 
-def build_converter(opts: dict):
+def build_converter(filetype: str, opts: dict):
+    from docling.document_converter import DocumentConverter
+
+    if filetype != "pdf":
+        return DocumentConverter()
+
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import (
         PdfPipelineOptions,
         TableStructureOptions,
     )
-    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.document_converter import PdfFormatOption
 
     pipeline_options = PdfPipelineOptions(
         do_ocr=opts["do_ocr"],
@@ -60,23 +65,27 @@ def build_converter(opts: dict):
     )
 
 
-def run_docling(stream: BytesIO, opts: dict) -> str:
+def run_docling(stream: BytesIO, filetype: str, opts: dict) -> str:
     from docling.document_converter import DocumentStream
 
     stream = DocumentStream(
-        name="target.pdf",
+        name=f"target.{filetype}",
         stream=stream,
     )
-    return build_converter(opts).convert(stream).document.export_to_markdown()
+    return build_converter(filetype, opts).convert(stream).document.export_to_markdown()
 
 
-def validate_pdf(data: bytes) -> None:
+def validate_input(filetype: str, data: bytes) -> None:
     if not data:
         sys.exit("error: empty input on stdin")
-    if b"%PDF-" not in data[:1024]:
-        sys.exit(f"error: not a PDF (no %PDF- in first 1024 bytes; head={data[:16]!r})")
-    if b"%%EOF" not in data[-1024:]:
-        sys.exit("error: PDF EOF marker not found")
+    if filetype == "pdf":
+        if b"%PDF-" not in data[:1024]:
+            sys.exit(f"error: not a PDF (no %PDF- in first 1024 bytes; head={data[:16]!r})")
+        if b"%%EOF" not in data[-1024:]:
+            sys.exit("error: PDF EOF marker not found")
+    elif filetype in ("docx", "pptx"):
+        if not data.startswith(b"PK"):
+            sys.exit(f"error: not a {filetype} (missing zip magic; head={data[:4]!r})")
 
 
 def parse_options(raw: str | None) -> dict:
@@ -97,18 +106,24 @@ def parse_options(raw: str | None) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Convert a PDF on stdin to Markdown on stdout.")
+    parser = argparse.ArgumentParser(description="Convert a document on stdin to Markdown on stdout.")
     parser.add_argument(
         "--options",
-        help="JSON object with pipeline options. Missing keys fall back to defaults.",
+        help="JSON object with PDF pipeline options. Ignored for non-PDF filetypes.",
         default=None,
+    )
+    parser.add_argument(
+        "--filetype",
+        choices=["pdf", "docx", "pptx"],
+        default="pdf",
+        help="Input document filetype (default: pdf).",
     )
     args = parser.parse_args()
     opts = parse_options(args.options)
 
     data = sys.stdin.buffer.read()
-    validate_pdf(data)
-    markdown = run_docling(BytesIO(data), opts)
+    validate_input(args.filetype, data)
+    markdown = run_docling(BytesIO(data), args.filetype, opts)
     print(markdown)
 
 

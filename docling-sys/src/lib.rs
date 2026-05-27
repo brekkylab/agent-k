@@ -93,10 +93,10 @@ impl Default for PdfOptions {
     }
 }
 
-/// Convert PDF bytes to Markdown.
-pub async fn convert_pdf_to_md(
-    pdf_bytes: &[u8],
-    options: &PdfOptions,
+async fn run_bundle(
+    bytes: &[u8],
+    filetype: &str,
+    options: Option<&PdfOptions>,
 ) -> anyhow::Result<String> {
     let dir = bundle_dir().ok_or_else(|| {
         anyhow!(
@@ -106,12 +106,13 @@ pub async fn convert_pdf_to_md(
     })?;
     let exe = dir.join(BUNDLE_BINARY);
 
-    let options_json =
-        serde_json::to_string(options).context("serialize PdfOptions")?;
-
-    let mut child = Command::new(&exe)
-        .arg("--options")
-        .arg(&options_json)
+    let mut cmd = Command::new(&exe);
+    cmd.arg("--filetype").arg(filetype);
+    if let Some(opts) = options {
+        let options_json = serde_json::to_string(opts).context("serialize PdfOptions")?;
+        cmd.arg("--options").arg(options_json);
+    }
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -123,7 +124,7 @@ pub async fn convert_pdf_to_md(
             .stdin
             .take()
             .ok_or_else(|| anyhow!("child stdin unavailable"))?;
-        stdin.write_all(pdf_bytes).await?;
+        stdin.write_all(bytes).await?;
         stdin.shutdown().await?;
     }
 
@@ -133,6 +134,24 @@ pub async fn convert_pdf_to_md(
         anyhow::bail!("run_docling exited with {}: {}", output.status, stderr);
     }
     String::from_utf8(output.stdout).context("run_docling stdout was not valid UTF-8")
+}
+
+/// Convert PDF bytes to Markdown.
+pub async fn convert_pdf_to_md(
+    pdf_bytes: &[u8],
+    options: &PdfOptions,
+) -> anyhow::Result<String> {
+    run_bundle(pdf_bytes, "pdf", Some(options)).await
+}
+
+/// Convert DOCX bytes to Markdown.
+pub async fn convert_docx_to_md(docx_bytes: &[u8]) -> anyhow::Result<String> {
+    run_bundle(docx_bytes, "docx", None).await
+}
+
+/// Convert PPTX bytes to Markdown.
+pub async fn convert_pptx_to_md(pptx_bytes: &[u8]) -> anyhow::Result<String> {
+    run_bundle(pptx_bytes, "pptx", None).await
 }
 
 /// Read a file from disk and convert it to Markdown.
