@@ -225,12 +225,11 @@ function AutomationsPage() {
     ? [...fanOutForSelected, ...(topUpQuery.data ?? [])]
     : allRuns;
   const visibleRuns = useMemo(() => displayRuns.filter((run) => {
-    if (!isSingleMode && selectedAutomationId && run.automationId !== selectedAutomationId) return false;
     if (statusFilter !== 'all' && effectiveStatus(run) !== statusFilter) return false;
     if (triggerFilter !== 'all' && runTriggerKind(run) !== triggerFilter) return false;
     return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [displayRuns, isSingleMode, selectedAutomationId, statusFilter, triggerFilter, cancelledIds, triggerById]);
+  }), [displayRuns, statusFilter, triggerFilter, cancelledIds, triggerById]);
 
   // Retry chains: the LATEST run in a chain (the head — nothing else points
   // to it via previousRunId) shows at depth 0; older attempts are listed
