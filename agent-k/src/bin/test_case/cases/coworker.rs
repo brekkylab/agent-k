@@ -416,5 +416,47 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )],
             shared_files: Vec::new(),
         },
+        // Case 19 — same as Case 15 (financial_report.xlsx) but the XLSX skill
+        //   is NOT passed as per-case input files. Instead it is attached to
+        //   the coworker agent itself (see `get_coworker_agent`), so this case
+        //   tests whether the agent discovers and uses the bundled skill on its
+        //   own. The "작업 전에 artifacts/SKILL.md 읽기" line is dropped because
+        //   the skill now lives at /workspace/skills/xlsx, surfaced via the
+        //   auto-rendered "Available Skills" table.
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "financial_report.xlsx 생성해줘.\n\n\
+                 주의:\n\
+                 이 파일은 임원 보고용이라 절대 깨지면 안 됨.\n\n\
+                 요구사항:\n\
+                 - 손익계산서\n\
+                 - 대차대조표\n\
+                 - 현금흐름표\n\
+                 - 요약대시보드\n\n\
+                 데이터:\n\
+                 - 최근 24개월 예시 데이터 자동 생성\n\n\
+                 필수 기능:\n\
+                 - 모든 합계는 수식 사용\n\
+                 - 전년동기대비 증감률 계산\n\
+                 - 적자 항목은 빨간색 괄호 표기\n\
+                 - 차트 포함\n\
+                 - 인쇄영역 설정\n\
+                 - 페이지 번호 포함\n\
+                 - 머리글/바닥글 설정\n\n\
+                 추가:\n\
+                 - 숨겨진 계산 시트 사용 가능\n\
+                 - Named Range 적극 활용\n\
+                 - 수식 consistency 유지\n\
+                 - circular reference 금지\n\
+                 - workbook corruption 절대 금지\n\n\
+                 특히 중요:\n\
+                 - 기존 financial_template.xlsx 스타일 유지\n\
+                 - merged cell 구조 유지\n\
+                 - 피벗 캐시 유지\n\
+                 - 매크로 손상 금지",
+            )]),
+            files: vec![],
+            shared_files: Vec::new(),
+        },
     ]
 }
