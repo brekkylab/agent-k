@@ -1,14 +1,15 @@
-//! Run a single test case against the coworker agent, then drop into
+//! Run a single test case against the chosen agent, then drop into
 //! interactive mode.
 //!
-//! cargo run -p agent-k --bin test_case -- 0
-//! cargo run -p agent-k --bin test_case -- 0 --model claude
-//! cargo run -p agent-k --bin test_case -- 0 --model gemini
-//! cargo run -p agent-k --bin test_case -- 0 --model kimi
+//! cargo run -p agent-k --bin test_case -- coworker 0
+//! cargo run -p agent-k --bin test_case -- coworker 0 --model claude
+//! cargo run -p agent-k --bin test_case -- coworker 0 --model gemini
+//! cargo run -p agent-k --bin test_case -- coworker 0 --model kimi
+//! cargo run -p agent-k --bin test_case -- deep-research 0 --model claude
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use agent_k::agents::get_coworker_agent;
+use agent_k::agents::{get_coworker_agent, get_deep_research_agent};
 use ailoy::{
     agent::Agent,
     lang_model::LangModelAPISchema,
@@ -17,18 +18,49 @@ use ailoy::{
 use futures::StreamExt;
 use url::Url;
 
-#[path = "test_case/cases.rs"]
+#[path = "test_case/cases/mod.rs"]
 mod cases;
-use cases::{Case, get_coworker_cases};
+use cases::{Case, get_coworker_cases, get_deep_research_cases};
 
 const COWORKER_AGENT_NAME: &str = "minerva";
-const COWORKER_AGENT_OPENAI_MODEL: &str = "openai/gpt-5.5";
-const COWORKER_AGENT_CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
-const COWORKER_AGENT_GEMINI_MODEL: &str = "gemini/gemini-3.5-flash";
-const COWORKER_AGENT_KIMI_MODEL: &str = "moonshot/kimi-k2.6";
+const DEEP_RESEARCH_AGENT_NAME: &str = "vegapunk";
+const OPENAI_MODEL: &str = "openai/gpt-5.5";
+const CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
+const GEMINI_MODEL: &str = "google/gemini-3.5-flash";
+const KIMI_MODEL: &str = "moonshot/kimi-k2.6";
 const ARTIFACT_DIR: &str = "./test/artifacts";
 const DATA_DIR: &str = "./test/data";
 const SHARED_DATA_DIR: &str = "./test/shared_data";
+
+enum AgentKind {
+    Coworker,
+    DeepResearch,
+}
+
+impl AgentKind {
+    fn parse(s: &str) -> anyhow::Result<Self> {
+        match s {
+            "coworker" => Ok(Self::Coworker),
+            "deep-research" | "deep_research" => Ok(Self::DeepResearch),
+            other => anyhow::bail!(
+                "invalid agent '{}', expected 'coworker' or 'deep-research'",
+                other
+            ),
+        }
+    }
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Coworker => COWORKER_AGENT_NAME,
+            Self::DeepResearch => DEEP_RESEARCH_AGENT_NAME,
+        }
+    }
+    fn log_prefix(&self) -> &'static str {
+        match self {
+            Self::Coworker => "coworker",
+            Self::DeepResearch => "deep-research",
+        }
+    }
+}
 
 enum InputSource {
     Stdin,
@@ -50,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let mut case_no_arg: Option<&str> = None;
+    let mut positional: Vec<&str> = Vec::new();
     let mut model_arg: Option<&str> = None;
     let mut i = 0;
     while i < argv.len() {
@@ -68,45 +100,48 @@ async fn main() -> anyhow::Result<()> {
                 i += 1;
             }
             s => {
-                if case_no_arg.is_some() {
-                    anyhow::bail!("unexpected argument '{}'", s);
-                }
-                case_no_arg = Some(s);
+                positional.push(s);
                 i += 1;
             }
         }
     }
 
-    let case_no: usize = match case_no_arg {
-        Some(s) => s.parse().map_err(|_| {
-            anyhow::anyhow!(
-                "invalid case number '{}', expected a non-negative integer",
-                s
-            )
-        })?,
-        None => {
-            eprintln!("usage: test_case <case_no> [--model openai|claude|gemini|kimi]");
-            std::process::exit(2);
-        }
-    };
+    if positional.len() != 2 {
+        eprintln!(
+            "usage: test_case <agent> <case_no> [--model openai|claude|gemini|kimi]\n\
+             agents: coworker, deep-research"
+        );
+        std::process::exit(2);
+    }
+    let agent_kind = AgentKind::parse(positional[0])?;
+    let case_no: usize = positional[1].parse().map_err(|_| {
+        anyhow::anyhow!(
+            "invalid case number '{}', expected a non-negative integer",
+            positional[1]
+        )
+    })?;
 
-    let coworker_agent_model = match model_arg {
-        None | Some("openai") => COWORKER_AGENT_OPENAI_MODEL,
-        Some("claude") => COWORKER_AGENT_CLAUDE_MODEL,
-        Some("gemini") => COWORKER_AGENT_GEMINI_MODEL,
-        Some("kimi") => COWORKER_AGENT_KIMI_MODEL,
+    let agent_model = match model_arg {
+        None | Some("openai") => OPENAI_MODEL,
+        Some("claude") => CLAUDE_MODEL,
+        Some("gemini") => GEMINI_MODEL,
+        Some("kimi") => KIMI_MODEL,
         Some(other) => anyhow::bail!(
             "invalid --model '{}', expected 'openai', 'claude', 'gemini', or 'kimi'",
             other
         ),
     };
 
-    let mut cases = get_coworker_cases();
+    let mut cases = match agent_kind {
+        AgentKind::Coworker => get_coworker_cases(),
+        AgentKind::DeepResearch => get_deep_research_cases(),
+    };
     if case_no >= cases.len() {
         anyhow::bail!(
-            "case {} out of range (have {} case(s))",
+            "case {} out of range (have {} {} case(s))",
             case_no,
-            cases.len()
+            cases.len(),
+            agent_kind.log_prefix()
         );
     }
     let case = cases.swap_remove(case_no);
@@ -116,20 +151,30 @@ async fn main() -> anyhow::Result<()> {
     prepare_dir(SHARED_DATA_DIR);
     write_case_files(&case)?;
 
-    let mut agent = get_coworker_agent(
-        COWORKER_AGENT_NAME,
-        coworker_agent_model,
-        DATA_DIR,
-        SHARED_DATA_DIR,
-        ARTIFACT_DIR,
-    )
-    .await?;
+    let mut agent = match agent_kind {
+        AgentKind::Coworker => {
+            get_coworker_agent(
+                agent_kind.name(),
+                agent_model,
+                DATA_DIR,
+                SHARED_DATA_DIR,
+                ARTIFACT_DIR,
+            )
+            .await?
+        }
+        AgentKind::DeepResearch => {
+            get_deep_research_agent(agent_kind.name(), agent_model, ARTIFACT_DIR).await?
+        }
+    };
     println!(
-        "[coworker] starting as '{}' ({}) — case #{}",
-        COWORKER_AGENT_NAME, coworker_agent_model, case_no
+        "[{}] starting as '{}' ({}) — case #{}",
+        agent_kind.log_prefix(),
+        agent_kind.name(),
+        agent_model,
+        case_no
     );
 
-    if let Err(e) = stream_turn(&mut agent, case.query).await {
+    if let Err(e) = stream_turn(&mut agent, case.query, agent_kind.log_prefix()).await {
         println!("[error] {e}");
     }
 
@@ -188,7 +233,7 @@ async fn main() -> anyhow::Result<()> {
                         let input = line.trim().to_string();
                         if !input.is_empty() {
                             let query = Message::new(Role::User).with_contents([Part::text(&input)]);
-                            if let Err(e) = stream_turn(&mut agent, query).await {
+                            if let Err(e) = stream_turn(&mut agent, query, agent_kind.log_prefix()).await {
                                 println!("[error] {e}");
                             }
                         }
@@ -232,7 +277,7 @@ fn write_files(dir: &str, files: &[(Vec<u8>, std::path::PathBuf)]) -> anyhow::Re
     Ok(())
 }
 
-async fn stream_turn(agent: &mut Agent, query: Message) -> anyhow::Result<()> {
+async fn stream_turn(agent: &mut Agent, query: Message, log_prefix: &str) -> anyhow::Result<()> {
     let mut stream = agent.run(query);
     while let Some(event) = stream.next().await {
         let event = event?;
@@ -252,7 +297,7 @@ async fn stream_turn(agent: &mut Agent, query: Message) -> anyhow::Result<()> {
                         if let Some((_id, name, args)) = tc.as_function() {
                             let args_json = serde_json::to_string(args)
                                 .unwrap_or_else(|_| "<unprintable>".into());
-                            println!("[coworker] tool: {name} {args_json}");
+                            println!("[{log_prefix}] tool: {name} {args_json}");
                         }
                     }
                 }
@@ -260,10 +305,10 @@ async fn stream_turn(agent: &mut Agent, query: Message) -> anyhow::Result<()> {
             Role::Tool => {
                 for part in &msg.contents {
                     if let Some(t) = part.as_text() {
-                        println!("[coworker] tool result: {t}");
+                        println!("[{log_prefix}] tool result: {t}");
                     } else if let Some(v) = part.as_value() {
                         let s = serde_json::to_string(v).unwrap_or_else(|_| "<unprintable>".into());
-                        println!("[coworker] tool result: {s}");
+                        println!("[{log_prefix}] tool result: {s}");
                     }
                 }
             }
