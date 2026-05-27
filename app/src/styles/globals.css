@@ -520,7 +520,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-artifact-preview section { border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); padding: 10px; background: var(--cw-bg); margin-bottom: 8px; }
 .cw-artifact-preview section p { margin: 5px 0; font-size: 12px; }
 
-.cw-dialog-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: oklch(0.18 0.01 60 / .26); }
+.cw-dialog-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: oklch(0.18 0.01 60 / .26); }
 .cw-dialog { position: relative; width: min(440px, calc(100vw - 32px)); border: 1px solid var(--cw-border); border-radius: var(--cw-radius-xl); background: var(--cw-bg); box-shadow: var(--cw-shadow-popover); padding: 24px; animation: cw-enter .22s ease both; }
 .cw-close { position: absolute; top: 12px; right: 12px; border: 0; background: transparent; padding: 4px; border-radius: var(--cw-radius-sm); color: var(--cw-ink-4); cursor: pointer; }
 .cw-close:hover { color: var(--cw-ink); background: var(--cw-paper-3); }
@@ -593,6 +593,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 
 .cw-project-card,
 .cw-session-card {
+  cursor: pointer;
   min-height: 126px;
   justify-content: flex-start;
   padding: 14px;
@@ -942,45 +943,91 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-composer {
   position: sticky;
   bottom: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  padding: 14px clamp(24px, 6vw, 72px) 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px clamp(20px, 5vw, 56px) 16px;
   border-top: 1px solid var(--cw-border);
   background: var(--cw-bg);
   width: 100%;
-  max-width: 920px;
+  max-width: 860px;
   margin: 0 auto;
 }
+/* Rounded single-row pill (PR #114 base): textarea grows in place, attach + send
+   sit on the right. The optional actionsSlot (home's model picker) tucks in before
+   them. Auto-grow makes it taller for multiline while staying rounded. */
 .cw-composer-box {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 46px;
-  padding: 6px 6px 6px 14px;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 5px 7px 5px 18px;
   border: 1px solid var(--cw-border);
-  border-radius: 999px;
+  border-radius: 24px;
   background: var(--cw-paper);
   transition: border-color 120ms, box-shadow 120ms;
+  /* Shared name so navigating home <-> session morphs the box (see route viewTransition). */
+  view-transition-name: cw-composer;
 }
 .cw-composer-box:focus-within {
   border-color: var(--cw-border-hover);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--cw-accent), transparent 86%);
 }
-.cw-composer input {
+/* Home "new conversation": roomier column layout — textarea on top, a bottom
+   toolbar row holding the model picker (left) and attach + send (right). */
+.cw-composer-box--large {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-radius: 20px;
+}
+.cw-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cw-composer-actions-spacer { flex: 1; }
+.cw-composer-input {
   flex: 1;
   min-width: 0;
-  height: 34px;
+  min-height: 24px;
+  max-height: 200px;
   border: 0;
-  border-radius: 0;
   background: transparent;
-  padding: 0;
+  padding: 7px 0;
   outline: 0;
+  resize: none;
+  overflow-y: hidden;
+  font: inherit;
   font-size: 14px;
+  line-height: 1.5;
   color: var(--cw-fg-1);
 }
-.cw-composer input::placeholder { color: var(--cw-fg-4); }
+/* In the column layout, let the textarea keep its JS auto-grow height instead of
+   flex-growing to fill the box (flex-grow on the column axis would override the
+   inline height and pin it to one line). align-items: stretch handles full width. */
+.cw-composer-box--large .cw-composer-input { flex: 0 0 auto; min-height: 24px; padding: 4px 0; }
+
+/* home -> session composer morph (route navigate with viewTransition: true).
+   The shared `cw-composer` name lets the browser tween the box from the home
+   center to the bottom-of-session pill; we just tune timing + cross-fade. */
+::view-transition-group(cw-composer) {
+  animation-duration: 480ms;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+::view-transition-old(cw-composer),
+::view-transition-new(cw-composer) {
+  /* Fade the differing inner content (large toolbar vs pill) so the reshape reads
+     as one element morphing rather than two boxes stacked. */
+  animation-duration: 320ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(cw-composer),
+  ::view-transition-old(cw-composer),
+  ::view-transition-new(cw-composer) { animation: none; }
+}
+.cw-composer-input::placeholder { color: var(--cw-fg-4); }
 .cw-send-button {
   width: 34px;
   height: 34px;
@@ -996,18 +1043,165 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .cw-send-button:hover:not(:disabled) { background: var(--cw-primary-hover, var(--cw-primary)); }
 .cw-send-button:disabled { opacity: 0.45; cursor: not-allowed; }
-.cw-artifact-button {
-  height: 38px;
-  border-radius: 999px;
-  padding: 0 14px;
-  white-space: nowrap;
+.cw-send-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in oklch, var(--cw-fg-on-primary, white), transparent 55%);
+  border-top-color: var(--cw-fg-on-primary, white);
+  border-radius: 50%;
+  animation: cw-spin 0.6s linear infinite;
 }
+@keyframes cw-spin { to { transform: rotate(360deg); } }
+.cw-attach-button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cw-fg-3);
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.cw-attach-button:hover:not(:disabled) { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+.cw-attach-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .cw-composer small {
-  grid-column: 1 / -1;
   text-align: center;
   color: var(--cw-fg-4);
   font-size: 11px;
 }
+.cw-model-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  border-radius: var(--cw-radius-full);
+  border: 1px solid var(--cw-border);
+  background: var(--cw-bg);
+  color: var(--cw-fg-2);
+  padding: 0 10px;
+  font-size: 12px;
+}
+.cw-model-picker select { border: 0; outline: 0; background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
+
+/* Project home — "new conversation" surface */
+.cw-project-hero.is-slim { align-items: center; padding-bottom: var(--cw-space-4); margin-bottom: var(--cw-space-5); }
+.cw-project-hero.is-slim h1 { font-size: var(--cw-text-xl); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Sidebar SESSIONS "View all" — hidden until the section header is hovered (Claude pattern). */
+.cw-section-viewall {
+  border: 0;
+  background: transparent;
+  color: var(--cw-fg-3);
+  font-size: 11px;
+  padding: 2px 6px;
+  margin-left: auto;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms, color 120ms;
+}
+.cw-section-header:hover .cw-section-viewall,
+.cw-section-viewall:focus-visible { opacity: 1; }
+.cw-section-viewall:hover { color: var(--cw-fg-1); }
+
+/* z-index ladder (keep these in sync when adding new layers):
+   25  toast
+   30  marquee / misc
+   48–51  sidebar (drawer, reveal, resizer)
+   58  sessions-overlay backdrop
+   60  sessions-overlay panel
+   70  ConfirmDialog backdrop (always the topmost modal, even over the overlay) */
+
+/* "View all" sessions overlay — wide modal floating over the main area. */
+.cw-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  background: color-mix(in oklch, var(--cw-ink) 38%, transparent);
+}
+.cw-sessions-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 60;
+  width: min(880px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--cw-paper);
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-lg);
+  box-shadow: 0 20px 60px color-mix(in oklch, var(--cw-ink), transparent 68%);
+  overflow: hidden;
+}
+.cw-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--cw-border);
+}
+.cw-overlay-head h2 { margin: 0; font-size: var(--cw-text-lg); }
+.cw-overlay-close {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--cw-radius-sm);
+  background: transparent;
+  color: var(--cw-fg-3);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.cw-overlay-close:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+.cw-overlay-body { padding: 20px; overflow-y: auto; }
+.cw-overlay-body .cw-session-grid { margin-bottom: 0; }
+.cw-home-blank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  min-height: 58vh;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+.cw-home-blank .cw-composer-box { width: 100%; }
+.cw-home-greeting { margin: 0; text-align: center; font-size: var(--cw-text-lg); color: var(--cw-fg-2); }
+.cw-home-blank .cw-composer {
+  position: static;
+  width: 100%;
+  max-width: 100%;
+  border-top: 0;
+  background: transparent;
+  padding: 0;
+}
+.cw-suggested-prompts {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.cw-suggested-chip {
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-full);
+  background: var(--cw-bg);
+  color: var(--cw-fg-3);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.cw-suggested-chip:hover { background: var(--cw-bg-muted); border-color: var(--cw-border-hover); color: var(--cw-fg-1); }
 
 /* ── Attachment tray (composer) & attachment chips ───────────────────────── */
 .cw-attach-chip {
@@ -1116,10 +1310,12 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .cw-project-card,
   .cw-session-card { min-height: 118px; }
   .cw-composer { grid-template-columns: 1fr; padding: 12px 18px; }
-  .cw-artifact-button { width: 100%; }
   .cw-message-body { max-width: calc(100vw - 82px); }
   .cw-file-row { min-height: 58px; }
   .cw-file-path { align-items: flex-start; flex-direction: column; gap: 10px; }
+  /* Composer sits in the upper third so the iOS keyboard doesn't cover it. */
+  .cw-home-blank { min-height: auto; justify-content: flex-start; padding-top: 12vh; }
+  .cw-home-blank .cw-composer { padding: 0; }
 }
 
 /* Authoritative pass from Design System preview/icons-nav-files.html.
