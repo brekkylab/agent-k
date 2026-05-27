@@ -42,7 +42,7 @@ export function NewProjectDialog({ existingNames, onClose }: NewProjectDialogPro
     onSuccess: async (created) => {
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
       onClose();
-      navigate({ to: '/projects/$projectId', params: { projectId: created.id } });
+      navigate({ to: '/projects/$projectSlug', params: { projectSlug: created.slug } });
     },
     onError: (err) => {
       setSubmitError(messageOf(err));

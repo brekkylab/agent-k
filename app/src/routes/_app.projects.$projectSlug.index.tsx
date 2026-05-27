@@ -5,7 +5,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getProject, listMembers } from '@/api/projects';
 import { createSession, deleteSession, listSessions } from '@/api/sessions';
-import { listDirents, type DirentScope } from '@/api/dirents';
+import { listDirents } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { ActivityRow, AvatarStack, EmptyState, InfoRow, IntentIcon, SectionLabel, SharePill } from '@/components/uiPrimitives';
 import { timeAgo } from '@/lib/timeAgo';
@@ -14,37 +14,40 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { useAuthStore } from '@/stores/auth';
 import { canAdministerSession } from '@/lib/permissions';
+import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
-export const Route = createFileRoute('/_app/projects/$projectId/')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/')({
   component: ProjectHome,
 });
 
 function ProjectHome() {
-  const { projectId } = Route.useParams();
+  const { projectSlug } = Route.useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
 
-  const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
-  const sessions = useQuery({ queryKey: ['sessions', projectId], queryFn: () => listSessions(projectId) });
-  const members = useQuery({ queryKey: ['members', projectId], queryFn: () => listMembers(projectId) });
-  const scope: DirentScope = { kind: 'shared', projectId };
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  const sessions = useQuery({ queryKey: ['sessions', projectSlug], queryFn: () => listSessions(projectSlug) });
+  const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
+  // Dirents are scope-based and keyed by the resolved project UUID (not the slug).
+  const resolvedProjectId = project.data?.id;
   const files = useQuery({
-    queryKey: ['dirents', 'shared', projectId, project.data?.name ?? ''],
-    queryFn: () => listDirents(scope, project.data?.name ?? 'project'),
+    queryKey: ['dirents', 'shared', resolvedProjectId, project.data?.name ?? ''],
+    queryFn: () =>
+      listDirents({ kind: 'shared', projectId: resolvedProjectId! }, project.data?.name ?? 'project'),
     enabled: Boolean(project.data),
   });
 
   const newSessionMutation = useMutation({
-    mutationFn: () => createSession(projectId),
+    mutationFn: () => createSession(projectSlug),
     onSuccess: async (session) => {
-      await queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       showToast('새 세션이 만들어졌습니다');
-      navigate({ to: '/projects/$projectId/sessions/$sessionId', params: { projectId, sessionId: session.id } });
+      navigate({ to: '/projects/$projectSlug/sessions/$sessionPrefix', params: { projectSlug, sessionPrefix: shortSessionId(session.id) } });
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
@@ -56,7 +59,7 @@ function ProjectHome() {
   const deleteMutation = useMutation({
     mutationFn: (sessionId: string) => deleteSession(sessionId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       await queryClient.invalidateQueries({ queryKey: ['session', pendingDelete?.id] });
       showToast(`세션이 삭제되었습니다`);
       setPendingDelete(null);
@@ -99,7 +102,7 @@ function ProjectHome() {
 
       <div className="cw-section-title">
         <SectionLabel>Sessions · {sessionList.length} visible to you</SectionLabel>
-        <button onClick={() => navigate({ to: '/projects/$projectId/schedule', params: { projectId } })}>
+        <button onClick={() => navigate({ to: '/projects/$projectSlug/schedule', params: { projectSlug } })}>
           schedule 자동 발화
         </button>
       </div>
@@ -112,8 +115,8 @@ function ProjectHome() {
               session={session}
               canDelete={canAdministerSession(session, project.data, currentUser)}
               onOpen={() => navigate({
-                to: '/projects/$projectId/sessions/$sessionId',
-                params: { projectId, sessionId: session.id },
+                to: '/projects/$projectSlug/sessions/$sessionPrefix',
+                params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
               })}
               onRequestDelete={() => setPendingDelete(session)}
             />

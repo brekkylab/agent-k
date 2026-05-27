@@ -15,9 +15,130 @@ use crate::{
         AddMemberRequest, CreateProjectRequest, ProjectListResponse, ProjectMemberListResponse,
         ProjectMemberResponse, ProjectResponse, UpdateProjectRequest,
     },
-    repository::RepositoryError,
+    repository::{RepositoryError, RepositoryResult, SqliteRepository},
     state::AppState,
 };
+
+// ── Slug helpers ──────────────────────────────────────────────────────────────
+
+/// Resolve a project reference (UUID, active slug, or retired slug) to its UUID.
+///
+/// Mirrors `resolve_session_id` in `handlers::session`: a path segment can be
+/// either the canonical UUID or a slug, and the handler doesn't care which.
+/// Retired slug fallback keeps links to a renamed project working. Returns 404
+/// only when none of the three resolutions succeed.
+pub async fn resolve_project_id(state: &Arc<AppState>, project_ref: &str) -> ApiResult<Uuid> {
+    if let Ok(uuid) = Uuid::parse_str(project_ref) {
+        return Ok(uuid);
+    }
+    if let Some(p) = state
+        .repository
+        .get_project_by_slug(project_ref)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+    {
+        return Ok(p.id);
+    }
+    if let Some(id) = state
+        .repository
+        .get_project_id_by_retired_slug(project_ref)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+    {
+        return Ok(id);
+    }
+    Err(AppError::not_found("project not found"))
+}
+
+/// Whether a slug is available for assignment to a new (or renamed) project.
+///
+/// Considers both active project slugs and retired ones — retired slugs are
+/// permanently reserved so the redirect history stays unambiguous.
+async fn is_slug_taken(repo: &SqliteRepository, candidate: &str) -> RepositoryResult<bool> {
+    if repo.get_project_by_slug(candidate).await?.is_some() {
+        return Ok(true);
+    }
+    if repo
+        .get_project_id_by_retired_slug(candidate)
+        .await?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Reject a slug that another project has already retired.
+///
+/// A retired slug stays bound to whichever project owned it last — links to
+/// the old URL must keep resolving — so a different project cannot claim it.
+/// The project itself is allowed to reuse a slug it had previously retired.
+async fn ensure_slug_not_retired_by_other(
+    repo: &SqliteRepository,
+    slug: &str,
+    self_project_id: Option<Uuid>,
+) -> ApiResult<()> {
+    let owner = repo
+        .get_project_id_by_retired_slug(slug)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    match owner {
+        Some(o) if Some(o) != self_project_id => Err(AppError::conflict("slug already in use")),
+        _ => Ok(()),
+    }
+}
+
+/// Validate a user-provided slug against the same shape `slug::slugify` produces.
+///
+/// The server-generated path is always safe by construction; this guard mirrors
+/// the same rule for explicit slugs that arrive via the API contract, so seed
+/// scripts and any future rename UI cannot quietly stash a malformed slug in
+/// the database (`my/project`, `한글`, leading/trailing hyphens, etc.).
+fn validate_explicit_slug(s: &str) -> ApiResult<()> {
+    if s.is_empty() || s.len() > 64 {
+        return Err(AppError::bad_request("slug must be 1-64 characters"));
+    }
+    let bytes = s.as_bytes();
+    if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
+        return Err(AppError::bad_request(
+            "slug must start and end with an alphanumeric character",
+        ));
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(AppError::bad_request(
+            "slug must contain only lowercase letters, digits, and hyphens",
+        ));
+    }
+    if s.contains("--") {
+        return Err(AppError::bad_request(
+            "slug cannot contain consecutive hyphens",
+        ));
+    }
+    Ok(())
+}
+
+/// Generate a slug that is unique among active and retired project slugs.
+///
+/// Starts from `slug::slugify(name)`; if that is empty, falls back to
+/// `project-<6-char nanoid>`. Appends `-2`, `-3`, … on collision.
+async fn generate_unique_slug(name: &str, repo: &SqliteRepository) -> RepositoryResult<String> {
+    let mut base = slug::slugify(name);
+    if base.is_empty() {
+        base = format!("project-{}", nanoid::nanoid!(6));
+    }
+    let mut candidate = base.clone();
+    let mut suffix = 2u32;
+    while is_slug_taken(repo, &candidate).await? {
+        candidate = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    Ok(candidate)
+}
+
+// ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// POST /projects
 pub async fn create_project(
@@ -25,13 +146,27 @@ pub async fn create_project(
     Extension(auth_user): Extension<AuthUser>,
     Json(payload): Json<CreateProjectRequest>,
 ) -> ApiResult<(StatusCode, Json<ProjectResponse>)> {
+    let slug = match payload.slug {
+        Some(s) => {
+            validate_explicit_slug(&s)?;
+            ensure_slug_not_retired_by_other(&state.repository, &s, None).await?;
+            s
+        }
+        None => generate_unique_slug(&payload.name, &state.repository)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    };
+
     let project = state
         .repository
-        .create_project(payload.name, payload.description, auth_user.id)
+        .create_project(payload.name, payload.description, auth_user.id, slug)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(|e| match e {
+            RepositoryError::UniqueViolation(_) => AppError::conflict("slug already in use"),
+            other => AppError::internal(other.to_string()),
+        })?;
 
-    tracing::info!(id = %project.id, owner = %auth_user.id, "project created");
+    tracing::info!(id = %project.id, slug = %project.slug, owner = %auth_user.id, "project created");
     Ok((StatusCode::CREATED, Json(ProjectResponse::from(project))))
 }
 
@@ -51,12 +186,17 @@ pub async fn list_projects(
     }))
 }
 
-/// GET /projects/{project_id}
+/// GET /projects/{project_ref}
+///
+/// `project_ref` may be a UUID, an active slug, or a retired slug; the response
+/// `id`/`slug` fields tell the caller whether a redirect is needed (retired slug
+/// resolves to a project whose current slug differs from the request path).
 pub async fn get_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_ref): Path<String>,
 ) -> ApiResult<Json<ProjectResponse>> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     let project = state
         .repository
         .get_project(project_id)
@@ -76,30 +216,45 @@ pub async fn get_project(
     Ok(Json(ProjectResponse::from(project)))
 }
 
-/// PATCH /projects/{project_id} — owner only
+/// PATCH /projects/{project_ref} — owner only
 pub async fn update_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_ref): Path<String>,
     Json(payload): Json<UpdateProjectRequest>,
 ) -> ApiResult<Json<ProjectResponse>> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     require_owner(&state, auth_user.id, project_id).await?;
+
+    if let Some(ref new_slug) = payload.slug {
+        validate_explicit_slug(new_slug)?;
+        ensure_slug_not_retired_by_other(&state.repository, new_slug, Some(project_id)).await?;
+    }
 
     let updated = state
         .repository
-        .update_project(project_id, payload.name, payload.description.map(Some))
+        .update_project(
+            project_id,
+            payload.name,
+            payload.description.map(Some),
+            payload.slug,
+        )
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(|e| match e {
+            RepositoryError::UniqueViolation(_) => AppError::conflict("slug already in use"),
+            other => AppError::internal(other.to_string()),
+        })?;
 
     Ok(Json(ProjectResponse::from(updated)))
 }
 
-/// DELETE /projects/{project_id} — owner only (cascades sessions)
+/// DELETE /projects/{project_ref} — owner only (cascades sessions)
 pub async fn delete_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_ref): Path<String>,
 ) -> ApiResult<StatusCode> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
     // Clean up agent + sandbox for every session before the DB cascade removes them.
@@ -134,12 +289,13 @@ pub async fn delete_project(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// GET /projects/{project_id}/members
+/// GET /projects/{project_ref}/members
 pub async fn list_members(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_ref): Path<String>,
 ) -> ApiResult<Json<ProjectMemberListResponse>> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     require_member(&state, auth_user.id, project_id).await?;
 
     let members = state
@@ -161,13 +317,14 @@ pub async fn list_members(
     Ok(Json(ProjectMemberListResponse { items }))
 }
 
-/// POST /projects/{project_id}/members — owner only, body: { username }
+/// POST /projects/{project_ref}/members — owner only, body: { username }
 pub async fn add_member(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path(project_id): Path<Uuid>,
+    Path(project_ref): Path<String>,
     Json(payload): Json<AddMemberRequest>,
 ) -> ApiResult<StatusCode> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
     let target = state
@@ -190,13 +347,15 @@ pub async fn add_member(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// DELETE /projects/{project_id}/members/{user_id}
+/// DELETE /projects/{project_ref}/members/{user_id}
 /// Owner can remove anyone. Member can only remove themselves (leave).
 pub async fn remove_member(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
-    Path((project_id, target_user_id)): Path<(Uuid, Uuid)>,
+    Path((project_ref, target_user_id)): Path<(String, Uuid)>,
 ) -> ApiResult<StatusCode> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
+
     let is_owner = state
         .repository
         .user_is_project_owner(auth_user.id, project_id)
@@ -294,5 +453,57 @@ async fn require_owner(state: &Arc<AppState>, user_id: Uuid, project_id: Uuid) -
         Err(AppError::forbidden("owner access required"))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod slug_validation_tests {
+    use super::validate_explicit_slug;
+
+    #[test]
+    fn accepts_well_formed_slugs() {
+        for ok in [
+            "a",
+            "p1",
+            "my-project",
+            "klient-co-q2",
+            "project-1234",
+            "abc123-xyz",
+        ] {
+            assert!(
+                validate_explicit_slug(ok).is_ok(),
+                "expected {ok:?} to be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_empty_and_oversized() {
+        assert!(validate_explicit_slug("").is_err());
+        let too_long = "a".repeat(65);
+        assert!(validate_explicit_slug(&too_long).is_err());
+    }
+
+    #[test]
+    fn rejects_uppercase_and_non_ascii() {
+        assert!(validate_explicit_slug("MyProject").is_err());
+        assert!(validate_explicit_slug("한글-슬러그").is_err());
+        assert!(validate_explicit_slug("project-🚀").is_err());
+    }
+
+    #[test]
+    fn rejects_path_breaking_characters() {
+        assert!(validate_explicit_slug("my project").is_err()); // space
+        assert!(validate_explicit_slug("my/project").is_err()); // slash
+        assert!(validate_explicit_slug("my?project").is_err()); // query
+        assert!(validate_explicit_slug("my.project").is_err()); // dot
+    }
+
+    #[test]
+    fn rejects_edge_hyphens_and_doubles() {
+        assert!(validate_explicit_slug("-leading").is_err());
+        assert!(validate_explicit_slug("trailing-").is_err());
+        assert!(validate_explicit_slug("my--project").is_err());
+        assert!(validate_explicit_slug("-").is_err());
     }
 }

@@ -70,10 +70,12 @@ dependencies = [
  "http-body-util",
  "jsonwebtoken 9.3.1",
  "mime_guess",
+ "nanoid",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "slug",
  "sqlx",
  "tempfile",
  "thiserror 2.0.18",
@@ -2272,6 +2274,12 @@ dependencies = [
  "syn",
  "unicode-xid",
 ]
+
+[[package]]
+name = "deunicode"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "digest"
@@ -4912,6 +4920,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
 
 [[package]]
+name = "nanoid"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ffa00dec017b5b1a8b7cf5e2c008bfda1aa7e0697ac1508b491fdf2622fb4d8"
+dependencies = [
+ "rand 0.8.6",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6436,7 +6453,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.7",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7153,6 +7170,16 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "slug"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "882a80f72ee45de3cc9a5afeb2da0331d58df69e4e7d8eeb5d3c7784ae67e724"
+dependencies = [
+ "deunicode",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "smallvec"

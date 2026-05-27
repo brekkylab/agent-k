@@ -8,6 +8,7 @@ use crate::repository::DbProject;
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ProjectResponse {
     pub id: Uuid,
+    pub slug: String,
     pub name: String,
     pub description: Option<String>,
     pub owner_id: Uuid,
@@ -19,6 +20,7 @@ impl From<DbProject> for ProjectResponse {
     fn from(p: DbProject) -> Self {
         Self {
             id: p.id,
+            slug: p.slug,
             name: p.name,
             description: p.description,
             owner_id: p.owner_id,
@@ -33,6 +35,8 @@ impl From<DbProject> for ProjectResponse {
 pub struct CreateProjectRequest {
     pub name: String,
     pub description: Option<String>,
+    /// Optional slug override. When omitted, the server generates one from `name`.
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -40,6 +44,7 @@ pub struct CreateProjectRequest {
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

@@ -16,23 +16,24 @@ export async function createProject(input: { name: string; description?: string 
   return toProject(raw);
 }
 
-export async function getProject(projectId: string): Promise<Project> {
-  const raw = await request<BackendProject>(`/projects/${projectId}`);
+/** `projectRef` may be a UUID, an active slug, or a retired slug — backend resolves all three. */
+export async function getProject(projectRef: string): Promise<Project> {
+  const raw = await request<BackendProject>(`/projects/${projectRef}`);
   return toProject(raw);
 }
 
-export async function listMembers(projectId: string): Promise<User[]> {
-  const res = await request<{ items: BackendMember[] }>(`/projects/${projectId}/members`);
+export async function listMembers(projectRef: string): Promise<User[]> {
+  const res = await request<{ items: BackendMember[] }>(`/projects/${projectRef}/members`);
   return res.items.map(toMemberUser);
 }
 
-export async function addMember(projectId: string, username: string): Promise<void> {
-  await request(`/projects/${projectId}/members`, {
+export async function addMember(projectRef: string, username: string): Promise<void> {
+  await request(`/projects/${projectRef}/members`, {
     method: 'POST',
     body: { username },
   });
 }
 
-export async function removeMember(projectId: string, userId: string): Promise<void> {
-  await request(`/projects/${projectId}/members/${userId}`, { method: 'DELETE' });
+export async function removeMember(projectRef: string, userId: string): Promise<void> {
+  await request(`/projects/${projectRef}/members/${userId}`, { method: 'DELETE' });
 }

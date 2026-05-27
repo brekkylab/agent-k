@@ -63,6 +63,7 @@ export const AI_USER: User = {
 export function toProject(backend: BackendProject, memberIds: string[] = []): Project {
   return {
     id: backend.id,
+    slug: backend.slug,
     name: backend.name,
     description: backend.description || '',
     ownerId: backend.owner_id,

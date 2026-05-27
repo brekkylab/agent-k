@@ -8,6 +8,16 @@ use uuid::Uuid;
 use super::SqliteRepository;
 use crate::repository::RepositoryResult;
 
+/// Result of a prefix-based session lookup.
+pub enum PrefixLookup {
+    /// Exactly one session matched the prefix.
+    Unique(Uuid),
+    /// Two or more sessions share the same prefix — caller should ask for more characters.
+    Ambiguous(Vec<Uuid>),
+    /// No session matched.
+    None,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ShareMode {
@@ -753,5 +763,79 @@ impl SqliteRepository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Look up a session by a UUID prefix string.
+    ///
+    /// Accepts a hex-only prefix (`aaaaaaaa2222`) or a hyphenated prefix
+    /// (`aaaaaaaa-2222`); both map to the same LIKE pattern against the
+    /// hyphenated form stored in `sessions.id`. The PK index handles the
+    /// prefix scan. Returns `Unique` for exactly one match, `Ambiguous` for
+    /// two or more (LIMIT 2 keeps this O(1) past the first hit), `None` for
+    /// no match.
+    pub async fn lookup_session_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> RepositoryResult<PrefixLookup> {
+        let pattern = format!("{}%", hyphenate_uuid_prefix(prefix));
+        let rows = sqlx::query("SELECT id FROM sessions WHERE id LIKE ? LIMIT 2")
+            .bind(&pattern)
+            .fetch_all(&self.pool)
+            .await?;
+        match rows.len() {
+            0 => Ok(PrefixLookup::None),
+            1 => Ok(PrefixLookup::Unique(Self::parse_uuid(
+                rows[0].get::<String, _>("id"),
+                "sessions.id",
+            )?)),
+            _ => {
+                let mut ids = Vec::with_capacity(rows.len());
+                for r in rows {
+                    ids.push(Self::parse_uuid(r.get::<String, _>("id"), "sessions.id")?);
+                }
+                Ok(PrefixLookup::Ambiguous(ids))
+            }
+        }
+    }
+}
+
+/// Reinsert UUID hyphens at the canonical 8-4-4-4-12 positions when the prefix
+/// doesn't already contain any. Lets URLs use a hex-only short id while DB
+/// rows stay in the standard hyphenated form.
+fn hyphenate_uuid_prefix(prefix: &str) -> String {
+    if prefix.contains('-') {
+        return prefix.to_string();
+    }
+    let mut out = String::with_capacity(prefix.len() + 4);
+    for (i, c) in prefix.chars().enumerate() {
+        if matches!(i, 8 | 12 | 16 | 20) {
+            out.push('-');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::hyphenate_uuid_prefix;
+
+    #[test]
+    fn hex_only_prefix_gets_hyphens() {
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa"), "aaaaaaaa");
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa1"), "aaaaaaaa-1");
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa2222"), "aaaaaaaa-2222");
+        assert_eq!(
+            hyphenate_uuid_prefix("aaaaaaaa22224222"),
+            "aaaaaaaa-2222-4222",
+        );
+    }
+
+    #[test]
+    fn hyphenated_prefix_passes_through() {
+        assert_eq!(
+            hyphenate_uuid_prefix("aaaaaaaa-2222"),
+            "aaaaaaaa-2222",
+        );
     }
 }

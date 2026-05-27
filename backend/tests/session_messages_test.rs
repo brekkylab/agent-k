@@ -41,8 +41,8 @@ async fn session_persists_and_restores_history_across_restart() {
         let user_id = uuid::Uuid::parse_str(user_info["id"].as_str().unwrap()).unwrap();
         let token = login(&app, &username, "Password123!").await;
         let project = common::get_personal_project(&app, &token).await;
-        let project_id = project["id"].as_str().unwrap().to_string();
-        let id = post_session_authed(&app, &token, &project_id).await;
+        let project_slug = project["slug"].as_str().unwrap().to_string();
+        let id = post_session_authed(&app, &token, &project_slug).await;
         repo.append_messages(
             id,
             &common::to_new_msgs(
@@ -486,8 +486,8 @@ async fn clear_messages_also_clears_in_memory_agent_history() {
     let user_id = uuid::Uuid::parse_str(user_info["id"].as_str().unwrap()).unwrap();
     let token = login(&app, &username, "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap().to_string();
-    let id = post_session_authed(&app, &token, &project_id).await;
+    let project_slug = project["slug"].as_str().unwrap().to_string();
+    let id = post_session_authed(&app, &token, &project_slug).await;
 
     let _guard = SessionGuard {
         app: app.clone(),

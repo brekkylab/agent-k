@@ -278,8 +278,8 @@ pub async fn post_session(app: &axum::Router) -> uuid::Uuid {
     signup(app, &username, "Password123!").await;
     let token = login(app, &username, "Password123!").await;
     let project = get_personal_project(app, &token).await;
-    let project_id = project["id"].as_str().unwrap().to_string();
-    post_session_authed(app, &token, &project_id).await
+    let project_slug = project["slug"].as_str().unwrap().to_string();
+    post_session_authed(app, &token, &project_slug).await
 }
 
 pub async fn try_delete_session(
