@@ -9,6 +9,7 @@ import { createSession } from '@/api/sessions';
 import { AvatarStack } from '@/components/uiPrimitives';
 import { SessionComposer, type ComposerSubmission } from '@/components/chat/SessionComposer';
 import { ComposerModelPicker, DEFAULT_MODEL_ID, type ModelId } from '@/components/chat/ComposerModelPicker';
+import { ComposerAgentPicker, DEFAULT_AGENT_ID, getAgentOption, type AgentId } from '@/components/chat/ComposerAgentPicker';
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
@@ -45,7 +46,10 @@ function ProjectHome() {
 
   const [composerText, setComposerText] = useState('');
   const [selectedModelId, setSelectedModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
+  const [selectedAgentId, setSelectedAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
   const [focusNonce, setFocusNonce] = useState(0);
+
+  const activeAgent = getAgentOption(selectedAgentId);
 
   // Sidebar '+' navigates here with focusComposer: bump the focus nonce (so the
   // composer focuses even on a repeat '+'), then consume the signal so a refresh
@@ -102,6 +106,7 @@ function ProjectHome() {
         <p className="cw-home-greeting">
           Start a new conversation in {project.data?.name ?? 'this project'}
         </p>
+        <ComposerAgentPicker value={selectedAgentId} onChange={setSelectedAgentId} />
         <SessionComposer
           value={composerText}
           onChange={setComposerText}
@@ -109,6 +114,7 @@ function ProjectHome() {
           disabled={startSessionMutation.isPending}
           pending={startSessionMutation.isPending}
           size="large"
+          placeholder={activeAgent.placeholder}
           focusSignal={focusNonce}
           onAttachClick={() => showToast('파일 추가 기능은 곧 추가됩니다.')}
           actionsSlot={<ComposerModelPicker value={selectedModelId} onChange={setSelectedModelId} />}
