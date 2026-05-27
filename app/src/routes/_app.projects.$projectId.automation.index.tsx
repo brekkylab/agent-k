@@ -275,7 +275,7 @@ function AutomationsPage() {
 
   const selectedAutomation = selectedAutomationId ? automationById[selectedAutomationId] : null;
   const selectedRun: Run | null = selectedRunId
-    ? allRuns.find((r) => r.id === selectedRunId) ?? null
+    ? displayRuns.find((r) => r.id === selectedRunId) ?? null
     : null;
   const messagesQuery = useQuery({
     queryKey: ['messages', selectedRun?.sessionId],
