@@ -7,23 +7,29 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, streamMessage } from '@/api/messages';
 import { getProject, listMembers } from '@/api/projects';
+import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
-import { Avatar, IconPocket, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
+import { Avatar, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { shareMeta } from '@/domain/metadata';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
-import { AI_USER } from '@/api/transformers';
+import { AI_USER, SUBAGENT_PREFIX } from '@/api/transformers';
 import { formatMessageTime, formatMessageTimeFull } from '@/lib/formatMessageTime';
 import type { Message, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
+import { ArtifactsPanel } from '@/components/ArtifactsPanel';
+import { CopyToSharedDialog } from '@/components/CopyToSharedDialog';
+import { AttachmentChip } from '@/components/AttachmentChip';
+import { AttachmentPreview } from '@/components/AttachmentPreview';
+import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 export const Route = createFileRoute('/_app/projects/$projectId/sessions/$sessionId')({
   component: SessionPage,
 });
 
-const SUBAGENT_PREFIX = 'subagent_';
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
 }
@@ -44,10 +50,21 @@ function SessionPage() {
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [composerText, setComposerText] = useState('');
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [copyToSharedPaths, setCopyToSharedPaths] = useState<string[] | null>(null);
+
+  type PendingAttachment = {
+    tempId: string;
+    filename: string;
+    status: 'uploading' | 'uploaded' | 'error';
+    globalPath?: string;
+    error?: string;
+  };
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
 
   useEffect(() => {
     setLiveMessages([]);
@@ -71,10 +88,47 @@ function SessionPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [allMessages.length, streaming]);
 
+  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    // Reset input so same file can be selected again
+    e.target.value = '';
+
+    for (const file of files) {
+      const tempId = `${Date.now()}-${file.name}`;
+      setPendingAttachments((prev) => [...prev, { tempId, filename: file.name, status: 'uploading' }]);
+      try {
+        const scope = { kind: 'inputs' as const, projectId, sessionId };
+        const result = await uploadFiles(scope, [{ file, targetPath: file.name }]);
+        const succeeded = result.succeeded[0];
+        if (succeeded) {
+          setPendingAttachments((prev) => prev.map((a) =>
+            a.tempId === tempId ? { ...a, status: 'uploaded', globalPath: succeeded.path } : a
+          ));
+        } else {
+          const err = result.failed[0]?.error ?? 'upload failed';
+          setPendingAttachments((prev) => prev.map((a) =>
+            a.tempId === tempId ? { ...a, status: 'error', error: err } : a
+          ));
+        }
+      } catch {
+        setPendingAttachments((prev) => prev.map((a) =>
+          a.tempId === tempId ? { ...a, status: 'error', error: 'upload failed' } : a
+        ));
+      }
+    }
+  }, [projectId, sessionId]);
+
   const send = useCallback(async () => {
     const text = composerText.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || hasUploadingAttachments) return;
+
+    const attachmentPaths = pendingAttachments
+      .filter((a) => a.status === 'uploaded' && a.globalPath)
+      .map((a) => a.globalPath!);
+
     setComposerText('');
+    setPendingAttachments([]);
 
     const nowIso = new Date().toISOString();
     const userMsg: Message = {
@@ -84,6 +138,7 @@ function SessionPage() {
       createdAt: nowIso,
       body: text,
       status: 'done',
+      attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
     };
     const aiId = `live-ai-${Date.now()}`;
     setLiveMessages((prev) => [...prev, userMsg, {
@@ -99,7 +154,7 @@ function SessionPage() {
     const ctrl = new AbortController();
 
     try {
-      for await (const update of streamMessage(sessionId, text, ctrl.signal)) {
+      for await (const update of streamMessage(sessionId, text, ctrl.signal, attachmentPaths.length > 0 ? attachmentPaths : undefined)) {
         const isDone = update.status === 'done';
         const doneOrStreaming = isDone ? 'done' as const : 'streaming' as const;
 
@@ -151,8 +206,9 @@ function SessionPage() {
       setLiveMessages([]);
       void queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
     }
-  }, [composerText, streaming, sessionId, projectId, currentUser, queryClient, showToast]);
+  }, [composerText, streaming, sessionId, projectId, currentUser, queryClient, showToast, pendingAttachments]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionId, mode),
@@ -171,6 +227,7 @@ function SessionPage() {
   const userList = members.data ?? [];
   const creator = userList.find((u) => u.id === sess?.creatorId);
   const usersForRender: User[] = [...userList, AI_USER];
+  const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
 
 
 
@@ -201,6 +258,13 @@ function SessionPage() {
               message={msg}
               users={usersForRender}
               currentUserId={currentUser?.id ?? ''}
+              artifactPaths={msg.artifacts}
+              projectId={projectId}
+              sessionId={sessionId}
+              onCopyToShared={setCopyToSharedPaths}
+              onArtifactDeleted={() => {
+                void queryClient.invalidateQueries({ queryKey: ['messages', sessionId] });
+              }}
             />
           ))}
           {streaming && (
@@ -210,6 +274,19 @@ function SessionPage() {
         </div>
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+          {pendingAttachments.length > 0 && (
+            <div className="cw-attach-tray" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '6px 0', gridColumn: '1 / -1' }}>
+              {pendingAttachments.map((a) => (
+                <AttachmentChip
+                  key={a.tempId}
+                  filename={a.filename}
+                  status={a.status}
+                  error={a.error}
+                  onRemove={() => setPendingAttachments((prev) => prev.filter((x) => x.tempId !== a.tempId))}
+                />
+              ))}
+            </div>
+          )}
           <div className="cw-composer-box">
             <input
               value={composerText}
@@ -217,18 +294,27 @@ function SessionPage() {
               placeholder="Message Cowork and the team…"
               disabled={streaming}
             />
-            <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || streaming}>
+            <button
+              type="button"
+              className="cw-attach-btn"
+              aria-label="파일 첨부"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={streaming}
+              style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
+            >
+              <Icon name="paperclip" size={13} />
+            </button>
+            <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || streaming || hasUploadingAttachments}>
               <Icon name="send" size={12} />
             </button>
           </div>
-          <button
-            type="button"
-            className="cw-btn-secondary cw-artifact-button"
-            onClick={() => showToast('Artifacts 기능은 곧 추가됩니다.')}
-            disabled={streaming}
-          >
-            <IconPocket tone="trust" icon="artifact" compact /> Artifact
-          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => void handleFileSelect(e)}
+          />
           <small>Enter to send · Reference files with @filename</small>
         </form>
       </section>
@@ -253,8 +339,123 @@ function SessionPage() {
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
           project · {project.data?.name ?? '...'}
         </p>
+        <ArtifactsPanel
+          projectId={projectId}
+          sessionId={sessionId}
+          onCopyToShared={(paths) => setCopyToSharedPaths(paths)}
+        />
       </aside>
+
+      {copyToSharedPaths !== null && (
+        <CopyToSharedDialog
+          open={copyToSharedPaths !== null}
+          projectId={projectId}
+          sessionId={sessionId}
+          sourcePaths={copyToSharedPaths}
+          onClose={() => setCopyToSharedPaths(null)}
+          onDone={() => {
+            setCopyToSharedPaths(null);
+            void queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function ArtifactChip({
+  path,
+  projectId,
+  sessionId,
+  onCopyToShared,
+  onDeleted,
+}: {
+  path: string;
+  projectId: string;
+  sessionId: string;
+  onCopyToShared: (paths: string[]) => void;
+  onDeleted: (path: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const chipRef = useRef<HTMLDivElement>(null);
+  const scope: DirentScope = { kind: 'artifacts', projectId, sessionId };
+  const filename = path.split('/').pop() ?? path;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPtr(e: PointerEvent) {
+      if (chipRef.current && !chipRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', onPtr);
+    return () => document.removeEventListener('pointerdown', onPtr);
+  }, [menuOpen]);
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteDirent(scope, path),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+      onDeleted(path);
+      showToast('삭제되었습니다');
+      setConfirmDelete(false);
+    },
+    onError: () => showToast('삭제 실패'),
+  });
+
+  return (
+    <>
+      <div
+        ref={chipRef}
+        className="cw-attach-chip cw-artifact-chip"
+        style={{ cursor: 'pointer', position: 'relative' }}
+        onClick={() => setMenuOpen(prev => !prev)}
+      >
+        <FileTypeIcon filename={filename} size={14} />
+        <span className="cw-attach-name">{filename}</span>
+        {menuOpen && (
+          <ul
+            className="cw-file-dropdown"
+            style={{ top: '100%', left: 0, marginTop: 4 }}
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
+          >
+            <li>
+              <button type="button" onClick={() => downloadFile(scope, path)}>
+                <Icon name="download" size={13} /> 다운로드
+              </button>
+            </li>
+            <li>
+              <button type="button" onClick={() => onCopyToShared([path])}>
+                <Icon name="file" size={13} /> 공유 디렉토리로 복사
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                className="cw-file-dropdown-destructive"
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Icon name="trash" size={13} /> 삭제
+              </button>
+            </li>
+          </ul>
+        )}
+      </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          title="삭제 확인"
+          body={`"${filename}"을(를) 삭제하시겠습니까?`}
+          confirmLabel="삭제"
+          destructive
+          pending={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate()}
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -282,10 +483,20 @@ function MessageBubble({
   message,
   users,
   currentUserId,
+  artifactPaths,
+  projectId,
+  sessionId,
+  onCopyToShared,
+  onArtifactDeleted,
 }: {
   message: Message;
   users: User[];
   currentUserId: string;
+  artifactPaths?: string[];
+  projectId?: string;
+  sessionId?: string;
+  onCopyToShared?: (paths: string[]) => void;
+  onArtifactDeleted?: (path: string) => void;
 }) {
   const isAi = message.sender.kind === 'agent';
   const isSelf = message.sender.kind === 'user' && message.sender.userId === currentUserId;
@@ -314,6 +525,13 @@ function MessageBubble({
             ? <MarkdownRenderer text={message.body} />
             : message.body.split('\n').map((line, i) => <p key={`${message.id}-${i}`}>{line || ' '}</p>)}
         </div>
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="cw-msg-attachments" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+            {message.attachments.map((path) => (
+              <AttachmentPreview key={path} globalPath={path} />
+            ))}
+          </div>
+        )}
         {isAi && message.toolCalls?.map((tc) =>
           tc.name.startsWith(SUBAGENT_PREFIX) ? (
             <div key={tc.id} className="cw-subagent-call">
@@ -331,6 +549,20 @@ function MessageBubble({
               {tc.result !== undefined && <pre className="cw-toolcall-result">{tc.result}</pre>}
             </details>
           )
+        )}
+        {isAi && artifactPaths && artifactPaths.length > 0 && projectId && sessionId && onCopyToShared && onArtifactDeleted && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+            {artifactPaths.map((path) => (
+              <ArtifactChip
+                key={path}
+                path={path}
+                projectId={projectId}
+                sessionId={sessionId}
+                onCopyToShared={onCopyToShared}
+                onDeleted={onArtifactDeleted}
+              />
+            ))}
+          </div>
         )}
         {isAi && message.status === 'done' && (
           <div className="cw-ai-actions">

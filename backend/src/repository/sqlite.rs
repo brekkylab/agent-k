@@ -138,6 +138,8 @@ mod tests {
                     sender_kind: DbSenderKind::User,
                     sender_name: None,
                     sender_user_id: Some(user_id),
+                    attachments: vec![],
+                    artifacts: vec![],
                 },
                 NewSessionMessage {
                     message: Message::new(Role::Assistant)
@@ -145,6 +147,8 @@ mod tests {
                     sender_kind: DbSenderKind::Agent,
                     sender_name: Some("agent-k".into()),
                     sender_user_id: None,
+                    attachments: vec![],
+                    artifacts: vec![],
                 },
             ];
             repo.append_messages(session_id, &msgs).await.unwrap();
@@ -192,6 +196,8 @@ mod tests {
                 sender_kind: DbSenderKind::User,
                 sender_name: None,
                 sender_user_id: Some(user_id),
+                attachments: vec![],
+                artifacts: vec![],
             }],
         )
         .await
@@ -223,6 +229,8 @@ mod tests {
                 sender_kind: DbSenderKind::User,
                 sender_name: None,
                 sender_user_id: Some(user_id),
+                attachments: vec![],
+                artifacts: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant)
@@ -230,6 +238,8 @@ mod tests {
                 sender_kind: DbSenderKind::Agent,
                 sender_name: Some("agent-k".into()),
                 sender_user_id: None,
+                attachments: vec![],
+                artifacts: vec![],
             },
         ];
         repo.append_messages(sid, &batch1).await.unwrap();
@@ -240,6 +250,8 @@ mod tests {
                 sender_kind: DbSenderKind::User,
                 sender_name: None,
                 sender_user_id: Some(user_id),
+                attachments: vec![],
+                artifacts: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant)
@@ -247,6 +259,8 @@ mod tests {
                 sender_kind: DbSenderKind::Agent,
                 sender_name: Some("agent-k".into()),
                 sender_user_id: None,
+                attachments: vec![],
+                artifacts: vec![],
             },
         ];
         repo.append_messages(sid, &batch2).await.unwrap();
@@ -492,7 +506,12 @@ mod tests {
                 tz: None,
             };
             let due = repo
-                .create_trigger(auto.id, &due_spec, None, Some(now - ChronoDuration::seconds(10)))
+                .create_trigger(
+                    auto.id,
+                    &due_spec,
+                    None,
+                    Some(now - ChronoDuration::seconds(10)),
+                )
                 .await
                 .unwrap();
 
@@ -535,7 +554,13 @@ mod tests {
                 .unwrap();
             let now = Utc::now();
             let run = repo
-                .create_run(auto.id, None, session.id, now - ChronoDuration::seconds(1), None)
+                .create_run(
+                    auto.id,
+                    None,
+                    session.id,
+                    now - ChronoDuration::seconds(1),
+                    None,
+                )
                 .await
                 .unwrap();
 
@@ -601,7 +626,13 @@ mod tests {
                 .unwrap();
             let now = Utc::now();
             let run = repo
-                .create_run(auto.id, None, session.id, now - ChronoDuration::seconds(1), None)
+                .create_run(
+                    auto.id,
+                    None,
+                    session.id,
+                    now - ChronoDuration::seconds(1),
+                    None,
+                )
                 .await
                 .unwrap();
 
@@ -783,9 +814,15 @@ mod tests {
                 .await
                 .unwrap();
             let now = Utc::now();
-            repo.create_run(auto.id, None, session.id, now - ChronoDuration::seconds(1), None)
-                .await
-                .unwrap();
+            repo.create_run(
+                auto.id,
+                None,
+                session.id,
+                now - ChronoDuration::seconds(1),
+                None,
+            )
+            .await
+            .unwrap();
             let claimed = repo
                 .claim_due_run(now, now + ChronoDuration::minutes(5))
                 .await
@@ -795,7 +832,10 @@ mod tests {
             assert!(claimed.lease_until.is_some());
 
             let cancelled = repo
-                .cancel_run(claimed.id, &serde_json::json!({ "reason": "user_requested" }))
+                .cancel_run(
+                    claimed.id,
+                    &serde_json::json!({ "reason": "user_requested" }),
+                )
                 .await
                 .unwrap();
             assert!(cancelled);
@@ -805,10 +845,10 @@ mod tests {
 
             // Worker-side guard: renew_lease must refuse the cancelled row so
             // the heartbeat will tear itself down on its next tick.
-            let still =
-                repo.renew_lease(claimed.id, now + ChronoDuration::minutes(10))
-                    .await
-                    .unwrap();
+            let still = repo
+                .renew_lease(claimed.id, now + ChronoDuration::minutes(10))
+                .await
+                .unwrap();
             assert!(!still, "renew_lease must reject a cancelled run");
         }
 
@@ -825,9 +865,15 @@ mod tests {
                 .await
                 .unwrap();
             let now = Utc::now();
-            repo.create_run(auto.id, None, session.id, now - ChronoDuration::seconds(1), None)
-                .await
-                .unwrap();
+            repo.create_run(
+                auto.id,
+                None,
+                session.id,
+                now - ChronoDuration::seconds(1),
+                None,
+            )
+            .await
+            .unwrap();
             let claimed = repo
                 .claim_due_run(now, now + ChronoDuration::minutes(5))
                 .await
@@ -837,7 +883,10 @@ mod tests {
                 .await
                 .unwrap();
             let res = repo
-                .cancel_run(claimed.id, &serde_json::json!({ "reason": "user_requested" }))
+                .cancel_run(
+                    claimed.id,
+                    &serde_json::json!({ "reason": "user_requested" }),
+                )
                 .await
                 .unwrap();
             assert!(!res, "cancel must be a no-op for already-succeeded runs");
@@ -900,9 +949,15 @@ mod tests {
                 .await
                 .unwrap();
             let now = Utc::now();
-            repo.create_run(auto.id, None, session.id, now - ChronoDuration::seconds(2), None)
-                .await
-                .unwrap();
+            repo.create_run(
+                auto.id,
+                None,
+                session.id,
+                now - ChronoDuration::seconds(2),
+                None,
+            )
+            .await
+            .unwrap();
             // Claim it so it transitions running with a short lease.
             let claimed = repo
                 .claim_due_run(now, now + ChronoDuration::seconds(1))
@@ -947,9 +1002,14 @@ mod tests {
                 expr: "* * * * *".into(),
                 tz: None,
             };
-            repo.create_trigger(auto.id, &spec, None, Some(now - ChronoDuration::seconds(10)))
-                .await
-                .unwrap();
+            repo.create_trigger(
+                auto.id,
+                &spec,
+                None,
+                Some(now - ChronoDuration::seconds(10)),
+            )
+            .await
+            .unwrap();
             // Trigger is enabled but its automation is disabled → excluded.
             repo.update_automation(auto.id, None, None, None, Some(false))
                 .await
@@ -1110,8 +1170,9 @@ mod tests {
                 .unwrap();
 
             // Backdate the "old" run 25h into the past so it falls beyond a 24h cutoff.
-            let backdate =
-                (now - ChronoDuration::hours(25)).format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+            let backdate = (now - ChronoDuration::hours(25))
+                .format("%Y-%m-%d %H:%M:%S%.3f")
+                .to_string();
             sqlx::query("UPDATE automation_runs SET created_at = ? WHERE id = ?")
                 .bind(&backdate)
                 .bind(old.id.to_string())
@@ -1155,7 +1216,10 @@ mod tests {
             assert_ne!(reused.id, old.id);
 
             // Second cleanup pass with the same cutoff is a no-op.
-            assert_eq!(repo.clear_expired_idempotency_keys(cutoff).await.unwrap(), 0);
+            assert_eq!(
+                repo.clear_expired_idempotency_keys(cutoff).await.unwrap(),
+                0
+            );
         }
 
         #[tokio::test]

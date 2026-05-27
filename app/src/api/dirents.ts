@@ -1,43 +1,70 @@
 import { ApiError, getBaseUrl, getToken, request } from './client';
-import type {
-  BackendDirent,
-  BackendDirentBatchOp,
-  BackendDirentBatchResult,
-} from './backend-types';
+import type { BackendDirent, BackendDirentBatchOp, BackendDirentBatchResult } from './backend-types';
 import { toFileAsset } from './transformers';
 import type { FileAsset } from '@/domain/types';
 
 export type DirentBatchResult = BackendDirentBatchResult;
 
+export type DirentScope =
+  | { kind: 'shared'; projectId: string }
+  | { kind: 'inputs'; projectId: string; sessionId: string }
+  | { kind: 'artifacts'; projectId: string; sessionId: string };
+
+export function scopeRoot(s: DirentScope): string {
+  switch (s.kind) {
+    case 'shared':    return `projects/${s.projectId}/shared`;
+    case 'inputs':    return `projects/${s.projectId}/sessions/${s.sessionId}/inputs`;
+    case 'artifacts': return `projects/${s.projectId}/sessions/${s.sessionId}/artifacts`;
+  }
+}
+
+/** Strip the scope-root prefix from a global path, returning scope-relative path. */
+export function stripScopePrefix(s: DirentScope, path: string): string {
+  const root = scopeRoot(s);
+  if (path === root) return '';
+  if (path.startsWith(root + '/')) return path.slice(root.length + 1);
+  return path;
+}
+
 function encodePath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
-export async function listDirents(projectId: string, projectName: string, recursive = true): Promise<FileAsset[]> {
+export async function listDirents(
+  scope: DirentScope,
+  projectName: string,
+  recursive = true,
+): Promise<FileAsset[]> {
   const res = await request<{ entries: BackendDirent[] }>(
-    `/projects/${projectId}/dirents?recursive=${recursive}`,
+    `/dirents?path=${scopeRoot(scope)}&recursive=${recursive}`,
   );
-  return res.entries.map((e) => toFileAsset(e, projectId, projectName));
+  const projectId = scope.projectId;
+  return res.entries.map((e) => {
+    const rel = stripScopePrefix(scope, e.path);
+    return toFileAsset({ ...e, path: rel }, projectId, projectName);
+  });
 }
 
-// Raw entries — preferred for tree navigation in the Files page where
-// the unmodified backend path is needed for both display and mutations.
-export async function listDirentsRaw(projectId: string, recursive = true): Promise<BackendDirent[]> {
+export async function listDirentsRaw(
+  scope: DirentScope,
+  recursive = true,
+): Promise<BackendDirent[]> {
   const res = await request<{ entries: BackendDirent[] }>(
-    `/projects/${projectId}/dirents?recursive=${recursive}`,
+    `/dirents?path=${scopeRoot(scope)}&recursive=${recursive}`,
   );
   return res.entries;
 }
 
-export async function uploadFile(projectId: string, file: File, targetPath: string): Promise<DirentBatchResult> {
-  return uploadFiles(projectId, [{ file, targetPath }]);
+export async function uploadFile(
+  scope: DirentScope,
+  file: File,
+  targetPath: string,
+): Promise<DirentBatchResult> {
+  return uploadFiles(scope, [{ file, targetPath }]);
 }
 
-// Upload many files in a single multipart request. Backend handles each
-// file independently and returns { succeeded, failed } so callers can show
-// partial-failure UI without parsing per-file errors out of a single message.
 export async function uploadFiles(
-  projectId: string,
+  scope: DirentScope,
   items: Array<{ file: File; targetPath: string }>,
 ): Promise<DirentBatchResult> {
   const form = new FormData();
@@ -45,73 +72,87 @@ export async function uploadFiles(
     const renamed = new File([file], targetPath, { type: file.type });
     form.append('file', renamed);
   }
-  return request<DirentBatchResult>(`/projects/${projectId}/dirents`, {
-    method: 'POST',
-    body: form,
-    isForm: true,
-  });
+  return request<DirentBatchResult>(
+    `/dirents?path=${scopeRoot(scope)}`,
+    { method: 'POST', body: form, isForm: true },
+  );
 }
 
-export async function createFolder(projectId: string, folderPath: string): Promise<void> {
+export async function createFolder(scope: DirentScope, folderPath: string): Promise<void> {
   const cleaned = folderPath.replace(/^\/+|\/+$/g, '');
   const placeholder = new File([''], `${cleaned}/.keep`, { type: 'text/plain' });
   const form = new FormData();
   form.append('file', placeholder);
-  await request(`/projects/${projectId}/dirents`, { method: 'POST', body: form, isForm: true });
+  await request(
+    `/dirents?path=${scopeRoot(scope)}`,
+    { method: 'POST', body: form, isForm: true },
+  );
 }
 
-// Collection-level batch op (move/copy). Rename is just a single-source move
-// with new_name set.
 export async function moveDirents(
-  projectId: string,
+  scope: DirentScope,
   sources: string[],
   destination: string,
   newName?: string,
 ): Promise<DirentBatchResult> {
+  const root = scopeRoot(scope);
   const body: BackendDirentBatchOp = {
     op: 'move',
-    sources,
-    destination,
+    sources: sources.map((s) => `${root}/${s}`),
+    destination: destination ? `${root}/${destination}` : root,
     new_name: newName ?? null,
   };
-  return request<DirentBatchResult>(`/projects/${projectId}/dirents`, {
-    method: 'PATCH',
-    body,
-  });
+  return request<DirentBatchResult>('/dirents', { method: 'PATCH', body });
 }
 
 export async function copyDirents(
-  projectId: string,
+  srcScope: DirentScope,
+  dstScope: DirentScope,
   sources: string[],
   destination: string,
 ): Promise<DirentBatchResult> {
-  const body: BackendDirentBatchOp = { op: 'copy', sources, destination };
-  return request<DirentBatchResult>(`/projects/${projectId}/dirents`, {
-    method: 'PATCH',
-    body,
-  });
+  const srcRoot = scopeRoot(srcScope);
+  const dstRoot = scopeRoot(dstScope);
+  const body: BackendDirentBatchOp = {
+    op: 'copy',
+    sources: sources.map((s) => `${srcRoot}/${s}`),
+    destination: destination ? `${dstRoot}/${destination}` : dstRoot,
+  };
+  return request<DirentBatchResult>('/dirents', { method: 'PATCH', body });
 }
 
-export async function deleteDirent(projectId: string, path: string): Promise<void> {
-  await request(`/projects/${projectId}/dirents/${encodePath(path)}`, { method: 'DELETE' });
+export async function deleteDirent(scope: DirentScope, relativePath: string): Promise<void> {
+  const globalPath = `${scopeRoot(scope)}/${relativePath}`;
+  await request(`/dirents/${encodePath(globalPath)}`, { method: 'DELETE' });
 }
 
-// Authenticated download. <a href> can't carry the Authorization header, so
-// we fetch the blob ourselves and trigger a download via a synthetic anchor.
-export async function downloadFile(projectId: string, path: string): Promise<void> {
-  const url = `${getBaseUrl()}/projects/${projectId}/dirents/${encodePath(path)}`;
+export async function downloadFile(scope: DirentScope, relativePath: string): Promise<void> {
+  const globalPath = `${scopeRoot(scope)}/${relativePath}`;
+  await _fetchAndTriggerDownload(globalPath);
+}
+
+/** Fetch a file by its full global path and trigger a browser download. */
+export async function downloadFileByGlobalPath(globalPath: string): Promise<void> {
+  await _fetchAndTriggerDownload(globalPath);
+}
+
+/** Fetch a file by its full global path and return the blob (for thumbnails etc.). */
+export async function fetchFileBlob(globalPath: string): Promise<Blob> {
+  const url = `${getBaseUrl()}/dirents/${encodePath(globalPath)}`;
   const headers = new Headers();
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
-
   const response = await fetch(url, { headers });
   if (!response.ok) {
     const raw = await response.text().catch(() => '');
     throw new ApiError(response.status, raw || `${response.status} ${response.statusText}`);
   }
+  return response.blob();
+}
 
-  const blob = await response.blob();
-  const filename = path.split('/').filter(Boolean).pop() ?? 'download';
+async function _fetchAndTriggerDownload(globalPath: string): Promise<void> {
+  const blob = await fetchFileBlob(globalPath);
+  const filename = globalPath.split('/').filter(Boolean).pop() ?? 'download';
   const objectUrl = URL.createObjectURL(blob);
   try {
     const link = document.createElement('a');

@@ -5,7 +5,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getProject, listMembers } from '@/api/projects';
 import { createSession, deleteSession, listSessions } from '@/api/sessions';
-import { listDirents } from '@/api/dirents';
+import { listDirents, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { ActivityRow, AvatarStack, EmptyState, InfoRow, IntentIcon, SectionLabel, SharePill } from '@/components/uiPrimitives';
 import { timeAgo } from '@/lib/timeAgo';
@@ -32,9 +32,10 @@ function ProjectHome() {
   const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
   const sessions = useQuery({ queryKey: ['sessions', projectId], queryFn: () => listSessions(projectId) });
   const members = useQuery({ queryKey: ['members', projectId], queryFn: () => listMembers(projectId) });
+  const scope: DirentScope = { kind: 'shared', projectId };
   const files = useQuery({
-    queryKey: ['dirents', projectId, project.data?.name ?? ''],
-    queryFn: () => listDirents(projectId, project.data?.name ?? 'project'),
+    queryKey: ['dirents', 'shared', projectId, project.data?.name ?? ''],
+    queryFn: () => listDirents(scope, project.data?.name ?? 'project'),
     enabled: Boolean(project.data),
   });
 
