@@ -198,11 +198,11 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![
                 (
-                    include_bytes!("SKILL.md").to_vec(),
+                    include_bytes!("xlsx/SKILL.md").to_vec(),
                     PathBuf::from("SKILL.md"),
                 ),
                 (
-                    include_bytes!("xlsx_skill.py").to_vec(),
+                    include_bytes!("xlsx/xlsx_skill.py").to_vec(),
                     PathBuf::from("xlsx_skill.py"),
                 ),
             ],
@@ -248,11 +248,11 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![
                 (
-                    include_bytes!("SKILL.md").to_vec(),
+                    include_bytes!("xlsx/SKILL.md").to_vec(),
                     PathBuf::from("SKILL.md"),
                 ),
                 (
-                    include_bytes!("xlsx_skill.py").to_vec(),
+                    include_bytes!("xlsx/xlsx_skill.py").to_vec(),
                     PathBuf::from("xlsx_skill.py"),
                 ),
             ],
@@ -339,11 +339,11 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![
                 (
-                    include_bytes!("SKILL.md").to_vec(),
+                    include_bytes!("xlsx/SKILL.md").to_vec(),
                     PathBuf::from("SKILL.md"),
                 ),
                 (
-                    include_bytes!("xlsx_skill.py").to_vec(),
+                    include_bytes!("xlsx/xlsx_skill.py").to_vec(),
                     PathBuf::from("xlsx_skill.py"),
                 ),
             ],
@@ -386,11 +386,11 @@ pub fn get_coworker_cases() -> Vec<Case> {
                     PathBuf::from("sales_dashboard.xlsx"),
                 ),
                 (
-                    include_bytes!("SKILL.md").to_vec(),
+                    include_bytes!("xlsx/SKILL.md").to_vec(),
                     PathBuf::from("SKILL.md"),
                 ),
                 (
-                    include_bytes!("xlsx_skill.py").to_vec(),
+                    include_bytes!("xlsx/xlsx_skill.py").to_vec(),
                     PathBuf::from("xlsx_skill.py"),
                 ),
             ],
