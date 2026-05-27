@@ -62,6 +62,7 @@ pub struct SessionListResponse {
 #[serde(deny_unknown_fields)]
 pub struct SendMessageRequest {
     pub content: String,
+    pub attachments: Option<Vec<String>>,
 }
 
 pub type SendMessageResponse = Vec<MessageOutput>;
@@ -78,6 +79,9 @@ pub struct SessionMessageResponse {
     pub message: Message,
     pub sender: MessageSender,
     pub created_at: DateTime<Utc>,
+    pub attachments: Vec<String>,
+    /// Scope-relative paths of artifacts created during this message turn.
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

@@ -33,9 +33,12 @@ function ProjectHome() {
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const sessions = useQuery({ queryKey: ['sessions', projectSlug], queryFn: () => listSessions(projectSlug) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
+  // Dirents are scope-based and keyed by the resolved project UUID (not the slug).
+  const resolvedProjectId = project.data?.id;
   const files = useQuery({
-    queryKey: ['dirents', projectSlug, project.data?.name ?? ''],
-    queryFn: () => listDirents(projectSlug, project.data?.name ?? 'project'),
+    queryKey: ['dirents', 'shared', resolvedProjectId, project.data?.name ?? ''],
+    queryFn: () =>
+      listDirents({ kind: 'shared', projectId: resolvedProjectId! }, project.data?.name ?? 'project'),
     enabled: Boolean(project.data),
   });
 

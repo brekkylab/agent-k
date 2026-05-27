@@ -5,9 +5,7 @@ mod sqlite;
 mod user;
 use std::{sync::Arc, time::Duration};
 
-pub use automation::{
-    DbAutomation, DbAutomationRun, DbAutomationRunEvent, DbAutomationTrigger,
-};
+pub use automation::{DbAutomation, DbAutomationRun, DbAutomationRunEvent, DbAutomationTrigger};
 pub use project::{DbProject, DbProjectMember};
 pub use session::{
     DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, PrefixLookup, SessionAccess,

@@ -60,6 +60,8 @@ export interface Message {
   body: string;
   toolCalls?: ToolCallInvocation[];
   citations?: FileAsset['id'][];
+  attachments?: string[];
+  artifacts?: string[];
   status?: 'sent' | 'streaming' | 'done';
 }
 

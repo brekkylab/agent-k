@@ -1,10 +1,11 @@
-use std::{convert::Infallible, sync::Arc};
+use std::{collections::HashSet, convert::Infallible, sync::Arc};
 
+use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use aide::NoApi;
 use ailoy::{
-    agent::{Agent, AgentBuilder, AgentCard, AgentSpec},
+    agent::Agent,
     message::{Message, MessageOutput, Part, Role},
-    runenv::{RunEnv, Sandbox, SandboxConfig, VolumeMount},
+    runenv::{Sandbox, SandboxConfig},
 };
 use axum::{
     Json,
@@ -18,6 +19,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
+    handlers::dirent::{DirentScope, enforce_scope_access, parse_dirent_path, scope_root},
     model::{
         CreateSessionRequest, MessageSender, SendMessageRequest, SendMessageResponse,
         SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
@@ -28,7 +30,7 @@ use crate::{
     state::AppState,
 };
 
-const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
+const DEFAULT_MODEL: &str = "openai/gpt-5.4";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
 
@@ -37,73 +39,110 @@ pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     format!("session-{}", &s[..12])
 }
 
-pub(crate) async fn build_sandbox(
-    state: &Arc<AppState>,
-    project_id: Uuid,
-    session_id: Uuid,
-) -> Result<RunEnv, String> {
-    let uploads_host = state
+fn session_root(state: &AppState, project_id: Uuid, session_id: Uuid) -> std::path::PathBuf {
+    state
         .data_root
         .join("projects")
         .join(project_id.to_string())
-        .join("uploads");
-    tokio::fs::create_dir_all(&uploads_host)
-        .await
-        .map_err(|e| format!("failed to create uploads dir: {e}"))?;
-
-    let volumes = vec![VolumeMount::Bind {
-        host: uploads_host,
-        guest: "/workspace/.uploads".to_string(),
-        readonly: true,
-    }];
-
-    let sandbox_name = sandbox_name_for(&session_id);
-    let cfg = SandboxConfig {
-        name: Some(sandbox_name),
-        image: SANDBOX_IMAGE.into(),
-        persist: true,
-        volumes,
-        ..Default::default()
-    };
-    RunEnv::sandbox(cfg).await.map_err(|e| e.to_string())
+        .join("sessions")
+        .join(session_id.to_string())
 }
 
-pub(crate) async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
-    // TODO: Remove the subagent. This is added for testing frontend UI.
-    let math_spec = AgentSpec::new(DEFAULT_MODEL)
-        .instruction(
-            "You are a math expert. Solve any mathematical problem step by step, \
-            showing your reasoning clearly. Return the final answer at the end.",
-        )
-        .card(AgentCard {
-            name: "math".into(),
-            description: "Solve mathematical problems step by step. \
-                Use for arithmetic, algebra, calculus, statistics, or any numeric reasoning."
-                .into(),
-            skills: vec![],
-        });
+fn session_dirs(
+    state: &AppState,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let root = session_root(state, project_id, session_id);
+    let shared = state
+        .data_root
+        .join("projects")
+        .join(project_id.to_string())
+        .join("shared");
+    (root.join("inputs"), shared, root.join("artifacts"))
+}
 
-    AgentBuilder::new(DEFAULT_MODEL)
-        .instruction(concat!(
-            "You are a versatile assistant with access to code execution tools ",
-            "(bash, python), web search, and a math subagent. ",
-            "Your working directory is /workspace, which is read-write — you can freely ",
-            "create, edit, and delete files there for intermediate work, scripts, and results. ",
-            "Project files uploaded by the user are available read-only at /workspace/.uploads/. ",
-            "Use `ls /workspace/.uploads` to see what files are available, and ",
-            "`cat /workspace/.uploads/<path>` to read them. ",
-            "To modify or analyse uploaded files, copy them into /workspace first. ",
-            "New uploads appear in /workspace/.uploads immediately without restarting. ",
-            "You MUST delegate ALL math and numeric problems to the math tool. ",
-            "Use bash and python tools for computation, data analysis, and code execution tasks. ",
-            "Only skip tools for greetings or casual conversation.",
-        ))
-        .system_tools()
-        .web_search_tool(vec![])
-        .runenv(runenv)
-        .subagent(math_spec)
-        .build()
-        .map_err(|e| e.to_string())
+pub(crate) async fn build_session_agent(
+    state: &Arc<AppState>,
+    project_id: Uuid,
+    session_id: Uuid,
+) -> Result<Agent, String> {
+    let (inputs, shared, artifacts) = session_dirs(state, project_id, session_id);
+    for d in [&inputs, &shared, &artifacts] {
+        tokio::fs::create_dir_all(d)
+            .await
+            .map_err(|e| format!("failed to create dir {}: {e}", d.display()))?;
+    }
+    let opts = agent_k::agents::CoworkerSandboxOptions {
+        sandbox_name: Some(sandbox_name_for(&session_id)),
+        persist: true,
+    };
+    agent_k::agents::get_coworker_agent_with_opts(
+        TOP_LEVEL_AGENT_NAME,
+        DEFAULT_MODEL,
+        &inputs,
+        &shared,
+        &artifacts,
+        opts,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Builds the LLM hint note for attached files, using the correct sandbox path per scope.
+///
+/// - `inputs/` is bind-mounted flat at `GUEST_ATTACHED_DIR`, so only the basename is needed.
+/// - `shared/` is bind-mounted at `GUEST_SHARED_DIR` preserving directory structure, so the
+///   full tail path (relative to the shared root) is needed.
+pub fn build_attachment_note(attachments: &[String]) -> String {
+    let hints = attachments
+        .iter()
+        .filter_map(|path| {
+            parse_dirent_path(path).ok().map(|parsed| {
+                let tail = parsed.tail.to_string_lossy();
+                match &parsed.scope {
+                    DirentScope::Inputs { .. } => {
+                        let name = parsed
+                            .tail
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| tail.into_owned());
+                        format!("{GUEST_ATTACHED_DIR}/{name}")
+                    }
+                    DirentScope::Shared { .. } | DirentScope::Artifacts { .. } => {
+                        format!("{GUEST_SHARED_DIR}/{tail}")
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[Attached files: {hints}]")
+}
+
+/// Re-injects the attachment note into a stored user message when reconstructing LLM history.
+///
+/// Messages are persisted without the note so the frontend can display clean content.
+/// This restores the note for the agent's context on the next run.
+pub fn inject_attachment_note(mut msg: Message, attachments: &[String]) -> Message {
+    if attachments.is_empty() {
+        return msg;
+    }
+    let current_text = msg
+        .contents
+        .iter()
+        .filter_map(|p| {
+            if let Part::Text { text } = p {
+                Some(text.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let note = build_attachment_note(attachments);
+    msg.contents = vec![Part::text(format!("{current_text}\n\n{note}"))];
+    msg
 }
 
 /// Attribute each persisted message to a sender using `MessageOutput` metadata.
@@ -118,21 +157,60 @@ pub(crate) async fn build_agent(runenv: RunEnv) -> Result<Agent, String> {
 /// Pair each message in `messages` with its sender attribution derived from
 /// the agent run's `outputs`. The first message is the user query;
 /// subsequent agent messages are tagged with `source_agent` when present.
+/// Walk `artifacts_dir` recursively and return the set of scope-relative file paths.
+/// Returns an empty set if the directory does not exist.
+async fn collect_artifact_paths(artifacts_dir: &std::path::Path) -> HashSet<String> {
+    let mut paths = HashSet::new();
+    let mut stack = vec![artifacts_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut rd = match tokio::fs::read_dir(&dir).await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        loop {
+            match rd.next_entry().await {
+                Ok(Some(entry)) => {
+                    match entry.metadata().await {
+                        Ok(m) if m.is_dir() => stack.push(entry.path()),
+                        Ok(_) => {
+                            if let Ok(rel) = entry.path().strip_prefix(artifacts_dir) {
+                                paths.insert(rel.to_string_lossy().into_owned());
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+    }
+    paths
+}
+
 pub(crate) fn attribute_messages(
     messages: Vec<Message>,
     outputs: &[MessageOutput],
     user_id: Uuid,
+    user_attachments: Vec<String>,
 ) -> Vec<NewSessionMessage> {
     let senders = classify_senders_from_outputs(outputs, user_id);
     messages
         .into_iter()
         .zip(senders)
+        .enumerate()
         .map(
-            |(message, (sender_kind, sender_name, sender_user_id))| NewSessionMessage {
+            |(i, (message, (sender_kind, sender_name, sender_user_id)))| NewSessionMessage {
                 message,
                 sender_kind,
                 sender_name,
                 sender_user_id,
+                attachments: if i == 0 {
+                    user_attachments.clone()
+                } else {
+                    vec![]
+                },
+                artifacts: vec![],
             },
         )
         .collect()
@@ -177,13 +255,14 @@ async fn resolve_agent_for(
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
-    let history: Vec<Message> = rows.into_iter().map(|r| r.message).collect();
+    // Messages are stored without the attachment note; re-inject it so the agent sees
+    // the correct file hints when replaying history.
+    let history: Vec<Message> = rows
+        .into_iter()
+        .map(|r| inject_attachment_note(r.message, &r.attachments))
+        .collect();
 
-    let sandbox = build_sandbox(state, project_id, session_id)
-        .await
-        .map_err(|e| AppError::internal(e))?;
-
-    let mut agent = build_agent(sandbox)
+    let mut agent = build_session_agent(state, project_id, session_id)
         .await
         .map_err(|e| AppError::internal(e))?;
 
@@ -222,6 +301,46 @@ async fn resolve_session_id(state: &Arc<AppState>, session_ref: &str) -> ApiResu
     }
 }
 
+async fn validate_attachments(
+    state: &Arc<AppState>,
+    auth_user: &AuthUser,
+    session_id: Uuid,
+    project_id: Uuid,
+    attachments: &[String],
+) -> ApiResult<()> {
+    for path in attachments {
+        let parsed = parse_dirent_path(path)
+            .map_err(|_| AppError::bad_request(format!("invalid attachment path: {path}")))?;
+        match &parsed.scope {
+            DirentScope::Inputs {
+                session_id: sid, ..
+            } if *sid == session_id => {}
+            DirentScope::Shared { project_id: pid } if *pid == project_id => {}
+            _ => {
+                return Err(AppError::bad_request(format!(
+                    "attachment path not valid for this session: {path}"
+                )));
+            }
+        }
+        enforce_scope_access(state, auth_user, &parsed.scope, false).await?;
+        let host_path = scope_root(state, &parsed.scope).join(&parsed.tail);
+        let meta = tokio::fs::symlink_metadata(&host_path)
+            .await
+            .map_err(|_| AppError::not_found(format!("attachment not found: {path}")))?;
+        if meta.is_symlink() {
+            return Err(AppError::bad_request(format!(
+                "attachment path must not be a symlink: {path}"
+            )));
+        }
+        if !meta.is_file() {
+            return Err(AppError::bad_request(format!(
+                "attachment must be a file: {path}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
 /// POST /sessions
@@ -247,25 +366,7 @@ pub async fn create_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    let sandbox_name = sandbox_name_for(&session.id);
-    let sandbox = match build_sandbox(&state, project_id, session.id).await {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = state.repository.delete_session(session.id).await;
-            return Err(AppError::internal(e));
-        }
-    };
-    let agent = match build_agent(sandbox).await {
-        Ok(a) => a,
-        Err(e) => {
-            let _ = Sandbox::remove_persisted(&sandbox_name).await;
-            let _ = state.repository.delete_session(session.id).await;
-            return Err(AppError::internal(e));
-        }
-    };
-    state.insert_agent(session.id, agent);
-
-    tracing::info!(id = %session.id, sandbox = %sandbox_name, "session created");
+    tracing::info!(id = %session.id, "session created");
     Ok((
         StatusCode::CREATED,
         Json(SessionResponse::from_db(session, 0)),
@@ -384,11 +485,21 @@ pub async fn update_session(
     Ok(Json(SessionResponse::from_db(updated, unread)))
 }
 
-pub(crate) async fn cleanup_session_resources(state: &Arc<AppState>, session_id: Uuid) {
+pub(crate) async fn cleanup_session_resources(
+    state: &Arc<AppState>,
+    project_id: Uuid,
+    session_id: Uuid,
+) {
     state.remove_agent(&session_id);
     let sandbox_name = sandbox_name_for(&session_id);
     if let Err(e) = Sandbox::remove_persisted(&sandbox_name).await {
         tracing::warn!(%session_id, "failed to remove persisted sandbox: {e}");
+    }
+    let session_rt = session_root(state, project_id, session_id);
+    if let Err(e) = tokio::fs::remove_dir_all(&session_rt).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(%session_id, "failed to remove session dir: {e}");
+        }
     }
 }
 
@@ -416,7 +527,7 @@ pub async fn delete_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    cleanup_session_resources(&state, session_id).await;
+    cleanup_session_resources(&state, session.project_id, session_id).await;
 
     tracing::info!(%session_id, "session deleted");
     Ok(StatusCode::NO_CONTENT)
@@ -461,6 +572,12 @@ pub async fn fork_session(
         .mark_session_read(new_id, auth_user.id)
         .await;
 
+    // Pre-create host dirs for the forked session.
+    let (new_inputs, _, new_artifacts) = session_dirs(&state, source.project_id, new_id);
+    for d in [&new_inputs, &new_artifacts] {
+        let _ = tokio::fs::create_dir_all(d).await;
+    }
+
     let source_cfg = SandboxConfig {
         name: Some(sandbox_name_for(&source_session_id)),
         image: SANDBOX_IMAGE.into(),
@@ -471,6 +588,9 @@ pub async fn fork_session(
         Ok(s) => s,
         Err(e) => {
             let _ = state.repository.delete_session(new_id).await;
+            // Clean up pre-created session dirs
+            let session_rt = session_root(&state, source.project_id, new_id);
+            let _ = tokio::fs::remove_dir_all(&session_rt).await;
             return Err(AppError::internal(e.to_string()));
         }
     };
@@ -500,6 +620,8 @@ pub async fn fork_session(
         Err(e) => {
             let _ = state.repository.delete_session(new_id).await;
             let _ = Sandbox::remove_persisted(&new_sandbox_name).await;
+            let session_rt = session_root(&state, source.project_id, new_id);
+            let _ = tokio::fs::remove_dir_all(&session_rt).await;
             Err(AppError::internal(format!("sandbox fork failed: {e}")))
         }
     }
@@ -546,6 +668,8 @@ pub async fn get_message_history(
                 message: r.message,
                 sender,
                 created_at: r.created_at,
+                attachments: r.attachments,
+                artifacts: r.artifacts,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -620,6 +744,25 @@ pub async fn send_message(
     let need_title = session.title.is_none();
     let project_id = session.project_id;
 
+    // Validate attachments
+    let attachments = payload.attachments.clone().unwrap_or_default();
+    validate_attachments(
+        &state,
+        &auth_user,
+        session_id,
+        session.project_id,
+        &attachments,
+    )
+    .await?;
+
+    let raw_content = payload.content.clone();
+    let content_with_note = if attachments.is_empty() {
+        raw_content.clone()
+    } else {
+        let note = build_attachment_note(&attachments);
+        format!("{raw_content}\n\n{note}")
+    };
+
     // Spawn title generation immediately — runs concurrently with the agent run
     if need_title {
         let repo_title = state.repository.clone();
@@ -647,18 +790,45 @@ pub async fn send_message(
         .try_lock()
         .map_err(|_| AppError::locked("session is currently in use"))?;
 
+    let (_, _, artifacts_dir) = session_dirs(&state, project_id, session_id);
+    let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
+
     let prev_len = agent.get_history().len();
-    let msg = Message::new(Role::User).with_contents([Part::text(payload.content)]);
+    let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
     let mut run = agent.run(msg);
     let mut outputs: Vec<MessageOutput> = Vec::new();
     while let Some(item) = run.next().await {
         outputs.push(item.map_err(|e| AppError::internal(e.to_string()))?);
     }
     drop(run);
-    let new_messages = agent.get_history()[prev_len..].to_vec();
+    // Strip the attachment note before persisting — it is stored clean and re-injected
+    // from the `attachments` column when history is replayed, so the note never appears
+    // in the raw message body returned to the frontend.
+    let mut new_messages = agent.get_history()[prev_len..].to_vec();
+    if !attachments.is_empty() {
+        if let Some(first) = new_messages.first_mut() {
+            first.contents = vec![Part::text(raw_content)];
+        }
+    }
     drop(agent);
 
-    let to_persist = attribute_messages(new_messages, &outputs, auth_user.id);
+    let current_artifacts = collect_artifact_paths(&artifacts_dir).await;
+    let new_artifacts: Vec<String> = current_artifacts
+        .difference(&prev_artifacts)
+        .cloned()
+        .collect();
+
+    let mut to_persist = attribute_messages(new_messages, &outputs, auth_user.id, attachments);
+
+    if !new_artifacts.is_empty() {
+        if let Some(last_agent) = to_persist
+            .iter_mut()
+            .rev()
+            .find(|m| matches!(m.sender_kind, crate::repository::DbSenderKind::Agent))
+        {
+            last_agent.artifacts = new_artifacts;
+        }
+    }
 
     state
         .repository
@@ -695,6 +865,25 @@ pub async fn send_message_stream(
         return Err(AppError::forbidden("read-only access to this session"));
     }
 
+    // Validate attachments
+    let attachments = payload.attachments.clone().unwrap_or_default();
+    validate_attachments(
+        &state,
+        &auth_user,
+        session_id,
+        session.project_id,
+        &attachments,
+    )
+    .await?;
+
+    let raw_content = payload.content.clone();
+    let content_with_note = if attachments.is_empty() {
+        raw_content.clone()
+    } else {
+        let note = build_attachment_note(&attachments);
+        format!("{raw_content}\n\n{note}")
+    };
+
     let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
 
     // Acquire OwnedMutexGuard — held for entire SSE stream lifetime.
@@ -706,16 +895,16 @@ pub async fn send_message_stream(
 
     let prev_len = guard.get_history().len();
     let repo = state.repository.clone();
-    let content = payload.content;
     let need_title = session.title.is_none();
     let sender_id = auth_user.id;
     let project_id = session.project_id;
+    let (_, _, artifacts_dir) = session_dirs(&state, project_id, session_id);
 
     // Spawn title generation immediately — runs concurrently with the agent stream
     if need_title {
         let repo_title = repo.clone();
         let ws_tx = state.ws_tx.clone();
-        let first_msg = content.clone();
+        let first_msg = payload.content.clone();
         tokio::spawn(async move {
             tracing::info!("starting title generation");
             let title = generate_session_title(&first_msg).await;
@@ -737,7 +926,8 @@ pub async fn send_message_stream(
 
     let stream = async_stream::stream! {
         let mut agent = guard;  // OwnedMutexGuard moved in — lock held for stream lifetime
-        let msg = Message::new(Role::User).with_contents([Part::text(content)]);
+        let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
+        let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
         let mut run = agent.run(msg);
 
         let mut run_error: Option<String> = None;
@@ -770,10 +960,33 @@ pub async fn send_message_stream(
             return;
         }
 
-        let new_msgs = agent.get_history()[prev_len..].to_vec();
+        let mut new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);  // Release OwnedMutexGuard
 
-        let to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id);
+        // Strip the attachment note before persisting — clean content is stored in DB and the
+        // note is reconstructed from the `attachments` column when history is replayed.
+        if !attachments.is_empty() {
+            if let Some(first) = new_msgs.first_mut() {
+                first.contents = vec![Part::text(raw_content.clone())];
+            }
+        }
+
+        let current_artifacts = collect_artifact_paths(&artifacts_dir).await;
+        let new_artifacts: Vec<String> = current_artifacts
+            .difference(&prev_artifacts)
+            .cloned()
+            .collect();
+
+        let mut to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id, attachments.clone());
+        if !new_artifacts.is_empty() {
+            if let Some(last_agent) = to_persist
+                .iter_mut()
+                .rev()
+                .find(|m| matches!(m.sender_kind, crate::repository::DbSenderKind::Agent))
+            {
+                last_agent.artifacts = new_artifacts;
+            }
+        }
 
         if let Err(e) = repo.append_messages(session_id, &to_persist).await {
             tracing::error!(%session_id, "failed to persist messages: {e}");

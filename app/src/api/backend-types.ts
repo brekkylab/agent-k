@@ -64,7 +64,6 @@ export interface BackendFailedFile { path: string; error: string; }
 
 /// Unified result shape for upload / move / copy batch operations.
 export interface BackendDirentBatchResult {
-  project_id: string;
   succeeded: BackendDirent[];
   failed: BackendFailedFile[];
 }
@@ -102,6 +101,8 @@ export interface SessionMessageItem {
   message: AiloyMessage;
   sender: BackendMessageSender;
   created_at: string;
+  attachments?: string[];
+  artifacts?: string[];
 }
 
 export interface SessionMessageList {
