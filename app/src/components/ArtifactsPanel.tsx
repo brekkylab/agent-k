@@ -59,6 +59,15 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [menuOpen]);
 
+  useEffect(() => {
+    setSelected(prev => {
+      if (prev.size === 0) return prev;
+      const valid = new Set(entries.map(e => e.path));
+      const next = new Set([...prev].filter(p => valid.has(p)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [entries]);
+
   const deleteMutation = useMutation({
     mutationFn: async (paths: string[]) => {
       for (const p of paths) await deleteDirent(scope, p);
