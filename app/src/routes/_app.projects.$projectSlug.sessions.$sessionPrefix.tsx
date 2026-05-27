@@ -1,8 +1,8 @@
 // Session — markup mirrors app-live SessionPage. Chat surface (head + messages
 // + composer) + right side (members, references, access, artifact).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createFileRoute } from '@tanstack/react-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, streamMessage } from '@/api/messages';
@@ -30,12 +30,19 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sess
   component: SessionPage,
 });
 
+// Tracks sessions whose home-composer first message has already been sent, so the
+// initial-send effect fires exactly once per session even under StrictMode's
+// double-invoked effects. Module-level so it survives StrictMode's remount cycle.
+const sentInitialMessageFor = new Set<string>();
+
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
 }
 
 function SessionPage() {
   const { projectSlug, sessionPrefix } = Route.useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
@@ -75,11 +82,17 @@ function SessionPage() {
   };
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
 
-  useEffect(() => {
+  // Reset when switching sessions — done during render (not in an effect) so React
+  // StrictMode's double-invoked effects can't wipe the optimistic user/ai bubbles
+  // the initial-send effect adds on entry (React's "adjust state on prop change").
+  const [trackedPrefix, setTrackedPrefix] = useState(sessionPrefix);
+  if (trackedPrefix !== sessionPrefix) {
+    setTrackedPrefix(sessionPrefix);
     setLiveMessages([]);
     setComposerText('');
     setStreaming(false);
-  }, [sessionPrefix]);
+    setPendingAttachments([]);
+  }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
   useEffect(() => {
@@ -128,8 +141,8 @@ function SessionPage() {
     }
   }, [projectId, sessionId]);
 
-  const send = useCallback(async () => {
-    const text = composerText.trim();
+  const send = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? composerText).trim();
     if (!text || streaming || hasUploadingAttachments) return;
 
     const attachmentPaths = pendingAttachments
@@ -218,6 +231,17 @@ function SessionPage() {
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
     }
   }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
+
+  // Auto-send the first message handed over from the home composer via router state.
+  // Guarded by the module-level Set so it fires exactly once per session (StrictMode-safe),
+  // then the router state is cleared so a refresh doesn't resend.
+  useLayoutEffect(() => {
+    const initial = location.state.initialMessage;
+    if (!initial || sentInitialMessageFor.has(sessionPrefix)) return;
+    sentInitialMessageFor.add(sessionPrefix);
+    void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined }) });
+    void send(initial);
+  }, [location.state.initialMessage, sessionPrefix, navigate, send]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
