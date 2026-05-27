@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, streamMessage } from '@/api/messages';
 import { getProject, listMembers } from '@/api/projects';
-import { uploadFiles } from '@/api/dirents';
+import { deleteDirent, downloadFile, stripScopePrefix, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { Avatar, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
@@ -23,6 +23,8 @@ import { ArtifactsPanel } from '@/components/ArtifactsPanel';
 import { CopyToSharedDialog } from '@/components/CopyToSharedDialog';
 import { AttachmentChip } from '@/components/AttachmentChip';
 import { AttachmentPreview } from '@/components/AttachmentPreview';
+import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 export const Route = createFileRoute('/_app/projects/$projectId/sessions/$sessionId')({
   component: SessionPage,
@@ -54,6 +56,8 @@ function SessionPage() {
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [copyToSharedPaths, setCopyToSharedPaths] = useState<string[] | null>(null);
+  // maps message ID → scope-relative artifact paths created during that turn
+  const [messageArtifacts, setMessageArtifacts] = useState<Record<string, string[]>>({});
 
   type PendingAttachment = {
     tempId: string;
@@ -68,6 +72,7 @@ function SessionPage() {
     setLiveMessages([]);
     setComposerText('');
     setStreaming(false);
+    setMessageArtifacts({});
   }, [sessionId]);
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
@@ -120,6 +125,13 @@ function SessionPage() {
   const send = useCallback(async () => {
     const text = composerText.trim();
     if (!text || streaming || hasUploadingAttachments) return;
+
+    // Snapshot current artifact paths so we can diff after the stream ends
+    const artScope: DirentScope = { kind: 'artifacts', projectId, sessionId };
+    const prevArtifactPaths = new Set<string>(
+      (queryClient.getQueryData<Array<{ path: string }>>(['dirents', 'artifacts', projectId, sessionId]) ?? [])
+        .map(e => e.path),
+    );
 
     const attachmentPaths = pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
@@ -204,7 +216,21 @@ function SessionPage() {
       setLiveMessages([]);
       void queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
-      void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+
+      // Refetch artifacts synchronously to compute the diff for this turn
+      await queryClient.refetchQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+
+      const newHistory = queryClient.getQueryData<Message[]>(['messages', sessionId]) ?? [];
+      const lastAiMsg = [...newHistory].reverse().find(m => m.sender.kind === 'agent');
+      if (lastAiMsg) {
+        const freshArtifacts = queryClient.getQueryData<Array<{ path: string; kind: string }>>(['dirents', 'artifacts', projectId, sessionId]) ?? [];
+        const newRelPaths = freshArtifacts
+          .filter(e => e.kind === 'file' && !prevArtifactPaths.has(e.path))
+          .map(e => stripScopePrefix(artScope, e.path));
+        if (newRelPaths.length > 0) {
+          setMessageArtifacts(prev => ({ ...prev, [lastAiMsg.id]: newRelPaths }));
+        }
+      }
     }
   }, [composerText, streaming, sessionId, projectId, currentUser, queryClient, showToast, pendingAttachments]);
 
@@ -256,6 +282,21 @@ function SessionPage() {
               message={msg}
               users={usersForRender}
               currentUserId={currentUser?.id ?? ''}
+              artifactPaths={messageArtifacts[msg.id]}
+              projectId={projectId}
+              sessionId={sessionId}
+              onCopyToShared={setCopyToSharedPaths}
+              onArtifactDeleted={(path) => {
+                setMessageArtifacts(prev => {
+                  const paths = (prev[msg.id] ?? []).filter(p => p !== path);
+                  if (paths.length === 0) {
+                    const next = { ...prev };
+                    delete next[msg.id];
+                    return next;
+                  }
+                  return { ...prev, [msg.id]: paths };
+                });
+              }}
             />
           ))}
           {streaming && (
@@ -354,6 +395,102 @@ function SessionPage() {
   );
 }
 
+function ArtifactChip({
+  path,
+  projectId,
+  sessionId,
+  onCopyToShared,
+  onDeleted,
+}: {
+  path: string;
+  projectId: string;
+  sessionId: string;
+  onCopyToShared: (paths: string[]) => void;
+  onDeleted: (path: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const scope: DirentScope = { kind: 'artifacts', projectId, sessionId };
+  const filename = path.split('/').pop() ?? path;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPtr(e: PointerEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', onPtr);
+    return () => document.removeEventListener('pointerdown', onPtr);
+  }, [menuOpen]);
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteDirent(scope, path),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+      onDeleted(path);
+      showToast('삭제되었습니다');
+      setConfirmDelete(false);
+    },
+    onError: () => showToast('삭제 실패'),
+  });
+
+  return (
+    <>
+      <div className="cw-attach-chip cw-artifact-chip">
+        <FileTypeIcon filename={filename} size={14} />
+        <span className="cw-attach-name">{filename}</span>
+        <div className="cw-artifact-menu-wrap" ref={menuRef}>
+          <button
+            type="button"
+            aria-label="더보기"
+            onClick={() => setMenuOpen(prev => !prev)}
+          >
+            <Icon name="more" size={11} />
+          </button>
+          {menuOpen && (
+            <ul className="cw-file-dropdown" onClick={() => setMenuOpen(false)}>
+              <li>
+                <button type="button" onClick={() => downloadFile(scope, path)}>
+                  <Icon name="download" size={13} /> 다운로드
+                </button>
+              </li>
+              <li>
+                <button type="button" onClick={() => onCopyToShared([path])}>
+                  <Icon name="file" size={13} /> 공유 디렉토리로 복사
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  className="cw-file-dropdown-destructive"
+                  onClick={() => { setMenuOpen(false); setConfirmDelete(true); }}
+                >
+                  <Icon name="trash" size={13} /> 삭제
+                </button>
+              </li>
+            </ul>
+          )}
+        </div>
+      </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          title="삭제 확인"
+          body={`"${filename}"을(를) 삭제하시겠습니까?`}
+          confirmLabel="삭제"
+          destructive
+          pending={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate()}
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
+    </>
+  );
+}
+
 function extractSubagentQuery(args: unknown): string {
   if (typeof args === 'string') {
     try {
@@ -378,10 +515,20 @@ function MessageBubble({
   message,
   users,
   currentUserId,
+  artifactPaths,
+  projectId,
+  sessionId,
+  onCopyToShared,
+  onArtifactDeleted,
 }: {
   message: Message;
   users: User[];
   currentUserId: string;
+  artifactPaths?: string[];
+  projectId?: string;
+  sessionId?: string;
+  onCopyToShared?: (paths: string[]) => void;
+  onArtifactDeleted?: (path: string) => void;
 }) {
   const isAi = message.sender.kind === 'agent';
   const isSelf = message.sender.kind === 'user' && message.sender.userId === currentUserId;
@@ -434,6 +581,20 @@ function MessageBubble({
               {tc.result !== undefined && <pre className="cw-toolcall-result">{tc.result}</pre>}
             </details>
           )
+        )}
+        {isAi && artifactPaths && artifactPaths.length > 0 && projectId && sessionId && onCopyToShared && onArtifactDeleted && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+            {artifactPaths.map((path) => (
+              <ArtifactChip
+                key={path}
+                path={path}
+                projectId={projectId}
+                sessionId={sessionId}
+                onCopyToShared={onCopyToShared}
+                onDeleted={onArtifactDeleted}
+              />
+            ))}
+          </div>
         )}
         {isAi && message.status === 'done' && (
           <div className="cw-ai-actions">
