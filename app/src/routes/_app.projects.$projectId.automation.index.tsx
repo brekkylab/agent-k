@@ -9,6 +9,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { summarizeCron } from '@/components/SchedulePicker';
 import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, listRuns, listTriggers } from '@/api/automations';
 import { listMessages } from '@/api/messages';
+import { formatMessageTime } from '@/lib/formatMessageTime';
 import type { Automation, Message, Run, Trigger } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectId/automation/')({
@@ -400,7 +401,7 @@ function AutomationsPage() {
                 <div className="cw-message-body">
                   <div className="cw-message-meta">
                     <b>{isAi ? 'Agent' : 'Prompt'}</b>
-                    <time>{formatRunWhen(run)}</time>
+                    <time>{formatMessageTime(msg.createdAt)}</time>
                   </div>
                   <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
                     {isAi
