@@ -6,7 +6,7 @@ use ailoy::{
 };
 use futures_util::StreamExt;
 
-const TITLE_MODEL: &str = "anthropic/claude-haiku-4-5";
+const TITLE_MODEL: &str = "openai/gpt-5.4-nano";
 pub const TITLE_MAX_LEN: usize = 60;
 const TITLE_TIMEOUT_SECS: u64 = 15;
 
@@ -29,7 +29,8 @@ async fn call_llm_for_session_title(text: &str) -> Result<String, String> {
     let mut agent = AgentBuilder::new(TITLE_MODEL)
         .instruction(
             format!("You are a concise title generator. \
-             Respond with a single short phrase (under {TITLE_MAX_LEN} characters) that captures the topic. \
+             Try to summarize user's question in a single short phrase (under {TITLE_MAX_LEN} characters). \
+             Just summarize it, DO NOT try to generate the answer of the question. \
              No quotes, no trailing punctuation."),
         )
         .build()

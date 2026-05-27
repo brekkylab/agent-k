@@ -117,13 +117,13 @@ type FileCategory = 'pdf' | 'sheet' | 'image' | 'doc' | 'code' | 'archive' | 'vi
 function categorise(name: string): FileCategory {
   const lower = name.toLowerCase();
   if (lower.endsWith('.pdf')) return 'pdf';
-  if (/\.(csv|tsv|xlsx|xls)$/.test(lower)) return 'sheet';
-  if (/\.(png|jpe?g|gif|webp|svg|bmp|heic|avif)$/.test(lower)) return 'image';
-  if (/\.(md|txt|doc|docx|markdown|rtf|odt)$/.test(lower)) return 'doc';
-  if (/\.(js|mjs|cjs|ts|tsx|jsx|json|html|css|scss|py|rb|rs|go|java|c|cc|cpp|h|hpp|sh|bash|zsh|yml|yaml|toml|xml|sql)$/.test(lower)) return 'code';
-  if (/\.(zip|tar|gz|tgz|bz2|rar|7z)$/.test(lower)) return 'archive';
-  if (/\.(mp4|mov|avi|mkv|webm|m4v)$/.test(lower)) return 'video';
-  if (/\.(mp3|wav|flac|ogg|m4a|aac)$/.test(lower)) return 'audio';
+  if (/\.(csv|tsv|xlsx|xls|ods|numbers)$/.test(lower)) return 'sheet';
+  if (/\.(png|jpe?g|gif|webp|svg|bmp|heic|heif|avif|tiff?|ico|raw|cr2|nef|arw)$/.test(lower)) return 'image';
+  if (/\.(md|txt|doc|docx|markdown|rtf|odt|hwp|hwpx|pages|pptx?|odp|key|epub)$/.test(lower)) return 'doc';
+  if (/\.(js|mjs|cjs|ts|tsx|jsx|json|jsonc|html|htm|css|scss|sass|less|py|rb|rs|go|java|kt|kts|c|cc|cpp|h|hpp|cs|fs|fsx|swift|m|sh|bash|zsh|fish|ps1|bat|cmd|yml|yaml|toml|xml|sql|graphql|gql|lua|php|r|scala|clj|cljs|ex|exs|erl|hrl|hs|ml|mli|nim|zig|dart|vue|svelte|elm|tf|tfvars|bicep|proto|gradle|groovy|cmake|make|dockerfile|ini|env|cfg|conf)$/.test(lower)) return 'code';
+  if (/\.(zip|tar|gz|tgz|bz2|xz|lz4|zst|rar|7z|cab|apk|ipa|deb|rpm|dmg|pkg|iso)$/.test(lower)) return 'archive';
+  if (/\.(mp4|mov|avi|mkv|webm|m4v|wmv|flv|3gp|ts|mts|m2ts|vob|ogv|rmvb)$/.test(lower)) return 'video';
+  if (/\.(mp3|wav|flac|ogg|m4a|aac|weba|opus|mid|midi|aiff|au|wma|amr|ape|dsf)$/.test(lower)) return 'audio';
   return 'other';
 }
 

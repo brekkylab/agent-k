@@ -210,10 +210,7 @@ impl SqliteRepository {
                 row.get::<String, _>("run_id"),
                 "automation_run_events.run_id",
             )?,
-            ts: Self::parse_timestamp(
-                row.get::<String, _>("ts"),
-                "automation_run_events.ts",
-            )?,
+            ts: Self::parse_timestamp(row.get::<String, _>("ts"), "automation_run_events.ts")?,
             kind,
             payload,
         })
@@ -318,9 +315,10 @@ impl SqliteRepository {
         prompts: Option<Vec<String>>,
         enabled: Option<bool>,
     ) -> RepositoryResult<DbAutomation> {
-        let current = self.get_automation(id).await?.ok_or_else(|| {
-            RepositoryError::InvalidData(format!("automation {id} not found"))
-        })?;
+        let current = self
+            .get_automation(id)
+            .await?
+            .ok_or_else(|| RepositoryError::InvalidData(format!("automation {id} not found")))?;
         let new_name = name.unwrap_or(current.name);
         let new_desc = description.unwrap_or(current.description);
         let new_prompts = prompts.unwrap_or(current.prompts);
@@ -409,10 +407,8 @@ impl SqliteRepository {
         for row in &triggers {
             let trig_id: String = row.get("id");
             let spec_json: String = row.get("spec_json");
-            let spec = crate::model::TriggerSpec::from_db(
-                crate::model::TriggerKind::Cron,
-                &spec_json,
-            )?;
+            let spec =
+                crate::model::TriggerSpec::from_db(crate::model::TriggerKind::Cron, &spec_json)?;
             let crate::model::TriggerSpec::Cron { expr, tz } = spec else {
                 continue;
             };
@@ -544,9 +540,9 @@ impl SqliteRepository {
         .execute(&self.pool)
         .await?;
 
-        self.get_trigger(id).await?.ok_or_else(|| {
-            RepositoryError::InvalidData("trigger disappeared after update".into())
-        })
+        self.get_trigger(id)
+            .await?
+            .ok_or_else(|| RepositoryError::InvalidData("trigger disappeared after update".into()))
     }
 
     pub async fn delete_trigger(&self, id: Uuid) -> RepositoryResult<bool> {
@@ -700,19 +696,18 @@ impl SqliteRepository {
         let now = Self::now_string();
         let scheduled_s = Self::ts_string(scheduled_for);
 
-        let automation_name: String = sqlx::query_scalar(
-            "SELECT name FROM automations WHERE id = ?",
-        )
-        .bind(automation_id.to_string())
-        .fetch_one(&mut *tx)
-        .await?;
+        let automation_name: String =
+            sqlx::query_scalar("SELECT name FROM automations WHERE id = ?")
+                .bind(automation_id.to_string())
+                .fetch_one(&mut *tx)
+                .await?;
         let trigger_kind_label: String = match trigger_id {
-            Some(tid) => sqlx::query_scalar(
-                "SELECT kind FROM automation_triggers WHERE id = ?",
-            )
-            .bind(tid.to_string())
-            .fetch_one(&mut *tx)
-            .await?,
+            Some(tid) => {
+                sqlx::query_scalar("SELECT kind FROM automation_triggers WHERE id = ?")
+                    .bind(tid.to_string())
+                    .fetch_one(&mut *tx)
+                    .await?
+            }
             None => "manual".to_string(),
         };
         let session_title =
@@ -818,14 +813,12 @@ impl SqliteRepository {
         let scheduled_s = Self::ts_string(scheduled_for);
         let next_s = Self::ts_string(next_fire_at);
 
-        let automation_name: String = sqlx::query_scalar(
-            "SELECT name FROM automations WHERE id = ?",
-        )
-        .bind(automation_id.to_string())
-        .fetch_one(&mut *tx)
-        .await?;
-        let session_title =
-            automation_session_title(&automation_name, "cron", scheduled_for);
+        let automation_name: String =
+            sqlx::query_scalar("SELECT name FROM automations WHERE id = ?")
+                .bind(automation_id.to_string())
+                .fetch_one(&mut *tx)
+                .await?;
+        let session_title = automation_session_title(&automation_name, "cron", scheduled_for);
 
         let session_id = Uuid::new_v4();
         sqlx::query(
@@ -890,14 +883,12 @@ impl SqliteRepository {
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query(
-            "UPDATE automation_triggers SET next_fire_at = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(&next_s)
-        .bind(&now)
-        .bind(trigger_id.to_string())
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE automation_triggers SET next_fire_at = ?, updated_at = ? WHERE id = ?")
+            .bind(&next_s)
+            .bind(&now)
+            .bind(trigger_id.to_string())
+            .execute(&mut *tx)
+            .await?;
 
         tx.commit().await?;
 
@@ -1148,16 +1139,18 @@ impl SqliteRepository {
             tx.commit().await?;
             return Ok(None);
         }
-        let project_id = Self::parse_uuid(row.get::<String, _>("project_id"), "automations.project_id")?;
-        let creator_id = Self::parse_uuid(row.get::<String, _>("created_by"), "automations.created_by")?;
+        let project_id =
+            Self::parse_uuid(row.get::<String, _>("project_id"), "automations.project_id")?;
+        let creator_id =
+            Self::parse_uuid(row.get::<String, _>("created_by"), "automations.created_by")?;
         let automation_name: String = row.get("name");
         let trigger_kind_label: String = match previous_run.trigger_id {
-            Some(tid) => sqlx::query_scalar(
-                "SELECT kind FROM automation_triggers WHERE id = ?",
-            )
-            .bind(tid.to_string())
-            .fetch_one(&mut *tx)
-            .await?,
+            Some(tid) => {
+                sqlx::query_scalar("SELECT kind FROM automation_triggers WHERE id = ?")
+                    .bind(tid.to_string())
+                    .fetch_one(&mut *tx)
+                    .await?
+            }
             None => "manual".to_string(),
         };
         let session_title =

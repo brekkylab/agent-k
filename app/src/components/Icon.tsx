@@ -6,7 +6,7 @@ export type IconName =
   | 'send' | 'sparkles' | 'check' | 'chevron' | 'zap' | 'calendar' | 'circle-play' | 'rocket' | 'artifact'
   | 'shield' | 'x' | 'arrow-left' | 'analysis' | 'brainstorm' | 'writing'
   | 'recap' | 'general' | 'more' | 'upload' | 'trash' | 'download' | 'copy'
-  | 'list' | 'grid' | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left'
+  | 'list' | 'grid' | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left' | 'paperclip'
   | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio';
 
 type PreviewIconName =
@@ -15,7 +15,7 @@ type PreviewIconName =
   | 'settings' | 'plus' | 'chevron-down' | 'chevron-right' | 'chevron-left' | 'more-horizontal' | 'check'
   | 'x' | 'arrow-left' | 'send' | 'search' | 'file-text' | 'file-spreadsheet'
   | 'file' | 'image' | 'sparkles' | 'shield-check' | 'zap' | 'calendar' | 'circle-play' | 'rocket'
-  | 'trash-2' | 'download' | 'copy' | 'list' | 'grid-3x3' | 'rotate-ccw' | 'corner-down-left'
+  | 'trash-2' | 'download' | 'copy' | 'list' | 'grid-3x3' | 'rotate-ccw' | 'corner-down-left' | 'paperclip'
   | 'file-code' | 'file-archive' | 'file-video' | 'file-audio';
 
 const previewIconPath: Record<PreviewIconName, string> = {
@@ -63,6 +63,7 @@ const previewIconPath: Record<PreviewIconName, string> = {
   'file-archive': '<path d="M10 12v-1"/><path d="M10 18v-2"/><path d="M10 7V6"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h2.5"/><circle cx="10" cy="20" r="2"/>',
   'file-video': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m10 11 5 3-5 3z"/>',
   'file-audio': '<path d="M17.5 22h.5a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M2 17v-3a4 4 0 0 1 8 0v3"/><circle cx="9" cy="17" r="1"/><circle cx="3" cy="17" r="1"/>',
+  paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
 };
 
 const iconAlias: Record<IconName, PreviewIconName> = {
@@ -115,6 +116,7 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   'file-archive': 'file-archive',
   'file-video': 'file-video',
   'file-audio': 'file-audio',
+  paperclip: 'paperclip',
 };
 
 export function Icon({ name, size = 16, className = '', strokeWidth = 2, style, ...props }: SVGProps<SVGSVGElement> & { name: IconName; size?: number }) {

@@ -4,10 +4,7 @@ mod common;
 use axum::http::StatusCode;
 use serde_json::json;
 
-async fn signup_and_personal_project(
-    app: &axum::Router,
-    username: &str,
-) -> (String, String) {
+async fn signup_and_personal_project(app: &axum::Router, username: &str) -> (String, String) {
     common::signup(app, username, "password123").await;
     let token = common::login(app, username, "password123").await;
     let project = common::get_personal_project(app, &token).await;
@@ -48,9 +45,14 @@ async fn automation_crud_happy_path() {
     let (token, pid) = signup_and_personal_project(&app, "alice").await;
 
     // create
-    let created =
-        create_automation(&app, &token, &pid, "daily report", vec!["step one", "step two"])
-            .await;
+    let created = create_automation(
+        &app,
+        &token,
+        &pid,
+        "daily report",
+        vec!["step one", "step two"],
+    )
+    .await;
     let auto_id = created["id"].as_str().unwrap().to_string();
     assert_eq!(created["name"], "daily report");
     assert_eq!(created["prompts"].as_array().unwrap().len(), 2);
@@ -473,11 +475,7 @@ async fn fire_webhook(
     (status, value)
 }
 
-async fn make_webhook_trigger(
-    app: &axum::Router,
-    token: &str,
-    auto_id: &str,
-) -> (String, String) {
+async fn make_webhook_trigger(app: &axum::Router, token: &str, auto_id: &str) -> (String, String) {
     let (status, body) = common::authed(
         app,
         "POST",
@@ -486,7 +484,11 @@ async fn make_webhook_trigger(
         Some(json!({ "kind": "webhook" })),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "create webhook trigger: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create webhook trigger: {body}"
+    );
     let tid = body["trigger"]["id"].as_str().unwrap().to_string();
     let plaintext = body["webhook_token"].as_str().unwrap().to_string();
     (tid, plaintext)
@@ -501,8 +503,7 @@ async fn webhook_fire_with_valid_token_queues_run() {
     let aid = auto["id"].as_str().unwrap().to_string();
     let (_tid, plaintext) = make_webhook_trigger(&app, &token, &aid).await;
 
-    let (status, body) =
-        fire_webhook(&app, Some(&plaintext), None, r#"{"event":"ping"}"#).await;
+    let (status, body) = fire_webhook(&app, Some(&plaintext), None, r#"{"event":"ping"}"#).await;
     assert_eq!(status, StatusCode::ACCEPTED, "fire webhook: {body}");
     assert_eq!(body["status"], "queued");
     assert!(body["run_id"].is_string());

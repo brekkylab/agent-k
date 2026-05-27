@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::{
     cron::next_fire_after,
-    handlers::session::{attribute_messages, build_agent, build_sandbox},
+    handlers::session::{attribute_messages, build_session_agent},
     model::{EventKind, RunStatus, TriggerSpec},
     repository::DbAutomationRun,
     state::AppState,
@@ -395,8 +395,9 @@ async fn execute_run(
         .await
         .map_err(|e| e.to_string())?;
 
-    let sandbox = build_sandbox(state, automation.project_id, run.session_id).await?;
-    let agent = build_agent(sandbox).await?;
+    let agent = build_session_agent(state, automation.project_id, run.session_id)
+        .await
+        .map_err(|e| e.to_string())?;
     state.insert_agent(run.session_id, agent);
 
     for (idx, prompt) in automation.prompts.iter().enumerate() {
@@ -452,7 +453,7 @@ async fn execute_run(
         // Attribute the prompt to the automation's creator (User-kind) and any
         // agent outputs to the agent (Agent-kind), via the same helper that
         // session.send_message uses.
-        let to_persist = attribute_messages(new_msgs, &outputs, automation.created_by);
+        let to_persist = attribute_messages(new_msgs, &outputs, automation.created_by, vec![]);
         repo.append_messages(run.session_id, &to_persist)
             .await
             .map_err(|e| e.to_string())?;
