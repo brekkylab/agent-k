@@ -267,10 +267,10 @@ def seed_rows(db: Path) -> None:
 
     # (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments_json)
     def user_msg(session_id: str, text: str, creator_id: str, t: str, attachments: list[str] | None = None):
-        return (session_id, message_json("user", text), t, "user", None, creator_id, json.dumps(attachments or []))
+        return (session_id, message_json("user", text), t, "user", None, creator_id, json.dumps(attachments or []), "[]")
 
-    def agent_msg(session_id: str, text: str, t: str):
-        return (session_id, message_json("assistant", text), t, "agent", "agent-k", None, "[]")
+    def agent_msg(session_id: str, text: str, t: str, artifacts: list[str] | None = None):
+        return (session_id, message_json("assistant", text), t, "agent", "agent-k", None, "[]", json.dumps(artifacts or []))
 
     messages = [
         # SESSION_Q2
@@ -296,10 +296,11 @@ def seed_rows(db: Path) -> None:
             SESSION_REPORT,
             "GTM_summary_report.md와 ICP_comparison_table.csv를 Artifacts에 저장했습니다. 보고서에는 ICP 우선순위와 런치 타임라인이 포함되어 있습니다.",
             ts(40),
+            artifacts=["GTM_summary_report.md", "ICP_comparison_table.csv"],
         ),
     ]
     conn.executemany(
-        "INSERT INTO session_messages (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session_messages (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments, artifacts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         messages,
     )
     conn.commit()

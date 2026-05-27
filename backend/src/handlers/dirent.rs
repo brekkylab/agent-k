@@ -641,6 +641,18 @@ pub async fn dirent_delete(
 
     tracing::info!(path = %path_str, "dirent deleted");
 
+    // Remove artifact from message linkage when an artifacts-scoped file is deleted.
+    if let DirentScope::Artifacts { session_id, .. } = &parsed.scope {
+        let rel_path = parsed.tail.to_string_lossy().into_owned();
+        if let Err(e) = state
+            .repository
+            .remove_artifact_from_messages(*session_id, &rel_path)
+            .await
+        {
+            tracing::warn!(%session_id, %rel_path, "failed to remove artifact from messages: {e}");
+        }
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -144,6 +144,7 @@ export function toMessageItem(
     body,
     toolCalls,
     attachments: item.attachments ?? undefined,
+    artifacts: item.artifacts?.length ? item.artifacts : undefined,
     status: 'done',
   };
 }

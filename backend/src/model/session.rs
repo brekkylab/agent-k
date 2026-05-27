@@ -79,6 +79,8 @@ pub struct SessionMessageResponse {
     pub sender: MessageSender,
     pub created_at: DateTime<Utc>,
     pub attachments: Vec<String>,
+    /// Scope-relative paths of artifacts created during this message turn.
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

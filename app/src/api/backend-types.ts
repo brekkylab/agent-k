@@ -101,6 +101,7 @@ export interface SessionMessageItem {
   sender: BackendMessageSender;
   created_at: string;
   attachments?: string[];
+  artifacts?: string[];
 }
 
 export interface SessionMessageList {

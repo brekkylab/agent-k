@@ -422,6 +422,7 @@ async fn get_messages_response_includes_correct_sender_field() {
                 sender_name: None,
                 sender_user_id: Some(alice_id),
                 attachments: vec![],
+                artifacts: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant).with_contents([Part::text("hi there")]),
@@ -429,6 +430,7 @@ async fn get_messages_response_includes_correct_sender_field() {
                 sender_name: Some("agent-k".to_string()),
                 sender_user_id: None,
                 attachments: vec![],
+                artifacts: vec![],
             },
         ],
     )
@@ -658,6 +660,7 @@ async fn attachment_note_not_present_in_stored_message_body() {
             attachments: vec![format!(
                 "projects/{project_id}/sessions/{session_id}/inputs/report.pdf"
             )],
+            artifacts: vec![],
         }],
     )
     .await

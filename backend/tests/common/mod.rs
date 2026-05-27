@@ -428,6 +428,7 @@ pub fn to_new_msgs(
                 sender_name,
                 sender_user_id,
                 attachments: vec![],
+                artifacts: vec![],
             }
         })
         .collect()

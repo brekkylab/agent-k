@@ -65,6 +65,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ['messages', sessionId] });
       showToast('삭제되었습니다');
       setSelected(new Set());
       setConfirmDelete(null);
@@ -159,11 +160,12 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
 
           {/* ── file rows ─────────────────────────────────────────── */}
           {entries.map((entry) => (
-            <div className="cw-artifact-row" key={entry.path}>
+            <div className="cw-artifact-row" key={entry.path} style={{ cursor: 'pointer' }} onClick={() => toggleEntry(entry.path)}>
               <input
                 type="checkbox"
                 checked={selected.has(entry.path)}
                 onChange={() => toggleEntry(entry.path)}
+                onClick={(e) => e.stopPropagation()}
                 style={{ cursor: 'pointer', flexShrink: 0 }}
               />
               <span className="cw-artifact-name">
@@ -171,7 +173,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
                 {nameOf(entry)}
               </span>
               <span className="cw-artifact-size">{entry.bytes != null ? formatBytes(entry.bytes) : ''}</span>
-              <div className="cw-artifact-menu-wrap" ref={menuOpen === entry.path ? openMenuRef : null}>
+              <div className="cw-artifact-menu-wrap" ref={menuOpen === entry.path ? openMenuRef : null} onClick={(e) => e.stopPropagation()}>
                 <button
                   type="button"
                   aria-label="더보기"

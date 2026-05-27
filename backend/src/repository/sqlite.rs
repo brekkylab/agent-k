@@ -139,6 +139,7 @@ mod tests {
                     sender_name: None,
                     sender_user_id: Some(user_id),
                     attachments: vec![],
+                    artifacts: vec![],
                 },
                 NewSessionMessage {
                     message: Message::new(Role::Assistant)
@@ -147,6 +148,7 @@ mod tests {
                     sender_name: Some("agent-k".into()),
                     sender_user_id: None,
                     attachments: vec![],
+                    artifacts: vec![],
                 },
             ];
             repo.append_messages(session_id, &msgs).await.unwrap();
@@ -195,6 +197,7 @@ mod tests {
                 sender_name: None,
                 sender_user_id: Some(user_id),
                 attachments: vec![],
+                artifacts: vec![],
             }],
         )
         .await
@@ -227,6 +230,7 @@ mod tests {
                 sender_name: None,
                 sender_user_id: Some(user_id),
                 attachments: vec![],
+                artifacts: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant)
@@ -235,6 +239,7 @@ mod tests {
                 sender_name: Some("agent-k".into()),
                 sender_user_id: None,
                 attachments: vec![],
+                artifacts: vec![],
             },
         ];
         repo.append_messages(sid, &batch1).await.unwrap();
@@ -246,6 +251,7 @@ mod tests {
                 sender_name: None,
                 sender_user_id: Some(user_id),
                 attachments: vec![],
+                artifacts: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant)
@@ -254,6 +260,7 @@ mod tests {
                 sender_name: Some("agent-k".into()),
                 sender_user_id: None,
                 attachments: vec![],
+                artifacts: vec![],
             },
         ];
         repo.append_messages(sid, &batch2).await.unwrap();

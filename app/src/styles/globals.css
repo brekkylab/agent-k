@@ -1051,8 +1051,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-attach-spinner { font-size: 10px; }
 
 /* Artifact chips below AI message bubbles */
-.cw-artifact-chip { max-width: 240px; border-radius: var(--cw-radius-sm); }
-.cw-artifact-chip .cw-artifact-menu-wrap > button { opacity: 1; width: 18px; height: 18px; }
+.cw-artifact-chip { max-width: 240px; border-radius: var(--cw-radius-sm); user-select: none; overflow: visible; }
+.cw-artifact-chip:hover { background: var(--cw-paper-4); border-color: var(--cw-border-hover); }
 
 /* Attachment preview in message bubbles */
 .cw-attach-preview {

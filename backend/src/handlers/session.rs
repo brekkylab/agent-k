@@ -1,4 +1,4 @@
-use std::{convert::Infallible, sync::Arc};
+use std::{collections::HashSet, convert::Infallible, sync::Arc};
 
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use aide::NoApi;
@@ -157,6 +157,37 @@ pub fn inject_attachment_note(mut msg: Message, attachments: &[String]) -> Messa
 /// Pair each message in `messages` with its sender attribution derived from
 /// the agent run's `outputs`. The first message is the user query;
 /// subsequent agent messages are tagged with `source_agent` when present.
+/// Walk `artifacts_dir` recursively and return the set of scope-relative file paths.
+/// Returns an empty set if the directory does not exist.
+async fn collect_artifact_paths(artifacts_dir: &std::path::Path) -> HashSet<String> {
+    let mut paths = HashSet::new();
+    let mut stack = vec![artifacts_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut rd = match tokio::fs::read_dir(&dir).await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        loop {
+            match rd.next_entry().await {
+                Ok(Some(entry)) => {
+                    match entry.metadata().await {
+                        Ok(m) if m.is_dir() => stack.push(entry.path()),
+                        Ok(_) => {
+                            if let Ok(rel) = entry.path().strip_prefix(artifacts_dir) {
+                                paths.insert(rel.to_string_lossy().into_owned());
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+    }
+    paths
+}
+
 pub(crate) fn attribute_messages(
     messages: Vec<Message>,
     outputs: &[MessageOutput],
@@ -179,6 +210,7 @@ pub(crate) fn attribute_messages(
                 } else {
                     vec![]
                 },
+                artifacts: vec![],
             },
         )
         .collect()
@@ -605,6 +637,7 @@ pub async fn get_message_history(
                 sender,
                 created_at: r.created_at,
                 attachments: r.attachments,
+                artifacts: r.artifacts,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -723,6 +756,9 @@ pub async fn send_message(
         .try_lock()
         .map_err(|_| AppError::locked("session is currently in use"))?;
 
+    let (_, _, artifacts_dir) = session_dirs(&state, project_id, session_id);
+    let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
+
     let prev_len = agent.get_history().len();
     let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
     let mut run = agent.run(msg);
@@ -742,7 +778,23 @@ pub async fn send_message(
     }
     drop(agent);
 
-    let to_persist = attribute_messages(new_messages, &outputs, auth_user.id, attachments);
+    let current_artifacts = collect_artifact_paths(&artifacts_dir).await;
+    let new_artifacts: Vec<String> = current_artifacts
+        .difference(&prev_artifacts)
+        .cloned()
+        .collect();
+
+    let mut to_persist = attribute_messages(new_messages, &outputs, auth_user.id, attachments);
+
+    if !new_artifacts.is_empty() {
+        if let Some(last_agent) = to_persist
+            .iter_mut()
+            .rev()
+            .find(|m| matches!(m.sender_kind, crate::repository::DbSenderKind::Agent))
+        {
+            last_agent.artifacts = new_artifacts;
+        }
+    }
 
     state
         .repository
@@ -811,6 +863,7 @@ pub async fn send_message_stream(
     let need_title = session.title.is_none();
     let sender_id = auth_user.id;
     let project_id = session.project_id;
+    let (_, _, artifacts_dir) = session_dirs(&state, project_id, session_id);
 
     // Spawn title generation immediately — runs concurrently with the agent stream
     if need_title {
@@ -838,6 +891,7 @@ pub async fn send_message_stream(
 
     let stream = async_stream::stream! {
         let mut agent = guard;  // OwnedMutexGuard moved in — lock held for stream lifetime
+        let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
         let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
         let mut run = agent.run(msg);
 
@@ -882,7 +936,22 @@ pub async fn send_message_stream(
             }
         }
 
-        let to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id, attachments.clone());
+        let current_artifacts = collect_artifact_paths(&artifacts_dir).await;
+        let new_artifacts: Vec<String> = current_artifacts
+            .difference(&prev_artifacts)
+            .cloned()
+            .collect();
+
+        let mut to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id, attachments.clone());
+        if !new_artifacts.is_empty() {
+            if let Some(last_agent) = to_persist
+                .iter_mut()
+                .rev()
+                .find(|m| matches!(m.sender_kind, crate::repository::DbSenderKind::Agent))
+            {
+                last_agent.artifacts = new_artifacts;
+            }
+        }
 
         if let Err(e) = repo.append_messages(session_id, &to_persist).await {
             tracing::error!(%session_id, "failed to persist messages: {e}");
