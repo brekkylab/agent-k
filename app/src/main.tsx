@@ -25,6 +25,14 @@ declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router;
   }
+  // Transient navigation payloads handed off between routes via router state.
+  // initialMessage: home composer 가 만든 첫 발화를 세션 페이지가 받아 자동 전송.
+  // focusComposer: sidebar '+' 가 home 진입 시 composer 모드 + input focus 를 요청.
+  interface HistoryState {
+    initialMessage?: string;
+    focusComposer?: boolean;
+    // future: agentHint?: string;
+  }
 }
 
 const root = document.getElementById('root');
