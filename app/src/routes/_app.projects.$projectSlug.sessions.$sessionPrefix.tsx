@@ -43,17 +43,20 @@ function SessionPage() {
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const session = useQuery({ queryKey: ['session', sessionPrefix], queryFn: () => getSession(sessionPrefix) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
-  const history = useQuery({
-    queryKey: ['messages', sessionPrefix],
-    queryFn: () => listMessages(sessionPrefix),
-    enabled: Boolean(session.data && currentUser),
-  });
 
-  // Dirent scopes / attachments / artifacts are keyed by the resolved project and
-  // session UUIDs, not the URL slug/prefix. Empty until the queries resolve; the
-  // attachment + artifact UI only acts after the session has loaded.
+  // The project/session queries key off the URL slug + prefix, but everything
+  // session-scoped (messages, dirent scopes, attachments, artifacts) keys off the
+  // resolved UUIDs so every component — this page, ArtifactsPanel, MessageBubble —
+  // shares one canonical key. Empty until the queries resolve; UUID-keyed queries
+  // are gated on session.data.
   const projectId = project.data?.id ?? '';
   const sessionId = session.data?.id ?? '';
+
+  const history = useQuery({
+    queryKey: ['messages', sessionId],
+    queryFn: () => listMessages(sessionId),
+    enabled: Boolean(session.data && currentUser),
+  });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -208,7 +211,7 @@ function SessionPage() {
     } finally {
       setStreaming(false);
       // Refetch and wait for new history data before clearing live messages to avoid flash.
-      await queryClient.refetchQueries({ queryKey: ['messages', sessionPrefix] });
+      await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
       setLiveMessages([]);
       void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
