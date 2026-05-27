@@ -5,6 +5,7 @@ import { Icon } from '@/components/Icon';
 import { SchedulePicker, summarizeCron, type SchedulePickerValue } from '@/components/SchedulePicker';
 import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useToastStore } from '@/components/Toast';
 import {
   createTrigger as createTriggerApi,
   deleteAutomation as deleteAutomationApi,
@@ -24,6 +25,7 @@ function AutomationSettingsPage() {
   const { projectId, automationId } = Route.useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
 
   const automationQuery = useQuery({
     queryKey: ['automation', automationId],
@@ -113,6 +115,10 @@ function AutomationSettingsPage() {
     mutationFn: (vars: { triggerId: string; patch: { spec?: TriggerSpec; enabled?: boolean } }) =>
       updateTriggerApi(automationId, vars.triggerId, vars.patch),
     onSuccess: () => invalidateTriggers(),
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`트리거 수정 실패: ${msg}`);
+    },
   });
 
   const deleteTriggerMutation = useMutation({
@@ -176,7 +182,7 @@ function AutomationSettingsPage() {
     if (!t || t.spec.kind !== 'cron') { setEditingId(null); return; }
     updateTriggerMutation.mutate({
       triggerId: t.id,
-      patch: { spec: { kind: 'cron', expr: editSchedule.expr || t.spec.expr, tz: editSchedule.tz || t.spec.tz } },
+      patch: { spec: { kind: 'cron', expr: editSchedule.expr, tz: editSchedule.tz || null } },
     });
     setEditingId(null);
   };
