@@ -12,16 +12,19 @@ import type { Session } from '@/domain/types';
 export const Route = createFileRoute('/_app')({
   beforeLoad: async ({ context }) => {
     if (!getToken()) throw redirect({ to: '/login' });
+
+    // 캐시 데이터가 있으면 블로킹 없이 통과 — AppShell의 useQuery가 백그라운드에서 갱신
+    const cached = context.queryClient.getQueryData(['me']);
+    if (cached) return;
+
+    // 첫 로드(콜드 캐시)에서만 서버 확인 — 만료된 토큰을 초기 진입 시점에 잡음
     try {
       await context.queryClient.fetchQuery({ queryKey: ['me'], queryFn: getMe, staleTime: 5 * 60_000 });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        // notifyUnauthorized (fired from client.ts) already called forceLogout,
-        // which cleared auth state, set sessionStorage, and navigated via router.
-        // Just ensure TanStack Router completes the redirect cleanly.
         throw redirect({ to: '/login' });
       }
-      // Non-auth errors (network issues, 5xx) fall through — page renders and handles them.
+      // 네트워크 오류, 5xx: 통과 — 페이지가 자체 에러 상태 처리
     }
   },
   component: AppShell,
