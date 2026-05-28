@@ -2,7 +2,7 @@
 // from the sidebar SESSIONS header. Shows every session of a project as a card
 // grid. Self-contained: takes only projectSlug and handles its own data + delete.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
@@ -25,6 +25,12 @@ export function SessionsOverlay({ projectSlug, onClose }: { projectSlug: string;
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const sessions = useQuery({ queryKey: ['sessions', projectSlug], queryFn: () => listSessions(projectSlug) });
 
+  // Move focus to the close button on mount so keyboard users can dismiss immediately.
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+  }, []);
+
   // Close on Escape.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -45,7 +51,7 @@ export function SessionsOverlay({ projectSlug, onClose }: { projectSlug: string;
       <div className="cw-sessions-overlay" role="dialog" aria-modal="true" aria-label="All sessions">
         <div className="cw-overlay-head">
           <h2>Sessions · {sessionList.length}</h2>
-          <button type="button" className="cw-overlay-close" onClick={onClose} aria-label="닫기">
+          <button ref={closeButtonRef} type="button" className="cw-overlay-close" onClick={onClose} aria-label="닫기">
             <Icon name="x" size={18} />
           </button>
         </div>

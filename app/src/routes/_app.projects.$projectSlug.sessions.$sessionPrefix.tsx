@@ -1,7 +1,7 @@
 // Session — markup mirrors app-live SessionPage. Chat surface (head + messages
 // + composer) + right side (members, references, access, artifact).
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
@@ -10,6 +10,7 @@ import { getProject, listMembers } from '@/api/projects';
 import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { Avatar, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
+import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { shareMeta } from '@/domain/metadata';
@@ -29,11 +30,6 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   component: SessionPage,
 });
-
-// Tracks sessions whose home-composer first message has already been sent, so the
-// initial-send effect fires exactly once per session even under StrictMode's
-// double-invoked effects. Module-level so it survives StrictMode's remount cycle.
-const sentInitialMessageFor = new Set<string>();
 
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
@@ -64,6 +60,24 @@ function SessionPage() {
     queryFn: () => listMessages(sessionId),
     enabled: Boolean(session.data && currentUser),
   });
+
+  // Agent chip — transient preview state from home. Persist it after router state
+  // is cleared, but reset it when this route instance moves to another session.
+  const [agentPreview, setAgentPreview] = useState<{ sessionPrefix: string; agentId?: AgentId }>(() => ({
+    sessionPrefix,
+    agentId: location.state.initialAgentId,
+  }));
+  if (agentPreview.sessionPrefix !== sessionPrefix) {
+    setAgentPreview({ sessionPrefix, agentId: location.state.initialAgentId });
+  } else if (location.state.initialAgentId && agentPreview.agentId !== location.state.initialAgentId) {
+    setAgentPreview({ sessionPrefix, agentId: location.state.initialAgentId });
+  }
+  const activeAgent = agentPreview.agentId ? getAgentSurface(agentPreview.agentId) : undefined;
+
+  // Auto-send initial message refs — useRef instead of module-level Set so each
+  // component instance tracks its own state (StrictMode-safe, no cross-session leak).
+  const initialMessageRef = useRef<string | null>(location.state.initialMessage ?? null);
+  const consumedInitialMessageRef = useRef(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -223,8 +237,11 @@ function SessionPage() {
       showToast(`전송 실패: ${msg}`);
     } finally {
       setStreaming(false);
-      // Refetch and wait for new history data before clearing live messages to avoid flash.
-      await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+      // Guard against empty sessionId (race where session hasn't resolved yet).
+      if (sessionId) {
+        // Refetch and wait for new history data before clearing live messages to avoid flash.
+        await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+      }
       setLiveMessages([]);
       void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
@@ -233,15 +250,20 @@ function SessionPage() {
   }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
 
   // Auto-send the first message handed over from the home composer via router state.
-  // Guarded by the module-level Set so it fires exactly once per session (StrictMode-safe),
-  // then the router state is cleared so a refresh doesn't resend.
-  useLayoutEffect(() => {
-    const initial = location.state.initialMessage;
-    if (!initial || sentInitialMessageFor.has(sessionPrefix)) return;
-    sentInitialMessageFor.add(sessionPrefix);
+  // Deferred until session.data resolves so `sessionId` is non-empty when the
+  // finally-block refetch runs. useRef guards ensure exactly one send per mount
+  // (StrictMode-safe — refs survive the double-invoke cycle).
+  useEffect(() => {
+    if (consumedInitialMessageRef.current) return;
+    if (!session.data) return;                        // wait for session UUID to resolve
+    if (!initialMessageRef.current) return;
+    consumedInitialMessageRef.current = true;
+    const msg = initialMessageRef.current;
+    initialMessageRef.current = null;
+    // Clear router state so a hard refresh doesn't resend, but don't block send on it.
     void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined }) });
-    void send(initial);
-  }, [location.state.initialMessage, sessionPrefix, navigate, send]);
+    void send(msg);
+  }, [session.data, send, navigate]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
@@ -275,6 +297,17 @@ function SessionPage() {
             </p>
           </div>
           <div className="cw-session-head-actions">
+            {activeAgent && (
+              <span
+                className="cw-session-agent-chip"
+                data-agent={activeAgent.id}
+                title="이 세션에서 선택된 에이전트 (미리보기)"
+              >
+                <Icon name={activeAgent.icon} size={13} />
+                <span>{activeAgent.label}</span>
+                <span className="cw-preview-pill cw-preview-pill--micro">Preview</span>
+              </span>
+            )}
             {sess && <IntentBadge intent={sess.intent} />}
             {sess && (
               <ShareSelect mode={sess.shareMode} onChange={(mode) => shareMutation.mutate(mode)} />

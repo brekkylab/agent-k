@@ -3,6 +3,7 @@
 // mock for now — the selection is not yet wired to the router/dispatcher — but the
 // labels are the real provider model names, grouped by provider.
 
+import { useId } from 'react';
 import { Icon } from '@/components/Icon';
 
 export type ModelId = string;
@@ -45,10 +46,12 @@ export function ComposerModelPicker({
   value: ModelId;
   onChange: (id: ModelId) => void;
 }) {
+  const selectId = useId();
   return (
-    <label className="cw-model-picker" title="모델 선택 (미리보기)">
+    <span className="cw-model-picker" title="모델 선택 (미리보기)">
       <Icon name="sparkles" size={12} />
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <label htmlFor={selectId} className="sr-only">모델 선택 (미리보기)</label>
+      <select id={selectId} value={value} onChange={(event) => onChange(event.target.value)}>
         {PROVIDER_MODELS.map((group) => (
           <optgroup key={group.provider} label={group.provider}>
             {group.models.map((model) => (
@@ -59,6 +62,6 @@ export function ComposerModelPicker({
           </optgroup>
         ))}
       </select>
-    </label>
+    </span>
   );
 }

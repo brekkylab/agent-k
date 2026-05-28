@@ -1,41 +1,28 @@
-// Shared chat composer. Extracted from the inline form that used to live in the
-// session page so the project home ("new conversation" surface) and the session
-// page render the exact same input. onSubmit takes an envelope object so future
-// dispatch metadata (agentHint / promptId from suggested-prompt chips) can be added
-// without touching every call site.
-//
-// Two sizes intentionally diverge:
-//   - 'pill'  (default, session page): a tight single-row rounded pill matching PR #114.
-//   - 'large' (home "new conversation"): a roomier box — textarea on top, a bottom
-//     toolbar row (model picker on the left, attach + send on the right) so the home
-//     surface doesn't feel cramped with the model picker crammed inline.
+// Project-home composer preview surface. Separate from the session composer because
+// this surface owns agent/model picker UI, suggested-prompt handoff, and a roomier
+// multiline textarea.
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
 
-export interface ComposerSubmission {
+export interface ProjectHomeComposerSubmission {
   text: string;
   // future: agentHint?: string;
   // future: promptId?: string;
 }
 
-interface SessionComposerProps {
+interface ProjectHomeComposerProps {
   value: string;
   onChange: (next: string) => void;
-  onSubmit: (submission: ComposerSubmission) => void | Promise<void>;
+  onSubmit: (submission: ProjectHomeComposerSubmission) => void | Promise<void>;
   disabled?: boolean;
   // 전송 처리 중(세션 생성/스트림 시작 대기): send 버튼에 스피너를 띄워 "보내는 중"을 알림.
   pending?: boolean;
   placeholder?: string;
   // 파일 추가 진입점 (placeholder — PR #114 의 attachment tray 와 연결 예정).
   onAttachClick?: () => void;
-  footerHint?: ReactNode;
-  // composer 아래 suggested prompts 슬롯.
-  belowSlot?: ReactNode;
-  // model picker 슬롯. pill 에선 send 앞 inline, large 에선 하단 toolbar 좌측.
-  actionsSlot?: ReactNode;
-  // 'pill'(세션, 기본) | 'large'(home). 레이아웃과 textarea 기본 높이가 달라진다.
-  size?: 'pill' | 'large';
+  // Home-only model picker slot. Session composer owns its own compact controls.
+  modelPicker?: ReactNode;
   // focus 요청 신호. 값이 바뀔 때마다 input 에 focus (boolean 이 아니라 nonce 라
   // 같은 요청이 반복돼도 매번 focus 가 걸린다). 0/undefined 면 focus 안 함.
   focusSignal?: number;
@@ -45,7 +32,7 @@ const DEFAULT_PLACEHOLDER = 'Message Cowork and the team…';
 const DEFAULT_HINT = 'Enter to send · Shift+Enter for newline · Reference files with @filename';
 const MAX_TEXTAREA_HEIGHT = 200;
 
-export function SessionComposer({
+export function ProjectHomeComposer({
   value,
   onChange,
   onSubmit,
@@ -53,15 +40,11 @@ export function SessionComposer({
   pending = false,
   placeholder = DEFAULT_PLACEHOLDER,
   onAttachClick,
-  footerHint = DEFAULT_HINT,
-  belowSlot,
-  actionsSlot,
-  size = 'pill',
+  modelPicker,
   focusSignal,
-}: SessionComposerProps) {
+}: ProjectHomeComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const canSubmit = value.trim().length > 0 && !disabled;
-  const isLarge = size === 'large';
 
   useEffect(() => {
     if (focusSignal) textareaRef.current?.focus();
@@ -113,40 +96,31 @@ export function SessionComposer({
 
   return (
     <form
-      className={`cw-composer${isLarge ? ' cw-composer--large' : ''}`}
+      className="cw-home-composer"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
     >
-      <div className={`cw-composer-box${isLarge ? ' cw-composer-box--large' : ''}`}>
+      <div className="cw-home-composer-box">
         <textarea
           ref={textareaRef}
-          className="cw-composer-input"
+          className="cw-home-composer-input"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={disabled}
-          rows={1}
+          rows={3}
         />
-        {isLarge ? (
-          <div className="cw-composer-actions">
-            {actionsSlot}
-            <span className="cw-composer-actions-spacer" />
-            {attachButton}
-            {sendButton}
-          </div>
-        ) : (
-          <>
-            {actionsSlot}
-            {attachButton}
-            {sendButton}
-          </>
-        )}
+        <div className="cw-home-composer-actions">
+          {modelPicker}
+          <span className="cw-home-composer-actions-spacer" />
+          {attachButton}
+          {sendButton}
+        </div>
       </div>
-      {footerHint && <small>{footerHint}</small>}
-      {belowSlot}
+      <small>{DEFAULT_HINT}</small>
     </form>
   );
 }

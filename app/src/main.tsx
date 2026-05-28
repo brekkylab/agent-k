@@ -31,7 +31,8 @@ declare module '@tanstack/react-router' {
   interface HistoryState {
     initialMessage?: string;
     focusComposer?: boolean;
-    // future: agentHint?: string;
+    // Agent selected in the home composer, carried to the session header chip.
+    initialAgentId?: import('@/domain/agentSurfaces').AgentId;
   }
 }
 
