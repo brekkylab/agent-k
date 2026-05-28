@@ -153,3 +153,74 @@ export interface BootstrapPayload {
   schedules: SchedulePreview[];
   activityFeed: ActivityEntry[];
 }
+
+// ── Automation domain types ────────────────────────────────────────────────
+// camelCase mirrors of the backend Automation/Trigger/Run/RunEvent shapes.
+
+export type AutomationId = string;
+export type TriggerId = string;
+export type RunId = string;
+
+export type TriggerKind = 'cron' | 'webhook';
+export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type RunEventKind =
+  | 'triggered' | 'queued' | 'started'
+  | 'succeeded' | 'failed' | 'cancelled'
+  | 'retry_scheduled' | 'retry_skipped'
+  | 'lease_lost' | 'step_started' | 'step_finished';
+
+/** Discriminated union mirroring backend TriggerSpec. */
+export type TriggerSpec =
+  | { kind: 'cron'; expr: string; tz: string | null }
+  | { kind: 'webhook' };
+
+export interface Automation {
+  id: AutomationId;
+  projectId: ProjectId;
+  name: string;
+  description: string | null;
+  prompts: string[];
+  enabled: boolean;
+  createdBy: UserId;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Trigger {
+  id: TriggerId;
+  automationId: AutomationId;
+  kind: TriggerKind;
+  spec: TriggerSpec;
+  enabled: boolean;
+  nextFireAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Returned only at trigger-creation time. `webhookToken` is the one-shot
+ *  plaintext bearer token; subsequent reads from the API never expose it. */
+export interface CreatedTrigger {
+  trigger: Trigger;
+  webhookToken: string | null;
+}
+
+export interface Run {
+  id: RunId;
+  automationId: AutomationId;
+  triggerId: TriggerId | null;
+  sessionId: SessionId;
+  status: RunStatus;
+  scheduledFor: string;
+  leaseUntil: string | null;
+  previousRunId: RunId | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RunEvent {
+  id: number;
+  runId: RunId;
+  ts: string;
+  kind: RunEventKind;
+  payload: unknown | null;
+}

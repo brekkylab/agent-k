@@ -11,7 +11,7 @@ pub use crate::repository::{SessionOrigin, ShareMode};
 #[serde(deny_unknown_fields)]
 pub struct CreateSessionRequest {
     /// Project UUID, active slug, or retired slug — backend resolves all three.
-    pub project_id: String,
+    pub project_ref: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
