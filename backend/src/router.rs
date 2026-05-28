@@ -46,18 +46,21 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/projects",
             get(handlers::list_projects).post(handlers::create_project),
         )
+        // Path segment accepts a UUID, an active slug, or a retired slug; the
+        // handler resolves all three through `resolve_project_id`. Mirrors the
+        // `Path<String>` + prefix-resolution pattern used by session handlers.
         .api_route(
-            "/projects/{project_id}",
+            "/projects/{project_ref}",
             get(handlers::get_project)
                 .patch(handlers::update_project)
                 .delete(handlers::delete_project),
         )
         .api_route(
-            "/projects/{project_id}/members",
+            "/projects/{project_ref}/members",
             get(handlers::list_members).post(handlers::add_member),
         )
         .api_route(
-            "/projects/{project_id}/members/{user_id}",
+            "/projects/{project_ref}/members/{user_id}",
             delete(handlers::remove_member),
         )
         .layer(axum::middleware::from_fn_with_state(

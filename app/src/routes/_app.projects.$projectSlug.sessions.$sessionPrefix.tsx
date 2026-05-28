@@ -26,7 +26,7 @@ import { AttachmentPreview } from '@/components/AttachmentPreview';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
-export const Route = createFileRoute('/_app/projects/$projectId/sessions/$sessionId')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   component: SessionPage,
 });
 
@@ -35,14 +35,23 @@ function stripSubagentPrefix(name: string): string {
 }
 
 function SessionPage() {
-  const { projectId, sessionId } = Route.useParams();
+  const { projectSlug, sessionPrefix } = Route.useParams();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
 
-  const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
-  const session = useQuery({ queryKey: ['session', sessionId], queryFn: () => getSession(sessionId) });
-  const members = useQuery({ queryKey: ['members', projectId], queryFn: () => listMembers(projectId) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  const session = useQuery({ queryKey: ['session', sessionPrefix], queryFn: () => getSession(sessionPrefix) });
+  const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
+
+  // The project/session queries key off the URL slug + prefix, but everything
+  // session-scoped (messages, dirent scopes, attachments, artifacts) keys off the
+  // resolved UUIDs so every component — this page, ArtifactsPanel, MessageBubble —
+  // shares one canonical key. Empty until the queries resolve; UUID-keyed queries
+  // are gated on session.data.
+  const projectId = project.data?.id ?? '';
+  const sessionId = session.data?.id ?? '';
+
   const history = useQuery({
     queryKey: ['messages', sessionId],
     queryFn: () => listMessages(sessionId),
@@ -70,14 +79,14 @@ function SessionPage() {
     setLiveMessages([]);
     setComposerText('');
     setStreaming(false);
-  }, [sessionId]);
+  }, [sessionPrefix]);
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
   useEffect(() => {
     if (history.isSuccess) {
-      void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
     }
-  }, [history.isSuccess, history.dataUpdatedAt, projectId, queryClient]);
+  }, [history.isSuccess, history.dataUpdatedAt, projectSlug, queryClient]);
 
   const allMessages = useMemo<Message[]>(() => [
     ...(history.data ?? []),
@@ -133,7 +142,7 @@ function SessionPage() {
     const nowIso = new Date().toISOString();
     const userMsg: Message = {
       id: `live-user-${Date.now()}`,
-      sessionId,
+      sessionId: sessionPrefix,
       sender: { kind: 'user', userId: currentUser?.id ?? 'user' },
       createdAt: nowIso,
       body: text,
@@ -143,7 +152,7 @@ function SessionPage() {
     const aiId = `live-ai-${Date.now()}`;
     setLiveMessages((prev) => [...prev, userMsg, {
       id: aiId,
-      sessionId,
+      sessionId: sessionPrefix,
       sender: { kind: 'agent' as const, name: 'agent-k' },
       createdAt: nowIso,
       body: '',
@@ -154,7 +163,7 @@ function SessionPage() {
     const ctrl = new AbortController();
 
     try {
-      for await (const update of streamMessage(sessionId, text, ctrl.signal, attachmentPaths.length > 0 ? attachmentPaths : undefined)) {
+      for await (const update of streamMessage(sessionPrefix, text, ctrl.signal, attachmentPaths.length > 0 ? attachmentPaths : undefined)) {
         const isDone = update.status === 'done';
         const doneOrStreaming = isDone ? 'done' as const : 'streaming' as const;
 
@@ -179,7 +188,7 @@ function SessionPage() {
             } else {
               next = [...next, {
                 id: subId,
-                sessionId,
+                sessionId: sessionPrefix,
                 sender: { kind: 'agent' as const, name: sub.sourceAgent },
                 createdAt: nowIso,
                 body: sub.text,
@@ -204,17 +213,17 @@ function SessionPage() {
       // Refetch and wait for new history data before clearing live messages to avoid flash.
       await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
       setLiveMessages([]);
-      void queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
-      void queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
+      void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
     }
-  }, [composerText, streaming, sessionId, projectId, currentUser, queryClient, showToast, pendingAttachments]);
+  }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
 
   const shareMutation = useMutation({
-    mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionId, mode),
+    mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
-      await queryClient.invalidateQueries({ queryKey: ['sessions', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
+      await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       showToast('공유 모드가 변경되었습니다');
     },
     onError: (err) => {
@@ -228,8 +237,6 @@ function SessionPage() {
   const creator = userList.find((u) => u.id === sess?.creatorId);
   const usersForRender: User[] = [...userList, AI_USER];
   const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
-
-
 
   return (
     <div className="cw-session-layout cw-page-enter">
@@ -335,7 +342,7 @@ function SessionPage() {
         {sess && <SharePill mode={sess.shareMode} />}
         {sess && <p>{shareMeta[sess.shareMode].desc}</p>}
         <h3>Session</h3>
-        <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionId}</p>
+        <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
           project · {project.data?.name ?? '...'}
         </p>

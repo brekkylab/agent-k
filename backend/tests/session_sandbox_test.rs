@@ -45,10 +45,10 @@ async fn two_sessions_get_isolated_sandboxes() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
+    let project_slug = project["slug"].as_str().unwrap();
 
-    let id1 = post_session_authed(&app, &token, project_id).await;
-    let id2 = post_session_authed(&app, &token, project_id).await;
+    let id1 = post_session_authed(&app, &token, project_slug).await;
+    let id2 = post_session_authed(&app, &token, project_slug).await;
     assert_ne!(id1, id2, "two sessions must have different ids");
 
     let (re1, re2) = {
@@ -98,8 +98,8 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
-    let id = post_session_authed(&app, &token, project_id).await;
+    let project_slug = project["slug"].as_str().unwrap();
+    let id = post_session_authed(&app, &token, project_slug).await;
 
     let outputs = send_message(
         &app,
@@ -150,17 +150,17 @@ async fn agent_can_read_shared_files_from_shared_data() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
+    let project_slug = project["slug"].as_str().unwrap();
 
     upload_dirents(
         &app,
         &token,
-        project_id,
+        project_slug,
         &[("context.txt", b"SENTINEL_UPLOAD_OK")],
     )
     .await;
 
-    let session_id = post_session_authed(&app, &token, project_id).await;
+    let session_id = post_session_authed(&app, &token, project_slug).await;
 
     let outputs = send_message(
         &app,
@@ -252,8 +252,8 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
-    let id = post_session_authed(&app, &token, project_id).await;
+    let project_slug = project["slug"].as_str().unwrap();
+    let id = post_session_authed(&app, &token, project_slug).await;
 
     let events = send_message_stream(
         &app,

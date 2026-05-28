@@ -22,6 +22,7 @@ export interface LoginResponse {
 
 export interface BackendProject {
   id: string;
+  slug: string;
   name: string;
   description?: string | null;
   owner_id: string;

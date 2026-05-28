@@ -199,8 +199,17 @@ impl SqliteRepository {
         new_user: NewUser,
     ) -> RepositoryResult<(DbUser, crate::repository::DbProject)> {
         let user = self.create_user(new_user).await?;
+        let mut personal_slug = format!("personal-{}", nanoid::nanoid!(6));
+        while self.get_project_by_slug(&personal_slug).await?.is_some()
+            || self
+                .get_project_id_by_retired_slug(&personal_slug)
+                .await?
+                .is_some()
+        {
+            personal_slug = format!("personal-{}", nanoid::nanoid!(6));
+        }
         let project = self
-            .create_project("Personal".to_string(), None, user.id)
+            .create_project("Personal".to_string(), None, user.id, personal_slug)
             .await?;
         Ok((user, project))
     }

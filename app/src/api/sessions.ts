@@ -3,16 +3,15 @@ import type { BackendSession } from './backend-types';
 import { toSession } from './transformers';
 import type { Session, ShareMode } from '@/domain/types';
 
-export async function listSessions(projectId: string): Promise<Session[]> {
-  const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-  const res = await request<{ items: BackendSession[] }>(`/sessions${qs}`);
+export async function listSessions(projectRef: string): Promise<Session[]> {
+  const res = await request<{ items: BackendSession[] }>(`/sessions?project_id=${encodeURIComponent(projectRef)}`);
   return res.items.map(toSession);
 }
 
-export async function createSession(projectId: string): Promise<Session> {
+export async function createSession(projectRef: string): Promise<Session> {
   const raw = await request<BackendSession>(`/sessions`, {
     method: 'POST',
-    body: { project_id: projectId },
+    body: { project_id: projectRef },
   });
   return toSession(raw);
 }
