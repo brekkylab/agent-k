@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { getMe } from './auth';
 
 // client 모듈 전체를 mock — ws.ts가 getToken, notifyUnauthorized를 import하므로
 vi.mock('./client', () => ({
@@ -35,11 +36,14 @@ class MockWebSocket {
 let wsInstances: MockWebSocket[] = [];
 const OriginalWebSocket = globalThis.WebSocket;
 
-beforeEach(() => {
+beforeEach(async () => {
   wsInstances = [];
   vi.useFakeTimers();
   vi.mocked(notifyUnauthorized).mockClear();
   vi.mocked(getToken).mockReturnValue('test-token');
+  // 기본값: getMe는 401 'invalid token'으로 reject (rapid-close 테스트에서 notifyUnauthorized 호출 유지)
+  const { ApiError } = await import('./client');
+  vi.mocked(getMe).mockRejectedValue(new ApiError(401, 'invalid token', { error: 'invalid token' }));
   // @ts-expect-error mock
   globalThis.WebSocket = class extends MockWebSocket {
     constructor() {
@@ -59,7 +63,7 @@ afterEach(() => {
 });
 
 describe('AppWebSocketManager rapid-close heuristic', () => {
-  it('accumulates rapidCloseCount across reconnect cycles when connections are short-lived', () => {
+  it('accumulates rapidCloseCount across reconnect cycles when connections are short-lived', async () => {
     const mgr = new AppWebSocketManager();
     mgr.connect('token');
 
@@ -82,6 +86,9 @@ describe('AppWebSocketManager rapid-close heuristic', () => {
     // 3차 연결 — 500ms 후 close → RAPID_CLOSE_MAX(3) 도달
     vi.advanceTimersByTime(500);
     wsInstances[2].onclose?.({ code: 1006, reason: '' });
+
+    // getMe()가 async이므로 microtask 소진 후 확인
+    await Promise.resolve();
 
     expect(notifyUnauthorized).toHaveBeenCalledOnce();
   });
@@ -118,14 +125,55 @@ describe('AppWebSocketManager rapid-close heuristic', () => {
     expect(notifyUnauthorized).not.toHaveBeenCalled();
   });
 
-  it('triggers logout immediately for close code 4401', () => {
+  it('stops reconnecting for close code 4401 (auth close code)', () => {
+    const mgr = new AppWebSocketManager();
+    mgr.connect('token');
+    wsInstances[0].onclose?.({ code: 4401, reason: '' });
+    // active is set to false — no further reconnect timer
+    vi.advanceTimersByTime(10000);
+    expect(wsInstances).toHaveLength(1); // no reconnect happened
+  });
+});
+
+describe('AppWebSocketManager auth close classification', () => {
+  it('calls notifyUnauthorized with expired body when getMe returns 401 "token has expired"', async () => {
+    const { ApiError } = await import('./client');
+    vi.mocked(getMe).mockRejectedValue(new ApiError(401, 'token has expired', { error: 'token has expired' }));
+
     const mgr = new AppWebSocketManager();
     mgr.connect('token');
 
     wsInstances[0].onclose?.({ code: 4401, reason: '' });
 
-    // 4401 → immediate logout (Task 2에서 async가 되지만, 최소 active=false 확인)
-    // Task 2 완성 후 notifyUnauthorized 호출 여부 검증
-    expect(wsInstances[0].readyState).toBeDefined(); // placeholder, Task 2에서 보강
+    await Promise.resolve();
+
+    expect(notifyUnauthorized).toHaveBeenCalledWith(401, { error: 'token has expired' });
+  });
+
+  it('calls notifyUnauthorized with invalid body when getMe returns generic 401', async () => {
+    const { ApiError } = await import('./client');
+    vi.mocked(getMe).mockRejectedValue(new ApiError(401, 'unauthorized', { error: 'unauthorized' }));
+
+    const mgr = new AppWebSocketManager();
+    mgr.connect('token');
+
+    wsInstances[0].onclose?.({ code: 4401, reason: '' });
+
+    await Promise.resolve();
+
+    expect(notifyUnauthorized).toHaveBeenCalledWith(401, { error: 'unauthorized' });
+  });
+
+  it('does NOT call notifyUnauthorized when getMe succeeds (WS flap, not auth failure)', async () => {
+    vi.mocked(getMe).mockResolvedValue({ id: '1', username: 'test', displayName: 'Test' } as any);
+
+    const mgr = new AppWebSocketManager();
+    mgr.connect('token');
+
+    wsInstances[0].onclose?.({ code: 4401, reason: '' });
+
+    await Promise.resolve();
+
+    expect(notifyUnauthorized).not.toHaveBeenCalled();
   });
 });

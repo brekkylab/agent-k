@@ -22,9 +22,6 @@ const AUTH_CLOSE_CODES = new Set([4401]);
 const RAPID_CLOSE_THRESHOLD_MS = 2000;
 const RAPID_CLOSE_MAX = 3;
 
-// Task 2에서 사용 예정 — 미리 import만 해둠
-void ApiError;
-void getMe;
 
 class AppWebSocketManager {
   private ws: WebSocket | null = null;
@@ -56,10 +53,20 @@ class AppWebSocketManager {
       // onclose가 발생한 시점에 this.ws를 null로 — 재연결 시 early-return 방지
       this.ws = null;
 
-      // 앱 정의 인증 실패 코드 — 재연결 중단 후 로그아웃 (Task 2에서 HTTP fallback으로 교체)
+      // 앱 정의 인증 실패 코드 — 재연결 중단 후 HTTP fallback으로 에러 분류
       if (AUTH_CLOSE_CODES.has(evt.code)) {
         this.active = false;
-        notifyUnauthorized(401, { error: 'invalid token' });  // Task 2에서 교체
+        getMe().then(
+          () => {
+            // WS는 닫혔지만 HTTP 인증은 통과 → WS 네트워크 문제, 로그아웃 안 함
+          },
+          (err: unknown) => {
+            if (err instanceof ApiError && err.status === 401) {
+              notifyUnauthorized(401, { error: err.message });
+            }
+            // 5xx, 네트워크 오류: 로그아웃 안 함
+          }
+        );
         return;
       }
 
@@ -73,7 +80,14 @@ class AppWebSocketManager {
 
       if (this.rapidCloseCount >= RAPID_CLOSE_MAX && getToken()) {
         this.active = false;
-        notifyUnauthorized(401, { error: 'invalid token' });
+        getMe().then(
+          () => { /* HTTP 통과 → WS만 불안정, 로그아웃 안 함 */ },
+          (err: unknown) => {
+            if (err instanceof ApiError && err.status === 401) {
+              notifyUnauthorized(401, { error: err.message });
+            }
+          }
+        );
         return;
       }
 
