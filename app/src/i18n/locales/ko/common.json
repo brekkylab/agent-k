@@ -72,6 +72,10 @@
       "settings": "설정"
     }
   },
+  "placeholders": {
+    "untitled_session": "새 대화",
+    "no_description": "설명 없음"
+  },
   "errors": {
     "unknown": "오류가 발생했어요. 다시 시도해 주세요."
   }

@@ -33,5 +33,21 @@
     "title": "세션을 삭제하시겠어요?",
     "body": "\"{{title}}\"의 모든 메시지와 sandbox 자원이 함께 정리됩니다. 이 작업은 되돌릴 수 없습니다.",
     "confirm": "삭제"
+  },
+  "card": {
+    "session_count": "{{count}}개 세션 · {{latest}}"
+  },
+  "skills_page": {
+    "subtitle": "재사용 가능한 프롬프트 템플릿과 도구 바인딩을 한곳에서 관리합니다.",
+    "empty_title": "Skills 준비 중",
+    "empty_body": "Skills 기능은 곧 추가됩니다."
+  },
+  "schedule_page": {
+    "subtitle": "주기 실행과 알림 배달을 한곳에서 관리합니다.",
+    "empty_title": "Schedule 준비 중",
+    "empty_body": "스케줄 기능은 곧 추가됩니다."
+  },
+  "settings_page": {
+    "subtitle": "프로젝트 메타데이터입니다. 편집 기능은 곧 추가됩니다."
   }
 }

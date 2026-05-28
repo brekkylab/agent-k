@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 import { EmptyState, SectionLabel } from '@/components/uiPrimitives';
 import { Icon } from '@/components/Icon';
 
@@ -7,14 +8,15 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/schedule')({
 });
 
 function SchedulePage() {
+  const { t } = useTranslation('project');
   return (
     <section className="cw-page cw-simple-page cw-page-enter">
       <SectionLabel>Recurring runs</SectionLabel>
       <h1>Schedule</h1>
-      <p>주기 실행과 알림 배달을 한곳에서 관리합니다.</p>
+      <p>{t('schedule_page.subtitle')}</p>
       <EmptyState
-        title="Schedule 준비 중"
-        body="스케줄 기능은 곧 추가됩니다."
+        title={t('schedule_page.empty_title')}
+        body={t('schedule_page.empty_body')}
         chip={<Icon name="calendar" size={16} />}
       />
     </section>

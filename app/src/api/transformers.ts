@@ -3,6 +3,7 @@
 
 export const SUBAGENT_PREFIX = 'subagent_';
 
+import { FALLBACK_TITLE } from '@/lib/useTypingText';
 import type { FileAsset, Message, MessageSender, PreferredLanguage, Project, Session, ToolCallInvocation, User } from '@/domain/types';
 import type { AiloyPart, AiloyToolCall, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser, SessionMessageItem } from './backend-types';
 
@@ -82,7 +83,7 @@ export function toSession(backend: BackendSession): Session {
   return {
     id: backend.id,
     projectId: backend.project_id,
-    title: backend.title ?? '새 대화',
+    title: backend.title ?? FALLBACK_TITLE,
     creatorId: backend.creator_id,
     shareMode: backend.share_mode,
     origin: backend.origin,

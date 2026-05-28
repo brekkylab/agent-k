@@ -32,6 +32,10 @@
     "project_label": "프로젝트 · {{name}}"
   },
   "artifacts_header": "산출물",
+  "menu": {
+    "options": "세션 옵션",
+    "delete": "세션 삭제"
+  },
   "artifact": {
     "download": "다운로드",
     "copy_to_shared": "공유 디렉토리로 복사",

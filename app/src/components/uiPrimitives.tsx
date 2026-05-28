@@ -53,14 +53,6 @@ export function IconPocket({ tone, icon, compact = false }: { tone: string; icon
   return <span className={`cw-pocket cw-nav-${tone} ${compact ? 'is-compact' : ''}`.trim()}><Icon name={icon} size={compact ? 12 : 13} /></span>;
 }
 
-export function compactTime(value: string): string {
-  if (value === '방금 전' || value === '오늘' || value === '어제' || value.endsWith('h') || value.endsWith('d')) return value;
-  if (value.includes('05-06')) return '5d';
-  if (value.includes('05-04')) return '1w';
-  if (value.includes('05-02')) return '11d';
-  return value.replace(/^2026-/, '').replace('-', '/');
-}
-
 export function byId<T extends { id: string }>(items: T[], id: string): T {
   const item = items.find((candidate) => candidate.id === id);
   if (!item) throw new Error(`Missing item: ${id}`);

@@ -72,6 +72,10 @@
       "settings": "Settings"
     }
   },
+  "placeholders": {
+    "untitled_session": "Untitled session",
+    "no_description": "No description"
+  },
   "errors": {
     "unknown": "Something went wrong. Please try again."
   }

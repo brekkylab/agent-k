@@ -32,6 +32,10 @@
     "project_label": "project · {{name}}"
   },
   "artifacts_header": "Artifacts",
+  "menu": {
+    "options": "Session options",
+    "delete": "Delete session"
+  },
   "artifact": {
     "download": "Download",
     "copy_to_shared": "Copy to shared folder",

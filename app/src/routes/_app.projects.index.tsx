@@ -3,6 +3,7 @@
 
 import { createFileRoute, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { listMembers, listProjects } from '@/api/projects';
 import { listSessions } from '@/api/sessions';
 import { Icon } from '@/components/Icon';
@@ -58,6 +59,7 @@ function ProjectsPage() {
 }
 
 function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive: boolean; onOpen: () => void }) {
+  const { t } = useTranslation(['project', 'common', 'members']);
   const currentUser = useAuthStore((s) => s.currentUser);
   const members = useQuery({ queryKey: ['members', project.slug], queryFn: () => listMembers(project.slug) });
   const sessions = useQuery({ queryKey: ['sessions', project.slug], queryFn: () => listSessions(project.slug) });
@@ -73,12 +75,14 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
           <Icon name="folder" size={15} />
           <span>{project.name}</span>
         </span>
-        <span className={`cw-role-badge ${isOwner ? 'owner' : 'member'}`}>{isOwner ? 'Owner' : 'Member'}</span>
+        <span className={`cw-role-badge ${isOwner ? 'owner' : 'member'}`}>
+          {isOwner ? t('members:badges.owner') : t('members:badges.member')}
+        </span>
       </div>
-      <p className="cw-project-card-desc">{project.description || '설명 없음'}</p>
+      <p className="cw-project-card-desc">{project.description || t('common:placeholders.no_description')}</p>
       <div className="cw-project-card-footer">
         <AvatarStack users={memberUsers} />
-        <span className="cw-card-stats">{userSessions.length}개 세션 · {latest}</span>
+        <span className="cw-card-stats">{t('card.session_count', { count: userSessions.length, latest })}</span>
       </div>
     </button>
   );
