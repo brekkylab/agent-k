@@ -23,9 +23,12 @@ import {
   moveDirents,
   uploadFiles,
   type DirentBatchResult,
+  type DirentScope,
+  stripScopePrefix,
 } from '@/api/dirents';
 import { getProject } from '@/api/projects';
 import { Icon } from '@/components/Icon';
+import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FolderPickerDialog } from '@/components/FolderPickerDialog';
 import { NewFolderDialog } from '@/components/NewFolderDialog';
@@ -37,8 +40,6 @@ import {
   ancestorPaths,
   buildFolderTree,
   countDescendants,
-  fileTypeClass,
-  fileTypeIcon,
   listDirectChildren,
   nameOf,
   type FolderNode,
@@ -49,19 +50,24 @@ type ViewMode = 'list' | 'grid';
 const VIEW_KEY = 'cowork.files.viewMode';
 const DRAG_THRESHOLD = 5; // px — under this we treat mousedown as click
 
-export const Route = createFileRoute('/_app/projects/$projectId/files')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/files')({
   component: FilesPage,
 });
 
 function FilesPage() {
-  const { projectId } = Route.useParams();
+  const { projectSlug } = Route.useParams();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
-  const project = useQuery({ queryKey: ['project', projectId], queryFn: () => getProject(projectId) });
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  // Dirents are scope-based, keyed by the resolved project UUID (not the slug).
+  const projectId = project.data?.id ?? '';
+  const scope: DirentScope = { kind: 'shared', projectId };
   const dirents = useQuery({
-    queryKey: ['dirents', projectId],
-    queryFn: () => listDirentsRaw(projectId),
+    queryKey: ['dirents', 'shared', projectId],
+    queryFn: () => listDirentsRaw(scope),
+    select: (raw) => raw.map((e) => ({ ...e, path: stripScopePrefix(scope, e.path) })),
+    enabled: Boolean(project.data),
   });
 
   const entries = dirents.data ?? [];
@@ -137,10 +143,10 @@ function FilesPage() {
   const uploadMutation = useMutation({
     mutationFn: async (files: File[]): Promise<DirentBatchResult> => {
       const items = files.map((file) => ({ file, targetPath: targetPathFor(file) }));
-      return uploadFiles(projectId, items);
+      return uploadFiles(scope, items);
     },
     onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = result.succeeded.length;
       const ko = result.failed.length;
       if (ko === 0) {
@@ -168,10 +174,10 @@ function FilesPage() {
     mutationFn: (name: string) => {
       const cleaned = name.trim().replace(/^\/+|\/+$/g, '');
       const fullPath = currentPath.length > 0 ? `${currentPath.join('/')}/${cleaned}` : cleaned;
-      return createFolder(projectId, fullPath);
+      return createFolder(scope, fullPath);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       showToast('폴더가 생성되었습니다');
       setFolderDialogOpen(false);
     },
@@ -182,7 +188,7 @@ function FilesPage() {
   });
 
   const downloadMutation = useMutation({
-    mutationFn: (entry: BackendDirent) => downloadFile(projectId, entry.path),
+    mutationFn: (entry: BackendDirent) => downloadFile(scope, entry.path),
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'download failed';
       showToast(`다운로드 실패: ${msg}`);
@@ -201,11 +207,11 @@ function FilesPage() {
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (targets: BackendDirent[]) => {
-      const results = await Promise.allSettled(targets.map((t) => deleteDirent(projectId, t.path)));
+      const results = await Promise.allSettled(targets.map((t) => deleteDirent(scope, t.path)));
       return { targets, results };
     },
     onSuccess: async ({ targets, results }) => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const fails: Array<{ path: string; error: string }> = [];
       let okCount = 0;
       results.forEach((r, idx) => {
@@ -299,9 +305,9 @@ function FilesPage() {
   // to show "이름이 변경되었습니다" or "이동되었습니다" copy.
   const moveMutation = useMutation({
     mutationFn: ({ sources, destination, newName }: { sources: string[]; destination: string; newName?: string }) =>
-      moveDirents(projectId, sources, destination, newName),
+      moveDirents(scope, sources, destination, newName),
     onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = res.succeeded.length;
       const ko = res.failed.length;
       const wasRename = renamingRef.current;
@@ -328,9 +334,9 @@ function FilesPage() {
 
   const copyMutation = useMutation({
     mutationFn: ({ sources, destination }: { sources: string[]; destination: string }) =>
-      copyDirents(projectId, sources, destination),
+      copyDirents(scope, scope, sources, destination),
     onSuccess: async (res) => {
-      await queryClient.invalidateQueries({ queryKey: ['dirents', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = res.succeeded.length;
       const ko = res.failed.length;
       if (ko === 0) showToast(ok === 1 ? '복사되었습니다' : `${ok}개 복사되었습니다`);
@@ -346,8 +352,6 @@ function FilesPage() {
   });
 
   // ── Outside click clears selection ───────────────────────────────
-  // If the user clicks anywhere that isn't a file-pane interaction, the
-  // floating bulk toolbar, or an open dialog, treat it as "dismiss".
   useEffect(() => {
     if (selectedPaths.size === 0) return;
     function onDocMouseDown(e: MouseEvent) {
@@ -402,7 +406,6 @@ function FilesPage() {
         return;
       }
 
-      // Arrow navigation: only when focus is inside a file row/card and there are rows.
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         const rowEl = target?.closest('[data-row-index]') as HTMLElement | null;
         if (!rowEl || allRows.length === 0) return;
@@ -440,11 +443,6 @@ function FilesPage() {
   }
 
   // ── Rubber-band selection ────────────────────────────────────────
-  // Allows marquee to start anywhere — empty space OR on top of a row.
-  // A row's click handler only fires when the mouse hasn't moved beyond
-  // DRAG_THRESHOLD between mousedown and mouseup. If it did move, we
-  // swallow the synthesized click in capture phase to keep the marquee
-  // selection from being reset by the underlying row.
   const bodyRef = useRef<HTMLDivElement>(null);
   const dragOriginRef = useRef<{
     x: number;
@@ -463,10 +461,6 @@ function FilesPage() {
     dragOriginRef.current = {
       x: e.clientX,
       y: e.clientY,
-      // When starting on a row we keep current selection as a base — the row's
-      // own click handler will resolve the single-select case if no drag.
-      // When starting on empty space without modifier we clear immediately so
-      // the user sees the deselect feedback even before they drag.
       basePaths: rowEl || additive ? new Set(selectedPaths) : new Set(),
       startedOnRow: !!rowEl,
       additive,
@@ -509,9 +503,6 @@ function FilesPage() {
       setDragRect(null);
       if (!origin) return;
       if (didDragRef.current) {
-        // Capture-phase listener fires *before* any onClick — swallow the
-        // synthetic click that follows this mouseup so the underlying row's
-        // onClick handler doesn't reset our marquee selection.
         const swallow = (ev: Event) => {
           ev.stopPropagation();
           ev.preventDefault();
@@ -529,18 +520,13 @@ function FilesPage() {
   }, [dragRect]);
 
   // ── Intra-app drag (move/copy) ───────────────────────────────────
-  // Global safety net: any drag that ends (dropped on a non-target or aborted
-  // with Esc) clears the highlighted folder so it doesn't get stuck visually.
   useEffect(() => {
     function onEnd() { setDropTarget(null); }
     window.addEventListener('dragend', onEnd);
     return () => window.removeEventListener('dragend', onEnd);
   }, []);
 
-  // dataTransfer custom MIME distinguishes intra-app drag from external file
-  // upload. Alt/Ctrl/Cmd held during drop → copy; otherwise → move.
   const handleDragStart = useCallback((e: React.DragEvent, entry: BackendDirent) => {
-    // mousedown started a potential rubber-band; HTML5 drag superseded it.
     dragOriginRef.current = null;
     setDragRect(null);
     e.dataTransfer.effectAllowed = 'copyMove';
@@ -550,9 +536,6 @@ function FilesPage() {
     e.dataTransfer.setData('application/x-cowork-dirent-paths', JSON.stringify(dragPaths));
     e.dataTransfer.setData('text/plain', dragPaths.join('\n'));
 
-    // The browser's default drag image renders the entire row/card at the
-    // cursor, obscuring the drop area. Replace with a compact pill that just
-    // shows the item count (or filename for a single item).
     const ghost = document.createElement('div');
     ghost.className = 'cw-drag-ghost';
     ghost.textContent = dragPaths.length === 1
@@ -560,11 +543,9 @@ function FilesPage() {
       : `${dragPaths.length}개 항목`;
     document.body.appendChild(ghost);
     e.dataTransfer.setDragImage(ghost, 14, 14);
-    // Browser captures the bitmap synchronously; safe to remove next frame.
     requestAnimationFrame(() => ghost.remove());
   }, [selectedPaths]);
 
-  // Returns true if this event was an intra-app drop (handled), false otherwise.
   const handleDropOnFolder = useCallback((destination: string, e: React.DragEvent): boolean => {
     const raw = e.dataTransfer.getData('application/x-cowork-dirent-paths');
     if (!raw) return false;
@@ -580,7 +561,6 @@ function FilesPage() {
     return true;
   }, [showToast, copyMutation, moveMutation]);
 
-  // ── Confirm dialog copy ──────────────────────────────────────────
   const deleteCopy = useMemo(() => describeBulkDelete(pendingDelete, entries), [pendingDelete, entries]);
   const currentPathKey = currentPath.join('/');
 
@@ -704,7 +684,7 @@ function FilesPage() {
               <div className="cw-view-toggle" role="tablist" aria-label="보기 방식">
                 <button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'is-active' : ''} onClick={() => setViewMode('list')} aria-label="리스트 보기"><Icon name="list" size={14} /></button>
                 <button type="button" role="tab" aria-selected={viewMode === 'grid'} className={viewMode === 'grid' ? 'is-active' : ''} onClick={() => setViewMode('grid')} aria-label="그리드 보기"><Icon name="grid" size={14} /></button>
-            </div>
+              </div>
             </div>
           </header>
 
@@ -714,7 +694,6 @@ function FilesPage() {
             onClick={(e) => { if (e.target === e.currentTarget) clearSelection(); }}
             onMouseDown={onBodyMouseDown}
             onDragEnter={(e) => {
-              // Internal drag (move/copy) doesn't paint the upload over-state.
               if (e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
               e.preventDefault();
               dragDepthRef.current += 1;
@@ -731,8 +710,6 @@ function FilesPage() {
               e.preventDefault();
               dragDepthRef.current = 0;
               setIsDraggingOver(false);
-              // Intra-app drop on the file body is treated as cancel — only
-              // sidebar tree folders are valid intra-app destinations.
               if (e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
               onDropFiles(e.dataTransfer.files);
             }}
@@ -921,13 +898,9 @@ function TreeBranch({
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect = e.altKey || e.ctrlKey || e.metaKey ? 'copy' : 'move';
-          // Re-affirm dropTarget continuously; helps after children flicker.
           setDropTarget(node.path);
         }}
         onDragLeave={(e) => {
-          // dragleave fires when crossing into a child too; only clear if
-          // the cursor moved outside this row entirely. The global dragend
-          // listener catches the case where the drag aborts elsewhere.
           const to = e.relatedTarget as Node | null;
           if (!to || !e.currentTarget.contains(to)) setDropTarget(null);
         }}
@@ -992,13 +965,6 @@ interface RowProps {
   onDragStart: (ev: React.DragEvent, e: BackendDirent) => void;
 }
 
-function iconClass(entry: BackendDirent): string {
-  return entry.kind === 'dir' ? 'cw-file-folder' : fileTypeClass(nameOf(entry));
-}
-
-function iconName(entry: BackendDirent): 'folder' | ReturnType<typeof fileTypeIcon> {
-  return entry.kind === 'dir' ? 'folder' : fileTypeIcon(nameOf(entry));
-}
 
 function folderSubtitle(entry: BackendDirent, entries: BackendDirent[]): string {
   if (entry.kind !== 'dir') return '';
@@ -1085,9 +1051,10 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onOpen(entry); } }}
     >
-      <span className={`cw-pocket ${iconClass(entry)}`}>
-        <Icon name={iconName(entry)} size={14} />
-      </span>
+      {isDir
+        ? <span className="cw-pocket cw-file-folder"><Icon name="folder" size={14} /></span>
+        : <FileTypeIcon filename={nameOf(entry)} size={18} />
+      }
       <span className="cw-file-main">
         <span className="name">{nameOf(entry)}</span>
         <span className="meta">
@@ -1127,9 +1094,10 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onOpen(entry); } }}
     >
-      <div className={`cw-grid-card-icon ${iconClass(entry)}`}>
-        <Icon name={iconName(entry)} size={28} />
-      </div>
+      {isDir
+        ? <div className="cw-grid-card-icon cw-file-folder"><Icon name="folder" size={28} /></div>
+        : <div className="cw-grid-card-icon cw-grid-card-icon--file"><FileTypeIcon filename={nameOf(entry)} size={44} /></div>
+      }
       <div className="cw-grid-card-name" title={nameOf(entry)}>{nameOf(entry)}</div>
       <div className="cw-grid-card-meta">
         {showPath

@@ -68,8 +68,8 @@ async fn test_ingest_message_purge_cycle() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
-    let session_id = post_session_authed(&app, &token, project_id).await;
+    let project_slug = project["slug"].as_str().unwrap();
+    let session_id = post_session_authed(&app, &token, project_slug).await;
 
     // ── Question about document 1 (Freedonia) ────────────────────────────────
     let outputs = send_message(

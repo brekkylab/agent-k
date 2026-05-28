@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { EmptyState, SectionLabel } from '@/components/uiPrimitives';
 import { Icon } from '@/components/Icon';
 
-export const Route = createFileRoute('/_app/projects/$projectId/schedule')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/schedule')({
   component: SchedulePage,
 });
 

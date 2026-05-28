@@ -5,9 +5,10 @@ use ailoy::{
     runenv::{FileEntry, RunEnv, SandboxConfig, VolumeMount},
 };
 
-/// Where the bundled XLSX skill is materialised inside the sandbox. Kept as a
-/// `const` because `SKILL.md`'s `sys.path.insert(...)` line must match it.
 const XLSX_SKILL_DIR: &str = "/workspace/skills/xlsx";
+pub const GUEST_ATTACHED_DIR: &str = "/workspace/attached";
+pub const GUEST_SHARED_DIR: &str = "/workspace/shared";
+pub const GUEST_ARTIFACTS_DIR: &str = "/workspace/artifacts";
 
 const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to plan and perform tasks based on the user's query.
 
@@ -36,6 +37,16 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 - Current time: {{TIME}}
 - Always respond in the language the user used."#;
 
+#[derive(Default, Clone, Debug)]
+pub struct CoworkerSandboxOptions {
+    pub sandbox_name: Option<String>,
+    pub persist: bool,
+    /// When true, the bundled XLSX skill is materialised under [`XLSX_SKILL_DIR`]
+    /// and surfaced via the auto-rendered "Available Skills" table. Default
+    /// `false`; the CLI wrappers (`run`, `test_case`) flip this on explicitly.
+    pub with_skill: bool,
+}
+
 /// name: Identity of the model
 /// model: Model to be used (e.g. openai/gpt-4.5)
 pub async fn get_coworker_agent(
@@ -45,6 +56,28 @@ pub async fn get_coworker_agent(
     shared_data_dir: impl AsRef<Path>,
     artifacts_dir: impl AsRef<Path>,
     with_skill: bool,
+) -> anyhow::Result<Agent> {
+    get_coworker_agent_with_opts(
+        name,
+        model,
+        input_dir,
+        shared_data_dir,
+        artifacts_dir,
+        CoworkerSandboxOptions {
+            with_skill,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+pub async fn get_coworker_agent_with_opts(
+    name: impl AsRef<str>,
+    model: impl AsRef<str>,
+    input_dir: impl AsRef<Path>,
+    shared_data_dir: impl AsRef<Path>,
+    artifacts_dir: impl AsRef<Path>,
+    opts: CoworkerSandboxOptions,
 ) -> anyhow::Result<Agent> {
     /// Days since 1970-01-01 → (year, month, day). Howard Hinnant's `civil_from_days`.
     fn civil_from_days(days: i64) -> (i64, u32, u32) {
@@ -78,6 +111,8 @@ pub async fn get_coworker_agent(
 
     // Build instruction
     let mut config = SandboxConfig::default();
+    config.name = opts.sandbox_name;
+    config.persist = opts.persist;
     config.image = "brekkylab/agent-k-libreoffice:latest".into();
     config.cpus = 8;
     config.memory_mib = 1024;
@@ -85,39 +120,40 @@ pub async fn get_coworker_agent(
     config.env.insert("HOME".into(), "/workspace".into());
     config.volumes.push(VolumeMount::Bind {
         host: input_dir.as_ref().into(),
-        guest: "/inputs".into(),
+        guest: GUEST_ATTACHED_DIR.into(),
         readonly: true,
     });
     config.volumes.push(VolumeMount::Bind {
         host: shared_data_dir.as_ref().into(),
-        guest: "/shared_data".into(),
+        guest: GUEST_SHARED_DIR.into(),
         readonly: true,
     });
     config.volumes.push(VolumeMount::Bind {
         host: artifacts_dir.as_ref().into(),
-        guest: "/workspace/artifacts".into(),
+        guest: GUEST_ARTIFACTS_DIR.into(),
         readonly: false,
     });
     let inst = COWORKER_INSTRUCTION
         .replace("{{NAME}}", name.as_ref())
         .replace("{{TIME}}", &now_utc_iso8601())
         .replace("{{HOME}}", "/workspace")
-        .replace("{{INPUTS}}", &"/inputs")
-        .replace("{{SHARED_DATA}}", &"/shared_data")
-        .replace("{{ARTIFACTS}}", "/workspace/artifacts")
+        .replace("{{INPUTS}}", GUEST_ATTACHED_DIR)
+        .replace("{{SHARED_DATA}}", GUEST_SHARED_DIR)
+        .replace("{{ARTIFACTS}}", GUEST_ARTIFACTS_DIR)
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
-    // XLSX skill: when `with_skill` is true (default), ailoy materialises
-    // the skill files into the sandbox under `XLSX_SKILL_DIR` on first run
-    // and auto-renders an "Available Skills" table into the system
-    // instruction so the model can `cat` it on demand. Pass `with_skill =
-    // false` for a no-skill baseline run (test_case `--no-skill`).
+    // XLSX skill: when `opts.with_skill` is true, ailoy materialises the
+    // skill files into the sandbox under `XLSX_SKILL_DIR` on first run and
+    // auto-renders an "Available Skills" table into the system instruction
+    // so the model can `cat` it on demand. The CLI wrappers (`run`,
+    // `test_case`) flip this on by default; pass `--no-skill` for the
+    // no-skill baseline.
     let mut spec = AgentSpec::new(model.as_ref())
         .instruction(inst)
         .system_tools()
         .web_search_tool(vec![])
         .max_tokens(32_000);
-    if with_skill {
+    if opts.with_skill {
         let skill_dir = PathBuf::from(XLSX_SKILL_DIR);
         spec = spec.skill(
             &skill_dir,

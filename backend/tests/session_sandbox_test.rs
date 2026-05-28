@@ -9,6 +9,7 @@ mod common;
 
 use std::{path::Path, sync::Arc};
 
+use agent_k::agents::GUEST_SHARED_DIR;
 use agent_k_backend::state::AppState;
 use common::{
     delete_session, extract_text, extract_text_from_slice, get_personal_project, login, make_repo,
@@ -44,10 +45,10 @@ async fn two_sessions_get_isolated_sandboxes() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
+    let project_slug = project["slug"].as_str().unwrap();
 
-    let id1 = post_session_authed(&app, &token, project_id).await;
-    let id2 = post_session_authed(&app, &token, project_id).await;
+    let id1 = post_session_authed(&app, &token, project_slug).await;
+    let id2 = post_session_authed(&app, &token, project_slug).await;
     assert_ne!(id1, id2, "two sessions must have different ids");
 
     let (re1, re2) = {
@@ -97,8 +98,8 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
-    let id = post_session_authed(&app, &token, project_id).await;
+    let project_slug = project["slug"].as_str().unwrap();
+    let id = post_session_authed(&app, &token, project_slug).await;
 
     let outputs = send_message(
         &app,
@@ -132,13 +133,13 @@ async fn agent_writes_and_reads_file_via_bash_in_sandbox() {
     delete_session(&app, id, &token).await;
 }
 
-/// Files uploaded via the dirent API must be readable by the agent inside the
-/// session sandbox at `/workspace/.uploads/<path>`.
+/// Files uploaded via the dirent API to the project's shared scope must be
+/// readable by the agent inside the session sandbox at `{GUEST_SHARED_DIR}/<path>`.
 ///
 /// Requires: microsandbox runtime + ANTHROPIC_API_KEY (real value).
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY"]
-async fn agent_can_read_uploaded_files_from_workspace_uploads() {
+async fn agent_can_read_shared_files_from_shared_data() {
     dotenvy::dotenv().ok();
     setup_provider().await;
 
@@ -149,22 +150,22 @@ async fn agent_can_read_uploaded_files_from_workspace_uploads() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
+    let project_slug = project["slug"].as_str().unwrap();
 
     upload_dirents(
         &app,
         &token,
-        project_id,
+        project_slug,
         &[("context.txt", b"SENTINEL_UPLOAD_OK")],
     )
     .await;
 
-    let session_id = post_session_authed(&app, &token, project_id).await;
+    let session_id = post_session_authed(&app, &token, project_slug).await;
 
     let outputs = send_message(
         &app,
         session_id,
-        "Run this bash command exactly and report the output: cat /workspace/.uploads/context.txt",
+        &format!("Run this bash command exactly and report the output: cat {GUEST_SHARED_DIR}/context.txt"),
         &token,
     )
     .await;
@@ -172,7 +173,7 @@ async fn agent_can_read_uploaded_files_from_workspace_uploads() {
     let text = extract_text(&outputs);
     assert!(
         text.contains("SENTINEL_UPLOAD_OK"),
-        "expected agent to read 'SENTINEL_UPLOAD_OK' from /workspace/.uploads/context.txt, got: {text:?}"
+        "expected agent to read 'SENTINEL_UPLOAD_OK' from {GUEST_SHARED_DIR}/context.txt, got: {text:?}"
     );
 
     delete_session(&app, session_id, &token).await;
@@ -251,8 +252,8 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
     signup(&app, &username, "Password123!").await;
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
-    let id = post_session_authed(&app, &token, project_id).await;
+    let project_slug = project["slug"].as_str().unwrap();
+    let id = post_session_authed(&app, &token, project_slug).await;
 
     let events = send_message_stream(
         &app,

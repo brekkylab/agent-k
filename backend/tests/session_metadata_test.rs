@@ -18,14 +18,14 @@ async fn new_session_has_null_last_message_at_and_title() {
     common::signup(&app, &username, "Password123!").await;
     let token = common::login(&app, &username, "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
+    let project_slug = project["slug"].as_str().unwrap();
 
     let (status, body) = common::authed(
         &app,
         "POST",
-        &format!("/projects/{project_id}/sessions"),
+        "/sessions",
         &token,
-        Some(serde_json::json!({})),
+        Some(serde_json::json!({ "project_id": project_slug })),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "create session failed: {body}");
@@ -49,8 +49,7 @@ async fn last_message_at_set_after_messages_appended() {
     let alice_info = common::signup(&app, "alice_lma", "Password123!").await;
     let alice_token = common::login(&app, "alice_lma", "Password123!").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
@@ -90,8 +89,7 @@ async fn share_mode_update_does_not_change_last_message_at() {
     let alice_info = common::signup(&app, "alice_smu", "Password123!").await;
     let alice_token = common::login(&app, "alice_smu", "Password123!").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
@@ -144,9 +142,9 @@ async fn creator_has_zero_unread_on_new_session() {
     common::signup(&app, &username, "Password123!").await;
     let token = common::login(&app, &username, "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
+    let project_slug = project["slug"].as_str().unwrap();
 
-    let session_id = common::post_session_authed(&app, &token, project_id).await;
+    let session_id = common::post_session_authed(&app, &token, project_slug).await;
 
     let (_, body) = common::authed(
         &app,
@@ -172,13 +170,13 @@ async fn other_user_sees_unread_messages_until_they_read() {
     let alice_info = common::signup(&app, "alice_unread", "Password123!").await;
     let alice_token = common::login(&app, "alice_unread", "Password123!").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     common::signup(&app, "bob_unread", "Password123!").await;
     let bob_token = common::login(&app, "bob_unread", "Password123!").await;
-    common::add_member(&app, &alice_token, project_id_str, "bob_unread").await;
+    common::add_member(&app, &alice_token, project_slug, "bob_unread").await;
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
     repo.update_session_share_mode(
@@ -243,8 +241,8 @@ async fn list_sessions_includes_metadata() {
     let alice_info = common::signup(&app, "alice_list", "Password123!").await;
     let alice_token = common::login(&app, "alice_list", "Password123!").await;
     let alice_project = common::get_personal_project(&app, &alice_token).await;
-    let project_id_str = alice_project["id"].as_str().unwrap();
-    let project_id = Uuid::parse_str(project_id_str).unwrap();
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
     let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
 
     let session = repo.create_session(project_id, alice_id).await.unwrap();
@@ -264,7 +262,7 @@ async fn list_sessions_includes_metadata() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/projects/{project_id_str}/sessions"),
+        &format!("/sessions?project_id={project_slug}"),
         &alice_token,
         None,
     )
@@ -357,8 +355,9 @@ async fn first_message_stream_broadcasts_title_via_websocket() {
     common::signup(&app, &username, "Password123!").await;
     let token = common::login(&app, &username, "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
+    let project_slug = project["slug"].as_str().unwrap().to_string();
     let project_id = project["id"].as_str().unwrap().to_string();
-    let session_id = common::post_session_authed(&app, &token, &project_id).await;
+    let session_id = common::post_session_authed(&app, &token, &project_slug).await;
 
     // Subscribe before triggering the stream so no event is missed.
     let mut ws_rx = state.ws_tx.subscribe();
@@ -394,6 +393,7 @@ async fn first_message_stream_broadcasts_title_via_websocket() {
 /// send_message on the first message triggers fire-and-forget LLM title generation.
 /// The title should be stored within a reasonable time after the response returns.
 #[tokio::test]
+#[ignore = "requires ANTHROPIC_API_KEY"]
 async fn send_message_generates_title_via_llm() {
     dotenvy::dotenv().ok();
     common::setup_provider().await;
@@ -404,9 +404,9 @@ async fn send_message_generates_title_via_llm() {
     common::signup(&app, &username, "Password123!").await;
     let token = common::login(&app, &username, "Password123!").await;
     let project = common::get_personal_project(&app, &token).await;
-    let project_id = project["id"].as_str().unwrap();
+    let project_slug = project["slug"].as_str().unwrap();
 
-    let session_id = common::post_session_authed(&app, &token, project_id).await;
+    let session_id = common::post_session_authed(&app, &token, project_slug).await;
 
     // First message triggers fire-and-forget title generation
     common::send_message(&app, session_id, "What is the capital of France?", &token).await;

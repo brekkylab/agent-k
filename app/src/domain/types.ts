@@ -15,6 +15,7 @@ export interface User {
 
 export interface Project {
   id: ProjectId;
+  slug: string;
   name: string;
   description: string;
   ownerId: UserId;
@@ -59,6 +60,8 @@ export interface Message {
   body: string;
   toolCalls?: ToolCallInvocation[];
   citations?: FileAsset['id'][];
+  attachments?: string[];
+  artifacts?: string[];
   status?: 'sent' | 'streaming' | 'done';
 }
 

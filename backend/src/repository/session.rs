@@ -8,6 +8,16 @@ use uuid::Uuid;
 use super::SqliteRepository;
 use crate::repository::RepositoryResult;
 
+/// Result of a prefix-based session lookup.
+pub enum PrefixLookup {
+    /// Exactly one session matched the prefix.
+    Unique(Uuid),
+    /// Two or more sessions share the same prefix — caller should ask for more characters.
+    Ambiguous(Vec<Uuid>),
+    /// No session matched.
+    None,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ShareMode {
@@ -89,6 +99,9 @@ pub struct DbSessionMessage {
     pub sender_name: Option<String>,
     pub sender_user_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    pub attachments: Vec<String>,
+    /// Scope-relative paths of artifacts created during this message turn.
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +110,9 @@ pub struct NewSessionMessage {
     pub sender_kind: DbSenderKind,
     pub sender_name: Option<String>,
     pub sender_user_id: Option<Uuid>,
+    pub attachments: Vec<String>,
+    /// Scope-relative paths of artifacts created during this message turn.
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -408,8 +424,8 @@ impl SqliteRepository {
 
         sqlx::query(
             "INSERT INTO session_messages \
-                 (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id) \
-             SELECT ?, message_json, created_at, sender_kind, sender_name, sender_user_id \
+                 (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments) \
+             SELECT ?, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments \
              FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
         )
         .bind(new_id.to_string())
@@ -460,10 +476,14 @@ impl SqliteRepository {
         for msg in messages {
             let now = Self::now_string();
             let msg_json = serde_json::to_string(&msg.message)?;
+            let attachments_json =
+                serde_json::to_string(&msg.attachments).unwrap_or_else(|_| "[]".to_string());
+            let artifacts_json =
+                serde_json::to_string(&msg.artifacts).unwrap_or_else(|_| "[]".to_string());
             sqlx::query(
                 "INSERT INTO session_messages \
-                     (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id) \
-                 VALUES (?, ?, ?, ?, ?, ?);",
+                     (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments, artifacts) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
             )
             .bind(&sid)
             .bind(&msg_json)
@@ -471,6 +491,8 @@ impl SqliteRepository {
             .bind(msg.sender_kind.as_str())
             .bind(&msg.sender_name)
             .bind(msg.sender_user_id.map(|u| u.to_string()))
+            .bind(&attachments_json)
+            .bind(&artifacts_json)
             .execute(&mut *tx)
             .await?;
         }
@@ -542,7 +564,7 @@ impl SqliteRepository {
 
     pub async fn get_messages(&self, session_id: Uuid) -> RepositoryResult<Vec<DbSessionMessage>> {
         let rows = sqlx::query(
-            "SELECT message_json, sender_kind, sender_name, sender_user_id, created_at \
+            "SELECT message_json, sender_kind, sender_name, sender_user_id, created_at, attachments, artifacts \
              FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
         )
         .bind(session_id.to_string())
@@ -577,15 +599,61 @@ impl SqliteRepository {
                 let created_at =
                     Self::parse_timestamp(row.get("created_at"), "session_messages.created_at")?;
 
+                let attachments_json: String = row.try_get("attachments").unwrap_or_default();
+                let attachments: Vec<String> =
+                    serde_json::from_str(&attachments_json).unwrap_or_default();
+
+                let artifacts_json: String = row.try_get("artifacts").unwrap_or_default();
+                let artifacts: Vec<String> =
+                    serde_json::from_str(&artifacts_json).unwrap_or_default();
+
                 Ok(DbSessionMessage {
                     message,
                     sender_kind,
                     sender_name,
                     sender_user_id,
                     created_at,
+                    attachments,
+                    artifacts,
                 })
             })
             .collect()
+    }
+
+    /// Remove an artifact path from all messages in a session.
+    /// Called after a file is deleted so message artifact chips stay in sync.
+    pub async fn remove_artifact_from_messages(
+        &self,
+        session_id: Uuid,
+        artifact_rel_path: &str,
+    ) -> RepositoryResult<()> {
+        let rows = sqlx::query(
+            "SELECT seq, artifacts FROM session_messages \
+             WHERE session_id = ? AND artifacts != '[]';",
+        )
+        .bind(session_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        for row in rows {
+            let seq: i64 = row.get("seq");
+            let artifacts_json: String = row.get("artifacts");
+            let mut artifacts: Vec<String> =
+                serde_json::from_str(&artifacts_json).unwrap_or_default();
+
+            if artifacts.contains(&artifact_rel_path.to_string()) {
+                artifacts.retain(|p| p != artifact_rel_path);
+                let new_json =
+                    serde_json::to_string(&artifacts).unwrap_or_else(|_| "[]".to_string());
+                sqlx::query("UPDATE session_messages SET artifacts = ? WHERE seq = ?;")
+                    .bind(&new_json)
+                    .bind(seq)
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Mark all current messages as read for a user. Uses upsert semantics.
@@ -695,5 +763,79 @@ impl SqliteRepository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Look up a session by a UUID prefix string.
+    ///
+    /// Accepts a hex-only prefix (`aaaaaaaa2222`) or a hyphenated prefix
+    /// (`aaaaaaaa-2222`); both map to the same LIKE pattern against the
+    /// hyphenated form stored in `sessions.id`. The PK index handles the
+    /// prefix scan. Returns `Unique` for exactly one match, `Ambiguous` for
+    /// two or more (LIMIT 2 keeps this O(1) past the first hit), `None` for
+    /// no match.
+    pub async fn lookup_session_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> RepositoryResult<PrefixLookup> {
+        let pattern = format!("{}%", hyphenate_uuid_prefix(prefix));
+        let rows = sqlx::query("SELECT id FROM sessions WHERE id LIKE ? LIMIT 2")
+            .bind(&pattern)
+            .fetch_all(&self.pool)
+            .await?;
+        match rows.len() {
+            0 => Ok(PrefixLookup::None),
+            1 => Ok(PrefixLookup::Unique(Self::parse_uuid(
+                rows[0].get::<String, _>("id"),
+                "sessions.id",
+            )?)),
+            _ => {
+                let mut ids = Vec::with_capacity(rows.len());
+                for r in rows {
+                    ids.push(Self::parse_uuid(r.get::<String, _>("id"), "sessions.id")?);
+                }
+                Ok(PrefixLookup::Ambiguous(ids))
+            }
+        }
+    }
+}
+
+/// Reinsert UUID hyphens at the canonical 8-4-4-4-12 positions when the prefix
+/// doesn't already contain any. Lets URLs use a hex-only short id while DB
+/// rows stay in the standard hyphenated form.
+fn hyphenate_uuid_prefix(prefix: &str) -> String {
+    if prefix.contains('-') {
+        return prefix.to_string();
+    }
+    let mut out = String::with_capacity(prefix.len() + 4);
+    for (i, c) in prefix.chars().enumerate() {
+        if matches!(i, 8 | 12 | 16 | 20) {
+            out.push('-');
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::hyphenate_uuid_prefix;
+
+    #[test]
+    fn hex_only_prefix_gets_hyphens() {
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa"), "aaaaaaaa");
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa1"), "aaaaaaaa-1");
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa2222"), "aaaaaaaa-2222");
+        assert_eq!(
+            hyphenate_uuid_prefix("aaaaaaaa22224222"),
+            "aaaaaaaa-2222-4222",
+        );
+    }
+
+    #[test]
+    fn hyphenated_prefix_passes_through() {
+        assert_eq!(
+            hyphenate_uuid_prefix("aaaaaaaa-2222"),
+            "aaaaaaaa-2222",
+        );
     }
 }

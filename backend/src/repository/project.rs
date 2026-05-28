@@ -8,6 +8,7 @@ use crate::repository::{RepositoryError, RepositoryResult};
 #[derive(Debug, Clone)]
 pub struct DbProject {
     pub id: Uuid,
+    pub slug: String,
     pub name: String,
     pub description: Option<String>,
     pub owner_id: Uuid,
@@ -26,6 +27,7 @@ impl SqliteRepository {
     fn row_to_db_project(row: &sqlx::sqlite::SqliteRow) -> RepositoryResult<DbProject> {
         Ok(DbProject {
             id: Self::parse_uuid(row.get::<String, _>("id"), "projects.id")?,
+            slug: row.get("slug"),
             name: row.get("name"),
             description: row.get("description"),
             owner_id: Self::parse_uuid(row.get::<String, _>("owner_id"), "projects.owner_id")?,
@@ -45,24 +47,28 @@ impl SqliteRepository {
         name: String,
         description: Option<String>,
         owner_id: Uuid,
+        slug: String,
     ) -> RepositoryResult<DbProject> {
         let id = Uuid::new_v4();
         let now = Self::now_string();
         sqlx::query(
-            "INSERT INTO projects (id, name, description, owner_id, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO projects (id, slug, name, description, owner_id, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
+        .bind(&slug)
         .bind(&name)
         .bind(&description)
         .bind(owner_id.to_string())
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
-        .await?;
+        .await
+        .map_err(|e| Self::map_db_error(e, "projects.slug"))?;
 
         Ok(DbProject {
             id,
+            slug,
             name,
             description,
             owner_id,
@@ -73,7 +79,7 @@ impl SqliteRepository {
 
     pub async fn get_project(&self, id: Uuid) -> RepositoryResult<Option<DbProject>> {
         let row = sqlx::query(
-            "SELECT id, name, description, owner_id, created_at, updated_at \
+            "SELECT id, slug, name, description, owner_id, created_at, updated_at \
              FROM projects WHERE id = ?",
         )
         .bind(id.to_string())
@@ -82,10 +88,21 @@ impl SqliteRepository {
         row.as_ref().map(Self::row_to_db_project).transpose()
     }
 
+    pub async fn get_project_by_slug(&self, slug: &str) -> RepositoryResult<Option<DbProject>> {
+        let row = sqlx::query(
+            "SELECT id, slug, name, description, owner_id, created_at, updated_at \
+             FROM projects WHERE slug = ?",
+        )
+        .bind(slug)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(Self::row_to_db_project).transpose()
+    }
+
     pub async fn list_projects_for_user(&self, user_id: Uuid) -> RepositoryResult<Vec<DbProject>> {
         let uid = user_id.to_string();
         let rows = sqlx::query(
-            "SELECT DISTINCT p.id, p.name, p.description, p.owner_id, p.created_at, p.updated_at
+            "SELECT DISTINCT p.id, p.slug, p.name, p.description, p.owner_id, p.created_at, p.updated_at
              FROM projects p
              LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?1
              WHERE p.owner_id = ?1 OR pm.user_id IS NOT NULL
@@ -97,11 +114,30 @@ impl SqliteRepository {
         rows.iter().map(Self::row_to_db_project).collect()
     }
 
+    pub async fn get_project_id_by_retired_slug(
+        &self,
+        slug: &str,
+    ) -> RepositoryResult<Option<Uuid>> {
+        let row =
+            sqlx::query("SELECT project_id FROM project_slug_history WHERE old_slug = ? LIMIT 1")
+                .bind(slug)
+                .fetch_optional(&self.pool)
+                .await?;
+        match row {
+            Some(r) => Ok(Some(Self::parse_uuid(
+                r.get::<String, _>("project_id"),
+                "project_slug_history.project_id",
+            )?)),
+            None => Ok(None),
+        }
+    }
+
     pub async fn update_project(
         &self,
         id: Uuid,
         name: Option<String>,
         description: Option<Option<String>>,
+        slug: Option<String>,
     ) -> RepositoryResult<DbProject> {
         let now = Self::now_string();
         let current = self
@@ -109,16 +145,44 @@ impl SqliteRepository {
             .await?
             .ok_or_else(|| RepositoryError::InvalidData(format!("project {id} not found")))?;
 
-        let new_name = name.unwrap_or(current.name);
-        let new_desc = description.unwrap_or(current.description);
+        let new_name = name.unwrap_or(current.name.clone());
+        let new_desc = description.unwrap_or(current.description.clone());
+        let new_slug = slug.unwrap_or_else(|| current.slug.clone());
+        let slug_changed = new_slug != current.slug;
 
-        sqlx::query("UPDATE projects SET name = ?, description = ?, updated_at = ? WHERE id = ?")
-            .bind(&new_name)
-            .bind(&new_desc)
-            .bind(&now)
+        let mut tx = self.pool.begin().await?;
+
+        if slug_changed {
+            // Preserve the old slug permanently so any link still pointing at it
+            // can resolve back to this project. ON CONFLICT keeps the existing
+            // history entry — a slug that was retired by some other project is
+            // never silently reassigned here.
+            sqlx::query(
+                "INSERT INTO project_slug_history (old_slug, project_id, retired_at) \
+                 VALUES (?, ?, ?) \
+                 ON CONFLICT(old_slug) DO NOTHING",
+            )
+            .bind(&current.slug)
             .bind(id.to_string())
-            .execute(&self.pool)
+            .bind(&now)
+            .execute(&mut *tx)
             .await?;
+        }
+
+        sqlx::query(
+            "UPDATE projects SET slug = ?, name = ?, description = ?, updated_at = ? \
+             WHERE id = ?",
+        )
+        .bind(&new_slug)
+        .bind(&new_name)
+        .bind(&new_desc)
+        .bind(&now)
+        .bind(id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| Self::map_db_error(e, "projects.slug"))?;
+
+        tx.commit().await?;
 
         self.get_project(id)
             .await?

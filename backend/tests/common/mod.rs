@@ -278,8 +278,8 @@ pub async fn post_session(app: &axum::Router) -> uuid::Uuid {
     signup(app, &username, "Password123!").await;
     let token = login(app, &username, "Password123!").await;
     let project = get_personal_project(app, &token).await;
-    let project_id = project["id"].as_str().unwrap().to_string();
-    post_session_authed(app, &token, &project_id).await
+    let project_slug = project["slug"].as_str().unwrap().to_string();
+    post_session_authed(app, &token, &project_slug).await
 }
 
 pub async fn try_delete_session(
@@ -427,6 +427,8 @@ pub fn to_new_msgs(
                 sender_kind,
                 sender_name,
                 sender_user_id,
+                attachments: vec![],
+                artifacts: vec![],
             }
         })
         .collect()
@@ -661,7 +663,7 @@ pub async fn upload_dirents(
     let (boundary, body) = build_multipart_body(files);
     let req = Request::builder()
         .method("POST")
-        .uri(format!("/projects/{project_id}/dirents"))
+        .uri(format!("/dirents?path=projects/{project_id}/shared"))
         .header("authorization", format!("Bearer {token}"))
         .header(
             "content-type",

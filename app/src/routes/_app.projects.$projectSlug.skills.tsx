@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { EmptyState, SectionLabel } from '@/components/uiPrimitives';
 import { Icon } from '@/components/Icon';
 
-export const Route = createFileRoute('/_app/projects/$projectId/skills')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/skills')({
   component: SkillsPage,
 });
 
