@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getToken } from '@/api/client';
+import { ApiError, getToken } from '@/api/client';
 import { getMe } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
 import { useLayoutStore } from '@/stores/layout';
@@ -10,8 +10,19 @@ import { appWs } from '@/api/ws';
 import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app')({
-  beforeLoad: () => {
+  beforeLoad: async ({ context }) => {
     if (!getToken()) throw redirect({ to: '/login' });
+    try {
+      await context.queryClient.fetchQuery({ queryKey: ['me'], queryFn: getMe, staleTime: 5 * 60_000 });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // notifyUnauthorized (fired from client.ts) already called forceLogout,
+        // which cleared auth state, set sessionStorage, and navigated via router.
+        // Just ensure TanStack Router completes the redirect cleanly.
+        throw redirect({ to: '/login' });
+      }
+      // Non-auth errors (network issues, 5xx) fall through — page renders and handles them.
+    }
   },
   component: AppShell,
 });
