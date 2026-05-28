@@ -27,13 +27,14 @@ use crate::{
 
 // ── automations ──────────────────────────────────────────────────────────────
 
-/// POST /automations — body includes `project_id`.
+/// POST /automations
+/// body must include `project_ref` (UUID or slug); user must be a member of that project.
 pub async fn create_automation(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Json(payload): Json<CreateAutomationRequest>,
 ) -> ApiResult<(StatusCode, Json<AutomationResponse>)> {
-    let project_id = payload.project_id;
+    let project_id = super::project::resolve_project_id(&state, &payload.project_ref).await?;
     require_member(&state, auth_user.id, project_id).await?;
     if payload.name.trim().is_empty() {
         return Err(AppError::bad_request("name must not be empty"));
@@ -58,18 +59,20 @@ pub async fn create_automation(
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct ListAutomationsQuery {
-    pub project_id: Option<Uuid>,
+    /// Project UUID, active slug, or retired slug — backend resolves all three.
+    pub project_ref: Option<String>,
 }
 
-/// GET /automations?project_id=... — `project_id` optional; omit for all
-/// automations across the user's accessible projects.
+/// GET /automations?project_ref=...
+/// `project_ref` is optional — omit to list all automations across projects the user can access.
 pub async fn list_automations(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Query(q): Query<ListAutomationsQuery>,
 ) -> ApiResult<Json<AutomationListResponse>> {
-    let automations = match q.project_id {
-        Some(project_id) => {
+    let automations = match q.project_ref {
+        Some(project_ref) => {
+            let project_id = super::project::resolve_project_id(&state, &project_ref).await?;
             require_member(&state, auth_user.id, project_id).await?;
             state
                 .repository
