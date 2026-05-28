@@ -1184,68 +1184,789 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   cursor: pointer;
 }
 
-.cw-live-login {
+/* ── Welcome / login: split-screen brand entry ─────────────────────────────
+   Left = product showcase on the deep accent (the one place we let the accent
+   fill the page — this is the brand surface outside the app). Right = auth. */
+.cw-welcome {
   min-height: 100vh;
   display: grid;
-  place-items: center;
-  padding: 28px;
+  /* 기본: 로그인 우세 (≈ 33% 가이드 · 67% 폼) — 가이드는 "엿보기" 정도.
+     마우스를 가이드로 옮기면 :has()로 비율이 뒤집혀 가이드가 풀로 펼쳐진다. */
+  grid-template-columns: 0.5fr 1fr;
+  background: var(--cw-paper);
+  transition: grid-template-columns 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.cw-welcome:has(.cw-welcome-showcase:hover),
+.cw-welcome:has(.cw-welcome-showcase:focus-within) {
+  grid-template-columns: 1.5fr 1fr; /* 가이드 우세 (≈ 60% 가이드 · 40% 폼) */
+}
+
+.cw-welcome-showcase {
+  position: relative;
+  overflow: hidden;
+  color: white;
   background:
-    radial-gradient(circle at 22% 18%, color-mix(in oklch, var(--cw-accent), transparent 70%), transparent 30%),
-    radial-gradient(circle at 82% 72%, color-mix(in oklch, var(--cw-cozy-teal), transparent 70%), transparent 34%),
-    linear-gradient(135deg, var(--cw-surface), var(--cw-canvas));
+    radial-gradient(circle at 16% 10%, color-mix(in oklch, var(--cw-cozy-teal), transparent 52%), transparent 44%),
+    radial-gradient(circle at 90% 90%, color-mix(in oklch, var(--cw-cozy-plum), transparent 58%), transparent 48%),
+    linear-gradient(155deg, var(--cw-accent), var(--cw-accent-2));
 }
 
-.cw-live-login-card {
-  width: min(520px, 100%);
-  padding: 34px;
-  border-radius: 32px;
-  background: color-mix(in oklch, white, var(--cw-surface) 16%);
-  border: 1px solid color-mix(in oklch, var(--cw-ink), transparent 88%);
-  box-shadow: var(--cw-shadow-lift);
+/* ── Carousel shell ─────────────────────────────────────────────────────── */
+.cw-welcome-carousel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  outline: none;
 }
 
-.cw-live-login-card img {
-  width: 54px;
-  height: 54px;
+.cw-welcome-carousel:focus-visible {
+  outline: 2px solid color-mix(in oklch, white, transparent 55%);
+  outline-offset: -5px;
+  border-radius: 8px;
 }
 
-.cw-live-login-card h1 {
-  margin: 8px 0;
-  font-size: clamp(32px, 6vw, 54px);
-  line-height: 0.94;
-  letter-spacing: -0.05em;
+.cw-welcome-track {
+  flex: 1;
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
 }
 
-.cw-live-login-card form {
+.cw-welcome-track::-webkit-scrollbar {
+  display: none;
+}
+
+.cw-welcome-slide {
+  flex: 0 0 100%;
+  min-width: 100%;
+  scroll-snap-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 52px clamp(36px, 4.5vw, 56px);
+}
+
+/* ── Media (real <video> drops in here; CSS mock until then) ─────────────── */
+.cw-welcome-media {
+  position: relative;
+  width: 100%;
+  height: clamp(160px, 24vh, 220px);
+  margin-bottom: 26px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: color-mix(in oklch, white, transparent 90%);
+  border: 1px solid color-mix(in oklch, white, transparent 85%);
   display: grid;
-  gap: 12px;
-  margin: 20px 0;
+  place-items: center;
 }
 
-.cw-live-login-card label {
+/* 도트 그리드 텍스처 — 모션 예산 0으로 "디자인된 공간" 인상.
+   미디어 안의 mock이 작을 때 배경이 단순한 빈 색면이 아니게 한다. */
+.cw-welcome-media::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(circle, color-mix(in oklch, white, transparent 86%) 1px, transparent 1.5px);
+  background-size: 16px 16px;
+  opacity: 0.55;
+}
+
+.cw-welcome-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cw-welcome-eyebrow {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in oklch, white, transparent 30%);
+}
+
+.cw-welcome-headline {
+  margin: 12px 0 10px;
+  font-size: clamp(28px, 3.2vw, 42px);
+  font-weight: 680;
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+}
+
+.cw-welcome-blurb {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: color-mix(in oklch, white, transparent 12%);
+}
+
+.cw-welcome-detail {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  max-width: 42ch;
+  color: color-mix(in oklch, white, transparent 30%);
+}
+
+/* ── Controls: arrows + progress dots ───────────────────────────────────── */
+.cw-welcome-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 0 clamp(36px, 4.5vw, 56px) 40px;
+}
+
+.cw-welcome-arrow {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklch, white, transparent 76%);
+  background: color-mix(in oklch, white, transparent 86%);
+  color: white;
+  cursor: pointer;
+  transition: background 120ms;
+}
+
+.cw-welcome-arrow:hover {
+  background: color-mix(in oklch, white, transparent 74%);
+}
+
+.cw-welcome-dots {
+  display: flex;
+  align-items: center;
+  gap: 2px; /* 버튼 간 간격은 좁게 — 실제 hit area는 버튼 padding이 만든다 */
+}
+
+/* 버튼 = hit target (시각엔 안 보이고, 손가락/커서 잡기는 쉬움 ≥ 44px) */
+.cw-welcome-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* 시각적 막대 = 진행바 트랙 */
+.cw-welcome-dot-track {
+  display: block;
+  width: 28px;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, white, transparent 78%);
+  overflow: hidden;
+  position: relative;
+  transition: width 220ms, background 220ms;
+}
+
+.cw-welcome-dot[data-active="true"] .cw-welcome-dot-track {
+  width: 56px;
+  /* 활성 트랙은 비활성보다 살짝 진하게 — 흰 채움 막대와의 콘트라스트 확보 */
+  background: color-mix(in oklch, white, transparent 70%);
+}
+
+.cw-welcome-dot-fill {
+  position: absolute;
+  inset: 0;
+  background: white;
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+/* 활성 상태는 track 길이(28→56px)로 표시하고, 채움은 "자동전환 진행 중"일 때만
+   보여준다. 수동으로 이동/일시정지하면 채움은 비어 있어, "지금은 카운트가
+   멈춤"이라는 정보를 시각적으로 정확히 전달한다. */
+.cw-welcome-dot-fill[data-run="true"] {
+  animation-name: cw-dot-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes cw-dot-progress {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+/* ── Slide mocks (placeholder motion until real videos arrive) ───────────── */
+.cw-mock {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+/* 에이전트 피커 모크 — 새 세션 시작 시 에이전트를 고르는 화면을 흉내낸다.
+   "선택" 행에 흰 배경 + 체크가 들어가 무엇을 골랐는지 분명히 보인다. */
+/* Agent 슬라이드 — picker(agent-list)와 그 결과인 composer를 세로 스택.
+   기본 .cw-mock(grid place-items:center) 대신 flex column으로 갭 둔다. */
+.cw-mock-agent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.cw-mock-agent-list {
+  display: grid;
+  gap: 8px;
+  width: min(260px, 88%);
+}
+
+.cw-mock-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(260px, 88%);
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: color-mix(in oklch, white, transparent 88%);
+  border: 1px solid color-mix(in oklch, white, transparent 78%);
+  opacity: 0;
+}
+.cw-mock-composer-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: white;
+  color: var(--cw-accent);
+  font-size: 11px;
+  font-weight: 700;
+  flex: none;
+}
+.cw-mock-composer-text {
+  font-size: 12px;
+  color: color-mix(in oklch, white, transparent 32%);
+}
+/* picker 행들이 들어온 뒤(1.0s)에 등장 — "선택 → 입력" 이야기 흐름 */
+.cw-mock-agent[data-active="true"] .cw-mock-composer {
+  animation: cw-loop-rise 4s ease 1.0s infinite;
+}
+.cw-mock-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: color-mix(in oklch, white, transparent 86%);
+  font-size: 13px;
+  font-weight: 600;
+  color: white;
+  opacity: 0;
+  transform: translateY(-6px);
+}
+.cw-mock-agent-row[data-on="true"] {
+  background: white;
+  color: var(--cw-accent);
+}
+.cw-mock-agent-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: color-mix(in oklch, white, transparent 78%);
+  color: white;
+}
+.cw-mock-agent-row[data-on="true"] .cw-mock-agent-icon {
+  background: color-mix(in oklch, var(--cw-accent), white 90%);
+  color: var(--cw-accent);
+}
+.cw-mock-agent-check { margin-left: auto; display: grid; place-items: center; }
+.cw-mock-agent[data-active="true"] .cw-mock-agent-row {
+  animation: cw-loop-fade 4s ease infinite;
+}
+.cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="0"] { animation-delay: 0s;   }
+.cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="1"] { animation-delay: 0.15s; }
+.cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="2"] { animation-delay: 0.3s;  }
+/* 선택된 row(검색)에는 loop-fade + box-shadow 펄스를 동시에 — "골랐다"는 신호가 hold 동안에도 살아 있다 */
+.cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-on="true"] {
+  animation:
+    cw-loop-fade   4s ease 0.15s infinite,
+    cw-breathe-ring 2.4s ease-in-out infinite;
+}
+
+.cw-mock-artifact {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.cw-mock-doc {
+  position: relative;
+  width: min(230px, 82%);
+  padding: 16px;
+  border-radius: 14px;
+  background: color-mix(in oklch, white, transparent 86%);
+  display: grid;
+  gap: 9px;
+}
+/* 메인 카드 뒤에 살짝 비스듬히 깔리는 그림자 카드 — "여러 산출물" 인상,
+   정적 깊이감(모션 예산 0). */
+.cw-mock-doc::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  background: color-mix(in oklch, white, transparent 92%);
+  transform: translate(8px, 8px) rotate(-2deg);
+  z-index: -1;
+  pointer-events: none;
+}
+/* 문서 카드 자체가 위아래로 살짝 떠다님 — 안쪽 line 채움이 끝나도 정적이지 않게 */
+.cw-mock-artifact[data-active="true"] .cw-mock-doc {
+  animation: cw-breathe-float 3.2s ease-in-out infinite;
+}
+.cw-mock-doc-line {
+  height: 7px;
+  border-radius: 4px;
+  background: color-mix(in oklch, white, transparent 58%);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+.cw-mock-doc-line:nth-child(2) { width: 82%; }
+.cw-mock-doc-line:nth-child(3) { width: 92%; }
+.cw-mock-doc-line:nth-child(4) { width: 60%; }
+.cw-mock-artifact[data-active="true"] .cw-mock-doc-line { animation: cw-loop-fill 4s ease infinite; }
+.cw-mock-artifact[data-active="true"] .cw-mock-doc-line:nth-child(1) { animation-delay: 0s;   }
+.cw-mock-artifact[data-active="true"] .cw-mock-doc-line:nth-child(2) { animation-delay: 0.15s; }
+.cw-mock-artifact[data-active="true"] .cw-mock-doc-line:nth-child(3) { animation-delay: 0.3s;  }
+.cw-mock-artifact[data-active="true"] .cw-mock-doc-line:nth-child(4) { animation-delay: 0.45s; }
+.cw-mock-share-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: white;
+  color: var(--cw-accent);
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(6px);
+}
+.cw-mock-artifact[data-active="true"] .cw-mock-share-badge { animation: cw-loop-rise 4s ease 0.9s infinite; }
+
+.cw-mock-share {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.cw-mock-avatars { display: flex; }
+.cw-mock-av {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin-left: -8px;
+  border: 2px solid color-mix(in oklch, var(--cw-accent), black 6%);
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+  opacity: 0;
+  transform: scale(0.6);
+}
+.cw-mock-av[data-i="0"] { background: var(--cw-cozy-clay); margin-left: 0; }
+.cw-mock-av[data-i="1"] { background: var(--cw-cozy-teal); }
+.cw-mock-av[data-i="2"] { background: var(--cw-cozy-plum); }
+.cw-mock-share[data-active="true"] .cw-mock-av { animation: cw-loop-pop 4s ease infinite; }
+.cw-mock-share[data-active="true"] .cw-mock-av[data-i="0"] { animation-delay: 0s;   }
+.cw-mock-share[data-active="true"] .cw-mock-av[data-i="1"] {
+  animation:
+    cw-loop-pop    4s ease 0.15s infinite,
+    cw-breathe-ring 2.4s ease-in-out infinite;
+}
+.cw-mock-share[data-active="true"] .cw-mock-av[data-i="2"] { animation-delay: 0.3s;  }
+.cw-mock-modes { display: flex; gap: 6px; }
+.cw-mock-mode {
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: color-mix(in oklch, white, transparent 84%);
+  font-size: 11.5px;
+}
+.cw-mock-mode.is-on {
+  background: white;
+  color: var(--cw-accent);
+  font-weight: 700;
+  opacity: 0;
+}
+.cw-mock-share[data-active="true"] .cw-mock-mode.is-on { animation: cw-loop-pop 4s ease 0.6s infinite; }
+
+/* "함께 대화"의 결과로 팀에서 누군가 보낸 메시지 — share 슬라이드의 보조 요소 */
+.cw-mock-chat-bubble {
+  align-self: flex-end;
+  margin-right: 6%;
+  padding: 7px 13px;
+  border-radius: 14px 14px 4px 14px;
+  background: white;
+  color: var(--cw-accent);
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(6px);
+}
+.cw-mock-share[data-active="true"] .cw-mock-chat-bubble {
+  animation: cw-loop-rise 4s ease 0.9s infinite;
+}
+
+/* Automation mock — 트리거 칩 + 누적된 run rows.
+   상단에서 트리거가 등장(0s, 0.15s) → 그 결과로 run row가 왼쪽에서 차례로
+   들어옴(0.3s ~ 0.6s). 모션이 "트리거가 결과를 만든다"는 인과를 그린다. */
+.cw-mock-automation-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(280px, 92%);
+}
+.cw-mock-trigger-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.cw-mock-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: color-mix(in oklch, white, transparent 78%);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(6px);
+}
+.cw-mock-trigger[data-kind="cron"] {
+  background: white;
+  color: var(--cw-accent);
+}
+.cw-mock-automation[data-active="true"] .cw-mock-trigger {
+  animation: cw-loop-rise 4s ease infinite;
+}
+.cw-mock-automation[data-active="true"] .cw-mock-trigger[data-kind="cron"] {
+  animation:
+    cw-loop-rise 4s ease 0s infinite,
+    cw-breathe-ring 2.4s ease-in-out infinite;
+}
+.cw-mock-automation[data-active="true"] .cw-mock-trigger[data-kind="webhook"] {
+  animation-delay: 0.15s;
+}
+
+.cw-mock-runs {
   display: grid;
   gap: 6px;
-  font-weight: 800;
-  color: var(--cw-muted);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
+.cw-mock-run {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: color-mix(in oklch, white, transparent 85%);
+  color: white;
+  font-size: 12px;
+  opacity: 0;
+  transform: translateX(-8px);
+}
+.cw-mock-automation[data-active="true"] .cw-mock-run {
+  animation: cw-loop-slide 4s ease infinite;
+}
+.cw-mock-automation[data-active="true"] .cw-mock-run[data-i="0"] { animation-delay: 0.3s;  }
+.cw-mock-automation[data-active="true"] .cw-mock-run[data-i="1"] { animation-delay: 0.45s; }
+.cw-mock-automation[data-active="true"] .cw-mock-run[data-i="2"] { animation-delay: 0.6s;  }
 
-.cw-live-login-card input {
-  width: 100%;
-  border: 1px solid color-mix(in oklch, var(--cw-ink), transparent 84%);
-  border-radius: 16px;
-  padding: 12px 14px;
-  font: inherit;
-  color: var(--cw-ink);
+.cw-mock-run-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: color-mix(in oklch, white, transparent 55%);
+}
+.cw-mock-run-dot[data-status="success"] {
+  background: color-mix(in oklch, var(--cw-cozy-teal), white 10%);
+}
+.cw-mock-run-dot[data-status="running"] {
   background: white;
 }
+/* "실행 중" 점만 hold 구간 내내 호흡 — main loop의 opacity/transform과
+   충돌하지 않게 box-shadow에 모션을 깐다. */
+.cw-mock-automation[data-active="true"] .cw-mock-run[data-i="0"] .cw-mock-run-dot[data-status="running"] {
+  animation: cw-breathe-ring 1.8s ease-in-out infinite;
+}
+.cw-mock-run-time {
+  font-weight: 700;
+  min-width: 70px;
+}
+.cw-mock-run-label {
+  opacity: 0.86;
+}
 
-.cw-live-login-error {
-  border: 1px solid color-mix(in oklch, crimson, transparent 70%);
-  color: oklch(0.45 0.17 28);
-  background: color-mix(in oklch, crimson, white 92%);
+.cw-mock-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 13px;
+}
+.cw-mock-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateX(-8px);
+}
+.cw-mock-quickstart[data-active="true"] .cw-mock-steps li {
+  animation: cw-loop-slide 4s ease infinite;
+}
+.cw-mock-quickstart[data-active="true"] .cw-mock-steps li:nth-child(1) { animation-delay: 0s;   }
+.cw-mock-quickstart[data-active="true"] .cw-mock-steps li:nth-child(2) { animation-delay: 0.15s; }
+.cw-mock-quickstart[data-active="true"] .cw-mock-steps li:nth-child(3) { animation-delay: 0.3s;  }
+.cw-mock-step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklch, white, transparent 80%);
+  color: white;
+  font-size: 13px;
+  flex: none;
+}
+/* 각 단계의 아이콘 — 순번 배지 옆에 글리프 추가해 한 행에 더 많은 정보 */
+.cw-mock-step-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklch, white, transparent 82%);
+  color: white;
+  flex: none;
+}
+
+/* 4초 사이클 안에 enter(10%) → hold(70%) → exit(10%) → dwell(10%)가 모두
+   들어가 있어, infinite로 돌면서 "잠깐 보이고 텀 두고 또 보이는" 짧은
+   영상처럼 자연스럽게 반복된다. AUTO_ADVANCE_MS(5s)보다 짧게 잡아 슬라이드
+   전환 직전에 한 번 더 들어가는 모습이 일부 비친다. */
+@keyframes cw-loop-fade {
+  0%,  100% { opacity: 0; transform: translateY(-6px); }
+  10%, 80%  { opacity: 1; transform: none; }
+  90%       { opacity: 0; transform: translateY(-6px); }
+}
+@keyframes cw-loop-rise {
+  0%,  100% { opacity: 0; transform: translateY(6px); }
+  10%, 80%  { opacity: 1; transform: none; }
+  90%       { opacity: 0; transform: translateY(6px); }
+}
+@keyframes cw-loop-pop {
+  0%,  100% { opacity: 0; transform: scale(0.6); }
+  10%, 80%  { opacity: 1; transform: none; }
+  90%       { opacity: 0; transform: scale(0.6); }
+}
+@keyframes cw-loop-slide {
+  0%,  100% { opacity: 0; transform: translateX(-8px); }
+  10%, 80%  { opacity: 1; transform: none; }
+  90%       { opacity: 0; transform: translateX(-8px); }
+}
+@keyframes cw-loop-fill {
+  0%,  100% { transform: scaleX(0); }
+  10%, 80%  { transform: scaleX(1); }
+  90%       { transform: scaleX(0); }
+}
+
+/* 보조 호흡 — 메인 loop의 hold(70%) 동안에도 미세 모션을 깔아
+   "정지된 카드" 느낌을 없앤다. transform이 아닌 box-shadow / translateY를
+   써서 메인 loop의 transform/opacity와 충돌하지 않는다. */
+@keyframes cw-breathe-ring {
+  0%, 100% { box-shadow: 0 0 0 0  color-mix(in oklch, white, transparent 80%); }
+  50%      { box-shadow: 0 0 0 5px color-mix(in oklch, white, transparent 92%); }
+}
+@keyframes cw-breathe-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-welcome { transition: none; }
+  .cw-welcome-track { scroll-behavior: auto; }
+  .cw-welcome-dot-fill,
+  .cw-mock-agent-row, .cw-mock-composer,
+  .cw-mock-doc, .cw-mock-doc-line, .cw-mock-share-badge,
+  .cw-mock-av, .cw-mock-mode.is-on, .cw-mock-chat-bubble, .cw-mock-steps li,
+  .cw-mock-trigger, .cw-mock-run, .cw-mock-run-dot {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  /* 모션 비선호 사용자에겐 활성 점을 풀로 채워 활성 위치를 명확히 한다
+     (자동전환은 꺼지므로 카운트다운이라는 정보가 무의미하므로). */
+  .cw-welcome-dot[data-active="true"] .cw-welcome-dot-fill { transform: scaleX(1); }
+}
+
+.cw-welcome-panel {
+  display: grid;
+  place-items: center;
+  padding: 40px 28px;
+  border-left: 1px solid var(--cw-line);
+}
+
+.cw-welcome-card {
+  width: min(380px, 100%);
+  animation: cw-enter 0.3s ease both;
+}
+
+.cw-welcome-brand {
+  display: inline-block;
+  margin-bottom: 14px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--cw-accent);
+}
+
+.cw-welcome-card-title {
+  margin: 0 0 6px;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  color: var(--cw-ink);
+}
+
+.cw-welcome-card-sub {
+  margin: 0 0 22px;
+  font-size: 14px;
+  color: var(--cw-ink-3);
+}
+
+.cw-welcome-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 18px;
+  background: var(--cw-paper-3);
+  border-radius: 999px;
+}
+
+.cw-welcome-tab {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--cw-ink-2);
+  transition: background 120ms, color 120ms;
+}
+
+.cw-welcome-tab[data-active="true"] {
+  background: var(--cw-paper);
+  color: var(--cw-ink);
+  font-weight: 600;
+  box-shadow: var(--cw-shadow-sm);
+}
+
+.cw-welcome-card form {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.cw-welcome-card label {
+  display: grid;
+  gap: 6px;
+  font-weight: 700;
+  color: var(--cw-ink-3);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cw-welcome-optional {
+  font-weight: 400;
+  color: var(--cw-ink-4);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.cw-welcome-card input {
+  width: 100%;
+  border: 1px solid var(--cw-line);
+  border-radius: 12px;
+  padding: 11px 13px;
+  font: inherit;
+  color: var(--cw-ink);
+  background: var(--cw-paper);
+}
+
+.cw-welcome-card input:focus-visible {
+  border-color: var(--cw-ink-3);
+  box-shadow: 0 0 0 3px var(--cw-paper-3);
+}
+
+.cw-welcome-card .cw-btn-primary {
+  min-height: 44px;
+  border-radius: 12px;
+}
+
+.cw-welcome-switch {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--cw-ink-3);
+}
+
+.cw-welcome-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--cw-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+@media (max-width: 920px) {
+  .cw-welcome {
+    grid-template-columns: 1fr;
+  }
+  /* Stacked: the showcase has no intrinsic height, so the carousel would
+     collapse — give it a viewport-relative floor. */
+  .cw-welcome-showcase {
+    min-height: 78vh;
+  }
+  .cw-welcome-slide {
+    padding: 40px 28px;
+  }
+  .cw-welcome-panel {
+    border-left: 0;
+  }
+}
+
+.cw-form-error {
+  border: 1px solid color-mix(in oklch, var(--cw-destructive), transparent 70%);
+  color: var(--cw-destructive);
+  background: color-mix(in oklch, var(--cw-destructive), white 92%);
   border-radius: 14px;
   padding: 10px 12px;
   font-weight: 700;

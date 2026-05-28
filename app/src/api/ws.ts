@@ -1,4 +1,4 @@
-import { getBaseUrl, getToken } from './client';
+import { BASE_URL, getToken } from './client';
 
 export interface SessionTitleUpdatedEvent {
   type: 'session_title_updated';
@@ -24,7 +24,7 @@ class AppWebSocketManager {
   connect(token: string): void {
     this.active = true;
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
-    const url = `${toWsUrl(getBaseUrl())}/ws?token=${encodeURIComponent(token)}`;
+    const url = `${toWsUrl(BASE_URL)}/ws?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(url);
     this.ws = ws;
 

@@ -2,9 +2,8 @@
 // Concerns: base URL configuration, auth header injection, JSON parse, typed errors.
 // All endpoint modules call request<T>() — there is no other fetch in the app.
 
-const BASE_URL_KEY = 'cowork.v2.baseUrl';
 const TOKEN_KEY = 'cowork.v2.token';
-const DEFAULT_BASE_URL = import.meta.env.VITE_BACKEND_V2_URL ?? 'http://127.0.0.1:8080';
+export const BASE_URL = import.meta.env.VITE_BACKEND_V2_URL ?? 'http://127.0.0.1:8080';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public body?: unknown) {
@@ -22,16 +21,6 @@ function writeStored(key: string, value: string | null): void {
     if (value == null) window.localStorage.removeItem(key);
     else window.localStorage.setItem(key, value);
   } catch { /* noop */ }
-}
-
-export function getBaseUrl(): string {
-  return readStored(BASE_URL_KEY) ?? DEFAULT_BASE_URL;
-}
-
-export function setBaseUrl(url: string): string {
-  const trimmed = url.replace(/\/+$/, '') || DEFAULT_BASE_URL;
-  writeStored(BASE_URL_KEY, trimmed);
-  return trimmed;
 }
 
 export function getToken(): string | null {
@@ -69,7 +58,7 @@ export async function request<T = unknown>(path: string, options: RequestOptions
     resolvedBody = JSON.stringify(body);
   }
 
-  const response = await fetch(`${getBaseUrl()}${path}`, {
+  const response = await fetch(`${BASE_URL}${path}`, {
     ...rest,
     headers,
     body: resolvedBody,
@@ -107,7 +96,7 @@ export async function* streamSse(
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const response = await fetch(`${getBaseUrl()}${path}`, {
+  const response = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),

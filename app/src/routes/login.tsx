@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { getMe, login, signupAndLogin } from '@/api/auth';
-import { getBaseUrl, setBaseUrl, getToken, ApiError } from '@/api/client';
+import { getToken, ApiError } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
+import { WelcomeCarousel } from '@/components/WelcomeCarousel';
 
 type Mode = 'login' | 'signup';
 
@@ -14,10 +15,20 @@ export const Route = createFileRoute('/login')({
 });
 
 function LoginPage() {
+  return (
+    <div className="cw-welcome">
+      <aside className="cw-welcome-showcase">
+        <WelcomeCarousel />
+      </aside>
+      <AuthPanel />
+    </div>
+  );
+}
+
+function AuthPanel() {
   const navigate = useNavigate();
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
   const [mode, setMode] = useState<Mode>('login');
-  const [baseUrl, setUrl] = useState(getBaseUrl());
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -34,7 +45,6 @@ function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      setBaseUrl(baseUrl);
       if (mode === 'login') {
         await login({ username, password });
       } else {
@@ -53,46 +63,35 @@ function LoginPage() {
   const isSignup = mode === 'signup';
 
   return (
-    <div className="cw-live-login">
-      <div className="cw-live-login-card">
-        <h1>Cowork for Teams</h1>
-        <p style={{ color: 'var(--cw-ink-3)', marginTop: 0 }}>
+    <main className="cw-welcome-panel">
+      <div className="cw-welcome-card">
+        <span className="cw-welcome-brand">Cowork for Teams</span>
+        <h2 className="cw-welcome-card-title">{isSignup ? '계정 만들기' : '오늘은 무엇을 함께 만들까요?'}</h2>
+        <p className="cw-welcome-card-sub">
           {isSignup
-            ? '새 계정을 만듭니다. 가입 후 personal project가 자동으로 생성됩니다.'
-            : '로그인하여 시작하세요.'}
+            ? '가입하면 개인 프로젝트가 자동으로 생성됩니다.'
+            : '팀과 에이전트가 기다리고 있어요.'}
         </p>
 
-        <div role="tablist" aria-label="auth mode" style={{
-          display: 'inline-flex',
-          gap: 4,
-          padding: 4,
-          marginTop: 6,
-          marginBottom: 14,
-          background: 'var(--cw-paper-3)',
-          borderRadius: 999,
-        }}>
+        <div role="group" aria-label="로그인 또는 회원가입 선택" className="cw-welcome-tabs">
           <ModeTab active={!isSignup} onClick={() => switchMode('login')}>로그인</ModeTab>
           <ModeTab active={isSignup} onClick={() => switchMode('signup')}>회원가입</ModeTab>
         </div>
 
         <form onSubmit={onSubmit}>
           <label>
-            Backend URL
-            <input value={baseUrl} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:8080" />
-          </label>
-          <label>
             Username
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              autoComplete={isSignup ? 'username' : 'username'}
+              autoComplete="username"
               autoFocus
               required
             />
           </label>
           {isSignup && (
             <label>
-              Display name <span style={{ fontWeight: 400, color: 'var(--cw-ink-4)', textTransform: 'none', letterSpacing: 0 }}>(선택)</span>
+              Display name <span className="cw-welcome-optional">(선택)</span>
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
@@ -110,7 +109,7 @@ function LoginPage() {
               required
             />
           </label>
-          {error && <div className="cw-live-login-error">{error}</div>}
+          {error && <div className="cw-form-error">{error}</div>}
           <button type="submit" className="cw-btn-primary wide" disabled={submitting}>
             {submitting
               ? (isSignup ? '가입 중…' : '로그인 중…')
@@ -118,15 +117,15 @@ function LoginPage() {
           </button>
         </form>
 
-        <p style={{ color: 'var(--cw-ink-3)', fontSize: 12, marginTop: 18 }}>
+        <p className="cw-welcome-switch">
           {isSignup ? (
             <>이미 계정이 있다면 <ModeLink onClick={() => switchMode('login')}>로그인</ModeLink>으로 돌아가세요.</>
           ) : (
-            <>처음이세요? <ModeLink onClick={() => switchMode('signup')}>회원가입</ModeLink>으로 시작할 수 있어요. 데모 계정: <code>olive / cowork-demo</code></>
+            <>처음이세요? <ModeLink onClick={() => switchMode('signup')}>회원가입</ModeLink>으로 시작할 수 있어요.</>
           )}
         </p>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -134,23 +133,10 @@ function ModeTab({ active, onClick, children }: { active: boolean; onClick: () =
   return (
     <button
       type="button"
-      role="tab"
-      aria-selected={active}
+      aria-pressed={active}
+      className="cw-welcome-tab"
+      data-active={active}
       onClick={onClick}
-      style={{
-        appearance: 'none',
-        border: 0,
-        background: active ? 'var(--cw-paper)' : 'transparent',
-        color: active ? 'var(--cw-ink)' : 'var(--cw-ink-3)',
-        padding: '6px 14px',
-        borderRadius: 999,
-        fontSize: 12.5,
-        fontWeight: active ? 600 : 500,
-        boxShadow: active ? 'var(--cw-shadow-sm)' : 'none',
-        cursor: 'pointer',
-        transition: 'background 120ms, color 120ms',
-        fontFamily: 'inherit',
-      }}
     >
       {children}
     </button>
@@ -159,22 +145,7 @@ function ModeTab({ active, onClick, children }: { active: boolean; onClick: () =
 
 function ModeLink({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        appearance: 'none',
-        border: 0,
-        background: 'transparent',
-        padding: 0,
-        color: 'var(--cw-accent)',
-        textDecoration: 'underline',
-        textUnderlineOffset: 2,
-        cursor: 'pointer',
-        fontSize: 'inherit',
-        fontFamily: 'inherit',
-      }}
-    >
+    <button type="button" className="cw-welcome-link" onClick={onClick}>
       {children}
     </button>
   );
