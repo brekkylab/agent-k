@@ -267,7 +267,7 @@ async fn resolve_agent_for(
         .await
         .map_err(|e| AppError::internal(e))?;
 
-    agent.state.history = history;
+    agent.state.history.extend(history);
     tracing::info!(%session_id, "agent lazy-created with history restored");
 
     if let Some(existing) = state.get_agent(&session_id) {
@@ -710,7 +710,9 @@ pub async fn clear_message_history(
             .clear_messages(session.id)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
-        agent.state.history.clear();
+        // Keep the system message (instruction + Available Skills) so the
+        // agent retains its identity after the conversation is wiped.
+        agent.state.history.retain(|m| m.role == Role::System);
     } else {
         state
             .repository
