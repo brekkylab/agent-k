@@ -14,13 +14,10 @@ with zero formula errors (`#REF!` / `#DIV/0!` / `#VALUE!` / `#N/A` /
 
 # Skill API Reference
 
-Full implementation is in [`xlsx_skill.py`](xlsx_skill.py). **Import it and
-call it as documented — do NOT open or read the source.** This reference
-already covers every public signature, the auto-config behavior
-(`configure_sheet`: widths/heights), the visual-width column
-sizing, and the sheet-name quoting rules. Reading the ~500-line source
-only burns tokens and adds nothing — **only** open it as a last resort if
-something genuinely fails and this reference doesn't explain it.
+Import [`xlsx_skill.py`](script/xlsx_skill.py) and use it through the
+APIs documented here. This reference covers every public signature and
+the auto-config behavior — **do not open the source unless this
+reference doesn't explain a failure.**
 
 ```python id="skill_setup"
 import sys
@@ -99,6 +96,24 @@ assert vals["Summary"]["B16"] == vals["Summary"]["B27"]  # monthly total == quar
 Neither helper catches Excel-only structural issues (unquoted CJK sheet
 names, orphan panes) — LibreOffice opens those without complaint, so those
 still rely on the helpers below.
+
+### ⚠️ Do NOT bypass the skill's save flow
+
+The patterns below produce files LibreOffice opens fine but Excel rejects
+with "file corrupted" / "removed records" (typically formula XML on one
+sheet stripped on open).
+
+- ❌ Don't call `wb.save(path)` directly after using `XLSXReportSkill`.
+  Always go through `report.save(path)`.
+- ❌ Don't reload-and-attach charts post-save. Add every chart via
+  `ws.add_chart(...)` **before** `report.save(path)`. Re-saving with
+  new chart anchors often corrupts other sheets' formula XML.
+- ❌ Don't treat `verify_formulas()` passing as proof of Excel safety —
+  it only recalculates in LibreOffice; Excel's stricter OOXML
+  validation may still strip records.
+
+If you hit a chart-anchor or styling problem mid-build, fix it inside
+the builder — do not "save first, then patch".
 
 ### ⚠️ Sheet names with CJK / spaces
 
