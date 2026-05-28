@@ -22,6 +22,21 @@ export async function getProject(projectRef: string): Promise<Project> {
   return toProject(raw);
 }
 
+export async function updateProject(
+  projectRef: string,
+  input: { name?: string; description?: string | null },
+): Promise<Project> {
+  const raw = await request<BackendProject>(`/projects/${projectRef}`, {
+    method: 'PATCH',
+    body: input,
+  });
+  return toProject(raw);
+}
+
+export async function deleteProject(projectRef: string): Promise<void> {
+  await request(`/projects/${projectRef}`, { method: 'DELETE' });
+}
+
 export async function listMembers(projectRef: string): Promise<User[]> {
   const res = await request<{ items: BackendMember[] }>(`/projects/${projectRef}/members`);
   return res.items.map(toMemberUser);

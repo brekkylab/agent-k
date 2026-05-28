@@ -8,6 +8,7 @@ export type RouteKey = 'projects' | 'project' | 'session' | 'files' | 'skills' |
 export interface User {
   id: UserId;
   name: string;
+  username?: string;
   roleLabel: string;
   avatar: string;
   color: string;

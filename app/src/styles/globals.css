@@ -220,7 +220,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-brand-lockup:hover { background: var(--cw-bg-muted); }
 .cw-brand-lockup img:first-child { width: 28px; height: 28px; flex-shrink: 0; }
 .cw-brand-lockup strong { color: var(--cw-fg-1); font-size: 22px; line-height: 1; letter-spacing: -0.035em; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cw-section-label-app { padding: 10px 8px 5px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--cw-fg-3); font-weight: 500; }
+.cw-section-label-app { padding: 5px 3px 5px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--cw-fg-3); font-weight: 500; }
 .cw-nav-list, .cw-session-rail { display: flex; flex-direction: column; gap: 1px; }
 .cw-nav-row, .cw-session-row { width: 100%; min-height: 31px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: var(--cw-radius-md); background: transparent; color: var(--cw-fg-2); padding: 6px 8px; text-align: left; font-size: 13px; transition: background 120ms, color 120ms, transform 120ms; }
 .cw-nav-row:hover, .cw-session-row:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
@@ -247,7 +247,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-page-enter { animation: cw-enter .26s ease both; }
 .cw-page-head, .cw-project-hero { display: flex; justify-content: space-between; gap: var(--cw-space-6); align-items: flex-start; padding-bottom: var(--cw-space-6); border-bottom: 1px solid var(--cw-border); margin-bottom: var(--cw-space-6); }
 .cw-page h1, .cw-project-hero h1, .cw-chat-head h1 { margin: 0; font-size: var(--cw-text-2xl); line-height: 1.12; letter-spacing: -0.025em; font-weight: 650; }
-.cw-page p, .cw-project-hero p { color: var(--cw-fg-3); margin: 12px 0 0; line-height: var(--cw-leading-relaxed); }
+.cw-page p, .cw-project-hero p { color: var(--cw-fg-3); margin: 8px 0 8px; line-height: var(--cw-leading-relaxed); }
 .cw-projects-page .cw-page-head h1 { font-size: 48px; letter-spacing: -0.04em; }
 .cw-projects-page .cw-page-head p { max-width: 590px; font-size: 18px; }
 .cw-btn-primary, .cw-btn-secondary { min-height: 34px; border-radius: var(--cw-radius-sm); padding: 7px 12px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; transition: background 120ms, border 120ms, transform 120ms; }

@@ -44,7 +44,6 @@ pub struct CreateProjectRequest {
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub description: Option<String>,
-    pub slug: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

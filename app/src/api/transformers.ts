@@ -35,6 +35,7 @@ export function toUser(backend: BackendUser): User {
   return {
     id: backend.id,
     name,
+    username: backend.username,
     roleLabel: backend.role === 'admin' ? 'Admin' : 'Member',
     avatar: initials(name),
     color: deterministicColor(backend.id),
@@ -46,6 +47,7 @@ export function toMemberUser(member: BackendMember): User {
   return {
     id: member.user_id,
     name,
+    username: member.username,
     roleLabel: 'Member',
     avatar: initials(name),
     color: deterministicColor(member.user_id),
