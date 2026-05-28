@@ -74,6 +74,7 @@ pub async fn run_create_admin(username: String, password: String, display_name: 
             role: auth::Role::Admin,
             display_name,
             is_active: true,
+            preferred_language: "en".to_string(),
         })
         .await;
 

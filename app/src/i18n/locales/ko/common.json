@@ -1,0 +1,32 @@
+{
+  "actions": {
+    "save": "저장",
+    "cancel": "취소",
+    "delete": "삭제",
+    "confirm": "확인",
+    "close": "닫기",
+    "edit": "편집",
+    "create": "만들기",
+    "rename": "이름 변경",
+    "copy": "복사",
+    "move": "이동",
+    "retry": "다시 시도",
+    "logout": "로그아웃"
+  },
+  "state": {
+    "loading": "불러오는 중…",
+    "saving": "저장 중…",
+    "creating": "생성 중…",
+    "deleting": "삭제 중…",
+    "processing": "처리 중…",
+    "empty": "표시할 내용이 없습니다"
+  },
+  "language": {
+    "label": "언어",
+    "english": "English",
+    "korean": "한국어"
+  },
+  "errors": {
+    "unknown": "오류가 발생했어요. 다시 시도해 주세요."
+  }
+}

@@ -511,7 +511,7 @@ function MessageBubble({
   const displayUser: User = isAi
     ? (users.find((u) => u.id === 'ai') ?? AI_USER)
     : (users.find((u) => u.id === (message.sender as { userId: string }).userId)
-      ?? { id: 'unknown', name: 'Member', roleLabel: 'Member', avatar: 'M', color: 'var(--cw-ink-3)' });
+      ?? { id: 'unknown', name: 'Member', roleLabel: 'Member', avatar: 'M', color: 'var(--cw-ink-3)', preferredLanguage: 'en' });
 
   const isStreaming = message.status === 'streaming';
   const timeLabel = formatMessageTime(message.createdAt);

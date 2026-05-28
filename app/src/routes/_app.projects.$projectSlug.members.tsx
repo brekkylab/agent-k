@@ -69,7 +69,7 @@ function MembersPage() {
     ?? (proj && currentUser?.id === proj.ownerId ? currentUser : null);
 
   const ownerRow: User | null = owner ?? (proj
-    ? { id: proj.ownerId, name: '(owner)', roleLabel: 'Owner', avatar: 'OW', color: 'var(--cw-ink)' }
+    ? { id: proj.ownerId, name: '(owner)', roleLabel: 'Owner', avatar: 'OW', color: 'var(--cw-ink)', preferredLanguage: 'en' }
     : null);
 
   const rows: User[] = ownerRow

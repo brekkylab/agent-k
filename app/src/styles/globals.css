@@ -1257,3 +1257,40 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
     flex-direction: column;
   }
 }
+
+.cw-lang-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--cw-ink), transparent 92%);
+}
+
+.cw-lang-toggle__btn {
+  border: 0;
+  background: transparent;
+  color: var(--cw-ink-3);
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.cw-lang-toggle__btn:hover:not(:disabled):not(.is-active) {
+  color: var(--cw-ink);
+}
+
+.cw-lang-toggle__btn.is-active {
+  background: white;
+  color: var(--cw-ink);
+  box-shadow: 0 1px 2px color-mix(in oklch, var(--cw-ink), transparent 88%);
+}
+
+.cw-lang-toggle__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

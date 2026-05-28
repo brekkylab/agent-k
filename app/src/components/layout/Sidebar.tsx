@@ -27,6 +27,7 @@ import { canAdministerSession } from '@/lib/permissions';
 import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
+import { LanguageToggle } from '@/components/LanguageToggle';
 import type { Session } from '@/domain/types';
 
 function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => void }) {
@@ -459,6 +460,7 @@ export function Sidebar() {
             <div className="cw-sidebar-user-meta">
               <b>{currentUser.name.split(' ')[0]}</b>
             </div>
+            <LanguageToggle />
             <button
               aria-label="logout"
               onClick={() => { useAuthStore.getState().reset(); window.location.href = '/login'; }}

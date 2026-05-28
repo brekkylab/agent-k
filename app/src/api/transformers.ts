@@ -3,8 +3,12 @@
 
 export const SUBAGENT_PREFIX = 'subagent_';
 
-import type { FileAsset, Message, MessageSender, Project, Session, ToolCallInvocation, User } from '@/domain/types';
+import type { FileAsset, Message, MessageSender, PreferredLanguage, Project, Session, ToolCallInvocation, User } from '@/domain/types';
 import type { AiloyPart, AiloyToolCall, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser, SessionMessageItem } from './backend-types';
+
+function normalizeLanguage(value: string | undefined): PreferredLanguage {
+  return value === 'ko' ? 'ko' : 'en';
+}
 
 const USER_COLOR_TOKENS = [
   'var(--cw-cozy-clay)',
@@ -38,6 +42,7 @@ export function toUser(backend: BackendUser): User {
     roleLabel: backend.role === 'admin' ? 'Admin' : 'Member',
     avatar: initials(name),
     color: deterministicColor(backend.id),
+    preferredLanguage: normalizeLanguage(backend.preferred_language),
   };
 }
 
@@ -49,6 +54,7 @@ export function toMemberUser(member: BackendMember): User {
     roleLabel: 'Member',
     avatar: initials(name),
     color: deterministicColor(member.user_id),
+    preferredLanguage: 'en',
   };
 }
 
@@ -58,6 +64,7 @@ export const AI_USER: User = {
   roleLabel: 'Agent',
   avatar: 'CW',
   color: 'var(--cw-ink)',
+  preferredLanguage: 'en',
 };
 
 export function toProject(backend: BackendProject, memberIds: string[] = []): Project {

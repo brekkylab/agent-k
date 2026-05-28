@@ -35,6 +35,7 @@ pub struct UserResponse {
     pub role: Role,
     pub display_name: Option<String>,
     pub is_active: bool,
+    pub preferred_language: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -47,6 +48,7 @@ impl From<DbUser> for UserResponse {
             role: u.role,
             display_name: u.display_name,
             is_active: u.is_active,
+            preferred_language: u.preferred_language,
             created_at: u.created_at,
             updated_at: u.updated_at,
         }
@@ -59,6 +61,7 @@ pub struct UpdateMeRequest {
     pub display_name: Option<String>,
     pub password: Option<String>,
     pub current_password: Option<String>,
+    pub preferred_language: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -69,6 +72,7 @@ pub struct AdminCreateUserRequest {
     pub role: Option<Role>,
     pub display_name: Option<String>,
     pub is_active: Option<bool>,
+    pub preferred_language: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -78,6 +82,7 @@ pub struct AdminUpdateUserRequest {
     pub role: Option<Role>,
     pub display_name: Option<String>,
     pub is_active: Option<bool>,
+    pub preferred_language: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

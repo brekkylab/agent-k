@@ -1,0 +1,32 @@
+{
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "close": "Close",
+    "edit": "Edit",
+    "create": "Create",
+    "rename": "Rename",
+    "copy": "Copy",
+    "move": "Move",
+    "retry": "Retry",
+    "logout": "Log out"
+  },
+  "state": {
+    "loading": "Loading…",
+    "saving": "Saving…",
+    "creating": "Creating…",
+    "deleting": "Deleting…",
+    "processing": "Processing…",
+    "empty": "Nothing to show"
+  },
+  "language": {
+    "label": "Language",
+    "english": "English",
+    "korean": "한국어"
+  },
+  "errors": {
+    "unknown": "Something went wrong. Please try again."
+  }
+}
