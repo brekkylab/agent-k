@@ -147,7 +147,7 @@ function SectionHeader({
 }
 
 export function Sidebar() {
-  const { t } = useTranslation('common');
+  const { t } = useTranslation(['common', 'project']);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
@@ -244,7 +244,7 @@ export function Sidebar() {
     mutationFn: (projectId: string) => createSession(projectId),
     onSuccess: async (session) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', activeProjectSlug] });
-      showToast(t('sidebar.toast.session_created'));
+      showToast(t('project:toast.session_created'));
       if (activeProject) {
         navigate({
           to: '/projects/$projectSlug/sessions/$sessionPrefix',
@@ -254,7 +254,7 @@ export function Sidebar() {
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
-      showToast(t('sidebar.toast.session_create_failed', { message: msg }));
+      showToast(t('project:toast.session_create_failed', { message: msg }));
     },
   });
 
@@ -273,14 +273,14 @@ export function Sidebar() {
       if (activeSessionId === shortSessionId(deletedId) && activeProject) {
         navigate({ to: '/projects/$projectSlug', params: { projectSlug: activeProject.slug } });
       }
-      showToast(t('sidebar.toast.session_deleted'));
+      showToast(t('project:toast.session_deleted'));
       setPendingDelete(null);
     },
     onError: (err) => {
       const msg = err instanceof ApiError
-        ? (err.status === 403 ? t('sidebar.toast.no_delete_permission') : err.message)
+        ? (err.status === 403 ? t('project:toast.no_delete_permission') : err.message)
         : err instanceof Error ? err.message : 'delete failed';
-      showToast(t('sidebar.toast.session_delete_failed', { message: msg }));
+      showToast(t('project:toast.session_delete_failed', { message: msg }));
     },
   });
 
@@ -330,7 +330,7 @@ export function Sidebar() {
         <button
           className="cw-brand-lockup"
           onClick={() => navigate({ to: '/projects' })}
-          aria-label="Cowork projects"
+          aria-label={t('sidebar.brand_label')}
         >
           <img src={logoMark} alt="" />
           <strong>Cowork</strong>
@@ -348,7 +348,7 @@ export function Sidebar() {
 
       <div className="cw-sidebar-scroll cw-scroll-quiet">
         <SectionHeader
-          label="PROJECTS"
+          label={t('sidebar.section_projects')}
           expanded={projectsExpanded}
           onToggle={toggleProjects}
           onAdd={projectCreator.open}
@@ -374,37 +374,37 @@ export function Sidebar() {
               className={`cw-nav-row ${activeRoute === 'project' ? 'is-active' : ''}`}
               onClick={() => openProject(activeProject.slug)}
             >
-              <IconPocket tone="home" icon="home" /> <span>Home</span>
+              <IconPocket tone="home" icon="home" /> <span>{t('sidebar.nav.home')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'files' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/files', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="files" icon="folder-open" /> <span>Files</span>
+              <IconPocket tone="files" icon="folder-open" /> <span>{t('sidebar.nav.files')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'skills' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/skills', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="skills" icon="zap" /> <span>Skills</span>
+              <IconPocket tone="skills" icon="zap" /> <span>{t('sidebar.nav.skills')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'schedule' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/schedule', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="schedule" icon="calendar" /> <span>Schedule</span>
+              <IconPocket tone="schedule" icon="calendar" /> <span>{t('sidebar.nav.schedule')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'members' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/members', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="members" icon="users" /> <span>Members</span>
+              <IconPocket tone="members" icon="users" /> <span>{t('sidebar.nav.members')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'settings' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/settings', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="settings" icon="settings" /> <span>Settings</span>
+              <IconPocket tone="settings" icon="settings" /> <span>{t('sidebar.nav.settings')}</span>
             </button>
           </div>
         )}
@@ -412,7 +412,7 @@ export function Sidebar() {
         {activeProject && (
           <>
             <SectionHeader
-              label="Sessions"
+              label={t('sidebar.section_sessions')}
               expanded={sessionsExpanded}
               onToggle={toggleSessions}
               onAdd={() => createSessionMutation.mutate(activeProject.id)}
@@ -480,9 +480,9 @@ export function Sidebar() {
 
       {pendingDelete && (
         <ConfirmDialog
-          title={t('sidebar.delete_session.title')}
-          body={t('sidebar.delete_session.body', { title: pendingDelete.title })}
-          confirmLabel={t('sidebar.delete_session.confirm')}
+          title={t('project:delete_session.title')}
+          body={t('project:delete_session.body', { title: pendingDelete.title })}
+          confirmLabel={t('project:delete_session.confirm')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(pendingDelete.id)}

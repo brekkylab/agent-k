@@ -10,6 +10,20 @@
   "creating": "Creating…",
   "new_session": "New session",
   "schedule_auto": "Schedule auto-trigger",
+  "info": {
+    "files_title": "{{count}} files",
+    "files_meta": "ground truth",
+    "files_body": "Project Files can be selected, pinned, and cited in sessions.",
+    "members_title": "{{count}} members",
+    "members_meta": "access",
+    "members_body": "Shared sessions show who can talk with Cowork."
+  },
+  "sessions_section_label": "Sessions · {{count}} visible to you",
+  "empty": {
+    "title": "No sessions yet",
+    "body": "Start a session to make this project self-serve.",
+    "action": "New session"
+  },
   "activity": {
     "sync_title": "Project synced",
     "sync_when": "just now",

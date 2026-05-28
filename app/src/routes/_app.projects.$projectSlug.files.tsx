@@ -15,7 +15,7 @@ import { createPortal } from 'react-dom';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { josa } from '@/i18n';
+import { localizedNoun } from '@/i18n';
 import type { TFunction } from 'i18next';
 import {
   copyDirents,
@@ -585,15 +585,15 @@ function FilesPage() {
     <section className="cw-page cw-files-page cw-page-enter">
       <div className="cw-page-head">
         <div>
-          <h1>Files</h1>
-          <p>Shared with the whole project. Select files, pin them to a session, then generate artifacts from those citations.</p>
+          <h1>{t('files:page.title')}</h1>
+          <p>{t('files:page.description')}</p>
         </div>
         <div>
           <button className="cw-btn-secondary" onClick={openFolderDialog} disabled={folderMutation.isPending}>
-            <IconPocket tone="add" icon="plus" compact /> New folder
+            <IconPocket tone="add" icon="plus" compact /> {t('files:ui.new_folder')}
           </button>
           <button className="cw-btn-primary" onClick={openUpload} disabled={uploadMutation.isPending}>
-            <IconPocket tone="add" icon="upload" compact /> {uploadMutation.isPending ? 'Uploading…' : 'Upload'}
+            <IconPocket tone="add" icon="upload" compact /> {uploadMutation.isPending ? t('files:ui.uploading') : t('files:ui.upload')}
           </button>
           <input
             ref={fileInputRef}
@@ -658,11 +658,11 @@ function FilesPage() {
               <div className="cw-bulk-toolbar cw-bulk-toolbar-inline" role="toolbar" aria-label="bulk actions">
                 <span className="cw-bulk-count">{t('files:ui.selected_count', { count: selectedPaths.size })}</span>
                 <button type="button" className="cw-btn-secondary" onClick={bulkDownload}>
-                  <Icon name="download" size={13} /> Download
+                  <Icon name="download" size={13} /> {t('files:ui.download')}
                 </button>
                 {selectedPaths.size === 1 && (
                   <button type="button" className="cw-btn-secondary" onClick={() => setPendingRename(selectedEntries[0]!)}>
-                    <Icon name="writing" size={13} /> Rename
+                    <Icon name="writing" size={13} /> {t('files:ui.rename')}
                   </button>
                 )}
                 <button type="button" className="cw-btn-secondary" onClick={() => setPendingMove(selectedEntries)}>
@@ -672,7 +672,7 @@ function FilesPage() {
                   <Icon name="file" size={13} /> {t('files:ui.copy')}
                 </button>
                 <button type="button" className="cw-btn-secondary cw-btn-destructive" onClick={requestBulkDelete}>
-                  <Icon name="trash" size={13} /> Delete
+                  <Icon name="trash" size={13} /> {t('files:ui.delete')}
                 </button>
                 <button type="button" className="cw-bulk-clear" onClick={clearSelection} aria-label={t('files:ui.clear_selection')}>
                   <Icon name="x" size={13} />
@@ -737,7 +737,7 @@ function FilesPage() {
                 body={view.isSearch
                   ? t('files:empty.search_hint')
                   : t('files:empty.folder_empty_hint')}
-                action={view.isSearch ? undefined : 'Upload file'}
+                action={view.isSearch ? undefined : t('files:empty_action.upload')}
                 onAction={view.isSearch ? undefined : openUpload}
                 chip={<Icon name="folder" size={16} />}
               />
@@ -1023,13 +1023,13 @@ function RowMenu({
           {entry.kind === 'file' && (
             <li role="menuitem">
               <button type="button" onClick={() => { onMenuToggle(null); onDownload(); }}>
-                <Icon name="download" size={13} /> Download
+                <Icon name="download" size={13} /> {t('ui.download')}
               </button>
             </li>
           )}
           <li role="menuitem">
             <button type="button" onClick={() => { onMenuToggle(null); onRename(); }}>
-              <Icon name="writing" size={13} /> Rename
+              <Icon name="writing" size={13} /> {t('ui.rename')}
             </button>
           </li>
           <li role="menuitem">
@@ -1045,7 +1045,7 @@ function RowMenu({
           <li role="separator" aria-hidden="true" className="cw-file-dropdown-sep" />
           <li role="menuitem">
             <button type="button" className="cw-file-dropdown-destructive" onClick={() => { onMenuToggle(null); onDelete(); }}>
-              <Icon name="trash" size={13} /> Delete
+              <Icon name="trash" size={13} /> {t('ui.delete')}
             </button>
           </li>
         </ul>
@@ -1162,7 +1162,7 @@ function describeBulkDelete(
           : t('delete.folder_body_empty', { name }),
       };
     }
-    const decorated = lang === 'ko' ? josa(name, '을/를') : name;
+    const decorated = localizedNoun(name, '을/를', lang);
     return {
       title: t('delete.file_title'),
       body: t('delete.file_body', { name: decorated }),

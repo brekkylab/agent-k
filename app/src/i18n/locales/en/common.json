@@ -60,17 +60,16 @@
     "new_project": "New Project",
     "new_session": "New Session",
     "creating_session": "Creating session…",
-    "toast": {
-      "session_created": "New session created",
-      "session_create_failed": "Failed to create session: {{message}}",
-      "session_deleted": "Session deleted",
-      "session_delete_failed": "Failed to delete session: {{message}}",
-      "no_delete_permission": "You don't have permission to delete (creator or project owner only)"
-    },
-    "delete_session": {
-      "title": "Delete this session?",
-      "body": "All messages and sandbox resources in \"{{title}}\" will be cleaned up. This cannot be undone.",
-      "confirm": "Delete"
+    "brand_label": "Cowork projects",
+    "section_projects": "PROJECTS",
+    "section_sessions": "Sessions",
+    "nav": {
+      "home": "Home",
+      "files": "Files",
+      "skills": "Skills",
+      "schedule": "Schedule",
+      "members": "Members",
+      "settings": "Settings"
     }
   },
   "errors": {

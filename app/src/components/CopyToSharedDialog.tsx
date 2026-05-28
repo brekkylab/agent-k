@@ -8,7 +8,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { copyDirents, listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
 import { buildFolderTree, type FolderNode } from '@/domain/files';
-import { josa } from '@/i18n';
+import { localizedNoun } from '@/i18n';
 import { Icon } from './Icon';
 import { useToastStore } from './Toast';
 
@@ -159,9 +159,7 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
   const subtitle = sourcePaths.length === 1
     ? (() => {
         const raw = sourcePaths[0]!.split('/').pop() ?? '';
-        // josa only makes sense for ko; en should see the raw filename without
-        // a Korean particle stitched onto it.
-        const decorated = i18n.language === 'ko' ? josa(raw, '을/를') : raw;
+        const decorated = localizedNoun(raw, '을/를', i18n.language);
         return t('copy_to_shared.body_single', { name: `"${decorated}"` });
       })()
     : t('copy_to_shared.body_multi', { count: sourcePaths.length });

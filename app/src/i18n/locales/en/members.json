@@ -18,6 +18,21 @@
     "title": "Couldn't load member info",
     "body": "You may not have permission, or the project may be empty."
   },
+  "page": {
+    "section_label": "Team access",
+    "title": "Members",
+    "invite": "Invite"
+  },
+  "table": {
+    "member": "Member",
+    "role": "Role",
+    "joined": "Joined",
+    "you_suffix": "(you)"
+  },
+  "badges": {
+    "owner": "Owner",
+    "member": "Member"
+  },
   "remove": {
     "self_title": "Leave this project?",
     "self_body": "You will no longer have access to \"{{project}}\".",

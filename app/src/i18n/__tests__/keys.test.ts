@@ -17,7 +17,19 @@ import koProject from '../locales/ko/project.json';
 import enSession from '../locales/en/session.json';
 import koSession from '../locales/ko/session.json';
 
+import type { SessionIntent, ShareMode } from '@/domain/types';
+
 type JsonShape = Record<string, unknown>;
+
+function getNested(obj: JsonShape, path: string): unknown {
+  return path.split('.').reduce<unknown>(
+    (acc, key) => (acc && typeof acc === 'object' ? (acc as JsonShape)[key] : undefined),
+    obj,
+  );
+}
+
+const INTENTS: SessionIntent[] = ['general', 'analysis', 'brainstorm', 'writing', 'recap'];
+const SHARE_MODES: ShareMode[] = ['private', 'shared_readonly', 'shared_chat'];
 
 function collectKeys(obj: JsonShape, prefix = ''): string[] {
   const keys: string[] = [];
@@ -46,5 +58,27 @@ const NAMESPACES: Array<{ name: string; en: JsonShape; ko: JsonShape }> = [
 describe('translation key parity', () => {
   it.each(NAMESPACES)('$name: en and ko expose the same keys', ({ en, ko }) => {
     expect(collectKeys(en)).toEqual(collectKeys(ko));
+  });
+});
+
+// Dynamic key callsites like `t(\`intent.${intent}.label\`)` are not caught
+// by the parity test alone — if the enum gains a value, both locale files
+// might still match but the new key is missing from both. These exhaustive
+// checks ensure every enum value is materialized in both locales.
+describe('dynamic key exhaustiveness', () => {
+  describe.each(INTENTS)('intent.%s', (intent) => {
+    it.each(['label', 'note'] as const)('en/ko define common.intent.%s.%s', (field) => {
+      const path = `intent.${intent}.${field}`;
+      expect(typeof getNested(enCommon, path)).toBe('string');
+      expect(typeof getNested(koCommon, path)).toBe('string');
+    });
+  });
+
+  describe.each(SHARE_MODES)('share.%s', (mode) => {
+    it.each(['label', 'short_label', 'desc'] as const)('en/ko define common.share.%s.%s', (field) => {
+      const path = `share.${mode}.${field}`;
+      expect(typeof getNested(enCommon, path)).toBe('string');
+      expect(typeof getNested(koCommon, path)).toBe('string');
+    });
   });
 });

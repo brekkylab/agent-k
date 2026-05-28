@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { josa } from '@/i18n';
+import { localizedNoun } from '@/i18n';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, streamMessage } from '@/api/messages';
 import { getProject, listMembers } from '@/api/projects';
@@ -247,9 +247,9 @@ function SessionPage() {
           <div>
             <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
             <p>
-              {creator && <>Started by <Avatar user={creator} small /> {creator.name} · </>}
-              {sess?.references.length ?? 0} files ·{' '}
-              <Avatar user={AI_USER} small /> Cowork Default
+              {creator && <>{t('chat.started_by')} <Avatar user={creator} small /> {creator.name} · </>}
+              {t('chat.files_count', { count: sess?.references.length ?? 0 })} ·{' '}
+              <Avatar user={AI_USER} small /> {t('chat.default_label')}
             </p>
           </div>
           <div className="cw-session-head-actions">
@@ -300,7 +300,7 @@ function SessionPage() {
             <input
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
-              placeholder="Message Cowork and the team…"
+              placeholder={t('ui.composer_placeholder')}
               disabled={streaming}
             />
             <button
@@ -313,7 +313,7 @@ function SessionPage() {
             >
               <Icon name="paperclip" size={13} />
             </button>
-            <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || streaming || hasUploadingAttachments}>
+            <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || streaming || hasUploadingAttachments}>
               <Icon name="send" size={12} />
             </button>
           </div>
@@ -324,29 +324,29 @@ function SessionPage() {
             style={{ display: 'none' }}
             onChange={(e) => void handleFileSelect(e)}
           />
-          <small>Enter to send · Reference files with @filename</small>
+          <small>{t('ui.composer_hint')}</small>
         </form>
       </section>
 
       <aside className="cw-session-side">
-        <h3>Members</h3>
+        <h3>{t('side.members')}</h3>
         {userList.map((user) => (
           <div className="cw-side-row" key={user.id}>
             <Avatar user={user} small />
             {user.name}
           </div>
         ))}
-        <h3>Referenced files</h3>
+        <h3>{t('side.referenced_files')}</h3>
         {sess?.references.length
           ? <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 11 }}>{sess.references.join(', ')}</p>
-          : <p>No pinned files yet.</p>}
-        <h3>Access</h3>
+          : <p>{t('side.no_pinned_files')}</p>}
+        <h3>{t('side.access')}</h3>
         {sess && <SharePill mode={sess.shareMode} />}
         {sess && <p>{t(`common:share.${sess.shareMode}.desc`)}</p>}
-        <h3>Session</h3>
+        <h3>{t('side.session')}</h3>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
-          project · {project.data?.name ?? '...'}
+          {t('side.project_label', { name: project.data?.name ?? '...' })}
         </p>
         <ArtifactsPanel
           projectId={projectId}
@@ -457,7 +457,7 @@ function ArtifactChip({
       {confirmDelete && (
         <ConfirmDialog
           title={t('delete_artifact.title')}
-          body={t('delete_artifact.body', { name: `"${i18n.language === 'ko' ? josa(filename, '을/를') : filename}"` })}
+          body={t('delete_artifact.body', { name: `"${localizedNoun(filename, '을/를', i18n.language)}"` })}
           confirmLabel={t('delete_artifact.confirm')}
           destructive
           pending={deleteMutation.isPending}

@@ -3,7 +3,7 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 import resourcesToBackend from 'i18next-resources-to-backend';
 import { initReactI18next } from 'react-i18next';
 
-export { josa, type JosaPair } from './josa';
+export { josa, localizedNoun, type JosaPair } from './josa';
 
 export const SUPPORTED_LANGUAGES = ['en', 'ko'] as const;
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -45,6 +45,7 @@ void i18n
       caches: ['localStorage'],
     },
     returnNull: false,
+    returnEmptyString: false,
   });
 
 export default i18n;

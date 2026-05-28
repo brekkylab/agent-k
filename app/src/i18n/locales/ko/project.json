@@ -10,6 +10,20 @@
   "creating": "생성 중…",
   "new_session": "New session",
   "schedule_auto": "schedule 자동 발화",
+  "info": {
+    "files_title": "파일 {{count}}개",
+    "files_meta": "ground truth",
+    "files_body": "프로젝트 파일을 선택해 세션에 고정하고 인용할 수 있어요.",
+    "members_title": "멤버 {{count}}명",
+    "members_meta": "access",
+    "members_body": "공유 세션에서 Cowork와 함께 대화할 수 있는 멤버가 표시돼요."
+  },
+  "sessions_section_label": "Sessions · 내가 볼 수 있는 {{count}}개",
+  "empty": {
+    "title": "세션이 아직 없어요",
+    "body": "세션을 시작해서 이 프로젝트를 self-serve 형태로 활용해 보세요.",
+    "action": "새 세션"
+  },
   "activity": {
     "sync_title": "프로젝트 동기화됨",
     "sync_when": "방금 전",

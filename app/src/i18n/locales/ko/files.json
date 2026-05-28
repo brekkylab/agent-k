@@ -44,7 +44,20 @@
     "collapse": "접기",
     "drag_items": "{{count}}개 항목",
     "empty_folder": "빈 폴더",
-    "item_count": "{{count}}개 항목"
+    "item_count": "{{count}}개 항목",
+    "download": "다운로드",
+    "rename": "이름 변경",
+    "delete": "삭제",
+    "new_folder": "새 폴더",
+    "upload": "업로드",
+    "uploading": "업로드 중…"
+  },
+  "page": {
+    "title": "파일",
+    "description": "프로젝트 전체와 공유돼요. 파일을 선택해 세션에 고정하고, 그 인용에서 산출물을 생성할 수 있어요."
+  },
+  "empty_action": {
+    "upload": "파일 업로드"
   },
   "empty": {
     "search_no_results": "검색 결과 없음",

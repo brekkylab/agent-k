@@ -44,7 +44,20 @@
     "collapse": "Collapse",
     "drag_items": "{{count}} items",
     "empty_folder": "Empty folder",
-    "item_count": "{{count}} items"
+    "item_count": "{{count}} items",
+    "download": "Download",
+    "rename": "Rename",
+    "delete": "Delete",
+    "new_folder": "New folder",
+    "upload": "Upload",
+    "uploading": "Uploading…"
+  },
+  "page": {
+    "title": "Files",
+    "description": "Shared with the whole project. Select files, pin them to a session, then generate artifacts from those citations."
+  },
+  "empty_action": {
+    "upload": "Upload file"
   },
   "empty": {
     "search_no_results": "No search results",

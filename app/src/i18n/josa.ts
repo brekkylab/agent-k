@@ -23,3 +23,13 @@ export function josa(noun: string, pair: JosaPair): string {
   const last = noun.charAt(noun.length - 1);
   return noun + (hasBatchim(last) ? withBatchim : without);
 }
+
+/**
+ * Localized noun decorator. Applies the Korean particle only when the active
+ * language is ko; otherwise returns the noun unchanged. Centralizes the
+ * `i18n.language === 'ko' ? josa(...) : noun` pattern that appears at every
+ * filename-interpolation site.
+ */
+export function localizedNoun(noun: string, pair: JosaPair, lang: string): string {
+  return lang === 'ko' ? josa(noun, pair) : noun;
+}

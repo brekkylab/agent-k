@@ -113,7 +113,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
         aria-expanded={!collapsed}
       >
         <Icon name={collapsed ? 'chevron-right' : 'chevron'} size={12} />
-        <span>Artifacts</span>
+        <span>{t('artifacts_header')}</span>
         {entries.length > 0 && (
           <span className="cw-artifacts-count">{entries.length}</span>
         )}

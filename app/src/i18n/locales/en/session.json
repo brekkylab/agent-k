@@ -12,8 +12,26 @@
     "ai_responding": "AI is responding…",
     "attach_file": "Attach file",
     "self_label": "Me",
-    "tool_running": "Running…"
+    "tool_running": "Running…",
+    "send_aria": "Send",
+    "composer_placeholder": "Message Cowork and the team…",
+    "composer_hint": "Enter to send · Reference files with @filename",
+    "title_fallback": "…"
   },
+  "chat": {
+    "started_by": "Started by",
+    "files_count": "{{count}} files",
+    "default_label": "Cowork Default"
+  },
+  "side": {
+    "members": "Members",
+    "referenced_files": "Referenced files",
+    "no_pinned_files": "No pinned files yet.",
+    "access": "Access",
+    "session": "Session",
+    "project_label": "project · {{name}}"
+  },
+  "artifacts_header": "Artifacts",
   "artifact": {
     "download": "Download",
     "copy_to_shared": "Copy to shared folder",

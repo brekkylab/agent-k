@@ -94,16 +94,16 @@ function ProjectHome() {
       </div>
 
       <div className="cw-project-summary">
-        <InfoRow icon="folder-open" title={`${fileList.length} files`} meta="ground truth">
-          Project Files can be selected, pinned, and cited in sessions.
+        <InfoRow icon="folder-open" title={t('info.files_title', { count: fileList.length })} meta={t('info.files_meta')}>
+          {t('info.files_body')}
         </InfoRow>
-        <InfoRow icon="users" title={`${memberList.length} members`} meta="access">
-          Shared sessions show who can talk with Cowork.
+        <InfoRow icon="users" title={t('info.members_title', { count: memberList.length })} meta={t('info.members_meta')}>
+          {t('info.members_body')}
         </InfoRow>
       </div>
 
       <div className="cw-section-title">
-        <SectionLabel>Sessions · {sessionList.length} visible to you</SectionLabel>
+        <SectionLabel>{t('sessions_section_label', { count: sessionList.length })}</SectionLabel>
         <button onClick={() => navigate({ to: '/projects/$projectSlug/schedule', params: { projectSlug } })}>
           {t('schedule_auto')}
         </button>
@@ -126,9 +126,9 @@ function ProjectHome() {
         </div>
       ) : (
         <EmptyState
-          title="No sessions yet"
-          body="Start a session to make this project self-serve."
-          action="New session"
+          title={t('empty.title')}
+          body={t('empty.body')}
+          action={t('empty.action')}
           onAction={() => newSessionMutation.mutate()}
           chip="+"
         />

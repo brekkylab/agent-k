@@ -85,14 +85,14 @@ function MembersPage() {
     <section className="cw-page cw-simple-page cw-page-enter">
       <header className="cw-page-head">
         <div>
-          <SectionLabel>Team access</SectionLabel>
-          <h1>Members</h1>
+          <SectionLabel>{t('page.section_label')}</SectionLabel>
+          <h1>{t('page.title')}</h1>
           <p>{t('subtitle', { project: proj?.name ?? '...' })}</p>
         </div>
         <div className="cw-hero-actions">
           {inviteAllowed && (
             <button className="cw-btn-primary" onClick={() => setInviteOpen(true)}>
-              <Icon name="plus" size={12} /> Invite
+              <Icon name="plus" size={12} /> {t('page.invite')}
             </button>
           )}
         </div>
@@ -117,9 +117,9 @@ function MembersPage() {
           letterSpacing: '0.08em',
           color: 'var(--cw-ink-3)',
         }}>
-          <span>Member</span>
-          <span>Role</span>
-          <span>Joined</span>
+          <span>{t('table.member')}</span>
+          <span>{t('table.role')}</span>
+          <span>{t('table.joined')}</span>
           <span />
         </div>
 
@@ -234,6 +234,7 @@ interface MemberRowProps {
 }
 
 function MemberRow({ user, isOwner, isMe, joinedAt, showMenu, isLastRow, onRemove }: MemberRowProps) {
+  const { t } = useTranslation('members');
   return (
     <div style={{
       display: 'grid',
@@ -250,7 +251,7 @@ function MemberRow({ user, isOwner, isMe, joinedAt, showMenu, isLastRow, onRemov
           <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: 'var(--cw-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {user.name}
             {isMe && (
-              <span style={{ marginLeft: 6, color: 'var(--cw-ink-4)', fontWeight: 400 }}>(you)</span>
+              <span style={{ marginLeft: 6, color: 'var(--cw-ink-4)', fontWeight: 400 }}>{t('table.you_suffix')}</span>
             )}
           </p>
         </div>
@@ -258,9 +259,9 @@ function MemberRow({ user, isOwner, isMe, joinedAt, showMenu, isLastRow, onRemov
 
       <div>
         {isOwner ? (
-          <span className="cw-role-badge owner" style={{ fontSize: 10 }}>Owner</span>
+          <span className="cw-role-badge owner" style={{ fontSize: 10 }}>{t('badges.owner')}</span>
         ) : (
-          <span className="cw-role-badge member" style={{ fontSize: 10 }}>Member</span>
+          <span className="cw-role-badge member" style={{ fontSize: 10 }}>{t('badges.member')}</span>
         )}
       </div>
 

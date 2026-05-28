@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { buildFolderTree, nameOf, type FolderNode } from '@/domain/files';
-import { josa } from '@/i18n';
+import { localizedNoun } from '@/i18n';
 import type { BackendDirent } from '@/api/backend-types';
 
 interface FolderPickerDialogProps {
@@ -137,8 +137,7 @@ export function FolderPickerDialog({
   const subtitle = sources.length === 1
     ? (() => {
         const raw = nameOf(sources[0]!);
-        // josa applies only to Korean; en uses the raw filename verbatim.
-        const decorated = i18n.language === 'ko' ? josa(raw, '을/를') : raw;
+        const decorated = localizedNoun(raw, '을/를', i18n.language);
         return t('folder_picker.body_single', { name: `"${decorated}"` });
       })()
     : t('folder_picker.body_multi', { count: sources.length });
