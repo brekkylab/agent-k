@@ -7,14 +7,14 @@ import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
 import { createAutomation, createTrigger, deleteAutomation } from '@/api/automations';
 import { ApiError } from '@/api/client';
 
-export const Route = createFileRoute('/_app/projects/$projectId/automation/new')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/automation/new')({
   component: NewAutomationPage,
 });
 
 type InitialTriggerKind = 'none' | 'cron' | 'webhook';
 
 function NewAutomationPage() {
-  const { projectId } = Route.useParams();
+  const { projectSlug } = Route.useParams();
   const navigate = useNavigate();
 
   const [name, setName] = useState('');
@@ -24,7 +24,7 @@ function NewAutomationPage() {
   const [schedule, setSchedule] = useState<SchedulePickerValue>({ expr: '0 9 * * 1,2,3,4,5', tz: 'Asia/Seoul' });
 
   const goBack = () => {
-    navigate({ to: '/projects/$projectId/automation', params: { projectId } });
+    navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug } });
   };
 
   const canSubmit = name.trim().length > 0 && prompts.some((p) => p.trim().length > 0);
@@ -43,7 +43,7 @@ function NewAutomationPage() {
   const discardMutation = useMutation({
     mutationFn: (id: string) => deleteAutomation(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['automations', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['automations', projectSlug] });
     },
   });
   const handleDiscard = () => {
@@ -57,7 +57,7 @@ function NewAutomationPage() {
   const createMutation = useMutation({
     mutationFn: async () => {
       const automation = await createAutomation({
-        projectId,
+        projectRef: projectSlug,
         name: name.trim(),
         description: description.trim() ? description.trim() : null,
         prompts: prompts.filter((p) => p.trim().length > 0),
@@ -77,7 +77,7 @@ function NewAutomationPage() {
       return { automationId: automation.id, webhookToken: null as string | null };
     },
     onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: ['automations', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['automations', projectSlug] });
       if (result.webhookToken) {
         setCreatedAutomationId(result.automationId);
         setRevealedToken(result.webhookToken);

@@ -17,12 +17,12 @@ import {
 } from '@/api/automations';
 import type { Trigger, TriggerSpec } from '@/domain/types';
 
-export const Route = createFileRoute('/_app/projects/$projectId/automation/$automationId')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/automation/$automationId')({
   component: AutomationSettingsPage,
 });
 
 function AutomationSettingsPage() {
-  const { projectId, automationId } = Route.useParams();
+  const { projectSlug, automationId } = Route.useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
@@ -53,13 +53,13 @@ function AutomationSettingsPage() {
   }, [automation, syncedAt]);
 
   const goBack = () => {
-    navigate({ to: '/projects/$projectId/automation', params: { projectId } });
+    navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug } });
   };
 
   // ── Mutations ───────────────────────────────────────────────────────────
   const invalidateAutomation = () => {
     void queryClient.invalidateQueries({ queryKey: ['automation', automationId] });
-    void queryClient.invalidateQueries({ queryKey: ['automations', projectId] });
+    void queryClient.invalidateQueries({ queryKey: ['automations', projectSlug] });
   };
   const invalidateTriggers = () => {
     void queryClient.invalidateQueries({ queryKey: ['triggers', automationId] });
@@ -106,7 +106,7 @@ function AutomationSettingsPage() {
   const deleteAutomationMutation = useMutation({
     mutationFn: () => deleteAutomationApi(automationId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['automations', projectId] });
+      void queryClient.invalidateQueries({ queryKey: ['automations', projectSlug] });
       goBack();
     },
   });

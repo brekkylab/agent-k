@@ -36,7 +36,7 @@ import type {
 // ── Automation ─────────────────────────────────────────────────────────────
 
 export interface CreateAutomationInput {
-  projectId: string;
+  projectRef: string;
   name: string;
   description?: string | null;
   prompts: string[];
@@ -49,9 +49,9 @@ export interface UpdateAutomationInput {
   enabled?: boolean;
 }
 
-/** Omit `projectId` to list across projects (admin only on the backend). */
-export async function listAutomations(projectId?: string): Promise<Automation[]> {
-  const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+/** Omit `projectRef` to list across projects (admin only on the backend). */
+export async function listAutomations(projectRef?: string): Promise<Automation[]> {
+  const qs = projectRef ? `?project_ref=${encodeURIComponent(projectRef)}` : '';
   const res = await request<BackendAutomationList>(`/automations${qs}`);
   return res.items.map(toAutomation);
 }
@@ -60,7 +60,7 @@ export async function createAutomation(input: CreateAutomationInput): Promise<Au
   const raw = await request<BackendAutomation>('/automations', {
     method: 'POST',
     body: {
-      project_id: input.projectId,
+      project_ref: input.projectRef,
       name: input.name,
       description: input.description ?? null,
       prompts: input.prompts,

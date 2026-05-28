@@ -385,7 +385,7 @@ export function Sidebar() {
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'automation' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectId/automation', params: { projectId: activeProject.id } })}
+              onClick={() => navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug: activeProject.slug } })}
             >
               <IconPocket tone="schedule" icon="circle-play" /> <span>Automation</span>
             </button>

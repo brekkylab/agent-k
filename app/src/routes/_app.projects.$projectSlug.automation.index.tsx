@@ -12,7 +12,7 @@ import { listMessages } from '@/api/messages';
 import { formatMessageTime } from '@/lib/formatMessageTime';
 import type { Automation, Message, Run, Trigger } from '@/domain/types';
 
-export const Route = createFileRoute('/_app/projects/$projectId/automation/')({
+export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')({
   component: AutomationsPage,
 });
 
@@ -118,7 +118,7 @@ function triggerSummaryText(t: Trigger): string {
 }
 
 function AutomationsPage() {
-  const { projectId } = Route.useParams();
+  const { projectSlug } = Route.useParams();
   const navigate = useNavigate();
   const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -127,8 +127,8 @@ function AutomationsPage() {
   const [page, setPage] = useState(0);
 
   const automationsQuery = useQuery({
-    queryKey: ['automations', projectId],
-    queryFn: () => listAutomations(projectId),
+    queryKey: ['automations', projectSlug],
+    queryFn: () => listAutomations(projectSlug),
   });
   const automations: Automation[] = automationsQuery.data ?? [];
   const automationById = useMemo(
@@ -310,8 +310,8 @@ function AutomationsPage() {
 
   const openSettings = (automationId: string) => {
     navigate({
-      to: '/projects/$projectId/automation/$automationId',
-      params: { projectId, automationId },
+      to: '/projects/$projectSlug/automation/$automationId',
+      params: { projectSlug, automationId },
     });
   };
 
@@ -452,7 +452,7 @@ function AutomationsPage() {
           <button
             className="cw-btn-primary"
             type="button"
-            onClick={() => navigate({ to: '/projects/$projectId/automation/new', params: { projectId } })}
+            onClick={() => navigate({ to: '/projects/$projectSlug/automation/new', params: { projectSlug } })}
           >
             <Icon name="plus" size={14} /> New automation
           </button>
@@ -468,7 +468,7 @@ function AutomationsPage() {
               className="cw-rail-create"
               aria-label="New automation"
               title="New automation"
-              onClick={() => navigate({ to: '/projects/$projectId/automation/new', params: { projectId } })}
+              onClick={() => navigate({ to: '/projects/$projectSlug/automation/new', params: { projectSlug } })}
             >
               <Icon name="plus" size={14} /> New
             </button>
