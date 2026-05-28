@@ -50,24 +50,6 @@ pub async fn resolve_project_id(state: &Arc<AppState>, project_ref: &str) -> Api
     Err(AppError::not_found("project not found"))
 }
 
-/// Whether a slug is available for assignment to a new (or renamed) project.
-///
-/// Considers both active project slugs and retired ones — retired slugs are
-/// permanently reserved so the redirect history stays unambiguous.
-async fn is_slug_taken(repo: &SqliteRepository, candidate: &str) -> RepositoryResult<bool> {
-    if repo.get_project_by_slug(candidate).await?.is_some() {
-        return Ok(true);
-    }
-    if repo
-        .get_project_id_by_retired_slug(candidate)
-        .await?
-        .is_some()
-    {
-        return Ok(true);
-    }
-    Ok(false)
-}
-
 /// Reject a slug that another project has already retired.
 ///
 /// A retired slug stays bound to whichever project owned it last — links to
@@ -123,19 +105,35 @@ fn validate_explicit_slug(s: &str) -> ApiResult<()> {
 /// Generate a slug that is unique among active and retired project slugs.
 ///
 /// Starts from `slug::slugify(name)`; if that is empty, falls back to
-/// `project-<6-char nanoid>`. Appends `-2`, `-3`, … on collision.
-async fn generate_unique_slug(name: &str, repo: &SqliteRepository) -> RepositoryResult<String> {
+/// `project-<6-char nanoid>`. Appends `-2`, `-3`, … on collision. When
+/// `self_project_id` is provided, slugs already owned (active or retired) by
+/// that project are not treated as collisions — useful for rename flows where
+/// re-deriving the same slug should yield a no-op rather than `-2`.
+async fn generate_unique_slug(
+    name: &str,
+    repo: &SqliteRepository,
+    self_project_id: Option<Uuid>,
+) -> RepositoryResult<String> {
     let mut base = slug::slugify(name);
     if base.is_empty() {
         base = format!("project-{}", nanoid::nanoid!(6));
     }
     let mut candidate = base.clone();
     let mut suffix = 2u32;
-    while is_slug_taken(repo, &candidate).await? {
+    loop {
+        let active_owner = repo.get_project_by_slug(&candidate).await?.map(|p| p.id);
+        let retired_owner = repo.get_project_id_by_retired_slug(&candidate).await?;
+        let taken_by_other = match (active_owner, retired_owner) {
+            (Some(id), _) => Some(id) != self_project_id,
+            (None, Some(id)) => Some(id) != self_project_id,
+            (None, None) => false,
+        };
+        if !taken_by_other {
+            return Ok(candidate);
+        }
         candidate = format!("{base}-{suffix}");
         suffix += 1;
     }
-    Ok(candidate)
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -152,7 +150,7 @@ pub async fn create_project(
             ensure_slug_not_retired_by_other(&state.repository, &s, None).await?;
             s
         }
-        None => generate_unique_slug(&payload.name, &state.repository)
+        None => generate_unique_slug(&payload.name, &state.repository, None)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?,
     };
@@ -217,6 +215,10 @@ pub async fn get_project(
 }
 
 /// PATCH /projects/{project_ref} — owner only
+///
+/// Slug isn't taken from the payload; if `name` changes, the new slug is
+/// derived from it via `generate_unique_slug` (same path as create). The
+/// previous slug is retired so old links keep resolving.
 pub async fn update_project(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
@@ -226,10 +228,15 @@ pub async fn update_project(
     let project_id = resolve_project_id(&state, &project_ref).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
-    if let Some(ref new_slug) = payload.slug {
-        validate_explicit_slug(new_slug)?;
-        ensure_slug_not_retired_by_other(&state.repository, new_slug, Some(project_id)).await?;
-    }
+    let new_slug = if let Some(ref new_name) = payload.name {
+        Some(
+            generate_unique_slug(new_name, &state.repository, Some(project_id))
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?,
+        )
+    } else {
+        None
+    };
 
     let updated = state
         .repository
@@ -237,7 +244,7 @@ pub async fn update_project(
             project_id,
             payload.name,
             payload.description.map(Some),
-            payload.slug,
+            new_slug,
         )
         .await
         .map_err(|e| match e {
