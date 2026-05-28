@@ -221,8 +221,8 @@ export function Sidebar() {
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions', activeProjectSlug],
-    queryFn: () => listSessions(activeProject?.id ?? ''),
-    enabled: Boolean(activeProjectSlug),
+    queryFn: () => listSessions(activeProject!.id),
+    enabled: Boolean(activeProjectSlug) && Boolean(activeProject),
   });
 
   const activeSessionId = useActiveSessionId();
