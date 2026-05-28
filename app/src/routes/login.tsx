@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 import { getMe, login, signupAndLogin } from '@/api/auth';
-import { getBaseUrl, setBaseUrl, getToken, ApiError } from '@/api/client';
+import { getBaseUrl, setBaseUrl, getToken } from '@/api/client';
+import { apiErrorToMessage } from '@/api/error-messages';
 import { useAuthStore } from '@/stores/auth';
 
 type Mode = 'login' | 'signup';
@@ -14,6 +16,7 @@ export const Route = createFileRoute('/login')({
 });
 
 function LoginPage() {
+  const { t } = useTranslation('auth');
   const navigate = useNavigate();
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
   const [mode, setMode] = useState<Mode>('login');
@@ -44,7 +47,12 @@ function LoginPage() {
       setCurrentUser(me);
       navigate({ to: '/projects' });
     } catch (err) {
-      setError(messageOf(err, mode));
+      const scope = mode === 'signup' ? 'auth_signup' : 'auth_login';
+      const fallbackKey = mode === 'signup'
+        ? 'errors.fallback_signup'
+        : 'errors.fallback_login';
+      const { key, params, fallback } = apiErrorToMessage(err, scope);
+      setError(t(key, { ...params, defaultValue: fallback ?? t(fallbackKey) }));
     } finally {
       setSubmitting(false);
     }
@@ -55,11 +63,9 @@ function LoginPage() {
   return (
     <div className="cw-live-login">
       <div className="cw-live-login-card">
-        <h1>Cowork for Teams</h1>
+        <h1>{t('card.title')}</h1>
         <p style={{ color: 'var(--cw-ink-3)', marginTop: 0 }}>
-          {isSignup
-            ? '새 계정을 만듭니다. 가입 후 personal project가 자동으로 생성됩니다.'
-            : '로그인하여 시작하세요.'}
+          {isSignup ? t('card.tagline_signup') : t('card.tagline_login')}
         </p>
 
         <div role="tablist" aria-label="auth mode" style={{
@@ -71,17 +77,17 @@ function LoginPage() {
           background: 'var(--cw-paper-3)',
           borderRadius: 999,
         }}>
-          <ModeTab active={!isSignup} onClick={() => switchMode('login')}>로그인</ModeTab>
-          <ModeTab active={isSignup} onClick={() => switchMode('signup')}>회원가입</ModeTab>
+          <ModeTab active={!isSignup} onClick={() => switchMode('login')}>{t('modes.login')}</ModeTab>
+          <ModeTab active={isSignup} onClick={() => switchMode('signup')}>{t('modes.signup')}</ModeTab>
         </div>
 
         <form onSubmit={onSubmit}>
           <label>
-            Backend URL
-            <input value={baseUrl} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:8080" />
+            {t('fields.backend_url')}
+            <input value={baseUrl} onChange={(e) => setUrl(e.target.value)} placeholder={t('fields.backend_url_placeholder')} />
           </label>
           <label>
-            Username
+            {t('fields.username')}
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -92,16 +98,16 @@ function LoginPage() {
           </label>
           {isSignup && (
             <label>
-              Display name <span style={{ fontWeight: 400, color: 'var(--cw-ink-4)', textTransform: 'none', letterSpacing: 0 }}>(선택)</span>
+              {t('fields.display_name')} <span style={{ fontWeight: 400, color: 'var(--cw-ink-4)', textTransform: 'none', letterSpacing: 0 }}>{t('fields.display_name_optional')}</span>
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="팀원들이 보게 될 이름"
+                placeholder={t('fields.display_name_placeholder')}
               />
             </label>
           )}
           <label>
-            Password
+            {t('fields.password')}
             <input
               type="password"
               value={password}
@@ -113,16 +119,19 @@ function LoginPage() {
           {error && <div className="cw-live-login-error">{error}</div>}
           <button type="submit" className="cw-btn-primary wide" disabled={submitting}>
             {submitting
-              ? (isSignup ? '가입 중…' : '로그인 중…')
-              : (isSignup ? '회원가입 후 시작' : '로그인')}
+              ? (isSignup ? t('submit.signup_busy') : t('submit.login_busy'))
+              : (isSignup ? t('submit.signup') : t('submit.login'))}
           </button>
         </form>
 
         <p style={{ color: 'var(--cw-ink-3)', fontSize: 12, marginTop: 18 }}>
           {isSignup ? (
-            <>이미 계정이 있다면 <ModeLink onClick={() => switchMode('login')}>로그인</ModeLink>으로 돌아가세요.</>
+            <>{t('switch.to_login_prefix')} <ModeLink onClick={() => switchMode('login')}>{t('switch.to_login_link')}</ModeLink></>
           ) : (
-            <>처음이세요? <ModeLink onClick={() => switchMode('signup')}>회원가입</ModeLink>으로 시작할 수 있어요. 데모 계정: <code>olive / cowork-demo</code></>
+            <>
+              {t('switch.to_signup_prefix')} <ModeLink onClick={() => switchMode('signup')}>{t('switch.to_signup_link')}</ModeLink>
+              {' '}{t('switch.demo_label')} <code>olive / cowork-demo</code>
+            </>
           )}
         </p>
       </div>
@@ -178,20 +187,4 @@ function ModeLink({ onClick, children }: { onClick: () => void; children: React.
       {children}
     </button>
   );
-}
-
-function messageOf(err: unknown, mode: Mode): string {
-  if (err instanceof ApiError) {
-    if (mode === 'signup') {
-      if (err.status === 409) return '이미 사용 중인 username입니다. 다른 username을 시도해 주세요.';
-      if (err.status === 422 || err.status === 400) return `입력 검증 실패: ${err.message}`;
-    }
-    if (mode === 'login') {
-      if (err.status === 401) return '아이디 또는 비밀번호가 올바르지 않습니다.';
-      if (err.status === 403) return '비활성화된 계정입니다.';
-    }
-    return `${err.status} — ${err.message}`;
-  }
-  if (err instanceof Error) return err.message;
-  return mode === 'signup' ? 'Signup failed' : 'Login failed';
 }

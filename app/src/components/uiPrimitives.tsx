@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from './Icon';
 import { intentMeta, shareMeta } from '../domain/metadata';
 import type { SessionIntent, ShareMode, User } from '../domain/types';
@@ -70,8 +71,37 @@ export function InfoRow({ icon, title, meta, children }: { icon: IconName; title
 
 export function ActivityRow({ title, date, children }: { title: string; date: string; children: ReactNode }) { return <article className="cw-activity-row"><span><Icon name="recap" /></span><div><b>{title}</b><p>{children}</p></div><time>{date}</time></article>; }
 
-export function IntentBadge({ intent }: { intent: SessionIntent }) { return <span className="cw-intent-badge"><IntentIcon intent={intent} force />{intentMeta[intent].label}</span>; }
+export function IntentBadge({ intent }: { intent: SessionIntent }) {
+  const { t } = useTranslation('common');
+  return (
+    <span className="cw-intent-badge">
+      <IntentIcon intent={intent} force />
+      {t(`intent.${intent}.label`)}
+    </span>
+  );
+}
 
-export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?: boolean }) { return <span className={`cw-share-pill ${shareMeta[mode].className}`}><Icon name={shareMeta[mode].icon} size={compact ? 11 : 12} />{compact ? shareMeta[mode].shortLabel : shareMeta[mode].label}</span>; }
+export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?: boolean }) {
+  const { t } = useTranslation('common');
+  const labelKey = compact ? `share.${mode}.short_label` : `share.${mode}.label`;
+  return (
+    <span className={`cw-share-pill ${shareMeta[mode].className}`}>
+      <Icon name={shareMeta[mode].icon} size={compact ? 11 : 12} />
+      {t(labelKey)}
+    </span>
+  );
+}
 
-export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mode: ShareMode) => void }) { return <label className={`cw-share-select ${shareMeta[mode].className}`}><Icon name={shareMeta[mode].icon} /><select value={mode} onChange={(event) => onChange(event.target.value as ShareMode)}>{(Object.keys(shareMeta) as ShareMode[]).map((key) => <option key={key} value={key}>{shareMeta[key].label}</option>)}</select></label>; }
+export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mode: ShareMode) => void }) {
+  const { t } = useTranslation('common');
+  return (
+    <label className={`cw-share-select ${shareMeta[mode].className}`}>
+      <Icon name={shareMeta[mode].icon} />
+      <select value={mode} onChange={(event) => onChange(event.target.value as ShareMode)}>
+        {(Object.keys(shareMeta) as ShareMode[]).map((key) => (
+          <option key={key} value={key}>{t(`share.${key}.label`)}</option>
+        ))}
+      </select>
+    </label>
+  );
+}

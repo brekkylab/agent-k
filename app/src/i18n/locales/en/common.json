@@ -26,6 +26,30 @@
     "english": "English",
     "korean": "한국어"
   },
+  "intent": {
+    "general": { "label": "General", "note": "Start freely" },
+    "analysis": { "label": "Analysis", "note": "Evidence-based judgement" },
+    "brainstorm": { "label": "Brainstorm", "note": "Explore options" },
+    "writing": { "label": "Writing", "note": "Draft content" },
+    "recap": { "label": "Recap", "note": "Decisions & summary" }
+  },
+  "share": {
+    "private": {
+      "label": "Private",
+      "short_label": "Private",
+      "desc": "Only visible to you"
+    },
+    "shared_readonly": {
+      "label": "Read-only share",
+      "short_label": "Read",
+      "desc": "Teammates can read"
+    },
+    "shared_chat": {
+      "label": "Chat together",
+      "short_label": "Chat",
+      "desc": "Teammates and AI reply together"
+    }
+  },
   "errors": {
     "unknown": "Something went wrong. Please try again."
   }

@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, streamMessage } from '@/api/messages';
 import { getProject, listMembers } from '@/api/projects';
@@ -12,7 +13,6 @@ import { Icon } from '@/components/Icon';
 import { Avatar, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
-import { shareMeta } from '@/domain/metadata';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { AI_USER, SUBAGENT_PREFIX } from '@/api/transformers';
 import { formatMessageTime, formatMessageTimeFull } from '@/lib/formatMessageTime';
@@ -36,6 +36,7 @@ function stripSubagentPrefix(name: string): string {
 
 function SessionPage() {
   const { projectSlug, sessionPrefix } = Route.useParams();
+  const { t } = useTranslation('common');
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
@@ -340,7 +341,7 @@ function SessionPage() {
           : <p>No pinned files yet.</p>}
         <h3>Access</h3>
         {sess && <SharePill mode={sess.shareMode} />}
-        {sess && <p>{shareMeta[sess.shareMode].desc}</p>}
+        {sess && <p>{t(`share.${sess.shareMode}.desc`)}</p>}
         <h3>Session</h3>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>

@@ -26,6 +26,30 @@
     "english": "English",
     "korean": "한국어"
   },
+  "intent": {
+    "general": { "label": "일반", "note": "자유롭게 시작" },
+    "analysis": { "label": "분석", "note": "자료 기반 판단" },
+    "brainstorm": { "label": "브레인스토밍", "note": "옵션 탐색" },
+    "writing": { "label": "작성", "note": "초안 생성" },
+    "recap": { "label": "정리", "note": "결정/요약" }
+  },
+  "share": {
+    "private": {
+      "label": "비공개",
+      "short_label": "비공개",
+      "desc": "나만 봐요"
+    },
+    "shared_readonly": {
+      "label": "읽기 공유",
+      "short_label": "읽기",
+      "desc": "팀은 읽을 수 있어요"
+    },
+    "shared_chat": {
+      "label": "함께 대화",
+      "short_label": "대화",
+      "desc": "팀과 AI가 함께 답해요"
+    }
+  },
   "errors": {
     "unknown": "오류가 발생했어요. 다시 시도해 주세요."
   }
