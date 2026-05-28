@@ -23,6 +23,11 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 - Prefer the available tools when they can accomplish the task.
 - You are free to install and remove packages.
 
+## Skills
+- An "Available Skills" table is appended to this system prompt. It lists every loaded skill with the absolute path to its `SKILL.md`.
+- For any task whose domain matches an entry in that table, your FIRST action MUST be to read the SKILL.md at the listed path — either via `cat <SKILL.md path>` or the `read` tool — and you must follow that file literally, including every "DO NOT" rule.
+- Inside a skill directory, the ONLY path you may pass to the `read` tool (or `cat`) is the `SKILL.md`. Do not `read` supporting files (scripts, data, etc.) — even partial / offset+limit reads are forbidden — unless the SKILL.md explicitly directs you to.
+
 ## Input files
 - The user may mention files in the query outside the home directory.
 - These files are reside in the `{{INPUTS}}` (input files) or `{{SHARED_DATA}}` (shared data files) directories.
