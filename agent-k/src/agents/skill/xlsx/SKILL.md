@@ -1,6 +1,6 @@
 ---
 name: xlsx
-description: Create or edit any Excel .xlsx file — single sheet or multi-sheet, with formulas, charts, conditional formatting, named ranges, print setup, currency/date formatting, etc. — so it opens cleanly in Excel (no "file corrupted"/recovery dialog, no #REF!/#NAME?/#DIV/0! errors). Use this for ANY task that produces or modifies an .xlsx file.
+description: Create or edit any Excel .xlsx file — multi-sheet workbooks with formulas, charts, conditional formatting, named ranges, currency/date formatting, etc. — that opens cleanly in Excel (no "file corrupted" dialog, no #REF!/#NAME?/#DIV/0! errors). Use for any task that generates or modifies an .xlsx file.
 ---
 
 # XLSX Creation Skill
@@ -30,6 +30,18 @@ from xlsx_skill import (
     XLSXReportSkill, Formula, verify_formulas, read_computed, autofit_columns
 )
 ```
+
+## Two workflows
+
+| Task | What to use |
+|---|---|
+| **Create a new `.xlsx`** | `XLSXReportSkill` builder below (add_sheet → save). |
+| **Edit an existing `.xlsx`** | `openpyxl.load_workbook(path)` directly + raw openpyxl APIs (`ws.insert_cols`, `ws.merge_cells`, cell assignment, etc.). **Do NOT** try to recreate the file with `XLSXReportSkill` — it's for new files only and will lose the existing charts/styles. |
+
+**In both cases**, after `save()` you must run `autofit_columns(path)` and
+`verify_formulas(path)` (see **Final steps** below). For edits this is
+especially important — they're how you confirm your column shifts /
+formula rewrites / named-range updates didn't break anything.
 
 ## `XLSXReportSkill`
 

@@ -160,11 +160,11 @@ pub async fn get_coworker_agent_with_opts(
             [
                 FileEntry::new(
                     skill_dir.join("SKILL.md"),
-                    include_bytes!("skill/SKILL.md").to_vec(),
+                    include_bytes!("skill/xlsx/SKILL.md").to_vec(),
                 ),
                 FileEntry::new(
                     skill_dir.join("xlsx_skill.py"),
-                    include_bytes!("skill/script/xlsx_skill.py").to_vec(),
+                    include_bytes!("skill/xlsx/script/xlsx_skill.py").to_vec(),
                 ),
             ],
         );
