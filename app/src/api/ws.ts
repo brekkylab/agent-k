@@ -1,5 +1,5 @@
 import { ApiError, getBaseUrl, getToken, notifyUnauthorized } from './client';
-import { getMe } from './auth';  // Task 2에서 사용, 여기서 미리 추가
+import { getMe } from './auth';
 
 export interface SessionTitleUpdatedEvent {
   type: 'session_title_updated';
@@ -16,9 +16,10 @@ function toWsUrl(httpBase: string): string {
   return httpBase.replace(/^https?/, (m) => (m === 'https' ? 'wss' : 'ws'));
 }
 
-// 앱이 정의한 WS 인증 실패 코드 (4401만 — 1008은 프록시가 발생시키는 범용 코드라 제외)
+// App-defined WS auth failure code. 1008 (Policy Violation) is intentionally excluded
+// as proxies and firewalls emit it for non-auth reasons.
 const AUTH_CLOSE_CODES = new Set([4401]);
-// 접속이 이 시간(ms) 이내에 끊기면 short-lived로 간주
+// Connections that close within this window are considered short-lived.
 const RAPID_CLOSE_THRESHOLD_MS = 2000;
 const RAPID_CLOSE_MAX = 3;
 
@@ -29,14 +30,13 @@ class AppWebSocketManager {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private active = false;
   private rapidCloseCount = 0;
-  private connectionStartTime = 0;  // lastCloseTime 대체: WS 생성 시점 기록
+  private connectionStartTime = 0;  // replaces lastCloseTime: records when the socket was created
 
   connect(token: string): void {
     this.active = true;
-    // early-return 이후에 connectionStartTime 설정 — OPEN/CONNECTING이면 새 소켓 없음
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
     const url = `${toWsUrl(getBaseUrl())}/ws?token=${encodeURIComponent(token)}`;
-    this.connectionStartTime = Date.now();  // 실제 소켓 생성 직전에 기록
+    this.connectionStartTime = Date.now();
     const ws = new WebSocket(url);
     this.ws = ws;
 
@@ -50,38 +50,38 @@ class AppWebSocketManager {
     ws.onclose = (evt) => {
       if (!this.active) return;
 
-      // onclose가 발생한 시점에 this.ws를 null로 — 재연결 시 early-return 방지
+      // Clear the socket reference so the reconnect call doesn't hit the early-return guard.
       this.ws = null;
 
-      // 앱 정의 인증 실패 코드 — 재연결 중단 후 HTTP fallback으로 에러 분류
+      // App-defined auth close code — stop reconnecting and classify the failure via HTTP.
       if (AUTH_CLOSE_CODES.has(evt.code)) {
         this.active = false;
         getMe().then(
           () => {
-            // WS는 닫혔지만 HTTP 인증은 통과 → WS 네트워크 문제, 로그아웃 안 함
+            // WS closed but HTTP auth passed — treat as a transient WS flap, not an auth failure.
           },
           (err: unknown) => {
             if (err instanceof ApiError && err.status === 401) {
               notifyUnauthorized(401, { error: err.message });
             }
-            // 5xx, 네트워크 오류: 로그아웃 안 함
+            // 5xx or network error: do not force logout.
           }
         );
         return;
       }
 
-      // 접속 유지 시간으로 short-lived 여부 판단
+      // Increment counter if the connection was short-lived; reset if it was stable.
       const lifetime = Date.now() - this.connectionStartTime;
       if (lifetime < RAPID_CLOSE_THRESHOLD_MS) {
         this.rapidCloseCount += 1;
       } else {
-        this.rapidCloseCount = 0;  // 충분히 오래 살았으면 카운터 리셋
+        this.rapidCloseCount = 0;
       }
 
       if (this.rapidCloseCount >= RAPID_CLOSE_MAX && getToken()) {
         this.active = false;
         getMe().then(
-          () => { /* HTTP 통과 → WS만 불안정, 로그아웃 안 함 */ },
+          () => { /* HTTP auth passed — WS instability only, do not force logout. */ },
           (err: unknown) => {
             if (err instanceof ApiError && err.status === 401) {
               notifyUnauthorized(401, { error: err.message });
@@ -102,7 +102,7 @@ class AppWebSocketManager {
 
   disconnect(): void {
     this.active = false;
-    this.rapidCloseCount = 0;  // 명시적 disconnect 시 카운터 리셋
+    this.rapidCloseCount = 0;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

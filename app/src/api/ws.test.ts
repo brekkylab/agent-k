@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getMe } from './auth';
 
-// client 모듈 전체를 mock — ws.ts가 getToken, notifyUnauthorized를 import하므로
+// Mock the entire client module — ws.ts imports getToken and notifyUnauthorized from it.
 vi.mock('./client', () => ({
   getBaseUrl: () => 'http://localhost:8080',
   getToken: vi.fn(() => 'test-token'),
@@ -13,7 +13,7 @@ vi.mock('./client', () => ({
   },
 }));
 
-// auth 모듈 mock (Task 2에서 사용)
+// Mock the auth module so getMe can be controlled per test.
 vi.mock('./auth', () => ({
   getMe: vi.fn(),
 }));
@@ -41,7 +41,7 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.mocked(notifyUnauthorized).mockClear();
   vi.mocked(getToken).mockReturnValue('test-token');
-  // 기본값: getMe는 401 'invalid token'으로 reject (rapid-close 테스트에서 notifyUnauthorized 호출 유지)
+  // Default: getMe rejects with 401 so rapid-close tests still see notifyUnauthorized called.
   const { ApiError } = await import('./client');
   vi.mocked(getMe).mockRejectedValue(new ApiError(401, 'invalid token', { error: 'invalid token' }));
   // @ts-expect-error mock
@@ -67,27 +67,27 @@ describe('AppWebSocketManager rapid-close heuristic', () => {
     const mgr = new AppWebSocketManager();
     mgr.connect('token');
 
-    // 1차 연결 — 500ms 후 close (threshold 2000ms 미만)
+    // 1st connection — closes after 500ms (below 2000ms threshold)
     expect(wsInstances).toHaveLength(1);
     vi.advanceTimersByTime(500);
     wsInstances[0].onclose?.({ code: 1006, reason: '' });
 
-    // 3000ms reconnect timer
+    // wait out the 3000ms reconnect timer
     vi.advanceTimersByTime(3000);
     expect(wsInstances).toHaveLength(2);
 
-    // 2차 연결 — 500ms 후 close
+    // 2nd connection — closes after 500ms
     vi.advanceTimersByTime(500);
     wsInstances[1].onclose?.({ code: 1006, reason: '' });
 
     vi.advanceTimersByTime(3000);
     expect(wsInstances).toHaveLength(3);
 
-    // 3차 연결 — 500ms 후 close → RAPID_CLOSE_MAX(3) 도달
+    // 3rd connection — closes after 500ms → reaches RAPID_CLOSE_MAX (3)
     vi.advanceTimersByTime(500);
     wsInstances[2].onclose?.({ code: 1006, reason: '' });
 
-    // getMe()가 async이므로 microtask 소진 후 확인
+    // flush microtask so the async getMe() rejection is processed
     await Promise.resolve();
 
     expect(notifyUnauthorized).toHaveBeenCalledOnce();
@@ -97,21 +97,21 @@ describe('AppWebSocketManager rapid-close heuristic', () => {
     const mgr = new AppWebSocketManager();
     mgr.connect('token');
 
-    // 1차 연결 — short-lived
+    // 1st connection — short-lived
     vi.advanceTimersByTime(500);
     wsInstances[0].onclose?.({ code: 1006, reason: '' });
 
-    // 2차 연결 — 3000ms 살다가 종료 (RAPID_CLOSE_THRESHOLD_MS=2000ms 초과 → 카운터 리셋)
-    vi.advanceTimersByTime(3000); // reconnect timer 소진
-    vi.advanceTimersByTime(3000); // 이 접속의 lifetime = 3000ms > 2000ms threshold
+    // 2nd connection — lives for 3000ms (> RAPID_CLOSE_THRESHOLD_MS=2000ms → counter resets)
+    vi.advanceTimersByTime(3000); // exhaust the reconnect timer
+    vi.advanceTimersByTime(3000); // this connection's lifetime = 3000ms > 2000ms threshold
     wsInstances[1].onclose?.({ code: 1006, reason: '' });
 
-    // 3차 연결 — short-lived again (count reset → only 1, not 3)
+    // 3rd connection — short-lived again (count starts from 1, not 3)
     vi.advanceTimersByTime(3000);
     vi.advanceTimersByTime(500);
     wsInstances[2].onclose?.({ code: 1006, reason: '' });
 
-    // notifyUnauthorized 아직 호출되면 안 됨
+    // counter is only 1 — notifyUnauthorized must not have been called
     expect(notifyUnauthorized).not.toHaveBeenCalled();
   });
 
@@ -121,7 +121,7 @@ describe('AppWebSocketManager rapid-close heuristic', () => {
 
     wsInstances[0].onclose?.({ code: 1008, reason: '' });
 
-    // rapid-close 카운터가 1이 되었을 뿐, notifyUnauthorized 즉시 호출 안 됨
+    // counter is 1, but RAPID_CLOSE_MAX not reached — notifyUnauthorized must not fire
     expect(notifyUnauthorized).not.toHaveBeenCalled();
   });
 

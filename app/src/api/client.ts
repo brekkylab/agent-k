@@ -15,8 +15,8 @@ export function setUnauthorizedHandler(cb: (reason: UnauthorizedReason) => void)
   unauthorizedTriggered = false;
 }
 
-// 백엔드 출처: backend/src/auth/jwt.rs — ExpiredSignature 에러 메시지
-// 이 문자열이 변경되면 만료 배너가 표시되지 않음 (backend error_code 필드 추가로 개선 예정)
+// Source: backend/src/auth/jwt.rs — the error message emitted on ExpiredSignature.
+// If this string changes the expired-session banner will silently stop appearing.
 const JWT_EXPIRED_MESSAGE = 'token has expired';
 
 export function notifyUnauthorized(status: number, body: unknown, skipAuth?: boolean): void {
