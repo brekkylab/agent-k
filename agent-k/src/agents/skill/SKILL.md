@@ -17,14 +17,14 @@ with zero formula errors (`#REF!` / `#DIV/0!` / `#VALUE!` / `#N/A` /
 Full implementation is in [`xlsx_skill.py`](xlsx_skill.py). **Import it and
 call it as documented — do NOT open or read the source.** This reference
 already covers every public signature, the auto-config behavior
-(`configure_sheet`: freeze/filter/widths/heights), the visual-width column
+(`configure_sheet`: widths/heights), the visual-width column
 sizing, and the sheet-name quoting rules. Reading the ~500-line source
 only burns tokens and adds nothing — **only** open it as a last resort if
 something genuinely fails and this reference doesn't explain it.
 
 ```python id="skill_setup"
 import sys
-sys.path.insert(0, "artifacts")  # so `xlsx_skill` is importable
+sys.path.insert(0, "/workspace/skills/xlsx")  # so `xlsx_skill` is importable
 
 from xlsx_skill import (
     XLSXReportSkill, Formula, verify_formulas, read_computed, autofit_columns
@@ -47,7 +47,7 @@ Stateful builder for a workbook. One instance per output `.xlsx`.
 `rows` cells may be primitives (`int`, `str`, `date`, `datetime`) or
 formula strings starting with `=`. ISO date strings (`YYYY-MM-DD`) are
 auto-converted to real date values. Row layout (title r1 / spacer r2 /
-header r3 / data r4+) is shown in the **Row heights** table below.
+header r3 / data r4+); see **Row heights** below.
 
 ### Final steps after `save()` — always run these
 
@@ -126,18 +126,11 @@ ws["B3"].fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type=
 ws["B3"].font = Font(bold=True, size=14, color="FFFFFF")
 ```
 
-### Row heights (applied by `configure_sheet`)
+### Row heights (auto)
 
-| Constant | Pt | Applied to |
-|---|---|---|
-| `ROW_HEIGHT_TITLE` | 28 | Row 1 (title) |
-| `ROW_HEIGHT_SPACER` | 10 | Row 2 (spacer) |
-| `ROW_HEIGHT_HEADER` | 22 | Row 3 (header) |
-| `ROW_HEIGHT_DATA` | 20 | Rows 4+ (data) |
-| `ROW_HEIGHT_SUMMARY` | 22 | Reuse for your summary/total rows |
-
-Override after `add_sheet` only when content truly needs more (multi-line
-wrapped text, KPI cards, etc.):
+`configure_sheet` sets title 28 / spacer 10 / header 22 / data 20 pt, and
+**auto-grows any row with multi-line (`\n`) text** so wrapped headers/labels
+are not clipped. Override only for special rows:
 
 ```python
 ws.row_dimensions[4].height = 40   # taller KPI card row
@@ -145,62 +138,35 @@ ws.row_dimensions[4].height = 40   # taller KPI card row
 
 ### Auto-configured by `configure_sheet`
 
-* `freeze_panes = "A4"`
-* `auto_filter.ref = "A3:{last_col}{max_row}"`
 * Column widths (visual-width aware, see below)
 * Row heights per the table above
 
-Override after `add_sheet` when the layout differs (dashboard sheets,
-multi-block layouts, etc.):
-
-```python
-ws.freeze_panes = None        # dashboard / KPI-only sheet
-ws.freeze_panes = "A3"        # fix only the title row
-ws.auto_filter.ref = None     # no filter
-```
+`configure_sheet` does **not** set `auto_filter` or `freeze_panes` — both
+auto-features misbehaved on report layouts (filter dropdowns on dashboards,
+freeze lines splitting data blocks) and are disabled. Do not add them back.
 
 ### Column width policy (auto)
 
-Visual width via `unicodedata.east_asian_width()` (CJK / Hangul /
-full-width Latin = 2). Only the **main data block** (row 3 → first
-all-blank spacer row) is measured; title row and summary block below
-are excluded. Formula cells can't be evaluated here, so they're sized to
-`COLUMN_WIDTH_FORMULA_DEFAULT` (a guess) — see `autofit_columns` below to
-fix that.
-
-Width = `clamp(visual + PADDING, MIN, MAX)`.
-
-| Constant | Default |
-|---|---|
-| `COLUMN_WIDTH_MIN` | 10 |
-| `COLUMN_WIDTH_MAX` | 40 |
-| `COLUMN_WIDTH_PADDING` | 4 |
-| `COLUMN_WIDTH_FORMULA_DEFAULT` | 8 |
-
-For auto-exclude to work, leave **one blank row** between data and
-summary block. Override after `add_sheet`:
+`configure_sheet` sizes columns to the visual width (CJK / full-width = 2)
+of the **main data block** (row 3 → first all-blank row); the title and any
+summary block below a blank row are excluded — so leave **one blank row**
+between data and a summary block. Formula cells can't be measured yet and
+are only guessed (→ `######`); the real fix is **`autofit_columns(path)`
+after `save()`** (see **Final steps**). Override a column directly:
 
 ```python id="skill_colwidth_override"
 ws.column_dimensions["C"].width = 18           # fixed width
-ws.auto_filter.ref = f"A3:J{DATA_END}"         # exclude summary rows
 ```
 
-This auto-width only *guesses* formula columns (→ `######`). The real fix
-is `autofit_columns(path)` after `save()` — see **Final steps** above.
+### ⚠️ Excel Table + named ranges
 
-### ⚠️ Excel Table + named ranges + autoFilter
-
-Adding an Excel Table (`openpyxl.worksheet.table.Table`) to a sheet that
-`add_sheet` already configured causes Excel's **"The file is corrupted"**
-dialog from two collisions:
-
-1. **Table column names ↔ workbook named ranges** with the same name.
-2. **Triple autoFilter** on the same range.
+Adding an Excel Table (`openpyxl.worksheet.table.Table`) whose column name
+collides with a workbook **named range** of the same name triggers Excel's
+**"The file is corrupted"** dialog.
 
 ```text
 ✅ When using a Table:
    - prefix named ranges: DefinedName("R_Region", ...)
-   - clear the sheet-level filter: ws.auto_filter.ref = None
 ```
 
 ### Charts — how to add one
@@ -210,7 +176,7 @@ The anchor is a **plain cell string** (`"B8"`). `add_chart` builds the
 / `XDRPositiveSize2D` by hand.
 
 ```python id="skill_chart"
-from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+from openpyxl.chart import BarChart, LineChart, PieChart, DoughnutChart, Reference
 
 chart = BarChart()                 # or LineChart() / PieChart()
 chart.type = "col"                 # BarChart only: "col"=vertical, "bar"=horizontal
@@ -219,6 +185,10 @@ chart.title = "Monthly Sales"
 chart.add_data(Reference(ws, min_col=2, min_row=3, max_row=15), titles_from_data=True)
 # categories = the label column, WITHOUT the header row
 chart.set_categories(Reference(ws, min_col=1, min_row=4, max_row=15))
+# ⚠️ REQUIRED on every BarChart / LineChart (see warning below):
+chart.x_axis.delete = False        # else Excel hides the axis AND its labels
+chart.y_axis.delete = False
+chart.x_axis.numFmt = "yyyy-mm"    # date categories: match the cells' format
 chart.width, chart.height = 12, 7  # centimeters (see placement rule below)
 ws.add_chart(chart, "B8")          # anchor = cell string; add_chart builds the anchor
 ```
@@ -226,10 +196,22 @@ ws.add_chart(chart, "B8")          # anchor = cell string; add_chart builds the 
 - **Multiple series**: widen the data `Reference` across several value
   columns (`min_col`..`max_col`); each column becomes one series.
 - **LineChart**: same API, no `.type`.
-- **PieChart**: one series only; `set_categories` = the slice labels.
-- **Axis number format**: `chart.y_axis.numFmt = "₩#,##0"`.
+- **PieChart**: one series only; `set_categories` = the slice labels. A
+  pie has no `x_axis`/`y_axis`, so the `.delete`/`numFmt` lines above are
+  Bar/Line only — skip them for pies.
+- **DoughnutChart**: same as Pie (one series, `set_categories` = labels, no
+  axes — skip `.delete`/`numFmt`). Optional `chart.holeSize = 50` (0–90) sets
+  the hole; good for 구성비율 / composition dashboards.
+- **Axis number format**: `chart.y_axis.numFmt = "₩#,##0"` (values),
+  `chart.x_axis.numFmt = "yyyy-mm"` (date categories).
 
-`skill.save()` auto-resolves overlaps afterward (see placement rule below).
+### ⚠️ Axis labels vanish unless `axis.delete = False`
+
+openpyxl leaves `x_axis.delete` / `y_axis.delete` unset, which Excel treats
+as **auto-hide the axis** — taking the category (date) labels with it (the
+chart shows a bare `1, 2, 3…` or nothing). The snippet above already sets
+both to `False` on every Bar/Line chart — keep them. This is the #1 cause of
+"the dates don't show up". Pies have no axes, so skip it there.
 
 ### ⚠️ Chart data rows — don't hide them
 
@@ -239,6 +221,19 @@ chart render **empty**.
 ```text
 ❌ ws.row_dimensions[r].hidden = True   # for rows referenced by a chart
 ✅ leave helper rows visible (on a separate sheet, or below the visible content)
+```
+
+### ⚠️ After save: confirm the chart actually has data
+
+A chart whose value `Reference` points one row/column past the data (an
+off-by-one, e.g. referencing the empty total row below the last month)
+renders as an **empty** chart — `verify_formulas` won't catch it because
+the cells are blank, not erroneous. After `save()` + `autofit_columns()`,
+spot-check the chart's source cells with `read_computed`:
+
+```python
+vals = read_computed("artifacts/report.xlsx", {"대차대조표": ["AC24","AC28"]})
+assert all(v is not None for v in vals["대차대조표"].values()), "pie source empty → wrong row?"
 ```
 
 ### ⚠️ Chart placement — avoid overlap
@@ -272,24 +267,18 @@ hold the data the chart reads, the data is invisible to the user.
 `xlsx_skill.save()` warns on stderr if any populated cell falls inside
 a chart's footprint.
 
-### ⚠️ Freeze pane — line must not split a data block
+### ⚠️ Freeze panes — don't use them
 
-The row directly above the freeze line must be a **blank spacer** (or
-the freeze line must sit just below a lone header row). Otherwise the
-line cuts through a content block and the data ends up half-frozen,
-half-scrolling.
+Do **not** set `ws.freeze_panes`. The auto freeze kept splitting
+multi-block / title+subtitle layouts into half-frozen, half-scrolling
+sheets, so it is disabled. Leave panes unfrozen — `configure_sheet`
+already sets `freeze_panes = None`; never override it back to `"A4"`,
+`"A3"`, etc.
 
 ```text
-❌ Helper table at P3:Q15 + freeze=A7
-   → rows 3..6 frozen, rows 7..15 scroll → same table split
-
-✅ Move freeze above the table (e.g. A3, only title fixed),
-   or move the table to start at/after the freeze line,
-   or drop freeze on dashboard-style sheets.
+❌ ws.freeze_panes = "A4"     # reintroduces the split-block problem
+✅ leave it as None
 ```
-
-`xlsx_skill.save()` warns if the row above the freeze line is part of
-a multi-row data block.
 
 ### ⚠️ PivotTable — don't create with openpyxl
 

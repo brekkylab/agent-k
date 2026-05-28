@@ -265,7 +265,6 @@ class XLSXReportSkill:
     ROW_HEIGHT_TITLE = 28
     ROW_HEIGHT_HEADER = 22
     ROW_HEIGHT_DATA = 20
-    ROW_HEIGHT_SUMMARY = 22
     ROW_HEIGHT_SPACER = 10
 
     COLUMN_WIDTH_MIN = 10
@@ -360,10 +359,10 @@ class XLSXReportSkill:
         return max_length
 
     def configure_sheet(self, ws):
-        ws.freeze_panes = "A4"
+        ws.freeze_panes = None  # don't use freeze panes
 
         last_data_row = self._data_end_row(ws)
-        ws.auto_filter.ref = f"A3:{get_column_letter(ws.max_column)}{last_data_row}"
+        ws.auto_filter.ref = None  # don't use auto filter
 
         for column_cells in ws.columns:
             max_length = self._compute_column_visual_width(column_cells, last_data_row=last_data_row)
@@ -374,11 +373,24 @@ class XLSXReportSkill:
             letter = get_column_letter(column_cells[0].column)
             ws.column_dimensions[letter].width = adjusted_width
 
-        ws.row_dimensions[1].height = self.ROW_HEIGHT_TITLE
+        # Scale each row's height by its tallest multi-line cell so wrapped
+        # text (e.g. a 2-line header like "Opening\n(2024-05)") is not clipped.
+        ws.row_dimensions[1].height = self.ROW_HEIGHT_TITLE * self._row_line_count(ws, 1)
         ws.row_dimensions[2].height = self.ROW_HEIGHT_SPACER
-        ws.row_dimensions[3].height = self.ROW_HEIGHT_HEADER
+        ws.row_dimensions[3].height = self.ROW_HEIGHT_HEADER * self._row_line_count(ws, 3)
         for r in range(4, ws.max_row + 1):
-            ws.row_dimensions[r].height = self.ROW_HEIGHT_DATA
+            ws.row_dimensions[r].height = self.ROW_HEIGHT_DATA * self._row_line_count(ws, r)
+
+    @staticmethod
+    def _row_line_count(ws, r):
+        """Max newline-separated line count among a row's cells (>= 1), so a
+        wrapped multi-line header/label gets a row tall enough to show it."""
+        n = 1
+        for c in ws[r]:
+            v = c.value
+            if isinstance(v, str) and "\n" in v:
+                n = max(n, v.count("\n") + 1)
+        return n
 
     # ----- DEFINED NAMES (named ranges) -----
 
@@ -409,7 +421,6 @@ class XLSXReportSkill:
             self._sanitize_sheet_view(ws)
             self._resolve_chart_overlaps(ws)
             self._warn_chart_data_overlap(ws)
-            self._warn_freeze_split(ws)
         self.wb.save(path)
         return path
 
@@ -469,42 +480,3 @@ class XLSXReportSkill:
                     f"{sample}. Move the chart or relocate the data.",
                     file=sys.stderr,
                 )
-
-    @staticmethod
-    def _warn_freeze_split(ws):
-        """OK if the row above the freeze line is blank, or it's a lone header
-        row (with a blank row above it). NG if a multi-row data block sits
-        across the line."""
-        fp = ws.freeze_panes
-        if not fp:
-            return
-        m = re.match(r"^[A-Z]+(\d+)$", str(fp))
-        if not m:
-            return
-        freeze_row = int(m.group(1))
-        if freeze_row <= 1:
-            return
-
-        def row_has_value(r):
-            return any(
-                ws.cell(row=r, column=c).value is not None
-                for c in range(1, ws.max_column + 1)
-            )
-
-        above = freeze_row - 1
-        if not row_has_value(above):
-            return
-        if above >= 2 and row_has_value(above - 1):
-            hits = [
-                ws.cell(row=above, column=c).coordinate
-                for c in range(1, ws.max_column + 1)
-                if ws.cell(row=above, column=c).value is not None
-            ]
-            sample = ", ".join(hits[:5]) + ("..." if len(hits) > 5 else "")
-            print(
-                f"[xlsx_skill] WARNING: sheet '{ws.title}' freeze pane "
-                f"'{fp}' splits a data block (rows {above - 1} and {above} "
-                f"both populated: {sample}). Move freeze between header and "
-                f"data, or above a blank spacer row.",
-                file=sys.stderr,
-            )

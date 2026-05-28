@@ -1,9 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ailoy::{
     agent::{Agent, AgentSpec},
-    runenv::{RunEnv, SandboxConfig, VolumeMount},
+    runenv::{FileEntry, RunEnv, SandboxConfig, VolumeMount},
 };
+
+/// Where the bundled XLSX skill is materialised inside the sandbox. Kept as a
+/// `const` because `SKILL.md`'s `sys.path.insert(...)` line must match it.
+const XLSX_SKILL_DIR: &str = "/workspace/skills/xlsx";
 
 const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to plan and perform tasks based on the user's query.
 
@@ -40,6 +44,7 @@ pub async fn get_coworker_agent(
     input_dir: impl AsRef<Path>,
     shared_data_dir: impl AsRef<Path>,
     artifacts_dir: impl AsRef<Path>,
+    with_skill: bool,
 ) -> anyhow::Result<Agent> {
     /// Days since 1970-01-01 → (year, month, day). Howard Hinnant's `civil_from_days`.
     fn civil_from_days(days: i64) -> (i64, u32, u32) {
@@ -73,7 +78,7 @@ pub async fn get_coworker_agent(
 
     // Build instruction
     let mut config = SandboxConfig::default();
-    config.image = "brekkylab/agent-k:latest".into();
+    config.image = "brekkylab/agent-k-libreoffice:latest".into();
     config.cpus = 8;
     config.memory_mib = 1024;
     config.workdir = "/workspace".into();
@@ -102,10 +107,31 @@ pub async fn get_coworker_agent(
         .replace("{{ARTIFACTS}}", "/workspace/artifacts")
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
-    let spec = AgentSpec::new(model.as_ref())
+    // XLSX skill: when `with_skill` is true (default), ailoy materialises
+    // the skill files into the sandbox under `XLSX_SKILL_DIR` on first run
+    // and auto-renders an "Available Skills" table into the system
+    // instruction so the model can `cat` it on demand. Pass `with_skill =
+    // false` for a no-skill baseline run (test_case `--no-skill`).
+    let mut spec = AgentSpec::new(model.as_ref())
         .instruction(inst)
         .system_tools()
         .web_search_tool(vec![])
         .max_tokens(32_000);
+    if with_skill {
+        let skill_dir = PathBuf::from(XLSX_SKILL_DIR);
+        spec = spec.skill(
+            &skill_dir,
+            [
+                FileEntry::new(
+                    skill_dir.join("SKILL.md"),
+                    include_bytes!("skill/SKILL.md").to_vec(),
+                ),
+                FileEntry::new(
+                    skill_dir.join("xlsx_skill.py"),
+                    include_bytes!("skill/script/xlsx_skill.py").to_vec(),
+                ),
+            ],
+        );
+    }
     Agent::try_with_runenv(spec, RunEnv::sandbox(config).await?)
 }
