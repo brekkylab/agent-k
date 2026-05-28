@@ -96,7 +96,7 @@ function PickerNode({
 export function FolderPickerDialog({
   title, confirmLabel, entries, sources, pending, onConfirm, onClose,
 }: FolderPickerDialogProps) {
-  const { t } = useTranslation('dialogs');
+  const { t, i18n } = useTranslation('dialogs');
   const { t: tCommon } = useTranslation('common');
   const tree = useMemo(() => buildFolderTree(entries), [entries]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -135,9 +135,12 @@ export function FolderPickerDialog({
   }
 
   const subtitle = sources.length === 1
-    ? t('folder_picker.body_single', {
-        name: `"${josa(nameOf(sources[0]!), '을/를')}"`,
-      })
+    ? (() => {
+        const raw = nameOf(sources[0]!);
+        // josa applies only to Korean; en uses the raw filename verbatim.
+        const decorated = i18n.language === 'ko' ? josa(raw, '을/를') : raw;
+        return t('folder_picker.body_single', { name: `"${decorated}"` });
+      })()
     : t('folder_picker.body_multi', { count: sources.length });
 
   return (

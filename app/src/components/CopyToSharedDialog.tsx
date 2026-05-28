@@ -94,7 +94,7 @@ function PickerNode({
 }
 
 export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, onClose, onDone }: Props) {
-  const { t } = useTranslation('dialogs');
+  const { t, i18n } = useTranslation('dialogs');
   const { t: tCommon } = useTranslation('common');
   const showToast = useToastStore((s) => s.show);
 
@@ -127,6 +127,7 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
     },
     onError: () => showToast(t('copy_to_shared.failure')),
   });
+  const { mutate: copyMutate } = copyMutation;
 
   const pending = copyMutation.isPending;
 
@@ -135,14 +136,14 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
       if (e.key === 'Escape' && !pending) onClose();
       if (e.key === 'Enter' && !pending) {
         e.preventDefault();
-        copyMutation.mutate(selected);
+        copyMutate(selected);
       }
     }
     if (open) {
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
     }
-  }, [open, onClose, copyMutation, pending, selected]);
+  }, [open, onClose, copyMutate, pending, selected]);
 
   const downOnBackdropRef = useRef(false);
 
@@ -156,9 +157,13 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
   }
 
   const subtitle = sourcePaths.length === 1
-    ? t('copy_to_shared.body_single', {
-        name: `"${josa(sourcePaths[0]!.split('/').pop() ?? '', '을/를')}"`,
-      })
+    ? (() => {
+        const raw = sourcePaths[0]!.split('/').pop() ?? '';
+        // josa only makes sense for ko; en should see the raw filename without
+        // a Korean particle stitched onto it.
+        const decorated = i18n.language === 'ko' ? josa(raw, '을/를') : raw;
+        return t('copy_to_shared.body_single', { name: `"${decorated}"` });
+      })()
     : t('copy_to_shared.body_multi', { count: sourcePaths.length });
 
   if (!open) return null;

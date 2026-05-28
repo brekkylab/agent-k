@@ -16,7 +16,10 @@ export const Route = createFileRoute('/login')({
 });
 
 function LoginPage() {
-  const { t } = useTranslation('auth');
+  // Pre-load both namespaces so error-messages.ts keys like
+  // `errors:http.401` resolve immediately on the first failure (otherwise
+  // the errors chunk may not have arrived yet and the key string leaks).
+  const { t } = useTranslation(['auth', 'errors']);
   const navigate = useNavigate();
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
   const [mode, setMode] = useState<Mode>('login');
@@ -129,7 +132,7 @@ function LoginPage() {
             <>{t('switch.to_login_prefix')} <ModeLink onClick={() => switchMode('login')}>{t('switch.to_login_link')}</ModeLink></>
           ) : (
             <>
-              {t('switch.to_signup_prefix')} <ModeLink onClick={() => switchMode('signup')}>{t('switch.to_signup_link')}</ModeLink>
+              {t('switch.to_signup_prefix')} <ModeLink onClick={() => switchMode('signup')}>{t('switch.to_signup_link')}</ModeLink>{t('switch.to_signup_suffix')}
               {' '}{t('switch.demo_label')} <code>olive / cowork-demo</code>
             </>
           )}
