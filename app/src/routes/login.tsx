@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { getMe, login, signupAndLogin } from '@/api/auth';
 import { getBaseUrl, setBaseUrl, getToken, ApiError } from '@/api/client';
@@ -25,6 +25,7 @@ function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [expiredReason, setExpiredReason] = useState<LogoutReason | null>(null);
+  const dismissExpiredReason = useCallback(() => setExpiredReason(null), []);
 
   useEffect(() => {
     const reason = consumeLogoutReason();
@@ -62,7 +63,7 @@ function LoginPage() {
 
   return (
     <div className="cw-live-login">
-      {expiredReason && <SessionExpiredBanner reason={expiredReason} onDismiss={() => setExpiredReason(null)} />}
+      {expiredReason && <SessionExpiredBanner reason={expiredReason} onDismiss={dismissExpiredReason} />}
       <div className="cw-live-login-card">
         <h1>Cowork for Teams</h1>
         <p style={{ color: 'var(--cw-ink-3)', marginTop: 0 }}>
