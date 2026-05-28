@@ -1,1 +1,23 @@
-{}
+{
+  "toast": {
+    "session_created": "New session created",
+    "session_create_failed": "Failed to create session: {{message}}",
+    "session_deleted": "Session deleted",
+    "session_delete_failed": "Failed to delete session: {{message}}",
+    "no_delete_permission": "You don't have permission to delete (creator or project owner only)"
+  },
+  "subtitle_fallback": "Start a session to chat with the agent.",
+  "creating": "Creating…",
+  "new_session": "New session",
+  "schedule_auto": "Schedule auto-trigger",
+  "activity": {
+    "sync_title": "Project synced",
+    "sync_when": "just now",
+    "sync_body": "Sessions and files sync in real time."
+  },
+  "delete_session": {
+    "title": "Delete this session?",
+    "body": "All messages and sandbox resources in \"{{title}}\" will be cleaned up. This cannot be undone.",
+    "confirm": "Delete"
+  }
+}

@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
 import { createSession, deleteSession, listSessions } from '@/api/sessions';
@@ -85,13 +86,14 @@ function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => v
     [setRevealed, setSidebarMode, setExpandedWidth],
   );
 
+  const { t } = useTranslation('common');
   return (
     <div
       className="cw-sidebar-resizer"
       onPointerDown={onPointerDown}
       role="separator"
       aria-orientation="vertical"
-      aria-label="사이드바 폭 조절"
+      aria-label={t('sidebar.resizer_label')}
     />
   );
 }
@@ -111,6 +113,7 @@ function SectionHeader({
   addLabel?: string;
   addDisabled?: boolean;
 }) {
+  const { t } = useTranslation('common');
   return (
     <div className="cw-section-header">
       <button
@@ -133,8 +136,8 @@ function SectionHeader({
           className="cw-section-add"
           onClick={(e) => { e.stopPropagation(); onAdd(); }}
           disabled={addDisabled}
-          aria-label={addLabel ?? `${label} 추가`}
-          title={addLabel ?? `${label} 추가`}
+          aria-label={addLabel ?? t('sidebar.add_label', { label })}
+          title={addLabel ?? t('sidebar.add_label', { label })}
         >
           <Icon name="plus" size={14} />
         </button>
@@ -144,6 +147,7 @@ function SectionHeader({
 }
 
 export function Sidebar() {
+  const { t } = useTranslation('common');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
@@ -240,7 +244,7 @@ export function Sidebar() {
     mutationFn: (projectId: string) => createSession(projectId),
     onSuccess: async (session) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', activeProjectSlug] });
-      showToast('새 세션이 만들어졌습니다');
+      showToast(t('sidebar.toast.session_created'));
       if (activeProject) {
         navigate({
           to: '/projects/$projectSlug/sessions/$sessionPrefix',
@@ -250,7 +254,7 @@ export function Sidebar() {
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
-      showToast(`세션 생성 실패: ${msg}`);
+      showToast(t('sidebar.toast.session_create_failed', { message: msg }));
     },
   });
 
@@ -269,14 +273,14 @@ export function Sidebar() {
       if (activeSessionId === shortSessionId(deletedId) && activeProject) {
         navigate({ to: '/projects/$projectSlug', params: { projectSlug: activeProject.slug } });
       }
-      showToast('세션이 삭제되었습니다');
+      showToast(t('sidebar.toast.session_deleted'));
       setPendingDelete(null);
     },
     onError: (err) => {
       const msg = err instanceof ApiError
-        ? (err.status === 403 ? '삭제 권한이 없습니다 (creator 또는 project owner만 가능)' : err.message)
+        ? (err.status === 403 ? t('sidebar.toast.no_delete_permission') : err.message)
         : err instanceof Error ? err.message : 'delete failed';
-      showToast(`세션 삭제 실패: ${msg}`);
+      showToast(t('sidebar.toast.session_delete_failed', { message: msg }));
     },
   });
 
@@ -301,7 +305,7 @@ export function Sidebar() {
         type="button"
         className="cw-sidebar-hamburger"
         onClick={onHamburgerClick}
-        aria-label={revealed ? '사이드바 닫기' : '사이드바 열기'}
+        aria-label={revealed ? t('sidebar.close') : t('sidebar.open')}
         aria-expanded={revealed}
       >
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={18} height={18} aria-hidden="true">
@@ -335,8 +339,8 @@ export function Sidebar() {
           type="button"
           className="cw-sidebar-collapse-btn"
           onClick={sidebarMode === 'hidden' ? expandSidebar : collapseSidebar}
-          aria-label={sidebarMode === 'hidden' ? '사이드바 고정' : '사이드바 접기'}
-          title={sidebarMode === 'hidden' ? '사이드바 고정' : '사이드바 접기'}
+          aria-label={sidebarMode === 'hidden' ? t('sidebar.pin') : t('sidebar.collapse')}
+          title={sidebarMode === 'hidden' ? t('sidebar.pin') : t('sidebar.collapse')}
         >
           <Icon name={sidebarMode === 'hidden' ? 'chevron-right' : 'chevron-left'} size={16} />
         </button>
@@ -348,7 +352,7 @@ export function Sidebar() {
           expanded={projectsExpanded}
           onToggle={toggleProjects}
           onAdd={projectCreator.open}
-          addLabel="새 Project"
+          addLabel={t('sidebar.new_project')}
         />
         <nav className="cw-projects-list" data-expanded={projectsExpanded ? 'true' : 'false'}>
           {(projectsQuery.data ?? []).map((item) => (
@@ -412,7 +416,7 @@ export function Sidebar() {
               expanded={sessionsExpanded}
               onToggle={toggleSessions}
               onAdd={() => createSessionMutation.mutate(activeProject.id)}
-              addLabel={createSessionMutation.isPending ? '세션 생성 중…' : '새 Session'}
+              addLabel={createSessionMutation.isPending ? t('sidebar.creating_session') : t('sidebar.new_session')}
               addDisabled={createSessionMutation.isPending}
             />
             <div className="cw-sessions-list" data-expanded={sessionsExpanded ? 'true' : 'false'}>
@@ -476,9 +480,9 @@ export function Sidebar() {
 
       {pendingDelete && (
         <ConfirmDialog
-          title="세션을 삭제하시겠어요?"
-          body={`"${pendingDelete.title}"의 모든 메시지와 sandbox 자원이 함께 정리됩니다. 이 작업은 되돌릴 수 없습니다.`}
-          confirmLabel="삭제"
+          title={t('sidebar.delete_session.title')}
+          body={t('sidebar.delete_session.body', { title: pendingDelete.title })}
+          confirmLabel={t('sidebar.delete_session.confirm')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(pendingDelete.id)}

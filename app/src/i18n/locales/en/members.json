@@ -1,1 +1,29 @@
-{}
+{
+  "toast": {
+    "left_project": "You've left the project",
+    "member_removed": "Member removed",
+    "no_permission": "You don't have permission",
+    "failed": "Failed: {{message}}"
+  },
+  "subtitle": "{{project}} · Manage project members.",
+  "loading": "Loading…",
+  "empty": {
+    "first_invite_title": "Invite your first member",
+    "first_invite_hint": "Use the + Invite button to add teammates"
+  },
+  "actions": {
+    "leave_project": "Leave this project"
+  },
+  "fallback": {
+    "title": "Couldn't load member info",
+    "body": "You may not have permission, or the project may be empty."
+  },
+  "remove": {
+    "self_title": "Leave this project?",
+    "self_body": "You will no longer have access to \"{{project}}\".",
+    "member_title": "Remove this member?",
+    "member_body": "\"{{name}}\" will be removed from the project. This cannot be undone.",
+    "self_confirm": "Leave",
+    "member_confirm": "Remove"
+  }
+}

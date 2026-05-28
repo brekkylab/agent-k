@@ -1,1 +1,77 @@
-{}
+{
+  "toast": {
+    "upload_success_one": "파일이 업로드되었습니다",
+    "upload_success_other": "{{count}}개 파일이 업로드되었습니다",
+    "upload_partial": "{{ok}}개 업로드, {{ko}}개 실패",
+    "upload_failed": "업로드 실패: {{message}}",
+    "folder_created": "폴더가 생성되었습니다",
+    "folder_failed": "폴더 생성 실패: {{message}}",
+    "download_failed": "다운로드 실패: {{message}}",
+    "no_files_selected": "다운로드할 파일이 선택되지 않았습니다",
+    "delete_success_one": "삭제되었습니다",
+    "delete_success_other": "{{count}}개 항목이 삭제되었습니다",
+    "delete_partial": "{{ok}}개 삭제, {{ko}}개 실패",
+    "delete_failed": "삭제 실패: {{message}}",
+    "rename_success": "이름이 변경되었습니다",
+    "rename_failed": "이름 변경 실패",
+    "move_success_one": "이동되었습니다",
+    "move_success_other": "{{count}}개 이동되었습니다",
+    "move_partial": "{{ok}}개 이동, {{ko}}개 실패",
+    "rename_or_move_failed": "{{action}} 실패: {{message}}",
+    "rename_action": "이름 변경",
+    "move_action": "이동",
+    "copy_success_one": "복사되었습니다",
+    "copy_success_other": "{{count}}개 복사되었습니다",
+    "copy_partial": "{{ok}}개 복사, {{ko}}개 실패",
+    "copy_failed": "복사 실패: {{message}}",
+    "invalid_move": "자기 자신 또는 하위 폴더로는 이동할 수 없습니다",
+    "failed_entry": "{{path}} — {{error}}",
+    "unnamed": "(이름 없음)"
+  },
+  "ui": {
+    "selected_count": "{{count}}개 선택됨",
+    "move": "이동",
+    "copy": "복사",
+    "clear_selection": "선택 해제",
+    "search_placeholder": "이 프로젝트에서 검색",
+    "view_toggle_label": "보기 방식",
+    "list_view": "리스트 보기",
+    "grid_view": "그리드 보기",
+    "more": "더보기",
+    "move_dropdown": "이동…",
+    "copy_dropdown": "복사…",
+    "expand": "펼치기",
+    "collapse": "접기",
+    "drag_items": "{{count}}개 항목",
+    "empty_folder": "빈 폴더",
+    "item_count": "{{count}}개 항목"
+  },
+  "empty": {
+    "search_no_results": "검색 결과 없음",
+    "search_hint": "다른 키워드로 시도하거나 검색을 지우세요.",
+    "folder_empty_title": "이 폴더는 비어 있습니다",
+    "folder_empty_hint": "파일을 드래그하거나 Upload를 눌러 첫 파일을 올려보세요."
+  },
+  "delete": {
+    "folder_title": "폴더를 삭제하시겠어요?",
+    "folder_body_with_children": "{{name}} 폴더와 그 안의 파일 {{count}}개가 함께 삭제됩니다. 되돌릴 수 없습니다.",
+    "folder_body_empty": "{{name}} 폴더를 삭제합니다. 되돌릴 수 없습니다.",
+    "file_title": "파일을 삭제하시겠어요?",
+    "file_body": "{{name}} 삭제하면 되돌릴 수 없습니다.",
+    "bulk_title": "{{count}}개 항목을 삭제하시겠어요?",
+    "bulk_body_summary": "{{summary}}를 삭제합니다.",
+    "bulk_body_includes": " 폴더 내부 파일 {{count}}개도 함께 삭제됩니다.",
+    "bulk_body_undo": " 되돌릴 수 없습니다.",
+    "summary_folders_one": "폴더 {{count}}개",
+    "summary_folders_other": "폴더 {{count}}개",
+    "summary_files_one": "파일 {{count}}개",
+    "summary_files_other": "파일 {{count}}개",
+    "confirm": "삭제"
+  },
+  "ops": {
+    "move_title": "이동",
+    "move_confirm": "이동",
+    "copy_title": "복사",
+    "copy_confirm": "복사"
+  }
+}

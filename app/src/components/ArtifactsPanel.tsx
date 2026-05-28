@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { deleteDirent, downloadFile, listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
 import { nameOf } from '@/domain/files';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -26,6 +27,7 @@ function formatBytes(bytes: number): string {
 }
 
 export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: ArtifactsPanelProps) {
+  const { t } = useTranslation('session');
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
@@ -75,11 +77,11 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
       void queryClient.invalidateQueries({ queryKey: ['messages', sessionId] });
-      showToast('삭제되었습니다');
+      showToast(t('toast.artifact_deleted'));
       setSelected(new Set());
       setConfirmDelete(null);
     },
-    onError: () => showToast('삭제 실패'),
+    onError: () => showToast(t('toast.artifact_delete_failed')),
   });
 
   const allSelected = entries.length > 0 && entries.every((e) => selected.has(e.path));
@@ -130,14 +132,14 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
               />
               <span style={{ cursor: 'pointer', userSelect: 'none', flex: 1 }} onClick={toggleAll}>
                 {selected.size > 0
-                  ? `${selected.size}개 선택됨`
-                  : (allSelected ? '전체 해제' : '전체 선택')}
+                  ? t('artifacts.select_count', { count: selected.size })
+                  : (allSelected ? t('artifacts.deselect_all') : t('artifacts.select_all'))}
               </span>
               {selected.size > 0 && (
                 <div className="cw-artifact-menu-wrap" ref={menuOpen === 'bulk' ? openMenuRef : null}>
                   <button
                     type="button"
-                    aria-label="선택 항목 작업"
+                    aria-label={t('artifacts.bulk_label')}
                     onClick={() => setMenuOpen(menuOpen === 'bulk' ? null : 'bulk')}
                   >
                     <Icon name="more" size={13} />
@@ -147,7 +149,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
                       {onCopyToShared && (
                         <li>
                           <button type="button" onClick={() => onCopyToShared([...selected])}>
-                            <Icon name="file" size={13} /> 공유 디렉토리로 복사
+                            <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
                           </button>
                         </li>
                       )}
@@ -157,7 +159,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
                           className="cw-file-dropdown-destructive"
                           onClick={() => setConfirmDelete([...selected])}
                         >
-                          <Icon name="trash" size={13} /> 삭제
+                          <Icon name="trash" size={13} /> {t('artifact.delete')}
                         </button>
                       </li>
                     </ul>
@@ -185,7 +187,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
               <div className="cw-artifact-menu-wrap" ref={menuOpen === entry.path ? openMenuRef : null} onClick={(e) => e.stopPropagation()}>
                 <button
                   type="button"
-                  aria-label="더보기"
+                  aria-label={t('artifacts.more')}
                   onClick={() => setMenuOpen(menuOpen === entry.path ? null : entry.path)}
                 >
                   <Icon name="more" size={13} />
@@ -194,19 +196,19 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
                   <ul className="cw-file-dropdown" onClick={() => setMenuOpen(null)}>
                     <li>
                       <button type="button" onClick={() => downloadFile(scope, entry.path)}>
-                        <Icon name="download" size={13} /> 다운로드
+                        <Icon name="download" size={13} /> {t('artifact.download')}
                       </button>
                     </li>
                     {onCopyToShared && (
                       <li>
                         <button type="button" onClick={() => onCopyToShared([entry.path])}>
-                          <Icon name="file" size={13} /> 공유 디렉토리로 복사
+                          <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
                         </button>
                       </li>
                     )}
                     <li>
                       <button type="button" className="cw-file-dropdown-destructive" onClick={() => setConfirmDelete([entry.path])}>
-                        <Icon name="trash" size={13} /> 삭제
+                        <Icon name="trash" size={13} /> {t('artifact.delete')}
                       </button>
                     </li>
                   </ul>
@@ -216,16 +218,16 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
           ))}
 
           {!isLoading && entries.length === 0 && (
-            <EmptyState chip="📦" title="산출물 없음" body="에이전트가 파일을 생성하면 여기에 표시됩니다." />
+            <EmptyState chip="📦" title={t('artifacts.empty_title')} body={t('artifacts.empty_body')} />
           )}
         </>
       )}
 
       {confirmDelete !== null && (
         <ConfirmDialog
-          title="삭제 확인"
-          body={`${confirmDelete.length}개 파일을 삭제하시겠습니까?`}
-          confirmLabel="삭제"
+          title={t('delete_artifacts_bulk.title')}
+          body={t('delete_artifacts_bulk.body', { count: confirmDelete.length })}
+          confirmLabel={t('delete_artifacts_bulk.confirm')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(confirmDelete)}

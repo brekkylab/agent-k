@@ -1,1 +1,77 @@
-{}
+{
+  "toast": {
+    "upload_success_one": "File uploaded",
+    "upload_success_other": "{{count}} files uploaded",
+    "upload_partial": "{{ok}} uploaded, {{ko}} failed",
+    "upload_failed": "Upload failed: {{message}}",
+    "folder_created": "Folder created",
+    "folder_failed": "Folder creation failed: {{message}}",
+    "download_failed": "Download failed: {{message}}",
+    "no_files_selected": "No files selected to download.",
+    "delete_success_one": "Deleted",
+    "delete_success_other": "{{count}} items deleted",
+    "delete_partial": "{{ok}} deleted, {{ko}} failed",
+    "delete_failed": "Delete failed: {{message}}",
+    "rename_success": "Renamed",
+    "rename_failed": "Rename failed",
+    "move_success_one": "Moved",
+    "move_success_other": "{{count}} moved",
+    "move_partial": "{{ok}} moved, {{ko}} failed",
+    "rename_or_move_failed": "{{action}} failed: {{message}}",
+    "rename_action": "Rename",
+    "move_action": "Move",
+    "copy_success_one": "Copied",
+    "copy_success_other": "{{count}} copied",
+    "copy_partial": "{{ok}} copied, {{ko}} failed",
+    "copy_failed": "Copy failed: {{message}}",
+    "invalid_move": "Can't move into the source itself or its descendants.",
+    "failed_entry": "{{path}} — {{error}}",
+    "unnamed": "(unnamed)"
+  },
+  "ui": {
+    "selected_count": "{{count}} selected",
+    "move": "Move",
+    "copy": "Copy",
+    "clear_selection": "Clear selection",
+    "search_placeholder": "Search this project",
+    "view_toggle_label": "View mode",
+    "list_view": "List view",
+    "grid_view": "Grid view",
+    "more": "More",
+    "move_dropdown": "Move…",
+    "copy_dropdown": "Copy…",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "drag_items": "{{count}} items",
+    "empty_folder": "Empty folder",
+    "item_count": "{{count}} items"
+  },
+  "empty": {
+    "search_no_results": "No search results",
+    "search_hint": "Try different keywords or clear the search.",
+    "folder_empty_title": "This folder is empty",
+    "folder_empty_hint": "Drag files in or press Upload to add your first file."
+  },
+  "delete": {
+    "folder_title": "Delete folder?",
+    "folder_body_with_children": "{{name}} and {{count}} files inside will be deleted. This cannot be undone.",
+    "folder_body_empty": "{{name}} will be deleted. This cannot be undone.",
+    "file_title": "Delete file?",
+    "file_body": "Deleting {{name}} cannot be undone.",
+    "bulk_title": "Delete {{count}} items?",
+    "bulk_body_summary": "Deleting {{summary}}.",
+    "bulk_body_includes": " {{count}} files inside the folders will also be deleted.",
+    "bulk_body_undo": " This cannot be undone.",
+    "summary_folders_one": "{{count}} folder",
+    "summary_folders_other": "{{count}} folders",
+    "summary_files_one": "{{count}} file",
+    "summary_files_other": "{{count}} files",
+    "confirm": "Delete"
+  },
+  "ops": {
+    "move_title": "Move",
+    "move_confirm": "Move",
+    "copy_title": "Copy",
+    "copy_confirm": "Copy"
+  }
+}

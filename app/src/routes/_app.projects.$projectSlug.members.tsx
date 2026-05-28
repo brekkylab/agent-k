@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { getProject, listMembers, removeMember } from '@/api/projects';
 import { Avatar, EmptyState, SectionLabel } from '@/components/uiPrimitives';
 import { Icon } from '@/components/Icon';
@@ -24,6 +25,7 @@ interface RemoveTarget { user: User; isSelfLeave: boolean; }
 
 function MembersPage() {
   const { projectSlug } = Route.useParams();
+  const { t } = useTranslation('members');
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((s) => s.currentUser);
   const showToast = useToastStore((s) => s.show);
@@ -41,20 +43,20 @@ function MembersPage() {
       if (removeTarget?.isSelfLeave) {
         // I left the project — drop me back to /p.
         await queryClient.invalidateQueries({ queryKey: ['projects'] });
-        showToast('프로젝트에서 나왔습니다');
+        showToast(t('toast.left_project'));
         // Note: navigate happens via the parent layout's route guard when
         // the project disappears from the user's list; for now just toast.
       } else {
-        showToast('멤버를 제거했습니다');
+        showToast(t('toast.member_removed'));
       }
       setRemoveTarget(null);
       void removedId;
     },
     onError: (err) => {
       const msg = err instanceof ApiError
-        ? (err.status === 400 ? err.message : err.status === 403 ? '권한이 없습니다' : err.message)
+        ? (err.status === 400 ? err.message : err.status === 403 ? t('toast.no_permission') : err.message)
         : err instanceof Error ? err.message : 'remove failed';
-      showToast(`실패: ${msg}`);
+      showToast(t('toast.failed', { message: msg }));
     },
   });
 
@@ -85,7 +87,7 @@ function MembersPage() {
         <div>
           <SectionLabel>Team access</SectionLabel>
           <h1>Members</h1>
-          <p>{proj?.name ?? '...'} · 프로젝트 멤버를 관리합니다.</p>
+          <p>{t('subtitle', { project: proj?.name ?? '...' })}</p>
         </div>
         <div className="cw-hero-actions">
           {inviteAllowed && (
@@ -122,7 +124,7 @@ function MembersPage() {
         </div>
 
         {members.isLoading && (
-          <div style={{ padding: 16, color: 'var(--cw-ink-3)', fontSize: 12 }}>불러오는 중…</div>
+          <div style={{ padding: 16, color: 'var(--cw-ink-3)', fontSize: 12 }}>{t('loading')}</div>
         )}
 
         {rows.map((user, idx) => (
@@ -164,8 +166,8 @@ function MembersPage() {
           onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--cw-paper-4)'; }}
         >
           <Icon name="users" size={22} />
-          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--cw-ink-2)' }}>첫 멤버를 초대해보세요</span>
-          <span style={{ fontSize: 11, color: 'var(--cw-ink-4)' }}>+ Invite 버튼으로 팀원을 추가할 수 있어요</span>
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--cw-ink-2)' }}>{t('empty.first_invite_title')}</span>
+          <span style={{ fontSize: 11, color: 'var(--cw-ink-4)' }}>{t('empty.first_invite_hint')}</span>
         </button>
       )}
 
@@ -185,15 +187,15 @@ function MembersPage() {
               textUnderlineOffset: 2,
             }}
           >
-            이 프로젝트에서 나가기
+            {t('actions.leave_project')}
           </button>
         </p>
       )}
 
       {memberList.length === 0 && !members.isLoading && !showInviteCta && !inviteAllowed && (
         <EmptyState
-          title="멤버 정보를 불러올 수 없습니다"
-          body="권한이 없거나 프로젝트가 비어있을 수 있습니다."
+          title={t('fallback.title')}
+          body={t('fallback.body')}
           chip={<Icon name="users" size={16} />}
         />
       )}
@@ -204,13 +206,13 @@ function MembersPage() {
 
       {removeTarget && (
         <ConfirmDialog
-          title={removeTarget.isSelfLeave ? '프로젝트에서 나가시겠어요?' : '멤버를 제거하시겠어요?'}
+          title={removeTarget.isSelfLeave ? t('remove.self_title') : t('remove.member_title')}
           body={
             removeTarget.isSelfLeave
-              ? `"${proj?.name ?? 'project'}" 프로젝트에 더 이상 접근할 수 없게 됩니다.`
-              : `"${removeTarget.user.name}"님을 프로젝트에서 제거합니다. 이 작업은 되돌릴 수 없습니다.`
+              ? t('remove.self_body', { project: proj?.name ?? 'project' })
+              : t('remove.member_body', { name: removeTarget.user.name })
           }
-          confirmLabel={removeTarget.isSelfLeave ? '나가기' : '제거'}
+          confirmLabel={removeTarget.isSelfLeave ? t('remove.self_confirm') : t('remove.member_confirm')}
           destructive
           pending={removeMutation.isPending}
           onConfirm={() => removeMutation.mutate(removeTarget.user.id)}

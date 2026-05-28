@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { getProject, listMembers } from '@/api/projects';
 import { createSession, deleteSession, listSessions } from '@/api/sessions';
 import { listDirents } from '@/api/dirents';
@@ -25,6 +26,7 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/')({
 
 function ProjectHome() {
   const { projectSlug } = Route.useParams();
+  const { t } = useTranslation('project');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
@@ -46,12 +48,12 @@ function ProjectHome() {
     mutationFn: () => createSession(projectSlug),
     onSuccess: async (session) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
-      showToast('새 세션이 만들어졌습니다');
+      showToast(t('toast.session_created'));
       navigate({ to: '/projects/$projectSlug/sessions/$sessionPrefix', params: { projectSlug, sessionPrefix: shortSessionId(session.id) } });
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
-      showToast(`세션 생성 실패: ${msg}`);
+      showToast(t('toast.session_create_failed', { message: msg }));
     },
   });
 
@@ -61,14 +63,14 @@ function ProjectHome() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       await queryClient.invalidateQueries({ queryKey: ['session', pendingDelete?.id] });
-      showToast(`세션이 삭제되었습니다`);
+      showToast(t('toast.session_deleted'));
       setPendingDelete(null);
     },
     onError: (err) => {
       const msg = err instanceof ApiError
-        ? (err.status === 403 ? '삭제 권한이 없습니다 (creator 또는 project owner만 가능)' : err.message)
+        ? (err.status === 403 ? t('toast.no_delete_permission') : err.message)
         : err instanceof Error ? err.message : 'delete failed';
-      showToast(`세션 삭제 실패: ${msg}`);
+      showToast(t('toast.session_delete_failed', { message: msg }));
     },
   });
 
@@ -81,12 +83,12 @@ function ProjectHome() {
       <div className="cw-project-hero">
         <div>
           <h1>{project.data?.name ?? '...'}</h1>
-          <p>{project.data?.description || '세션을 시작해 에이전트와 대화하세요.'}</p>
+          <p>{project.data?.description || t('subtitle_fallback')}</p>
         </div>
         <div className="cw-hero-actions">
           <AvatarStack users={memberList} />
           <button className="cw-btn-primary" onClick={() => newSessionMutation.mutate()} disabled={newSessionMutation.isPending}>
-            <Icon name="plus" /> {newSessionMutation.isPending ? '생성 중…' : 'New session'}
+            <Icon name="plus" /> {newSessionMutation.isPending ? t('creating') : t('new_session')}
           </button>
         </div>
       </div>
@@ -103,7 +105,7 @@ function ProjectHome() {
       <div className="cw-section-title">
         <SectionLabel>Sessions · {sessionList.length} visible to you</SectionLabel>
         <button onClick={() => navigate({ to: '/projects/$projectSlug/schedule', params: { projectSlug } })}>
-          schedule 자동 발화
+          {t('schedule_auto')}
         </button>
       </div>
 
@@ -134,16 +136,16 @@ function ProjectHome() {
 
       <SectionLabel>Activity</SectionLabel>
       <div className="cw-activity-list">
-        <ActivityRow title="프로젝트 동기화됨" date="방금 전">
-          세션과 파일이 실시간으로 동기화되어 표시됩니다.
+        <ActivityRow title={t('activity.sync_title')} date={t('activity.sync_when')}>
+          {t('activity.sync_body')}
         </ActivityRow>
       </div>
 
       {pendingDelete && (
         <ConfirmDialog
-          title="세션을 삭제하시겠어요?"
-          body={`"${pendingDelete.title}"의 모든 메시지와 sandbox 자원이 함께 정리됩니다. 이 작업은 되돌릴 수 없습니다.`}
-          confirmLabel="삭제"
+          title={t('delete_session.title')}
+          body={t('delete_session.body', { title: pendingDelete.title })}
+          confirmLabel={t('delete_session.confirm')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(pendingDelete.id)}

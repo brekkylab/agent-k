@@ -1,1 +1,23 @@
-{}
+{
+  "toast": {
+    "session_created": "새 세션이 만들어졌습니다",
+    "session_create_failed": "세션 생성 실패: {{message}}",
+    "session_deleted": "세션이 삭제되었습니다",
+    "session_delete_failed": "세션 삭제 실패: {{message}}",
+    "no_delete_permission": "삭제 권한이 없습니다 (creator 또는 project owner만 가능)"
+  },
+  "subtitle_fallback": "세션을 시작해 에이전트와 대화하세요.",
+  "creating": "생성 중…",
+  "new_session": "New session",
+  "schedule_auto": "schedule 자동 발화",
+  "activity": {
+    "sync_title": "프로젝트 동기화됨",
+    "sync_when": "방금 전",
+    "sync_body": "세션과 파일이 실시간으로 동기화되어 표시됩니다."
+  },
+  "delete_session": {
+    "title": "세션을 삭제하시겠어요?",
+    "body": "\"{{title}}\"의 모든 메시지와 sandbox 자원이 함께 정리됩니다. 이 작업은 되돌릴 수 없습니다.",
+    "confirm": "삭제"
+  }
+}

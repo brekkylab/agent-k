@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { josa } from '@/i18n';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, streamMessage } from '@/api/messages';
 import { getProject, listMembers } from '@/api/projects';
@@ -36,7 +37,7 @@ function stripSubagentPrefix(name: string): string {
 
 function SessionPage() {
   const { projectSlug, sessionPrefix } = Route.useParams();
-  const { t } = useTranslation('common');
+  const { t } = useTranslation(['session', 'common']);
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
@@ -202,13 +203,13 @@ function SessionPage() {
         });
 
         if (update.status === 'error') {
-          showToast(`스트리밍 실패: ${update.errorText ?? 'unknown'}`);
+          showToast(t('toast.stream_failed', { error: update.errorText ?? t('toast.unknown_error') }));
           break;
         }
       }
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'stream failed';
-      showToast(`전송 실패: ${msg}`);
+      showToast(t('toast.send_failed', { message: msg }));
     } finally {
       setStreaming(false);
       // Refetch and wait for new history data before clearing live messages to avoid flash.
@@ -225,11 +226,11 @@ function SessionPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
-      showToast('공유 모드가 변경되었습니다');
+      showToast(t('toast.share_mode_changed'));
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'update failed';
-      showToast(`공유 변경 실패: ${msg}`);
+      showToast(t('toast.share_change_failed', { message: msg }));
     },
   });
 
@@ -276,7 +277,7 @@ function SessionPage() {
             />
           ))}
           {streaming && (
-            <div className="cw-live"><span />AI 답변 중…</div>
+            <div className="cw-live"><span />{t('ui.ai_responding')}</div>
           )}
           <div ref={messagesEndRef} />
         </div>
@@ -305,7 +306,7 @@ function SessionPage() {
             <button
               type="button"
               className="cw-attach-btn"
-              aria-label="파일 첨부"
+              aria-label={t('ui.attach_file')}
               onClick={() => fileInputRef.current?.click()}
               disabled={streaming}
               style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
@@ -341,7 +342,7 @@ function SessionPage() {
           : <p>No pinned files yet.</p>}
         <h3>Access</h3>
         {sess && <SharePill mode={sess.shareMode} />}
-        {sess && <p>{t(`share.${sess.shareMode}.desc`)}</p>}
+        {sess && <p>{t(`common:share.${sess.shareMode}.desc`)}</p>}
         <h3>Session</h3>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
@@ -384,6 +385,7 @@ function ArtifactChip({
   onCopyToShared: (paths: string[]) => void;
   onDeleted: (path: string) => void;
 }) {
+  const { t, i18n } = useTranslation('session');
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -408,10 +410,10 @@ function ArtifactChip({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
       onDeleted(path);
-      showToast('삭제되었습니다');
+      showToast(t('toast.artifact_deleted'));
       setConfirmDelete(false);
     },
-    onError: () => showToast('삭제 실패'),
+    onError: () => showToast(t('toast.artifact_delete_failed')),
   });
 
   return (
@@ -432,12 +434,12 @@ function ArtifactChip({
           >
             <li>
               <button type="button" onClick={() => downloadFile(scope, path)}>
-                <Icon name="download" size={13} /> 다운로드
+                <Icon name="download" size={13} /> {t('artifact.download')}
               </button>
             </li>
             <li>
               <button type="button" onClick={() => onCopyToShared([path])}>
-                <Icon name="file" size={13} /> 공유 디렉토리로 복사
+                <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
               </button>
             </li>
             <li>
@@ -446,7 +448,7 @@ function ArtifactChip({
                 className="cw-file-dropdown-destructive"
                 onClick={() => setConfirmDelete(true)}
               >
-                <Icon name="trash" size={13} /> 삭제
+                <Icon name="trash" size={13} /> {t('artifact.delete')}
               </button>
             </li>
           </ul>
@@ -454,9 +456,9 @@ function ArtifactChip({
       </div>
       {confirmDelete && (
         <ConfirmDialog
-          title="삭제 확인"
-          body={`"${filename}"을(를) 삭제하시겠습니까?`}
-          confirmLabel="삭제"
+          title={t('delete_artifact.title')}
+          body={t('delete_artifact.body', { name: `"${i18n.language === 'ko' ? josa(filename, '을/를') : filename}"` })}
+          confirmLabel={t('delete_artifact.confirm')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate()}
@@ -506,6 +508,7 @@ function MessageBubble({
   onCopyToShared?: (paths: string[]) => void;
   onArtifactDeleted?: (path: string) => void;
 }) {
+  const { t } = useTranslation('session');
   const isAi = message.sender.kind === 'agent';
   const isSelf = message.sender.kind === 'user' && message.sender.userId === currentUserId;
 
@@ -525,7 +528,7 @@ function MessageBubble({
       {isAi ? <span className="cw-ai-chip">AI</span> : <Avatar user={displayUser} />}
       <div className="cw-message-body">
         <div className="cw-message-meta">
-          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · 나` : isAi ? (agentLabel ?? 'AI') : displayUser.name.split(' ')[0]}</b>
+          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · ${t('ui.self_label')}` : isAi ? (agentLabel ?? 'AI') : displayUser.name.split(' ')[0]}</b>
           <time dateTime={message.createdAt} data-tooltip={formatMessageTimeFull(message.createdAt)}>{timeLabel}</time>
         </div>
         <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
@@ -548,7 +551,7 @@ function MessageBubble({
             </div>
           ) : (
             <details key={tc.id} className="cw-toolcall">
-              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ' · 실행 중…' : ''}</summary>
+              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ` · ${t('ui.tool_running')}` : ''}</summary>
               {tc.arguments !== undefined && (
                 <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
                   ? tc.arguments
