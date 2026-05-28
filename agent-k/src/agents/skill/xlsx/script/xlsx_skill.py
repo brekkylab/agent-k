@@ -155,6 +155,50 @@ def autofit_columns(path, header_row=3):
     return path
 
 
+def style_chart_labels(chart, *, rotate_x=None, x_font=None, y_font=None,
+                       legend_pos=None, tick_skip=None):
+    """Tweak chart label readability without hand-building openpyxl's verbose
+    RichText / CharacterProperties chain. Call on the chart object before
+    `ws.add_chart(chart, ...)`. All params optional.
+
+    rotate_x:   x-axis label rotation in degrees (negative tilts down, e.g. -45)
+    x_font:     x-axis label font size in points (e.g. 9)
+    y_font:     y-axis label font size in points
+    legend_pos: 'r' | 'b' | 'l' | 't' | 'tr' — move the legend. Pass False
+                to remove it ONLY when there is a single series (otherwise the
+                reader can't tell which color is which).
+    tick_skip:  show every Nth x-axis label (e.g. 2 = every other)
+    """
+    from openpyxl.chart.text import RichText
+    from openpyxl.drawing.text import (
+        Paragraph, ParagraphProperties, CharacterProperties, RichTextProperties,
+    )
+
+    def _axis_text(rot_deg, font_pt):
+        rot = int(rot_deg * -60000) if rot_deg is not None else None  # deg → 60000ths, openpyxl is clockwise+
+        sz = font_pt * 100 if font_pt is not None else None            # pt → 100ths
+        return RichText(
+            bodyPr=RichTextProperties(rot=rot, vert="horz"),
+            p=[Paragraph(pPr=ParagraphProperties(defRPr=CharacterProperties(sz=sz)))],
+        )
+
+    if rotate_x is not None or x_font is not None:
+        chart.x_axis.txPr = _axis_text(rotate_x, x_font)
+    if y_font is not None:
+        chart.y_axis.txPr = _axis_text(None, y_font)
+    if tick_skip is not None:
+        chart.x_axis.tickLblSkip = tick_skip
+    if legend_pos is not None:
+        if legend_pos is False or legend_pos == "none":
+            chart.legend = None
+        else:
+            if chart.legend is None:
+                from openpyxl.chart.legend import Legend
+                chart.legend = Legend()
+            chart.legend.position = legend_pos
+    return chart
+
+
 class Formula:
 
     @staticmethod
@@ -434,8 +478,31 @@ class XLSXReportSkill:
                 sel.pane = None
 
     @staticmethod
+    def _normalize_chart_anchor(chart):
+        """If chart.anchor is a bare cell string (e.g. "B9"), promote it to a
+        OneCellAnchor so downstream code (overlap resolver, span calc, Excel
+        itself) sees a proper object. Sometimes happens when chart.anchor is
+        assigned a string directly instead of going through ws.add_chart()."""
+        anchor = chart.anchor
+        if not isinstance(anchor, str):
+            return
+        from openpyxl.utils import coordinate_to_tuple
+        from openpyxl.utils.units import cm_to_EMU
+        from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+        from openpyxl.drawing.xdr import XDRPositiveSize2D
+        row, col = coordinate_to_tuple(anchor)
+        chart.anchor = OneCellAnchor(
+            _from=AnchorMarker(col=col - 1, row=row - 1),
+            ext=XDRPositiveSize2D(
+                cx=cm_to_EMU(chart.width or 15),
+                cy=cm_to_EMU(chart.height or 7.5),
+            ),
+        )
+
+    @staticmethod
     def _chart_span(chart):
         """Default col ≈ 2.3cm, row ≈ 0.5cm."""
+        XLSXReportSkill._normalize_chart_anchor(chart)
         f = chart.anchor._from
         return (
             f.col,

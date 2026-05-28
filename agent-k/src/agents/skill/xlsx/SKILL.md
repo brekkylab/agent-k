@@ -1,6 +1,6 @@
 ---
 name: xlsx
-description: Create or edit any Excel .xlsx file — multi-sheet workbooks with formulas, charts, conditional formatting, named ranges, currency/date formatting, etc. — that opens cleanly in Excel (no "file corrupted" dialog, no #REF!/#NAME?/#DIV/0! errors). Use for any task that generates or modifies an .xlsx file.
+description: Create or edit any Excel .xlsx file — multi-sheet workbooks with formulas, charts, conditional formatting, named ranges, currency/date formatting, etc. — that opens cleanly in Excel (no "file corrupted" dialog, no #REF!/#NAME?/#DIV/0! errors). Use for any task that generates or modifies an .xlsx file. The deliverable is the .xlsx only — do not save build scripts (`.py`) to the output directory.
 ---
 
 # XLSX Creation Skill
@@ -24,7 +24,8 @@ import sys
 sys.path.insert(0, "/workspace/skills/xlsx")  # so `xlsx_skill` is importable
 
 from xlsx_skill import (
-    XLSXReportSkill, Formula, verify_formulas, read_computed, autofit_columns
+    XLSXReportSkill, Formula,
+    verify_formulas, read_computed, autofit_columns, style_chart_labels,
 )
 ```
 
@@ -57,6 +58,11 @@ Stateful builder for a workbook. One instance per output `.xlsx`.
 formula strings starting with `=`. ISO date strings (`YYYY-MM-DD`) are
 auto-converted to real date values. Row layout (title r1 / spacer r2 /
 header r3 / data r4+); see **Row heights** below.
+
+**One cell = one thing.** A formula cell value must be the `=...` string
+**alone** — never prefix a label (e.g. `"Total Sales\n=SUM(...)"` becomes
+literal text, Excel won't compute it). Put label and formula in **separate
+cells** (merge surrounding cells if you want a wider card).
 
 ### Final steps after `save()` — always run these
 
@@ -231,6 +237,16 @@ ws.add_chart(chart, "B8")          # anchor = cell string; add_chart builds the 
   the hole; good for 구성비율 / composition dashboards.
 - **Axis number format**: `chart.y_axis.numFmt = "₩#,##0"` (values),
   `chart.x_axis.numFmt = "yyyy-mm"` (date categories).
+- **Labels cramped / overlapping?** Use `style_chart_labels(chart, ...)`
+  before `add_chart` — it sets x/y label rotation, font size, legend
+  position, and tick-skip in one call (wraps openpyxl's verbose
+  RichText/CharacterProperties chain):
+  ```python
+  style_chart_labels(chart, rotate_x=-45, x_font=9,
+                     legend_pos='b', tick_skip=2)
+  # NOTE: keep the legend on multi-series charts (reader needs the color key).
+  # `legend_pos=False` to remove it is only OK for single-series charts.
+  ```
 
 ### ⚠️ Axis labels vanish unless `axis.delete = False`
 
