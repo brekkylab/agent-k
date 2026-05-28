@@ -42,15 +42,18 @@ function AutomationSettingsPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [prompts, setPrompts] = useState<string[]>(['']);
-  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [nameEditMode, setNameEditMode] = useState(false);
+  const [descEditMode, setDescEditMode] = useState(false);
+  const [promptsEditMode, setPromptsEditMode] = useState(false);
+  // Populate form state when the automation first loads (or when navigating
+  // to a different one). Subsequent refetches don't re-fire — drafts in
+  // progress stay intact.
   useEffect(() => {
     if (!automation) return;
-    if (syncedAt === automation.updatedAt) return;
     setName(automation.name);
     setDescription(automation.description ?? '');
     setPrompts(automation.prompts.length > 0 ? automation.prompts : ['']);
-    setSyncedAt(automation.updatedAt);
-  }, [automation, syncedAt]);
+  }, [automation?.id]);
 
   const goBack = () => {
     navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug } });
@@ -65,15 +68,44 @@ function AutomationSettingsPage() {
     void queryClient.invalidateQueries({ queryKey: ['triggers', automationId] });
   };
 
-  const saveMutation = useMutation({
+  const nameMutation = useMutation({
+    mutationFn: () => updateAutomationApi(automationId, { name: name.trim() }),
+    onSuccess: (updated) => {
+      invalidateAutomation();
+      setName(updated.name);
+      setNameEditMode(false);
+    },
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`이름 변경 실패: ${msg}`);
+    },
+  });
+  const descMutation = useMutation({
     mutationFn: () => updateAutomationApi(automationId, {
-      name,
-      description: description.trim() ? description : null,
+      description: description.trim() ? description.trim() : null,
+    }),
+    onSuccess: (updated) => {
+      invalidateAutomation();
+      setDescription(updated.description ?? '');
+      setDescEditMode(false);
+    },
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`설명 변경 실패: ${msg}`);
+    },
+  });
+  const promptsMutation = useMutation({
+    mutationFn: () => updateAutomationApi(automationId, {
       prompts: prompts.filter((p) => p.trim().length > 0),
     }),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       invalidateAutomation();
-      goBack();
+      setPrompts(updated.prompts.length > 0 ? updated.prompts : ['']);
+      setPromptsEditMode(false);
+    },
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`프롬프트 변경 실패: ${msg}`);
     },
   });
 
@@ -211,6 +243,16 @@ function AutomationSettingsPage() {
   }
 
   const enabled = automation.enabled;
+  const trimmedName = name.trim();
+  const nameDirty = trimmedName !== automation.name;
+  const nameSaveDisabled = !nameDirty || trimmedName.length === 0 || nameMutation.isPending;
+  const descDirty = description.trim() !== (automation.description ?? '');
+  const descSaveDisabled = !descDirty || descMutation.isPending;
+  const cleanedPrompts = prompts.filter((p) => p.trim().length > 0);
+  const promptsDirty =
+    cleanedPrompts.length !== automation.prompts.length ||
+    cleanedPrompts.some((p, i) => p !== automation.prompts[i]);
+  const promptsSaveDisabled = !promptsDirty || cleanedPrompts.length === 0 || promptsMutation.isPending;
 
   return (
     <section className="cw-page cw-automation-settings cw-page-enter">
@@ -218,23 +260,97 @@ function AutomationSettingsPage() {
         <Icon name="arrow-left" size={14} /> Automations
       </button>
 
-      <header className="cw-page-head">
-        <div>
-          <h1>{automation.name}</h1>
-          <p>이 automation의 이름·프롬프트·트리거를 관리합니다.</p>
-        </div>
-        <div>
-          <button className="cw-btn-secondary" type="button" onClick={goBack}>Cancel</button>
-          <button
-            className="cw-btn-primary"
-            type="button"
-            onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending}
-          >
-            {saveMutation.isPending ? 'Saving…' : 'Save changes'}
-          </button>
-        </div>
-      </header>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+          marginTop: 4,
+          marginBottom: 24,
+        }}
+      >
+        {nameEditMode ? (
+          <>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (!nameSaveDisabled) nameMutation.mutate();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setName(automation.name);
+                  setNameEditMode(false);
+                }
+              }}
+              disabled={nameMutation.isPending}
+              maxLength={100}
+              aria-label="Automation 이름"
+              style={{
+                margin: 0,
+                padding: '4px 10px',
+                border: '1px solid var(--cw-line)',
+                borderRadius: 8,
+                background: 'var(--cw-paper)',
+                color: 'var(--cw-ink)',
+                fontSize: 'var(--cw-text-2xl)',
+                lineHeight: 1.12,
+                letterSpacing: '-0.025em',
+                fontWeight: 650,
+                fontFamily: 'inherit',
+                minWidth: 280,
+              }}
+            />
+            <button
+              type="button"
+              className="cw-btn-primary"
+              onClick={() => nameMutation.mutate()}
+              disabled={nameSaveDisabled}
+            >
+              {nameMutation.isPending ? '저장 중…' : '저장'}
+            </button>
+            <button
+              type="button"
+              className="cw-btn-secondary"
+              onClick={() => {
+                setName(automation.name);
+                setNameEditMode(false);
+              }}
+              disabled={nameMutation.isPending}
+            >
+              취소
+            </button>
+          </>
+        ) : (
+          <>
+            <h1 style={{ margin: 0 }}>{automation.name}</h1>
+            <button
+              type="button"
+              onClick={() => setNameEditMode(true)}
+              aria-label="Automation 이름 편집"
+              title="편집"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 30,
+                height: 30,
+                border: '1px solid var(--cw-line)',
+                borderRadius: 8,
+                background: 'var(--cw-paper-2)',
+                color: 'var(--cw-ink-3)',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            >
+              <Icon name="writing" size={14} />
+            </button>
+          </>
+        )}
+      </div>
 
       <div className="cw-settings-stack">
         <section className="cw-settings-card">
@@ -259,56 +375,197 @@ function AutomationSettingsPage() {
               <span className="cw-toggle-label">{enabled ? 'On' : 'Off'}</span>
             </label>
           </div>
-          <label className="cw-settings-field">
-            <span>이름</span>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Automation 이름"
-            />
-          </label>
-          <label className="cw-settings-field">
-            <span>설명</span>
-            <textarea
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="이 automation이 무엇을 하는지"
-            />
-          </label>
+        </section>
+
+        <section className="cw-settings-card">
+          <header className="cw-settings-card-head">
+            <h2>설명</h2>
+            {!descEditMode && (
+              <button
+                type="button"
+                onClick={() => setDescEditMode(true)}
+                aria-label="설명 편집"
+                title="편집"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 22,
+                  height: 22,
+                  border: '1px solid var(--cw-line)',
+                  borderRadius: 6,
+                  background: 'var(--cw-paper-2)',
+                  color: 'var(--cw-ink-3)',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <Icon name="writing" size={12} />
+              </button>
+            )}
+          </header>
+          {descEditMode ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <textarea
+                autoFocus
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setDescription(automation.description ?? '');
+                    setDescEditMode(false);
+                  }
+                }}
+                placeholder="이 automation이 무엇을 하는지"
+                disabled={descMutation.isPending}
+                rows={3}
+                style={{
+                  resize: 'vertical',
+                  minHeight: 80,
+                  fontFamily: 'inherit',
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                  padding: '10px 12px',
+                  border: '1px solid var(--cw-line)',
+                  borderRadius: 8,
+                  background: 'var(--cw-paper)',
+                  color: 'var(--cw-ink)',
+                }}
+              />
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="cw-btn-secondary"
+                  onClick={() => {
+                    setDescription(automation.description ?? '');
+                    setDescEditMode(false);
+                  }}
+                  disabled={descMutation.isPending}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  className="cw-btn-primary"
+                  onClick={() => descMutation.mutate()}
+                  disabled={descSaveDisabled}
+                >
+                  {descMutation.isPending ? '저장 중…' : '저장'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p
+              style={{
+                margin: 0,
+                color: automation.description ? 'var(--cw-ink-2)' : 'var(--cw-ink-4)',
+                fontSize: 14,
+                lineHeight: 1.6,
+              }}
+            >
+              {automation.description || '설명이 없습니다.'}
+            </p>
+          )}
         </section>
 
         <section className="cw-settings-card">
           <header className="cw-settings-card-head">
             <h2>Prompts</h2>
-            <button className="cw-btn-secondary" type="button" onClick={addPrompt}>
-              <Icon name="plus" size={14} /> Add prompt
-            </button>
+            {!promptsEditMode && (
+              <button
+                type="button"
+                onClick={() => setPromptsEditMode(true)}
+                aria-label="프롬프트 편집"
+                title="편집"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 22,
+                  height: 22,
+                  border: '1px solid var(--cw-line)',
+                  borderRadius: 6,
+                  background: 'var(--cw-paper-2)',
+                  color: 'var(--cw-ink-3)',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <Icon name="writing" size={12} />
+              </button>
+            )}
           </header>
           <p className="cw-settings-hint">실행 시 순서대로 평가됩니다. 첫 프롬프트가 후속 단계의 컨텍스트가 됩니다.</p>
-          <ol className="cw-prompt-list">
-            {prompts.map((line, i) => (
-              <li key={i}>
-                <span className="cw-prompt-index">{i + 1}</span>
-                <textarea
-                  rows={2}
-                  value={line}
-                  onChange={(e) => updatePrompt(i, e.target.value)}
-                  placeholder="프롬프트를 입력하세요"
-                />
+          {promptsEditMode ? (
+            <>
+              <ol className="cw-prompt-list">
+                {prompts.map((line, i) => (
+                  <li key={i}>
+                    <span className="cw-prompt-index">{i + 1}</span>
+                    <textarea
+                      rows={2}
+                      value={line}
+                      onChange={(e) => updatePrompt(i, e.target.value)}
+                      placeholder="프롬프트를 입력하세요"
+                      disabled={promptsMutation.isPending}
+                    />
+                    <button
+                      className="cw-prompt-remove"
+                      type="button"
+                      aria-label="Remove prompt"
+                      onClick={() => removePrompt(i)}
+                      disabled={prompts.length <= 1 || promptsMutation.isPending}
+                    >
+                      <Icon name="trash" size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ol>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', marginTop: 12 }}>
                 <button
-                  className="cw-prompt-remove"
+                  className="cw-btn-secondary"
                   type="button"
-                  aria-label="Remove prompt"
-                  onClick={() => removePrompt(i)}
-                  disabled={prompts.length <= 1}
+                  onClick={addPrompt}
+                  disabled={promptsMutation.isPending}
                 >
-                  <Icon name="trash" size={14} />
+                  <Icon name="plus" size={14} /> Add prompt
                 </button>
-              </li>
-            ))}
-          </ol>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    type="button"
+                    className="cw-btn-secondary"
+                    onClick={() => {
+                      setPrompts(automation.prompts.length > 0 ? automation.prompts : ['']);
+                      setPromptsEditMode(false);
+                    }}
+                    disabled={promptsMutation.isPending}
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    className="cw-btn-primary"
+                    onClick={() => promptsMutation.mutate()}
+                    disabled={promptsSaveDisabled}
+                  >
+                    {promptsMutation.isPending ? '저장 중…' : '저장'}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <ol className="cw-prompt-list">
+              {automation.prompts.map((line, i) => (
+                <li key={i}>
+                  <span className="cw-prompt-index">{i + 1}</span>
+                  <p style={{ margin: 0, color: 'var(--cw-ink-2)', fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                    {line}
+                  </p>
+                </li>
+              ))}
+            </ol>
+          )}
         </section>
 
         <section className="cw-settings-card">
@@ -324,7 +581,6 @@ function AutomationSettingsPage() {
               </button>
             )}
           </header>
-          <p className="cw-settings-hint">트리거 추가/수정/삭제는 즉시 반영됩니다. Save changes는 automation 본문만 저장합니다.</p>
 
           {showAddForm && (
             <div className="cw-trigger-draft">

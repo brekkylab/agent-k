@@ -2176,7 +2176,6 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 6px;
   font-variant-numeric: tabular-nums;
 }
 .cw-prompt-remove {
