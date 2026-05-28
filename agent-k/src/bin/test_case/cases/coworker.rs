@@ -224,10 +224,6 @@ pub fn get_coworker_cases() -> Vec<Case> {
                  - KPI 카드 4개: 총매출 / 평균주문금액 / 최고매출지역 / 총주문수\n\
                  - 조건부서식 사용\n\
                  - 인쇄 시 A4 가로 1페이지 맞춤\n\n\
-                 추가 조건:\n\
-                 - 통화 형식 적용\n\
-                 - 열너비 자동 조정\n\
-                 - Freeze Pane 적용\n\
                  - 저장명은 sales_dashboard.xlsx",
             )]),
             files: vec![],
