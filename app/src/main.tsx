@@ -27,7 +27,10 @@ const router = createRouter({
 // Inject router into forceLogout so it uses client-side navigation instead of
 // window.location.href — avoiding a full-page reload that would race with
 // TanStack Router's own redirect and consume the sessionStorage banner items.
-setLogoutRouter((to) => { void router.navigate({ to } as Parameters<typeof router.navigate>[0]); });
+setLogoutRouter((to) => {
+  router.navigate({ to } as Parameters<typeof router.navigate>[0])
+    .catch(() => { window.location.href = to; });
+});
 
 setUnauthorizedHandler((reason) => {
   forceLogout({ reason, redirectTo: window.location.pathname + window.location.search });
