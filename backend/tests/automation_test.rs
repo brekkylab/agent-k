@@ -25,7 +25,7 @@ async fn create_automation(
         "/automations",
         token,
         Some(json!({
-            "project_id": project_id,
+            "project_ref": project_id,
             "name": name,
             "description": null,
             "prompts": prompts,
@@ -61,7 +61,7 @@ async fn automation_crud_happy_path() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/automations?project_id={pid}"),
+        &format!("/automations?project_ref={pid}"),
         &token,
         None,
     )
@@ -153,7 +153,7 @@ async fn create_automation_rejects_empty_name() {
         "POST",
         "/automations",
         &token,
-        Some(json!({ "project_id": pid, "name": "   ", "prompts": [] })),
+        Some(json!({ "project_ref": pid, "name": "   ", "prompts": [] })),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -414,7 +414,7 @@ async fn list_automations_no_filter_returns_user_scoped() {
     let (status, _) = common::authed(
         &app,
         "GET",
-        &format!("/automations?project_id={bob_pid}"),
+        &format!("/automations?project_ref={bob_pid}"),
         &alice_token,
         None,
     )
@@ -608,4 +608,95 @@ async fn webhook_idempotency_key_returns_same_run_on_repeat() {
     let (s4, b4) = fire_webhook(&app, Some(&plaintext), None, r#"{}"#).await;
     assert_eq!(s4, StatusCode::ACCEPTED);
     assert_ne!(b4["run_id"].as_str().unwrap(), run1_id);
+}
+
+// ─── project_id slug resolution ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn create_automation_accepts_project_slug() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let slug = project["slug"].as_str().unwrap().to_string();
+    let expected_project_id = project["id"].as_str().unwrap().to_string();
+
+    let created = create_automation(&app, &token, &slug, "via-slug", vec!["p"]).await;
+    assert_eq!(created["project_id"], expected_project_id.as_str());
+}
+
+#[tokio::test]
+async fn list_automations_accepts_project_slug() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let slug = project["slug"].as_str().unwrap().to_string();
+    let pid = project["id"].as_str().unwrap().to_string();
+
+    create_automation(&app, &token, &pid, "one", vec!["p"]).await;
+
+    let (status, body) = common::authed(
+        &app,
+        "GET",
+        &format!("/automations?project_ref={slug}"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "list by slug: {body}");
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn create_automation_accepts_retired_slug() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let pid = project["id"].as_str().unwrap().to_string();
+    let original_slug = project["slug"].as_str().unwrap().to_string();
+
+    // Rename and reslug the project — the original slug is retired but still resolves.
+    let (status, renamed) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{pid}"),
+        &token,
+        Some(json!({ "name": "Renamed", "slug": "renamed" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "rename failed: {renamed}");
+    assert_eq!(renamed["slug"].as_str().unwrap(), "renamed");
+    assert_ne!(renamed["slug"].as_str().unwrap(), original_slug.as_str());
+
+    // The retired slug still routes to the same project.
+    let created = create_automation(&app, &token, &original_slug, "via-retired", vec!["p"]).await;
+    assert_eq!(created["project_id"], pid.as_str());
+}
+
+#[tokio::test]
+async fn create_automation_unknown_project_ref_returns_404() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+
+    let (status, _) = common::authed(
+        &app,
+        "POST",
+        "/automations",
+        &token,
+        Some(json!({
+            "project_ref": "ghost-project",
+            "name": "x",
+            "description": null,
+            "prompts": ["p"],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
