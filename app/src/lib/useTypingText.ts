@@ -1,16 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { FALLBACK_TITLE } from './sessionConstants';
 
 const TYPING_INTERVAL_MS = 32;
 const TYPING_CHARS_PER_TICK = 1;
 
-/**
- * Sentinel value used by `transformers.ts` to mark sessions without a
- * backend-assigned title. The hook detects the sentinel→real-title
- * transition to drive the typing animation, and renders the sentinel as
- * the locale-appropriate "untitled" placeholder.
- */
-export const FALLBACK_TITLE = '__cw_untitled__';
+export { FALLBACK_TITLE } from './sessionConstants';
 
 interface TypingResult {
   text: string;
@@ -24,13 +19,19 @@ export function useTypingText(target: string): TypingResult {
   const [text, setText] = useState(displayTarget);
   const [typing, setTyping] = useState(false);
   const prevTargetRef = useRef<string | null>(null);
+  // Keep the latest displayTarget reachable inside the effect without making
+  // it a dependency — otherwise a locale switch on an untitled session would
+  // re-fire the typing animation just to swap the placeholder copy.
+  const displayTargetRef = useRef(displayTarget);
+  displayTargetRef.current = displayTarget;
 
   useEffect(() => {
     const prev = prevTargetRef.current;
     prevTargetRef.current = target;
+    const current = displayTargetRef.current;
 
     if (prev === null || prev === target || prev !== FALLBACK_TITLE) {
-      setText(displayTarget);
+      setText(current);
       setTyping(false);
       return;
     }
@@ -40,17 +41,24 @@ export function useTypingText(target: string): TypingResult {
     let i = 0;
     const id = window.setInterval(() => {
       i += TYPING_CHARS_PER_TICK;
-      if (i >= displayTarget.length) {
-        setText(displayTarget);
+      if (i >= current.length) {
+        setText(current);
         setTyping(false);
         window.clearInterval(id);
       } else {
-        setText(displayTarget.slice(0, i));
+        setText(current.slice(0, i));
       }
     }, TYPING_INTERVAL_MS);
 
     return () => window.clearInterval(id);
-  }, [target, displayTarget]);
+  }, [target]);
+
+  // A pure language switch (target unchanged, displayTarget changed) updates
+  // the rendered text in place without restarting the typing animation.
+  useEffect(() => {
+    if (target !== FALLBACK_TITLE) return;
+    setText(displayTarget);
+  }, [displayTarget, target]);
 
   return { text, typing };
 }

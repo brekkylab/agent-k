@@ -11,8 +11,8 @@ function SkillsPage() {
   const { t } = useTranslation('project');
   return (
     <section className="cw-page cw-simple-page cw-page-enter">
-      <SectionLabel>Reusable prompts & tools</SectionLabel>
-      <h1>Skills</h1>
+      <SectionLabel>{t('skills_page_meta.section_label')}</SectionLabel>
+      <h1>{t('skills_page_meta.title')}</h1>
       <p>{t('skills_page.subtitle')}</p>
       <EmptyState
         title={t('skills_page.empty_title')}

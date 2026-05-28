@@ -3,7 +3,7 @@
 
 export const SUBAGENT_PREFIX = 'subagent_';
 
-import { FALLBACK_TITLE } from '@/lib/useTypingText';
+import { FALLBACK_TITLE } from '@/lib/sessionConstants';
 import type { FileAsset, Message, MessageSender, PreferredLanguage, Project, Session, ToolCallInvocation, User } from '@/domain/types';
 import type { AiloyPart, AiloyToolCall, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser, SessionMessageItem } from './backend-types';
 

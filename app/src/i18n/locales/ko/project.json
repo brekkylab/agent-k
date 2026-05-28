@@ -35,7 +35,27 @@
     "confirm": "삭제"
   },
   "card": {
-    "session_count": "{{count}}개 세션 · {{latest}}"
+    "session_count_one": "{{count}}개 세션 · {{latest}}",
+    "session_count_other": "{{count}}개 세션 · {{latest}}",
+    "latest_new": "신규"
+  },
+  "list_page": {
+    "title": "내 프로젝트",
+    "description": "각 프로젝트는 하나의 워크스페이스예요. 세션, 파일, 멤버, 스킬, 일정이 모두 그 안에서 관리됩니다.",
+    "new_project": "새 프로젝트",
+    "section_label": "프로젝트 · {{count}}개"
+  },
+  "skills_page_meta": {
+    "section_label": "재사용 프롬프트 & 도구",
+    "title": "스킬"
+  },
+  "schedule_page_meta": {
+    "section_label": "주기 실행",
+    "title": "일정"
+  },
+  "settings_page_meta": {
+    "section_label": "프로젝트 메타데이터",
+    "title": "설정"
   },
   "skills_page": {
     "subtitle": "재사용 가능한 프롬프트 템플릿과 도구 바인딩을 한곳에서 관리합니다.",

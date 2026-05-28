@@ -26,6 +26,7 @@ export const Route = createFileRoute('/_app/projects/')({
 });
 
 function ProjectsPage() {
+  const { t } = useTranslation('project');
   const navigate = useNavigate();
   const projects = useQuery({ queryKey: ['projects'], queryFn: listProjects });
   const activeProjectSlug = useActiveProjectSlugFromRoute() ?? projects.data?.[0]?.slug ?? null;
@@ -35,14 +36,14 @@ function ProjectsPage() {
     <section className="cw-page cw-projects-page cw-page-enter">
       <div className="cw-page-head">
         <div>
-          <h1>Your projects</h1>
-          <p>Each project is a workspace. Sessions, files, members, skills, schedule — all live inside.</p>
+          <h1>{t('list_page.title')}</h1>
+          <p>{t('list_page.description')}</p>
         </div>
         <button className="cw-btn-primary" onClick={creator.open}>
-          <Icon name="plus" /> New project
+          <Icon name="plus" /> {t('list_page.new_project')}
         </button>
       </div>
-      <SectionLabel>Projects · {projects.data?.length ?? 0} projects</SectionLabel>
+      <SectionLabel>{t('list_page.section_label', { count: projects.data?.length ?? 0 })}</SectionLabel>
       <div className="cw-project-grid">
         {(projects.data ?? []).map((project) => (
           <ProjectCard
@@ -65,7 +66,8 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
   const sessions = useQuery({ queryKey: ['sessions', project.slug], queryFn: () => listSessions(project.slug) });
   const isOwner = currentUser?.id === project.ownerId;
   const userSessions = (sessions.data ?? []).filter((s) => s.origin === 'user');
-  const latest = latestUpdated(userSessions);
+  const latestRaw = latestUpdated(userSessions);
+  const latest = latestRaw === 'new' ? t('card.latest_new') : latestRaw;
   const memberUsers: User[] = members.data ?? [];
 
   return (
@@ -83,6 +85,7 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
       <div className="cw-project-card-footer">
         <AvatarStack users={memberUsers} />
         <span className="cw-card-stats">{t('card.session_count', { count: userSessions.length, latest })}</span>
+        {/* i18next picks `_one` or `_other` based on `count` automatically. */}
       </div>
     </button>
   );

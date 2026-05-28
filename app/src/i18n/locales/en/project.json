@@ -35,7 +35,27 @@
     "confirm": "Delete"
   },
   "card": {
-    "session_count": "{{count}} sessions · {{latest}}"
+    "session_count_one": "{{count}} session · {{latest}}",
+    "session_count_other": "{{count}} sessions · {{latest}}",
+    "latest_new": "new"
+  },
+  "list_page": {
+    "title": "Your projects",
+    "description": "Each project is a workspace. Sessions, files, members, skills, schedule — all live inside.",
+    "new_project": "New project",
+    "section_label": "Projects · {{count}} projects"
+  },
+  "skills_page_meta": {
+    "section_label": "Reusable prompts & tools",
+    "title": "Skills"
+  },
+  "schedule_page_meta": {
+    "section_label": "Recurring runs",
+    "title": "Schedule"
+  },
+  "settings_page_meta": {
+    "section_label": "Project metadata",
+    "title": "Settings"
   },
   "skills_page": {
     "subtitle": "Manage reusable prompt templates and tool bindings in one place.",

@@ -15,8 +15,8 @@ function SettingsPage() {
 
   return (
     <section className="cw-page cw-simple-page cw-page-enter">
-      <SectionLabel>Project metadata</SectionLabel>
-      <h1>Settings</h1>
+      <SectionLabel>{t('settings_page_meta.section_label')}</SectionLabel>
+      <h1>{t('settings_page_meta.title')}</h1>
       <p>{t('settings_page.subtitle')}</p>
       <div className="cw-simple-stack">
         <code>name: {project.data?.name ?? '—'}</code>

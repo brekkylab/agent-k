@@ -11,8 +11,8 @@ function SchedulePage() {
   const { t } = useTranslation('project');
   return (
     <section className="cw-page cw-simple-page cw-page-enter">
-      <SectionLabel>Recurring runs</SectionLabel>
-      <h1>Schedule</h1>
+      <SectionLabel>{t('schedule_page_meta.section_label')}</SectionLabel>
+      <h1>{t('schedule_page_meta.title')}</h1>
       <p>{t('schedule_page.subtitle')}</p>
       <EmptyState
         title={t('schedule_page.empty_title')}
