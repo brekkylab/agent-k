@@ -105,6 +105,10 @@ fi
 python3 "$ROOT/app/scripts/seed_cowork_demo.py" "${SEED_ARGS[@]}"
 
 echo
+echo "==> Seeding automation demo (idempotent)"
+python3 "$ROOT/app/scripts/seed_automation_demo.py" --db "$DB"
+
+echo
 echo "==> Starting backend-v2 on $BACKEND_URL"
 (
   cd "$ROOT"

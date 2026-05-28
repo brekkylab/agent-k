@@ -2,6 +2,7 @@
 // Destructive variant tints the confirm button using the brick destructive token.
 
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
 
 interface ConfirmDialogProps {
@@ -13,6 +14,7 @@ interface ConfirmDialogProps {
   pending?: boolean;
   onConfirm: () => void;
   onClose: () => void;
+  confirmOnEnter?: boolean;
 }
 
 export function ConfirmDialog({
@@ -24,19 +26,23 @@ export function ConfirmDialog({
   pending,
   onConfirm,
   onClose,
+  confirmOnEnter = false,
 }: ConfirmDialogProps) {
-  // Close on Escape — small UX detail that reads as polish.
   useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape' && !pending) onClose(); }
+    function onKey(e: KeyboardEvent) {
+      if (pending) return;
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'Enter' && confirmOnEnter) onConfirm();
+    }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, pending]);
+  }, [onClose, onConfirm, pending, confirmOnEnter]);
 
   // Track where mousedown started so a drag (e.g. selecting body text) that
   // ends on the backdrop doesn't close the dialog.
   const downOnBackdropRef = useRef(false);
 
-  return (
+  return createPortal(
     <div
       className="cw-dialog-backdrop"
       role="dialog"
@@ -56,7 +62,10 @@ export function ConfirmDialog({
         <h2 style={{ margin: '0 0 8px', fontSize: 18, letterSpacing: '-0.015em' }}>{title}</h2>
         <p style={{ color: 'var(--cw-ink-3)', margin: '0 0 18px', fontSize: 13, lineHeight: 1.6 }}>{body}</p>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-          <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>{cancelLabel}</button>
+          <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>
+            {cancelLabel}
+            {confirmOnEnter && <span style={{ opacity: 0.6, fontSize: 11 }}>Esc</span>}
+          </button>
           <button
             type="button"
             className="cw-btn-primary"
@@ -67,10 +76,16 @@ export function ConfirmDialog({
               borderColor: 'var(--cw-destructive)',
             } : undefined}
           >
-            {pending ? '처리 중…' : confirmLabel}
+            {pending ? '처리 중…' : (
+              <>
+                {confirmLabel}
+                {confirmOnEnter && <Icon name="corner-down-left" size={12} style={{ opacity: 0.7 }} />}
+              </>
+            )}
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
