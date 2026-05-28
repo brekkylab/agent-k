@@ -15,13 +15,17 @@ export function setUnauthorizedHandler(cb: (reason: UnauthorizedReason) => void)
   unauthorizedTriggered = false;
 }
 
+// 백엔드 출처: backend/src/auth/jwt.rs — ExpiredSignature 에러 메시지
+// 이 문자열이 변경되면 만료 배너가 표시되지 않음 (backend error_code 필드 추가로 개선 예정)
+const JWT_EXPIRED_MESSAGE = 'token has expired';
+
 export function notifyUnauthorized(status: number, body: unknown, skipAuth?: boolean): void {
   if (status !== 401 || skipAuth || !unauthorizedHandler || unauthorizedTriggered) return;
   unauthorizedTriggered = true;
   const msg = typeof body === 'object' && body && 'error' in body
     ? String((body as Record<string, unknown>).error)
     : '';
-  const reason: UnauthorizedReason = msg === 'token has expired' ? 'expired' : 'invalid';
+  const reason: UnauthorizedReason = msg === JWT_EXPIRED_MESSAGE ? 'expired' : 'invalid';
   unauthorizedHandler(reason);
 }
 const DEFAULT_BASE_URL = import.meta.env.VITE_BACKEND_V2_URL ?? 'http://127.0.0.1:8080';
