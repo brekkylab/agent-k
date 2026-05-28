@@ -256,3 +256,29 @@ pub async fn delete_user_admin(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::validate_language;
+
+    #[test]
+    fn validate_language_accepts_en_and_ko() {
+        assert!(validate_language("en").is_ok());
+        assert!(validate_language("ko").is_ok());
+    }
+
+    #[test]
+    fn validate_language_rejects_unsupported_codes() {
+        assert!(validate_language("ja").is_err());
+        assert!(validate_language("zh").is_err());
+        assert!(validate_language("").is_err());
+    }
+
+    #[test]
+    fn validate_language_is_case_sensitive() {
+        // The frontend always sends lowercase codes; reject uppercase so a typo
+        // doesn't silently succeed in the DB.
+        assert!(validate_language("EN").is_err());
+        assert!(validate_language("Ko").is_err());
+    }
+}

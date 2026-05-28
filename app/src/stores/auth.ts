@@ -14,7 +14,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   currentUser: null,
   setCurrentUser: (user) => {
     if (user && i18n.language !== user.preferredLanguage) {
-      void i18n.changeLanguage(user.preferredLanguage);
+      i18n.changeLanguage(user.preferredLanguage).catch((err) => {
+        console.warn('[i18n] changeLanguage failed during auth hydrate', err);
+      });
     }
     set({ currentUser: user });
   },

@@ -25,7 +25,9 @@ export function useLanguage() {
 
   const setLanguage = useCallback(
     (next: SupportedLanguage) => {
-      void i18n.changeLanguage(next);
+      i18n.changeLanguage(next).catch((err) => {
+        console.warn('[i18n] changeLanguage failed', err);
+      });
       try {
         localStorage.setItem(LANGUAGE_STORAGE_KEY, next);
       } catch {

@@ -3,9 +3,6 @@ import LanguageDetector from 'i18next-browser-languagedetector';
 import resourcesToBackend from 'i18next-resources-to-backend';
 import { initReactI18next } from 'react-i18next';
 
-import enCommon from './locales/en/common.json';
-import koCommon from './locales/ko/common.json';
-
 export { josa, type JosaPair } from './josa';
 
 export const SUPPORTED_LANGUAGES = ['en', 'ko'] as const;
@@ -23,6 +20,10 @@ export const I18N_NAMESPACES = [
   'members',
 ] as const;
 
+// All namespaces — including `common` — are loaded lazily via vite chunks.
+// The `<Suspense fallback={null}>` wrapper around the router covers the
+// first paint while `common` resolves; the file is ~100 bytes so the gap
+// is invisible on real devices.
 void i18n
   .use(
     resourcesToBackend(
@@ -34,13 +35,7 @@ void i18n
   .init({
     fallbackLng: 'en',
     supportedLngs: [...SUPPORTED_LANGUAGES],
-    ns: ['common'],
     defaultNS: 'common',
-    partialBundledLanguages: true,
-    resources: {
-      en: { common: enCommon },
-      ko: { common: koCommon },
-    },
     interpolation: {
       escapeValue: false,
     },
