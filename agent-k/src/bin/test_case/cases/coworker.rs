@@ -179,7 +179,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )],
             shared_files: Vec::new(),
         },
-        // Case 12 — xlsx create from scratch, must follow XLSX Report Create Skill (SKILL.md)
+        // Case 12 — xlsx create: 학생 성적 (per-case SKILL.md / xlsx_skill.py attached)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "학생 성적 관리용 엑셀 파일 하나 만들어줘. 학생 12명 정도 \
@@ -198,19 +198,34 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![
                 (
-                    include_bytes!("xlsx/SKILL.md").to_vec(),
+                    include_bytes!("../../../agents/skill/SKILL.md").to_vec(),
                     PathBuf::from("SKILL.md"),
                 ),
                 (
-                    include_bytes!("xlsx/xlsx_skill.py").to_vec(),
+                    include_bytes!("../../../agents/skill/script/xlsx_skill.py").to_vec(),
                     PathBuf::from("xlsx_skill.py"),
                 ),
             ],
             shared_files: Vec::new(),
         },
-        // Case 13 — xlsx multi-sheet dashboard (sales_dashboard.xlsx)
-        //   - 3 sheets: 원본데이터(100 rows), 월별요약(pivot), 대시보드(charts+KPI)
-        //   - Tests: formulas, pivot tables, charts, KPI cards, CF, print setup
+        // Case 13 — same as Case 12 but WITHOUT per-case skill files (baseline)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "학생 성적 관리용 엑셀 파일 하나 만들어줘. 학생 12명 정도 \
+                 예시 데이터로 채우고, 컬럼은 학번/이름/주민번호/전공점수/\
+                 영어점수/교양점수까지 직접 입력, 합계/평균/순위/평가는 \
+                 자동 계산되게 수식으로 넣어 줘. 평가는 평균 90 이상 \
+                 '우수', 60 미만 '재시험', 나머지 '보통'. 평균 60점 미만인 \
+                 학생은 행 전체가 빨갛게 표시되도록 조건부 서식도 넣어 줘. \
+                 그리고 시트 아래쪽에 최소/최대값, 여학생/남학생 수, 김씨 \
+                 성 학생 수, 평균 80점 이상 학생 수 같은 요약 통계도 \
+                 자동 계산되게 같이 넣어줘. 저장은 students.xlsx 같은 \
+                 이름으로.",
+            )]),
+            files: vec![],
+            shared_files: Vec::new(),
+        },
+        // Case 14 — xlsx create: sales_dashboard.xlsx multi-sheet (per-case skill files)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "sales_dashboard.xlsx 파일 하나 만들어줘.\n\n\
@@ -248,20 +263,17 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![
                 (
-                    include_bytes!("xlsx/SKILL.md").to_vec(),
+                    include_bytes!("../../../agents/skill/SKILL.md").to_vec(),
                     PathBuf::from("SKILL.md"),
                 ),
                 (
-                    include_bytes!("xlsx/xlsx_skill.py").to_vec(),
+                    include_bytes!("../../../agents/skill/script/xlsx_skill.py").to_vec(),
                     PathBuf::from("xlsx_skill.py"),
                 ),
             ],
             shared_files: Vec::new(),
         },
-        // Case 14 — same as Case 17 but WITHOUT SKILL.md / xlsx_skill.py
-        //   - Baseline: how well does the model do on this xlsx task with no
-        //     skill guide? Compare output against Case 17 to measure the
-        //     skill's contribution.
+        // Case 15 — same as Case 14 but WITHOUT per-case skill files (baseline)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "sales_dashboard.xlsx 파일 하나 만들어줘.\n\n\
@@ -298,78 +310,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             files: vec![],
             shared_files: Vec::new(),
         },
-        // Case 15 — financial_report.xlsx (executive-facing, strict integrity)
-        //   - 4 sheets: 손익계산서, 대차대조표, 현금흐름표, 요약대시보드
-        //   - Heavy on formulas, named ranges, charts, print setup, headers/footers
-        //   - Tests how the model handles "must-not-break" requirements + references
-        //     to a nonexistent template (financial_template.xlsx)
-        Case {
-            query: Message::new(Role::User).with_contents([Part::text(
-                "financial_report.xlsx 생성해줘.\n\n\
-                 주의:\n\
-                 이 파일은 임원 보고용이라 절대 깨지면 안 됨.\n\n\
-                 요구사항:\n\
-                 - 손익계산서\n\
-                 - 대차대조표\n\
-                 - 현금흐름표\n\
-                 - 요약대시보드\n\n\
-                 데이터:\n\
-                 - 최근 24개월 예시 데이터 자동 생성\n\n\
-                 필수 기능:\n\
-                 - 모든 합계는 수식 사용\n\
-                 - 전년동기대비 증감률 계산\n\
-                 - 적자 항목은 빨간색 괄호 표기\n\
-                 - 차트 포함\n\
-                 - 인쇄영역 설정\n\
-                 - 페이지 번호 포함\n\
-                 - 머리글/바닥글 설정\n\n\
-                 추가:\n\
-                 - 숨겨진 계산 시트 사용 가능\n\
-                 - Named Range 적극 활용\n\
-                 - 수식 consistency 유지\n\
-                 - circular reference 금지\n\
-                 - workbook corruption 절대 금지\n\n\
-                 특히 중요:\n\
-                 - 기존 financial_template.xlsx 스타일 유지\n\
-                 - merged cell 구조 유지\n\
-                 - 피벗 캐시 유지\n\
-                 - 매크로 손상 금지\n\n\
-                 작업 전에:\n\
-                 1. artifacts/SKILL.md 읽기",
-            )]),
-            files: vec![
-                (
-                    include_bytes!("xlsx/SKILL.md").to_vec(),
-                    PathBuf::from("SKILL.md"),
-                ),
-                (
-                    include_bytes!("xlsx/xlsx_skill.py").to_vec(),
-                    PathBuf::from("xlsx_skill.py"),
-                ),
-            ],
-            shared_files: Vec::new(),
-        },
-        // Case 16 — same as Case 16 but WITHOUT SKILL.md / xlsx_skill.py
-        Case {
-            query: Message::new(Role::User).with_contents([Part::text(
-                "학생 성적 관리용 엑셀 파일 하나 만들어줘. 학생 12명 정도 \
-                 예시 데이터로 채우고, 컬럼은 학번/이름/주민번호/전공점수/\
-                 영어점수/교양점수까지 직접 입력, 합계/평균/순위/평가는 \
-                 자동 계산되게 수식으로 넣어 줘. 평가는 평균 90 이상 \
-                 '우수', 60 미만 '재시험', 나머지 '보통'. 평균 60점 미만인 \
-                 학생은 행 전체가 빨갛게 표시되도록 조건부 서식도 넣어 줘. \
-                 그리고 시트 아래쪽에 최소/최대값, 여학생/남학생 수, 김씨 \
-                 성 학생 수, 평균 80점 이상 학생 수 같은 요약 통계도 \
-                 자동 계산되게 같이 넣어줘. 저장은 students.xlsx 같은 \
-                 이름으로.",
-            )]),
-            files: vec![],
-            shared_files: Vec::new(),
-        },
-        // Case 17 — xlsx edit (sales_dashboard.xlsx 수정)
-        //   - Base file: sales_dashboard.xlsx (3 sheets: 원본데이터, 월별요약, 대시보드)
-        //   - Edits: add quarterly summary table to 월별요약, change VAT 10% → 20% in 원본데이터
-        //   - Tests: existing-file editing, formula updates, sheet structure preservation
+        // Case 16 — xlsx edit: sales_dashboard.xlsx (per-case skill files)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "artifacts/sales_dashboard.xlsx 파일을 수정해줘.\n\n\
@@ -386,18 +327,17 @@ pub fn get_coworker_cases() -> Vec<Case> {
                     PathBuf::from("sales_dashboard.xlsx"),
                 ),
                 (
-                    include_bytes!("xlsx/SKILL.md").to_vec(),
+                    include_bytes!("../../../agents/skill/SKILL.md").to_vec(),
                     PathBuf::from("SKILL.md"),
                 ),
                 (
-                    include_bytes!("xlsx/xlsx_skill.py").to_vec(),
+                    include_bytes!("../../../agents/skill/script/xlsx_skill.py").to_vec(),
                     PathBuf::from("xlsx_skill.py"),
                 ),
             ],
             shared_files: Vec::new(),
         },
-        // Case 18 — same as Case 21 but WITHOUT SKILL.md / xlsx_skill.py
-        //   - Baseline: how does the model handle xlsx edit with no skill guide?
+        // Case 17 — same as Case 16 but WITHOUT per-case skill files (baseline)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "artifacts/sales_dashboard.xlsx 엑셀 파일을 수정해줘.\n\n\
@@ -416,13 +356,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )],
             shared_files: Vec::new(),
         },
-        // Case 19 — same as Case 15 (financial_report.xlsx) but the XLSX skill
-        //   is NOT passed as per-case input files. Instead it is attached to
-        //   the coworker agent itself (see `get_coworker_agent`), so this case
-        //   tests whether the agent discovers and uses the bundled skill on its
-        //   own. The "작업 전에 artifacts/SKILL.md 읽기" line is dropped because
-        //   the skill now lives at /workspace/skills/xlsx, surfaced via the
-        //   auto-rendered "Available Skills" table.
+        // Case 18 — xlsx create: financial_report.xlsx (per-case skill files)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "financial_report.xlsx 생성해줘.\n\n\
@@ -443,17 +377,43 @@ pub fn get_coworker_cases() -> Vec<Case> {
                  - 인쇄영역 설정\n\
                  - 페이지 번호 포함\n\
                  - 머리글/바닥글 설정\n\n\
-                 추가:\n\
-                 - 숨겨진 계산 시트 사용 가능\n\
-                 - Named Range 적극 활용\n\
-                 - 수식 consistency 유지\n\
-                 - circular reference 금지\n\
-                 - workbook corruption 절대 금지\n\n\
-                 특히 중요:\n\
-                 - 기존 financial_template.xlsx 스타일 유지\n\
-                 - merged cell 구조 유지\n\
-                 - 피벗 캐시 유지\n\
-                 - 매크로 손상 금지",
+                 작업 전에:\n\
+                 1. artifacts/SKILL.md 읽기",
+            )]),
+            files: vec![
+                (
+                    include_bytes!("../../../agents/skill/SKILL.md").to_vec(),
+                    PathBuf::from("SKILL.md"),
+                ),
+                (
+                    include_bytes!("../../../agents/skill/script/xlsx_skill.py").to_vec(),
+                    PathBuf::from("xlsx_skill.py"),
+                ),
+            ],
+            shared_files: Vec::new(),
+        },
+        // Case 19 — same as Case 18 but per-case files removed (skill comes from agent — see get_coworker_agent)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "financial_report.xlsx 파일 생성해줘.\n\n\
+                 주의:\n\
+                 이 파일은 임원 보고용이라 절대 깨지면 안 됨.\n\n\
+                 요구사항:\n\
+                 - 손익계산서\n\
+                 - 대차대조표\n\
+                 - 현금흐름표\n\
+                 - 요약대시보드\n\n\
+                 데이터:\n\
+                 - 최근 24개월 예시 데이터 자동 생성\n\n\
+                 필수 기능:\n\
+                 - 모든 합계는 수식 사용\n\
+                 - 전년동기대비 증감률 계산\n\
+                 - 적자 항목은 빨간색 괄호 표기\n\
+                 - 차트 포함\n\
+                 - 인쇄영역 설정\n\
+                 - 페이지 번호 포함\n\
+                 - 머리글/바닥글 설정\n"
+                 ,
             )]),
             files: vec![],
             shared_files: Vec::new(),
