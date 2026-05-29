@@ -2,7 +2,7 @@
 // + composer) + right side (members, references, access, artifact).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, streamMessage } from '@/api/messages';
@@ -26,6 +26,7 @@ import { AttachmentPreview } from '@/components/AttachmentPreview';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
+import { shortSessionId } from '@/lib/sessionId';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   component: SessionPage,
@@ -220,7 +221,8 @@ function SessionPage() {
     }
   }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
 
-  const duplicateMutation = useDuplicateSession({ navigateOnSuccess: true });
+  const navigate = useNavigate();
+  const duplicateMutation = useDuplicateSession();
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
@@ -261,7 +263,14 @@ function SessionPage() {
                 title="Duplicate session"
                 expandedText="세션 복제"
                 confirmText="한 번 더 눌러 복제"
-                onClick={() => duplicateMutation.mutate(sessionId)}
+                onClick={() => duplicateMutation.mutate(sessionId, {
+                  onSuccess: (newSession) => {
+                    navigate({
+                      to: '/projects/$projectSlug/sessions/$sessionPrefix',
+                      params: { projectSlug, sessionPrefix: shortSessionId(newSession.id) },
+                    });
+                  },
+                })}
               />
             )}
             {sess && (

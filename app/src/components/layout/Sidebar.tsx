@@ -222,8 +222,8 @@ export function Sidebar() {
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions', activeProjectSlug],
-    queryFn: () => listSessions(activeProject!.id),
-    enabled: Boolean(activeProjectSlug) && Boolean(activeProject),
+    queryFn: () => listSessions(activeProjectSlug!),
+    enabled: Boolean(activeProjectSlug),
   });
 
   const activeSessionId = useActiveSessionId();
@@ -281,7 +281,7 @@ export function Sidebar() {
     },
   });
 
-  const duplicateMutation = useDuplicateSession({ navigateOnSuccess: true });
+  const duplicateMutation = useDuplicateSession();
 
   function openProject(slug: string) {
     navigate({ to: '/projects/$projectSlug', params: { projectSlug: slug } });
@@ -496,7 +496,13 @@ export function Sidebar() {
           confirmLabel="복제"
           pending={duplicateMutation.isPending}
           onConfirm={() => {
-            duplicateMutation.mutate(pendingDuplicate.id);
+            duplicateMutation.mutate(pendingDuplicate.id, {
+              onSuccess: (newSession) => {
+                if (activeProject) {
+                  openSession(activeProject.slug, shortSessionId(newSession.id));
+                }
+              },
+            });
             setPendingDuplicate(null);
           }}
           onClose={() => setPendingDuplicate(null)}

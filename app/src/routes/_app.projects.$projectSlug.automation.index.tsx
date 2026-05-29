@@ -11,6 +11,7 @@ import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, l
 import { listMessages } from '@/api/messages';
 import { formatMessageTime } from '@/lib/formatMessageTime';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
+import { shortSessionId } from '@/lib/sessionId';
 import type { Automation, Message, Run, Trigger } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')({
@@ -322,7 +323,7 @@ function AutomationsPage() {
       void queryClient.invalidateQueries({ queryKey: ['runs', automationId] });
     },
   });
-  const duplicateMutation = useDuplicateSession({ navigateOnSuccess: true });
+  const duplicateMutation = useDuplicateSession();
   const [pendingManualRun, setPendingManualRun] = useState<Automation | null>(null);
   const triggerManualRun = (automationId: string) => {
     if (manualRunMutation.isPending) return;
@@ -359,7 +360,14 @@ function AutomationsPage() {
             title="이 run의 세션을 복제"
             expandedText="세션으로 복제"
             confirmText="한 번 더 눌러 복제"
-            onClick={() => duplicateMutation.mutate(run.sessionId)}
+            onClick={() => duplicateMutation.mutate(run.sessionId, {
+              onSuccess: (newSession) => {
+                navigate({
+                  to: '/projects/$projectSlug/sessions/$sessionPrefix',
+                  params: { projectSlug, sessionPrefix: shortSessionId(newSession.id) },
+                });
+              },
+            })}
           />
           {cancellable && (
             <button
