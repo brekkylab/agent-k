@@ -4,6 +4,7 @@ import { getMe, login, signupAndLogin } from '@/api/auth';
 import { getToken, ApiError } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { WelcomeCarousel } from '@/components/WelcomeCarousel';
+import { Icon } from '@/components/Icon';
 
 type Mode = 'login' | 'signup';
 
@@ -34,6 +35,7 @@ function AuthPanel() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -101,13 +103,25 @@ function AuthPanel() {
           )}
           <label>
             Password
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete={isSignup ? 'new-password' : 'current-password'}
-              required
-            />
+            <div className="cw-input-with-toggle">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={isSignup ? 'new-password' : 'current-password'}
+                required
+              />
+              <button
+                type="button"
+                className="cw-input-toggle"
+                aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 보이기'}
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((v) => !v)}
+                tabIndex={-1}
+              >
+                <Icon name={showPassword ? 'eye-off' : 'eye'} size={16} />
+              </button>
+            </div>
           </label>
           {error && <div className="cw-form-error">{error}</div>}
           <button type="submit" className="cw-btn-primary wide" disabled={submitting}>

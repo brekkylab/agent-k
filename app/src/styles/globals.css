@@ -2042,6 +2042,54 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   box-shadow: 0 0 0 3px var(--cw-paper-3);
 }
 
+/* Edge/IE의 built-in password reveal · clear 버튼 숨김 — 커스텀 토글
+   (.cw-input-toggle)과 나란히 두 번 보이는 걸 막고, 모든 브라우저에서
+   일관된 UI를 유지한다. password input에는 ::-ms-reveal이, text input에는
+   ::-ms-clear가 자동으로 붙는데, 후자는 보수적으로 함께 처리. */
+.cw-welcome-card input::-ms-reveal,
+.cw-welcome-card input::-ms-clear {
+  display: none;
+}
+
+/* Password 같이 보조 토글이 붙는 input의 래퍼. 토글 아이콘과 텍스트가
+   겹치지 않도록 input의 우측 padding을 토글 폭(30px + 여백)만큼 늘린다. */
+.cw-input-with-toggle {
+  position: relative;
+  display: block;
+}
+.cw-input-with-toggle input {
+  padding-right: 42px;
+}
+
+.cw-input-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cw-ink-3);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.cw-input-toggle:hover {
+  color: var(--cw-ink);
+  background: var(--cw-paper-3);
+}
+.cw-input-toggle:focus-visible {
+  outline: 2px solid var(--cw-ink-3);
+  outline-offset: 2px;
+  color: var(--cw-ink);
+}
+.cw-input-toggle[aria-pressed="true"] {
+  color: var(--cw-ink);
+}
+
 .cw-welcome-card .cw-btn-primary {
   min-height: 44px;
   border-radius: 12px;
