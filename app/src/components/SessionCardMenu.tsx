@@ -16,7 +16,7 @@ interface SessionCardMenuProps {
 interface MenuRect { top: number; left: number; }
 
 export function SessionCardMenu({ onDuplicate, duplicateDisabled, onDelete }: SessionCardMenuProps) {
-  if (!onDuplicate && !onDelete) return null;
+  const hasActions = Boolean(onDuplicate || onDelete);
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<MenuRect | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -60,6 +60,8 @@ export function SessionCardMenu({ onDuplicate, duplicateDisabled, onDelete }: Se
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  if (!hasActions) return null;
 
   return (
     <>
