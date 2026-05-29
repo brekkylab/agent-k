@@ -26,6 +26,7 @@ import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { canAdministerSession } from '@/lib/permissions';
 import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
+import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
@@ -461,7 +462,7 @@ export function Sidebar() {
             </div>
             <button
               aria-label="logout"
-              onClick={() => { useAuthStore.getState().reset(); window.location.href = '/login'; }}
+              onClick={() => forceLogout({ reason: 'manual' })}
               style={{ border: 0, background: 'transparent', padding: 0, color: 'var(--cw-ink-3)', cursor: 'pointer' }}
             >
               <Icon name="more" />
