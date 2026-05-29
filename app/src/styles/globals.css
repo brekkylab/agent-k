@@ -2051,6 +2051,22 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   display: none;
 }
 
+/* Chrome/Edge의 자동 채움 시 input 배경을 연한 파랑(rgb(232,240,254))으로
+   강제하는 동작을 덮어쓴다. CSS 명세상 background-color로는 override가 안 되어
+   inset box-shadow로 input 안쪽을 paper 색으로 덮고, text-fill-color로 글자
+   색을 ink로 강제한다 — 둘 다 -webkit-* prefix 한정이라 다른 브라우저에는
+   영향 없음. focus 시에도 같은 처리를 유지해 자동 채움 후 클릭해도 색이 안 튐. */
+.cw-welcome-card input:-webkit-autofill,
+.cw-welcome-card input:-webkit-autofill:hover,
+.cw-welcome-card input:-webkit-autofill:focus,
+.cw-welcome-card input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px var(--cw-paper) inset;
+          box-shadow: 0 0 0 1000px var(--cw-paper) inset;
+  -webkit-text-fill-color: var(--cw-ink);
+  caret-color: var(--cw-ink);
+  transition: background-color 5000s ease-in-out 0s;
+}
+
 /* Password 같이 보조 토글이 붙는 input의 래퍼. 토글 아이콘과 텍스트가
    겹치지 않도록 input의 우측 padding을 토글 폭(30px + 여백)만큼 늘린다. */
 .cw-input-with-toggle {
