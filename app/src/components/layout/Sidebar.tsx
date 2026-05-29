@@ -26,6 +26,7 @@ import { SessionsOverlay } from '@/components/SessionsOverlay';
 import { canAdministerSession } from '@/lib/permissions';
 import { shortSessionId } from '@/lib/sessionId';
 import { useSessionDelete } from '@/lib/useSessionDelete';
+import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import type { Session } from '@/domain/types';
 
@@ -230,8 +231,8 @@ export function Sidebar() {
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions', activeProjectSlug],
-    queryFn: () => listSessions(activeProject?.id ?? ''),
-    enabled: Boolean(activeProjectSlug),
+    queryFn: () => listSessions(activeProject!.id),
+    enabled: Boolean(activeProjectSlug) && Boolean(activeProject),
   });
 
   const activeSessionId = useActiveSessionId();
@@ -373,10 +374,10 @@ export function Sidebar() {
               <IconPocket tone="skills" icon="zap" /> <span>Skills</span>
             </button>
             <button
-              className={`cw-nav-row ${activeRoute === 'schedule' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectSlug/schedule', params: { projectSlug: activeProject.slug } })}
+              className={`cw-nav-row ${activeRoute === 'automation' ? 'is-active' : ''}`}
+              onClick={() => navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="schedule" icon="calendar" /> <span>Schedule</span>
+              <IconPocket tone="schedule" icon="circle-play" /> <span>Automation</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'members' ? 'is-active' : ''}`}
@@ -450,7 +451,7 @@ export function Sidebar() {
             </div>
             <button
               aria-label="logout"
-              onClick={() => { useAuthStore.getState().reset(); window.location.href = '/login'; }}
+              onClick={() => forceLogout({ reason: 'manual' })}
               style={{ border: 0, background: 'transparent', padding: 0, color: 'var(--cw-ink-3)', cursor: 'pointer' }}
             >
               <Icon name="more" />
@@ -503,13 +504,13 @@ function useParamFromMatches(key: string): string | null {
   return null;
 }
 
-function useActiveRouteKey(): 'project' | 'files' | 'skills' | 'schedule' | 'members' | 'settings' | 'session' | 'projects' {
+function useActiveRouteKey(): 'project' | 'files' | 'skills' | 'automation' | 'members' | 'settings' | 'session' | 'projects' {
   const state = useRouterState();
   const path = state.location.pathname;
   if (path.includes('/sessions/')) return 'session';
   if (path.endsWith('/files')) return 'files';
   if (path.endsWith('/skills')) return 'skills';
-  if (path.endsWith('/schedule')) return 'schedule';
+  if (/\/automation(\/|$)/.test(path)) return 'automation';
   if (path.endsWith('/members')) return 'members';
   if (path.endsWith('/settings')) return 'settings';
   if (path.match(/\/projects\/[^/]+$/)) return 'project';

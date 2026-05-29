@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getToken } from '@/api/client';
+import { ApiError, getToken } from '@/api/client';
 import { getMe } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
 import { useLayoutStore } from '@/stores/layout';
@@ -10,8 +10,22 @@ import { appWs } from '@/api/ws';
 import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app')({
-  beforeLoad: () => {
+  beforeLoad: async ({ context }) => {
     if (!getToken()) throw redirect({ to: '/login' });
+
+    // Warm cache: pass through without blocking — AppShell's useQuery handles background revalidation.
+    const cached = context.queryClient.getQueryData(['me']);
+    if (cached) return;
+
+    // Cold cache: verify the token with the server on first load.
+    try {
+      await context.queryClient.fetchQuery({ queryKey: ['me'], queryFn: getMe, staleTime: 5 * 60_000 });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        throw redirect({ to: '/login' });
+      }
+      // Network error or 5xx: fall through and let the page handle it.
+    }
   },
   component: AppShell,
 });

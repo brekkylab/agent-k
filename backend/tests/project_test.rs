@@ -301,7 +301,7 @@ async fn member_sees_own_sessions_in_project_list_but_not_others() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/sessions?project_id={project_id_str}"),
+        &format!("/sessions?project_ref={project_id_str}"),
         &alice_token,
         None,
     )
@@ -317,7 +317,7 @@ async fn member_sees_own_sessions_in_project_list_but_not_others() {
     let (status, body) = common::authed(
         &app,
         "GET",
-        &format!("/sessions?project_id={project_id_str}"),
+        &format!("/sessions?project_ref={project_id_str}"),
         &bob_token,
         None,
     )
@@ -357,5 +357,173 @@ async fn owner_leave_is_blocked() {
         status,
         StatusCode::BAD_REQUEST,
         "owner leave should be blocked: {body}"
+    );
+}
+
+// ── update_project: rename re-derives slug from the new name ─────────────────
+
+#[tokio::test]
+async fn update_project_name_regenerates_slug() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+
+    let payload = serde_json::json!({ "name": "Old Name" });
+    let (status, created) =
+        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    assert_eq!(status, StatusCode::CREATED, "create failed: {created}");
+    assert_eq!(created["slug"], "old-name");
+    let project_id = created["id"].as_str().unwrap().to_string();
+    let old_slug = created["slug"].as_str().unwrap().to_string();
+
+    let payload = serde_json::json!({ "name": "Cool Stuff" });
+    let (status, body) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{project_id}"),
+        &token,
+        Some(payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "rename failed: {body}");
+    assert_eq!(body["name"], "Cool Stuff");
+    assert_eq!(body["slug"], "cool-stuff");
+
+    // Old slug is retired but still resolves the same project.
+    let (status, fetched) = common::authed(
+        &app,
+        "GET",
+        &format!("/projects/{old_slug}"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "retired slug should still resolve: {fetched}");
+    assert_eq!(fetched["id"], project_id.as_str());
+    assert_eq!(fetched["slug"], "cool-stuff");
+}
+
+// ── update_project: description-only update leaves the slug alone ────────────
+
+#[tokio::test]
+async fn update_project_description_only_keeps_slug() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+    let original_slug = project["slug"].as_str().unwrap().to_string();
+
+    let payload = serde_json::json!({ "description": "new description" });
+    let (status, body) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{project_id}"),
+        &token,
+        Some(payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "desc update failed: {body}");
+    assert_eq!(body["description"], "new description");
+    assert_eq!(body["slug"], original_slug.as_str());
+}
+
+// ── update_project: re-deriving the same slug is a no-op (no history entry) ──
+
+#[tokio::test]
+async fn update_project_same_slug_noop() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+
+    let payload = serde_json::json!({ "name": "Stable Name" });
+    let (status, created) =
+        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    assert_eq!(status, StatusCode::CREATED, "create failed: {created}");
+    assert_eq!(created["slug"], "stable-name");
+    let project_id = created["id"].as_str().unwrap().to_string();
+
+    // A different spelling that slugifies to the same value.
+    let payload = serde_json::json!({ "name": "stable name" });
+    let (status, body) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{project_id}"),
+        &token,
+        Some(payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "rename failed: {body}");
+    assert_eq!(body["slug"], "stable-name");
+}
+
+// ── update_project: collision with another project's slug appends `-N` ───────
+
+#[tokio::test]
+async fn update_project_slug_collision_appends_suffix() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+
+    // Another project already owns the slug "shared".
+    let payload = serde_json::json!({ "name": "shared" });
+    let (status, blocker) =
+        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    assert_eq!(status, StatusCode::CREATED, "create blocker failed: {blocker}");
+    assert_eq!(blocker["slug"], "shared");
+
+    let payload = serde_json::json!({ "name": "Other" });
+    let (status, target) =
+        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    assert_eq!(status, StatusCode::CREATED, "create target failed: {target}");
+    let target_id = target["id"].as_str().unwrap().to_string();
+
+    // Renaming target to a value that slugifies to "shared" should bump to -2.
+    let payload = serde_json::json!({ "name": "Shared" });
+    let (status, body) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{target_id}"),
+        &token,
+        Some(payload),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "rename failed: {body}");
+    assert_eq!(body["slug"], "shared-2");
+}
+
+// ── update_project: explicit slug in payload is rejected by deny_unknown ─────
+
+#[tokio::test]
+async fn update_project_rejects_explicit_slug_field() {
+    let repo = common::make_repo().await;
+    let app = common::make_app_with_repo(repo);
+
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+
+    let payload = serde_json::json!({ "slug": "my-custom-slug" });
+    let (status, _) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{project_id}"),
+        &token,
+        Some(payload),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "slug must no longer be accepted in update payload"
     );
 }

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { getMe, login, signupAndLogin } from '@/api/auth';
 import { getBaseUrl, setBaseUrl, getToken, ApiError } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
+import { consumeLogoutReason, consumeRedirectAfterLogin, type LogoutReason } from '@/lib/forceLogout';
 
 type Mode = 'login' | 'signup';
 
@@ -23,6 +24,13 @@ function LoginPage() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [expiredReason, setExpiredReason] = useState<LogoutReason | null>(null);
+  const dismissExpiredReason = useCallback(() => setExpiredReason(null), []);
+
+  useEffect(() => {
+    const reason = consumeLogoutReason();
+    if (reason) setExpiredReason(reason);
+  }, []);
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -42,7 +50,8 @@ function LoginPage() {
       }
       const me = await getMe();
       setCurrentUser(me);
-      navigate({ to: '/projects' });
+      const redirectTo = consumeRedirectAfterLogin();
+      navigate({ to: redirectTo ?? '/projects' });
     } catch (err) {
       setError(messageOf(err, mode));
     } finally {
@@ -54,6 +63,7 @@ function LoginPage() {
 
   return (
     <div className="cw-live-login">
+      {expiredReason && <SessionExpiredBanner reason={expiredReason} onDismiss={dismissExpiredReason} />}
       <div className="cw-live-login-card">
         <h1>Cowork for Teams</h1>
         <p style={{ color: 'var(--cw-ink-3)', marginTop: 0 }}>
@@ -177,6 +187,47 @@ function ModeLink({ onClick, children }: { onClick: () => void; children: React.
     >
       {children}
     </button>
+  );
+}
+
+function SessionExpiredBanner({ reason, onDismiss }: { reason: LogoutReason; onDismiss: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 5000);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+
+  const message = reason === 'expired'
+    ? '세션이 만료되어 다시 로그인이 필요합니다.'
+    : '인증 정보가 유효하지 않습니다. 다시 로그인해 주세요.';
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 16,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: 'var(--cw-paper)',
+      border: '1px solid var(--cw-border)',
+      borderRadius: 8,
+      padding: '10px 16px',
+      fontSize: 13,
+      color: 'var(--cw-ink-2)',
+      boxShadow: 'var(--cw-shadow-md)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      zIndex: 9999,
+      whiteSpace: 'nowrap',
+    }}>
+      {message}
+      <button
+        type="button"
+        onClick={onDismiss}
+        style={{ border: 0, background: 'transparent', padding: 0, color: 'var(--cw-ink-4)', cursor: 'pointer', lineHeight: 1 }}
+      >
+        ✕
+      </button>
+    </div>
   );
 }
 

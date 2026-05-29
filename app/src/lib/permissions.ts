@@ -33,6 +33,18 @@ export function canRemoveMember(
   return targetUser.id === currentUser.id;             // self-leave
 }
 
+/**
+ * Mirrors backend `require_owner` for `PATCH /projects/{id}` and
+ * `DELETE /projects/{id}`. Both endpoints share the same predicate.
+ */
+export function canEditProject(
+  project: Project | null | undefined,
+  currentUser: User | null | undefined,
+): boolean {
+  if (!project || !currentUser) return false;
+  return project.ownerId === currentUser.id;
+}
+
 export function canLeaveProject(
   project: Project | null | undefined,
   currentUser: User | null | undefined,

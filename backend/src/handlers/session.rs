@@ -344,13 +344,13 @@ async fn validate_attachments(
 // ── Session CRUD ──────────────────────────────────────────────────────────────
 
 /// POST /sessions
-/// body must include `project_id` (UUID or slug); user must be a member of that project.
+/// body must include `project_ref` (UUID or slug); user must be a member of that project.
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Json(payload): Json<CreateSessionRequest>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
-    let project_id = super::project::resolve_project_id(&state, &payload.project_id).await?;
+    let project_id = super::project::resolve_project_id(&state, &payload.project_ref).await?;
     let is_member = state
         .repository
         .user_in_project(auth_user.id, project_id)
@@ -377,17 +377,17 @@ pub async fn create_session(
 #[serde(deny_unknown_fields, default)]
 pub struct ListSessionsQuery {
     /// Project UUID, active slug, or retired slug — backend resolves all three.
-    pub project_id: Option<String>,
+    pub project_ref: Option<String>,
 }
 
-/// GET /sessions?project_id=...
-/// `project_id` is optional — omit to list all sessions across projects the user can access.
+/// GET /sessions?project_ref=...
+/// `project_ref` is optional — omit to list all sessions across projects the user can access.
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     axum::extract::Query(q): axum::extract::Query<ListSessionsQuery>,
 ) -> ApiResult<Json<SessionListResponse>> {
-    let sessions = match q.project_id {
+    let sessions = match q.project_ref {
         Some(project_ref) => {
             let project_id = super::project::resolve_project_id(&state, &project_ref).await?;
             let is_member = state
