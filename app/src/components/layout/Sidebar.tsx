@@ -237,7 +237,7 @@ export function Sidebar() {
   }, [activeProjectSlug, activeSessionId, activeRoute, sidebarMode]);
 
   const createSessionMutation = useMutation({
-    mutationFn: (projectId: string) => createSession(projectId),
+    mutationFn: (projectRef: string) => createSession(projectRef),
     onSuccess: async (session) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', activeProjectSlug] });
       showToast('새 세션이 만들어졌습니다');
@@ -414,7 +414,7 @@ export function Sidebar() {
               label="Sessions"
               expanded={sessionsExpanded}
               onToggle={toggleSessions}
-              onAdd={() => createSessionMutation.mutate(activeProject.id)}
+              onAdd={() => createSessionMutation.mutate(activeProject.slug)}
               addLabel={createSessionMutation.isPending ? '세션 생성 중…' : '새 Session'}
               addDisabled={createSessionMutation.isPending}
             />
