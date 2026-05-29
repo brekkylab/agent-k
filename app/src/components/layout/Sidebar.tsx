@@ -445,7 +445,8 @@ export function Sidebar() {
                     {session.isAutoAppend && <span className="auto-dot">●</span>}
                     <span className="cw-session-menu-wrap">
                       <SessionCardMenu
-                        onDuplicate={session.lastMessageAt ? () => setPendingDuplicate(session) : undefined}
+                        onDuplicate={() => setPendingDuplicate(session)}
+                        duplicateDisabled={!session.lastMessageAt}
                         onDelete={canDelete ? () => setPendingDelete(session) : undefined}
                       />
                     </span>
