@@ -344,6 +344,7 @@ function AutomationsPage() {
   const renderRunDetail = (run: Run) => {
     const status = effectiveStatus(run);
     const cancellable = status === 'queued' || status === 'running';
+    const forkable = !cancellable;
     const trigger = run.triggerId ? triggerById[run.triggerId] ?? null : null;
     return (
     <>
@@ -357,9 +358,14 @@ function AutomationsPage() {
           <IconButton
             icon="sticky-notes"
             label="이 run의 세션 복제"
-            title="이 run의 세션을 복제"
-            expandedText="세션으로 복제"
+            title={
+              !forkable ? '완료된 run만 복제할 수 있습니다'
+              : duplicateMutation.isPending ? '복제 중...'
+              : '이 run의 세션을 복제'
+            }
+            expandedText={duplicateMutation.isPending ? '복제 중...' : '세션으로 복제'}
             confirmText="한 번 더 눌러 복제"
+            disabled={!forkable || duplicateMutation.isPending}
             onClick={() => duplicateMutation.mutate(run.sessionId, {
               onSuccess: (newSession) => {
                 navigate({

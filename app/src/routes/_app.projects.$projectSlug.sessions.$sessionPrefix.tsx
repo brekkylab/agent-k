@@ -242,6 +242,7 @@ function SessionPage() {
   const creator = userList.find((u) => u.id === sess?.creatorId);
   const usersForRender: User[] = [...userList, AI_USER];
   const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
+  const sessionForkable = !streaming && allMessages.length > 0;
 
   return (
     <div className="cw-session-layout cw-page-enter">
@@ -260,9 +261,15 @@ function SessionPage() {
               <IconButton
                 icon="sticky-notes"
                 label="세션 복제"
-                title="Duplicate session"
-                expandedText="세션 복제"
+                title={
+                  !sessionForkable
+                    ? (streaming ? '응답 생성이 끝난 뒤 복제할 수 있습니다' : '메시지가 있는 세션만 복제할 수 있습니다')
+                  : duplicateMutation.isPending ? '복제 중...'
+                  : 'Duplicate session'
+                }
+                expandedText={duplicateMutation.isPending ? '복제 중...' : '세션 복제'}
                 confirmText="한 번 더 눌러 복제"
+                disabled={!sessionForkable || duplicateMutation.isPending}
                 onClick={() => duplicateMutation.mutate(sessionId, {
                   onSuccess: (newSession) => {
                     navigate({

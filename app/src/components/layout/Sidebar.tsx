@@ -445,7 +445,7 @@ export function Sidebar() {
                     {session.isAutoAppend && <span className="auto-dot">●</span>}
                     <span className="cw-session-menu-wrap">
                       <SessionCardMenu
-                        onDuplicate={() => setPendingDuplicate(session)}
+                        onDuplicate={session.lastMessageAt ? () => setPendingDuplicate(session) : undefined}
                         onDelete={canDelete ? () => setPendingDelete(session) : undefined}
                       />
                     </span>
@@ -492,20 +492,23 @@ export function Sidebar() {
       {pendingDuplicate && (
         <ConfirmDialog
           title="세션을 복제하시겠어요?"
-          body={`"${pendingDuplicate.title}"의 메시지와 sandbox 상태를 새 세션으로 복제합니다.`}
+          body={`"${pendingDuplicate.title}"의 메시지와 sandbox 상태를 새 세션으로 복제합니다. 세션이 사용 중이면 복제에 실패할 수 있습니다.`}
           confirmLabel="복제"
           pending={duplicateMutation.isPending}
           onConfirm={() => {
             duplicateMutation.mutate(pendingDuplicate.id, {
               onSuccess: (newSession) => {
+                setPendingDuplicate(null);
                 if (activeProject) {
                   openSession(activeProject.slug, shortSessionId(newSession.id));
                 }
               },
+              onError: () => setPendingDuplicate(null),
             });
-            setPendingDuplicate(null);
           }}
-          onClose={() => setPendingDuplicate(null)}
+          onClose={() => {
+            if (!duplicateMutation.isPending) setPendingDuplicate(null);
+          }}
         />
       )}
 
