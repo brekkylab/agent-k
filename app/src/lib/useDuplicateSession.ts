@@ -2,16 +2,15 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { duplicateSession } from '@/api/sessions';
 import { ApiError } from '@/api/client';
 import { useToastStore } from '@/components/Toast';
-import type { Session } from '@/domain/types';
 
-export function useDuplicateSession() {
+export function useDuplicateSession(projectSlug: string) {
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
   return useMutation({
     mutationFn: (sessionId: string) => duplicateSession(sessionId),
-    onSuccess: async (session: Session) => {
-      await queryClient.invalidateQueries({ queryKey: ['sessions', session.projectId] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       showToast('세션이 복제되었습니다');
     },
     onError: (err) => {

@@ -281,7 +281,7 @@ export function Sidebar() {
     },
   });
 
-  const duplicateMutation = useDuplicateSession();
+  const duplicateMutation = useDuplicateSession(activeProjectSlug ?? '');
 
   function openProject(slug: string) {
     navigate({ to: '/projects/$projectSlug', params: { projectSlug: slug } });

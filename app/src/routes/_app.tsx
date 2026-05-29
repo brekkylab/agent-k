@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useLayoutStore } from '@/stores/layout';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { appWs } from '@/api/ws';
-import type { Session } from '@/domain/types';
+import type { Project, Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app')({
   beforeLoad: () => {
@@ -42,7 +42,13 @@ function AppShell() {
           ['session', event.session_id],
           (old) => (old ? { ...old, title: event.title } : old),
         );
-        void queryClient.invalidateQueries({ queryKey: ['sessions', event.project_id] });
+        // Session lists are keyed by project slug; event carries only the UUID.
+        // Resolve via the projects cache; no-op if it isn't loaded yet.
+        const projects = queryClient.getQueryData<Project[]>(['projects']) ?? [];
+        const slug = projects.find((p) => p.id === event.project_id)?.slug;
+        if (slug) {
+          void queryClient.invalidateQueries({ queryKey: ['sessions', slug] });
+        }
       }
     });
     return () => {

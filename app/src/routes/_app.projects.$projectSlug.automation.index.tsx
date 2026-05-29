@@ -323,7 +323,7 @@ function AutomationsPage() {
       void queryClient.invalidateQueries({ queryKey: ['runs', automationId] });
     },
   });
-  const duplicateMutation = useDuplicateSession();
+  const duplicateMutation = useDuplicateSession(projectSlug);
   const [pendingManualRun, setPendingManualRun] = useState<Automation | null>(null);
   const triggerManualRun = (automationId: string) => {
     if (manualRunMutation.isPending) return;

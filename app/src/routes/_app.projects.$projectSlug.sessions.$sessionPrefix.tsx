@@ -222,7 +222,7 @@ function SessionPage() {
   }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
 
   const navigate = useNavigate();
-  const duplicateMutation = useDuplicateSession();
+  const duplicateMutation = useDuplicateSession(projectSlug);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
