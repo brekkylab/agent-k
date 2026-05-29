@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon, type IconName } from '@/components/Icon';
 
-type MockKind = 'agent' | 'artifact' | 'share' | 'automation' | 'quickstart';
+type MockKind = 'agent' | 'knowledge' | 'artifact' | 'share' | 'automation' | 'quickstart';
 
 interface Slide {
   key: string;
@@ -21,33 +21,41 @@ const SLIDES: Slide[] = [
   {
     key: 'agent',
     eyebrow: '01 · 에이전트',
-    title: '원하는 에이전트에 맡기기',
+    title: '원하는 에이전트로',
     blurb: '새 세션을 시작할 때 에이전트를 고릅니다.',
-    detail: '작업의 성격에 맞는 에이전트를 선택해 요청을 보냅니다. 골라 둔 에이전트가 그 대화를 책임지고 처리합니다.',
+    detail: '작업의 성격에 맞는 에이전트를 선택해 요청을 보냅니다. 빠른 검색, 코드 실행, 멀티 페이지 심층 조사까지. 골라 둔 에이전트가 그 대화를 책임지고 처리합니다.',
     mock: 'agent',
   },
   {
+    key: 'knowledge',
+    eyebrow: '02 · 자료',
+    title: '내 문서로 답하기',
+    blurb: '파일을 올려두면 출처와 함께 답합니다.',
+    detail: 'PDF·문서·코드를 프로젝트에 올려두면 에이전트가 그 자료를 근거로 답합니다. 답변에는 어느 파일에서 가져왔는지 출처가 함께 표시되어 그대로 검토할 수 있습니다.',
+    mock: 'knowledge',
+  },
+  {
     key: 'artifact',
-    eyebrow: '02 · 산출물',
+    eyebrow: '03 · 산출물',
     title: '결과물을 바로 손에',
-    blurb: '보고서·코드·문서를 만들어 드립니다.',
+    blurb: '보고서·코드·문서를 바로 받습니다.',
     detail: '에이전트가 생성한 산출물을 내려받거나, 클릭 한 번으로 팀 공유 폴더로 옮겨 함께 이어갑니다.',
     mock: 'artifact',
   },
   {
     key: 'share',
-    eyebrow: '03 · 협업',
-    title: '팀이 함께 대화하는 세션',
+    eyebrow: '04 · 협업',
+    title: '함께 대화하는 세션',
     blurb: '공개 범위를 골라 함께 묻습니다.',
-    detail: '비공개·읽기 공유·함께 대화 모드로 팀원이 같은 세션에서 같은 AI와 실시간 협력합니다. 문서를 올리면 출처와 함께 답합니다.',
+    detail: '비공개·읽기 공유·함께 대화 모드로 팀원이 한 세션에서 같은 AI와 실시간 협업합니다. 같은 자료, 같은 답을 함께 검토합니다.',
     mock: 'share',
   },
   {
     key: 'automation',
-    eyebrow: '04 · 자동화',
-    title: '사람 없이 알아서 돌게',
-    blurb: '스케줄·웹훅으로 에이전트가 정기·이벤트 실행됩니다.',
-    detail: '매일 아침 리포트, 외부 알람이 트리거하는 분석처럼 반복되거나 사건에 반응해야 하는 작업을 등록해 두면 결과만 쌓입니다. 자동화 세션은 일반 대화와 분리되어 따로 관리됩니다.',
+    eyebrow: '05 · 자동화',
+    title: '사람 없이도 알아서',
+    blurb: '스케줄이나 웹훅으로 자동 실행됩니다.',
+    detail: '매일 아침 리포트, 외부 알람이 트리거하는 분석처럼 반복되거나 이벤트에 반응해야 하는 작업을 등록해 두면 결과만 쌓입니다. 자동화 세션은 일반 대화와 분리되어 따로 관리됩니다.',
     mock: 'automation',
   },
   {
@@ -236,6 +244,28 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
         </>
       )}
 
+      {kind === 'knowledge' && (
+        <div className="cw-mock-knowledge">
+          {/* 프로젝트에 업로드된 파일들 — 가장 위에서 "이 자료들이 답의 근거"임을 먼저 알린다 */}
+          <div className="cw-mock-files">
+            {KNOWLEDGE_FILES.map((f, i) => (
+              <span className="cw-mock-file" data-i={i} key={f.name}>
+                <Icon name={f.icon} size={13} />
+                {f.name}
+              </span>
+            ))}
+          </div>
+          {/* 사용자 질문 → 답변 + 출처. RAG의 핵심 가치는 출처가 보이는 것 */}
+          <div className="cw-mock-question">Q3 매출 알려줘</div>
+          <div className="cw-mock-answer">
+            <span className="cw-mock-answer-text">전년 동기 대비 12% 성장했습니다.</span>
+            <span className="cw-mock-source">
+              <Icon name="file-text" size={11} /> Q3-report.pdf · 12p
+            </span>
+          </div>
+        </div>
+      )}
+
       {kind === 'artifact' && (
         <div className="cw-mock-artifact">
           <div className="cw-mock-doc">
@@ -297,7 +327,10 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
             <li key={q.step}>
               <span className="cw-mock-step-num">{q.step}</span>
               <span className="cw-mock-step-icon"><Icon name={q.icon} size={13} /></span>
-              <span>{q.title}</span>
+              <span className="cw-mock-step-title">{q.title}</span>
+              {/* "이 단계에 들어갈 예시 한 토막" — 03/04와 같은 구체성을 마지막
+                 슬라이드에도 부여. 좁은 폭에서는 ellipsis로 안전하게 잘린다. */}
+              <span className="cw-mock-step-preview">{q.preview}</span>
             </li>
           ))}
         </ol>
@@ -306,16 +339,24 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
   );
 }
 
-const QUICKSTART: { step: string; title: string; icon: IconName }[] = [
-  { step: '1', title: '프로젝트 만들기', icon: 'folder' },
-  { step: '2', title: '대화 시작', icon: 'send' },
-  { step: '3', title: '팀과 공유', icon: 'users' },
+const QUICKSTART: { step: string; title: string; icon: IconName; preview: string }[] = [
+  { step: '1', title: '프로젝트 만들기', icon: 'folder', preview: 'Cowork Q3' },
+  { step: '2', title: '대화 시작',      icon: 'send',   preview: '오늘 미팅 정리' },
+  { step: '3', title: '팀과 공유',      icon: 'users',  preview: 'olive · mira' },
 ];
 
 const AGENTS: { name: string; icon: IconName; selected?: boolean }[] = [
-  { name: '분석', icon: 'analysis' },
-  { name: '검색', icon: 'search', selected: true },
-  { name: '실행', icon: 'zap' },
+  { name: '분석',     icon: 'analysis' },
+  { name: '검색',     icon: 'search', selected: true },
+  { name: '심층 조사', icon: 'sparkles' },
+  { name: '실행',     icon: 'zap' },
+];
+
+// 자료(RAG) mock — 업로드된 파일 두 종과, 답변에 인용된 출처. "출처와 함께 답한다"는
+// 본질을 보여주기 위해 답변 라인 옆에 작은 source chip을 강조한다.
+const KNOWLEDGE_FILES: { name: string; icon: IconName }[] = [
+  { name: 'Q3-report.pdf', icon: 'file-pdf' },
+  { name: 'market.docx',   icon: 'file-text' },
 ];
 
 // 자동화 mock — 가장 위가 "지금 실행 중", 아래로 갈수록 과거 실행.

@@ -1490,11 +1490,109 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="0"] { animation-delay: 0s;   }
 .cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="1"] { animation-delay: 0.15s; }
 .cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="2"] { animation-delay: 0.3s;  }
+.cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="3"] { animation-delay: 0.45s; }
 /* 선택된 row(검색)에는 loop-fade + box-shadow 펄스를 동시에 — "골랐다"는 신호가 hold 동안에도 살아 있다 */
 .cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-on="true"] {
   animation:
     cw-loop-fade   4s ease 0.15s infinite,
     cw-breathe-ring 2.4s ease-in-out infinite;
+}
+
+/* Knowledge mock — 업로드된 파일 chip + 사용자 질문 + 답변 라인 + 출처 chip.
+   타임라인: 파일들이 먼저 떠오르고(0s, 0.15s), 사용자 질문(0.3s), 답변 라인이
+   가로로 채워지며(0.45s, 0.6s), 마지막에 출처 chip이 pop으로 강조된다(0.75s).
+   "출처와 함께 답한다"는 RAG의 본질을 모션의 종점에 두는 설계. */
+.cw-mock-knowledge {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: min(280px, 92%);
+}
+.cw-mock-files {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cw-mock-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in oklch, white, transparent 84%);
+  color: white;
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(6px);
+}
+.cw-mock-knowledge[data-active="true"] .cw-mock-file { animation: cw-loop-rise 4s ease infinite; }
+.cw-mock-knowledge[data-active="true"] .cw-mock-file[data-i="0"] { animation-delay: 0s;    }
+.cw-mock-knowledge[data-active="true"] .cw-mock-file[data-i="1"] { animation-delay: 0.15s; }
+
+.cw-mock-question {
+  align-self: flex-end;
+  margin-right: 6%;
+  padding: 7px 13px;
+  border-radius: 14px 14px 4px 14px;
+  background: white;
+  color: var(--cw-accent);
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(6px);
+}
+.cw-mock-knowledge[data-active="true"] .cw-mock-question {
+  animation: cw-loop-rise 4s ease 0.3s infinite;
+}
+
+.cw-mock-answer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 10px 13px;
+  border-radius: 4px 14px 14px 14px;
+  background: color-mix(in oklch, white, transparent 86%);
+  margin-left: 4%;
+  max-width: 80%;
+}
+/* 짧은 실제 답변 한 줄 — placeholder 라인 대신 의미를 직접 전달한다.
+   다른 슬라이드들(03 채팅 버블, 04 run 라벨, 05 chip)과 같은 "구체적 텍스트" 결. */
+.cw-mock-answer-text {
+  color: white;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  opacity: 0;
+  transform: translateY(4px);
+}
+.cw-mock-knowledge[data-active="true"] .cw-mock-answer-text {
+  animation: cw-loop-rise 4s ease 0.45s infinite;
+}
+
+/* 출처 chip — 답변 안에서 살짝 들어가 있고, pop 모션 + breathe-ring으로
+   "여기 근거가 있다"를 강조한다. */
+.cw-mock-source {
+  align-self: flex-start;
+  margin-top: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: white;
+  color: var(--cw-accent);
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0;
+  transform: scale(0.6);
+}
+.cw-mock-knowledge[data-active="true"] .cw-mock-source {
+  animation:
+    cw-loop-pop    4s ease 0.75s infinite,
+    cw-breathe-ring 2.4s ease-in-out 0.75s infinite;
 }
 
 .cw-mock-artifact {
@@ -1758,6 +1856,27 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   color: white;
   flex: none;
 }
+/* step 이름이 너무 길어지면 chip이 밀려나지 않도록 — 타이틀이 chip 공간을
+   먹지 않고, chip은 항상 행 끝에서 ellipsis 처리된다. */
+.cw-mock-step-title {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* 각 step에 들어갈 예시 한 토막 — 03/04와 같은 구체성 결을 quickstart에도. */
+.cw-mock-step-preview {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in oklch, white, transparent 86%);
+  color: color-mix(in oklch, white, transparent 8%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+  flex: 0 1 auto;
+}
 
 /* 4초 사이클 안에 enter(10%) → hold(70%) → exit(10%) → dwell(10%)가 모두
    들어가 있어, infinite로 돌면서 "잠깐 보이고 텀 두고 또 보이는" 짧은
@@ -1809,7 +1928,8 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .cw-mock-agent-row, .cw-mock-composer,
   .cw-mock-doc, .cw-mock-doc-line, .cw-mock-share-badge,
   .cw-mock-av, .cw-mock-mode.is-on, .cw-mock-chat-bubble, .cw-mock-steps li,
-  .cw-mock-trigger, .cw-mock-run, .cw-mock-run-dot {
+  .cw-mock-trigger, .cw-mock-run, .cw-mock-run-dot,
+  .cw-mock-file, .cw-mock-question, .cw-mock-answer-text, .cw-mock-source {
     animation: none !important;
     opacity: 1 !important;
     transform: none !important;
