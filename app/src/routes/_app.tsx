@@ -14,9 +14,12 @@ export const Route = createFileRoute('/_app')({
   beforeLoad: () => {
     if (!getToken()) throw redirect({ to: '/login' });
   },
-  // Sidebar consumes both `common` and `project` ns — children inherit these
-  // through the parallel loader graph so leaf routes only declare their own.
-  loader: () => loadNs('common', 'project'),
+  // Sidebar mounts SessionCardMenu (`session`) and triggers NewProjectDialog
+  // (`dialogs`) in addition to its own `common`/`project` ns. These must all
+  // be guaranteed at the shell level — any route that doesn't independently
+  // load them would otherwise unmount the entire shell when the user opens
+  // a sidebar menu, re-introducing the blank-flash.
+  loader: () => loadNs('common', 'project', 'session', 'dialogs'),
   component: AppShell,
 });
 

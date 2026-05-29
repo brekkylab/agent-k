@@ -25,6 +25,7 @@
     "action": "새 세션"
   },
   "activity": {
+    "section_label": "활동",
     "sync_title": "프로젝트 동기화됨",
     "sync_when": "방금 전",
     "sync_body": "세션과 파일이 실시간으로 동기화되어 표시됩니다."

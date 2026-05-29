@@ -137,7 +137,7 @@ function ProjectHome() {
         />
       )}
 
-      <SectionLabel>Activity</SectionLabel>
+      <SectionLabel>{t('activity.section_label')}</SectionLabel>
       <div className="cw-activity-list">
         <ActivityRow title={t('activity.sync_title')} date={t('activity.sync_when')}>
           {t('activity.sync_body')}
