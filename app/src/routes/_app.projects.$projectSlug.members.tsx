@@ -15,9 +15,12 @@ import { useToastStore } from '@/components/Toast';
 import { useAuthStore } from '@/stores/auth';
 import { canInviteMembers, canLeaveProject, canRemoveMember } from '@/lib/permissions';
 import { ApiError } from '@/api/client';
+import { loadNs } from '@/i18n/loader';
 import type { User } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/members')({
+  // InviteDialog + ConfirmDialog → `dialogs`. `members` is route-local.
+  loader: () => loadNs('members', 'dialogs'),
   component: MembersPage,
 });
 

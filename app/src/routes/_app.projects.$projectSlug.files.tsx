@@ -16,6 +16,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
+import { loadNs } from '@/i18n/loader';
 import type { TFunction } from 'i18next';
 import {
   copyDirents,
@@ -54,6 +55,8 @@ const VIEW_KEY = 'cowork.files.viewMode';
 const DRAG_THRESHOLD = 5; // px — under this we treat mousedown as click
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/files')({
+  // Rename / NewFolder / CopyToShared / FolderPicker all live on this page → `dialogs`.
+  loader: () => loadNs('files', 'dialogs'),
   component: FilesPage,
 });
 

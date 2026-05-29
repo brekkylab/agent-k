@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getMe, login, signupAndLogin } from '@/api/auth';
 import { getBaseUrl, setBaseUrl, getToken } from '@/api/client';
 import { apiErrorToMessage } from '@/api/error-messages';
+import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 
 type Mode = 'login' | 'signup';
@@ -12,15 +14,18 @@ export const Route = createFileRoute('/login')({
   beforeLoad: () => {
     if (getToken()) throw redirect({ to: '/projects' });
   },
+  // Login page consumes `auth` + `errors` only. `common` is intentionally
+  // skipped here so the auth screen stays as light as possible.
+  loader: () => loadNs('auth', 'errors'),
   component: LoginPage,
 });
 
 function LoginPage() {
-  // Pre-load both namespaces so error-messages.ts keys like
-  // `errors:http.401` resolve immediately on the first failure (otherwise
-  // the errors chunk may not have arrived yet and the key string leaks).
+  // Both ns are guaranteed by the route loader; `useTranslation` is purely
+  // for the `t` binding here.
   const { t } = useTranslation(['auth', 'errors']);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
   const [mode, setMode] = useState<Mode>('login');
   const [baseUrl, setUrl] = useState(getBaseUrl());
@@ -47,6 +52,9 @@ function LoginPage() {
         await signupAndLogin({ username, password, displayName });
       }
       const me = await getMe();
+      // Prime the ['me'] cache so /_app's useQuery hits cache instead of
+      // refetching the identical payload right after this navigation.
+      queryClient.setQueryData(['me'], me);
       setCurrentUser(me);
       navigate({ to: '/projects' });
     } catch (err) {

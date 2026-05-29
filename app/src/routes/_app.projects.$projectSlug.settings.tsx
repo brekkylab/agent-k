@@ -3,8 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getProject } from '@/api/projects';
 import { SectionLabel } from '@/components/uiPrimitives';
+import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/settings')({
+  loader: () => loadNs('project'),
   component: SettingsPage,
 });
 

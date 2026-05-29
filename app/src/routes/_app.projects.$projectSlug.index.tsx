@@ -18,9 +18,12 @@ import { canAdministerSession } from '@/lib/permissions';
 import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
+import { loadNs } from '@/i18n/loader';
 import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/')({
+  // SessionCardMenu uses `session`. `project`/`common` come from parents.
+  loader: () => loadNs('session'),
   component: ProjectHome,
 });
 

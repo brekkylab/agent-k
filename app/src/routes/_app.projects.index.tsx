@@ -9,6 +9,7 @@ import { listSessions } from '@/api/sessions';
 import { Icon } from '@/components/Icon';
 import { useNewProjectDialog } from '@/components/NewProjectDialog';
 import { AvatarStack, SectionLabel } from '@/components/uiPrimitives';
+import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 import type { Project, Session, User } from '@/domain/types';
 
@@ -22,6 +23,8 @@ function useActiveProjectSlugFromRoute(): string | null {
 }
 
 export const Route = createFileRoute('/_app/projects/')({
+  // NewProjectDialog is rendered here → `dialogs`. Cards show member badges → `members`.
+  loader: () => loadNs('project', 'members', 'dialogs'),
   component: ProjectsPage,
 });
 

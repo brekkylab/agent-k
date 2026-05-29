@@ -26,8 +26,11 @@ import { AttachmentChip } from '@/components/AttachmentChip';
 import { AttachmentPreview } from '@/components/AttachmentPreview';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
+  // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
+  loader: () => loadNs('session', 'dialogs'),
   component: SessionPage,
 });
 

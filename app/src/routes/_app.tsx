@@ -3,6 +3,7 @@ import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getToken } from '@/api/client';
 import { getMe } from '@/api/auth';
+import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 import { useLayoutStore } from '@/stores/layout';
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -13,6 +14,9 @@ export const Route = createFileRoute('/_app')({
   beforeLoad: () => {
     if (!getToken()) throw redirect({ to: '/login' });
   },
+  // Sidebar consumes both `common` and `project` ns — children inherit these
+  // through the parallel loader graph so leaf routes only declare their own.
+  loader: () => loadNs('common', 'project'),
   component: AppShell,
 });
 
