@@ -1,8 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from './Icon';
 import { shareMeta } from '../domain/metadata';
 import type { ShareMode, User } from '../domain/types';
+
+const SHARE_MODES = Object.keys(shareMeta) as ShareMode[];
 
 export function EmptyState({
   title,
@@ -71,15 +73,120 @@ export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?
 
 export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mode: ShareMode) => void }) {
   const { t } = useTranslation('common');
+  const [open, setOpen] = useState(false);
+  const [focusIdx, setFocusIdx] = useState(() => SHARE_MODES.indexOf(mode));
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const [width, setWidth] = useState<number | null>(null);
+
+  // Re-measure when the visible label or its language changes. The hidden
+  // .cw-share-select-measure clone shares the trigger's box styling, so its
+  // intrinsic width is the value the real trigger should transition to.
+  useLayoutEffect(() => {
+    if (measureRef.current) {
+      setWidth(Math.ceil(measureRef.current.getBoundingClientRect().width));
+    }
+  }, [mode, t]);
+
+  // Outside-click + global keyboard handlers, only mounted while open.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setFocusIdx((i) => (i + 1) % SHARE_MODES.length);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setFocusIdx((i) => (i - 1 + SHARE_MODES.length) % SHARE_MODES.length);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        commit(SHARE_MODES[focusIdx]);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+    // commit is defined in the closure and depends on `mode`/`onChange`; the
+    // effect re-binds on every focusIdx change so Enter targets the right row.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, focusIdx]);
+
+  function commit(next: ShareMode) {
+    onChange(next);
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function toggle() {
+    setOpen((wasOpen) => {
+      if (!wasOpen) setFocusIdx(SHARE_MODES.indexOf(mode));
+      return !wasOpen;
+    });
+  }
+
+  function onTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (!open && (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      setFocusIdx(SHARE_MODES.indexOf(mode));
+      setOpen(true);
+    }
+  }
+
   return (
-    <label className={`cw-share-select ${shareMeta[mode].className}`}>
-      <Icon name={shareMeta[mode].icon} />
-      <select value={mode} onChange={(event) => onChange(event.target.value as ShareMode)}>
-        {(Object.keys(shareMeta) as ShareMode[]).map((key) => (
-          <option key={key} value={key}>{t(`share.${key}.label`)}</option>
-        ))}
-      </select>
-    </label>
+    <div ref={wrapRef} className="cw-share-select-wrap">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`cw-share-select ${shareMeta[mode].className}`}
+        style={width != null ? { width } : undefined}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={onTriggerKeyDown}
+      >
+        <Icon name={shareMeta[mode].icon} />
+        <span>{t(`share.${mode}.label`)}</span>
+        <span className="cw-share-select-caret" aria-hidden="true" />
+      </button>
+      <span ref={measureRef} className="cw-share-select cw-share-select-measure" aria-hidden="true">
+        <Icon name={shareMeta[mode].icon} />
+        <span>{t(`share.${mode}.label`)}</span>
+        <span className="cw-share-select-caret" aria-hidden="true" />
+      </span>
+      {open && (
+        <ul role="listbox" className="cw-share-select-panel">
+          {SHARE_MODES.map((key, idx) => (
+            <li
+              key={key}
+              role="option"
+              aria-selected={key === mode}
+              className={
+                'cw-share-select-option' +
+                (key === mode ? ' is-selected' : '') +
+                (idx === focusIdx ? ' is-focused' : '')
+              }
+              onMouseMove={() => setFocusIdx(idx)}
+              onClick={() => commit(key)}
+            >
+              <Icon name={shareMeta[key].icon} />
+              <span>{t(`share.${key}.label`)}</span>
+              {key === mode && <span className="cw-share-select-check" aria-hidden="true">✓</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
