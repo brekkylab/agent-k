@@ -69,6 +69,34 @@
     "empty_body": "스케줄 기능은 곧 추가됩니다."
   },
   "settings_page": {
-    "subtitle": "프로젝트 메타데이터입니다. 편집 기능은 곧 추가됩니다."
+    "section_label": "프로젝트 설정",
+    "owned_by": "소유자",
+    "edit_name_aria": "프로젝트 이름 편집",
+    "edit_title": "편집",
+    "edit_desc_aria": "설명 편집",
+    "description_label": "설명",
+    "description_placeholder": "이 프로젝트는 어떤 작업인가요?",
+    "description_empty": "설명이 없습니다.",
+    "danger_zone": "위험 작업",
+    "delete_project_heading": "프로젝트 삭제",
+    "delete_project_help": "세션·메시지·업로드 파일·sandbox 자원이 모두 함께 삭제됩니다. 이 작업은 되돌릴 수 없어요.",
+    "delete_project_button": "프로젝트 삭제",
+    "delete_dialog_title": "프로젝트를 삭제하시겠어요?",
+    "delete_dialog_body": "\"{{name}}\"의 모든 세션·메시지·업로드가 함께 정리됩니다. 이 작업은 되돌릴 수 없습니다.",
+    "cancel_aria_name": "이름 편집 취소",
+    "errors": {
+      "login_expired": "로그인이 만료되었습니다. 다시 로그인해 주세요.",
+      "no_permission": "권한이 없습니다 (소유자만 가능)",
+      "not_found": "프로젝트를 찾을 수 없습니다.",
+      "name_conflict": "같은 이름의 프로젝트가 이미 있어요.",
+      "validation_failed": "입력값을 확인해 주세요.",
+      "request_failed": "요청에 실패했습니다.",
+      "delete_failed": "삭제 실패: {{message}}"
+    },
+    "toasts": {
+      "rename_success": "프로젝트 이름을 변경했습니다",
+      "description_success": "설명을 변경했습니다",
+      "delete_success": "프로젝트가 삭제되었습니다"
+    }
   }
 }

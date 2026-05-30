@@ -221,7 +221,7 @@ pub async fn post_session_authed(app: &axum::Router, token: &str, project_id: &s
         "POST",
         "/sessions",
         token,
-        Some(serde_json::json!({ "project_id": project_id })),
+        Some(serde_json::json!({ "project_ref": project_id })),
     )
     .await;
     assert_eq!(

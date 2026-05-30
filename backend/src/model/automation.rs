@@ -39,7 +39,8 @@ impl From<DbAutomation> for AutomationResponse {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateAutomationRequest {
-    pub project_id: Uuid,
+    /// Project UUID, active slug, or retired slug — backend resolves all three.
+    pub project_ref: String,
     pub name: String,
     pub description: Option<String>,
     pub prompts: Vec<String>,

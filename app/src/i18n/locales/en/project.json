@@ -69,6 +69,34 @@
     "empty_body": "The schedule feature is on the way."
   },
   "settings_page": {
-    "subtitle": "Project metadata. Editing is on the way."
+    "section_label": "Project settings",
+    "owned_by": "Owned by",
+    "edit_name_aria": "Edit project name",
+    "edit_title": "Edit",
+    "edit_desc_aria": "Edit description",
+    "description_label": "Description",
+    "description_placeholder": "What is this project about?",
+    "description_empty": "No description.",
+    "danger_zone": "Danger zone",
+    "delete_project_heading": "Delete project",
+    "delete_project_help": "Sessions, messages, uploaded files, and sandbox resources will all be removed. This cannot be undone.",
+    "delete_project_button": "Delete project",
+    "delete_dialog_title": "Delete this project?",
+    "delete_dialog_body": "All sessions, messages, and uploads in \"{{name}}\" will be cleaned up. This cannot be undone.",
+    "cancel_aria_name": "Cancel name edit",
+    "errors": {
+      "login_expired": "Your session has expired. Please sign in again.",
+      "no_permission": "Permission denied (owner only).",
+      "not_found": "Project not found.",
+      "name_conflict": "A project with the same name already exists.",
+      "validation_failed": "Please check your input.",
+      "request_failed": "Request failed.",
+      "delete_failed": "Delete failed: {{message}}"
+    },
+    "toasts": {
+      "rename_success": "Project name updated",
+      "description_success": "Description updated",
+      "delete_success": "Project deleted"
+    }
   }
 }

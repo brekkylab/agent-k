@@ -117,3 +117,125 @@ export interface MessageOutput {
   finish_reason?: { type?: string };
   usage?: { input_tokens?: number; output_tokens?: number };
 }
+
+// ── Automation ─────────────────────────────────────────────────────────────
+// Mirrors backend/src/model/automation.rs. snake_case is preserved here;
+// transformers.ts maps these onto camelCase domain types.
+
+export interface BackendAutomation {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  prompts: string[];
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BackendAutomationList {
+  items: BackendAutomation[];
+}
+
+export interface CreateAutomationRequest {
+  project_id: string;
+  name: string;
+  description?: string | null;
+  prompts: string[];
+}
+
+export interface UpdateAutomationRequest {
+  name?: string;
+  description?: string | null;
+  prompts?: string[];
+  enabled?: boolean;
+}
+
+// ── Trigger ────────────────────────────────────────────────────────────────
+
+export type BackendTriggerKind = 'cron' | 'webhook';
+
+/** API-shape: internally tagged by `kind`. */
+export type BackendTriggerSpec =
+  | { kind: 'cron'; expr: string; tz?: string | null }
+  | { kind: 'webhook' };
+
+export interface BackendTrigger {
+  id: string;
+  automation_id: string;
+  kind: BackendTriggerKind;
+  spec: BackendTriggerSpec;
+  enabled: boolean;
+  next_fire_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BackendTriggerList {
+  items: BackendTrigger[];
+}
+
+/** POST body is the spec directly (no wrapper). */
+export type CreateTriggerRequest = BackendTriggerSpec;
+
+export interface UpdateTriggerRequest {
+  spec?: BackendTriggerSpec;
+  enabled?: boolean;
+}
+
+/**
+ * Creation response. For webhook triggers, `webhook_token` is the only
+ * chance to read the plaintext bearer token — subsequent GETs never include
+ * it (only the masked preview via the trigger's other fields, if any).
+ */
+export interface CreatedTriggerResponse {
+  trigger: BackendTrigger;
+  webhook_token?: string;
+}
+
+// ── Run ────────────────────────────────────────────────────────────────────
+
+export type BackendRunStatus =
+  | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface BackendRun {
+  id: string;
+  automation_id: string;
+  trigger_id: string | null;
+  session_id: string;
+  status: BackendRunStatus;
+  scheduled_for: string;
+  lease_until: string | null;
+  previous_run_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BackendRunList {
+  items: BackendRun[];
+}
+
+/** POST /automations/:id/runs body — currently no payload. */
+export interface CreateRunRequest {}
+
+// ── Run event ──────────────────────────────────────────────────────────────
+
+export type BackendEventKind =
+  | 'triggered' | 'queued' | 'started'
+  | 'succeeded' | 'failed' | 'cancelled'
+  | 'retry_scheduled' | 'retry_skipped'
+  | 'lease_lost' | 'step_started' | 'step_finished';
+
+export interface BackendRunEvent {
+  id: number;
+  run_id: string;
+  ts: string;
+  kind: BackendEventKind;
+  /** Shape varies per kind; treat as unknown JSON. */
+  payload: unknown | null;
+}
+
+export interface BackendRunEventList {
+  items: BackendRunEvent[];
+}

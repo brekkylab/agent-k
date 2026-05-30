@@ -4,12 +4,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import './i18n';
 import { routeTree } from './routeTree.gen';
+import { ApiError, setUnauthorizedHandler } from '@/api/client';
+import { forceLogout, setLogoutRouter } from '@/lib/forceLogout';
 import './styles/globals.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: (failureCount, error) =>
+        !(error instanceof ApiError && error.status === 401) && failureCount < 1,
       refetchOnWindowFocus: false,
       staleTime: 30_000,
     },
@@ -20,6 +23,18 @@ const router = createRouter({
   routeTree,
   defaultPreload: 'intent',
   context: { queryClient },
+});
+
+// Inject router into forceLogout so it uses client-side navigation instead of
+// window.location.href — avoiding a full-page reload that would race with
+// TanStack Router's own redirect and consume the sessionStorage banner items.
+setLogoutRouter((to) => {
+  router.navigate({ to } as Parameters<typeof router.navigate>[0])
+    .catch(() => { window.location.href = to; });
+});
+
+setUnauthorizedHandler((reason) => {
+  forceLogout({ reason, redirectTo: window.location.pathname + window.location.search });
 });
 
 declare module '@tanstack/react-router' {
