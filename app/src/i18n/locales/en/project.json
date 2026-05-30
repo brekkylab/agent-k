@@ -64,6 +64,11 @@
     "empty_title": "Schedule coming soon",
     "empty_body": "The schedule feature is on the way."
   },
+  "home": {
+    "preview_pill_aria": "Preview — not yet sent to the server",
+    "attach_coming_soon": "File attachment is coming soon.",
+    "suggested_prompts_aria": "Suggested prompts (preview)"
+  },
   "settings_page": {
     "section_label": "Project settings",
     "owned_by": "Owned by",

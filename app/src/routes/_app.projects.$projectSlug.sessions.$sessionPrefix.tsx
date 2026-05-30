@@ -2,7 +2,7 @@
 // + composer) + right side (members, references, access, artifact).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
@@ -12,6 +12,7 @@ import { getProject, listMembers } from '@/api/projects';
 import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { Avatar, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
+import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
@@ -41,6 +42,8 @@ function stripSubagentPrefix(name: string): string {
 function SessionPage() {
   const { projectSlug, sessionPrefix } = Route.useParams();
   const { t } = useTranslation(['session', 'common']);
+  const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
@@ -63,6 +66,24 @@ function SessionPage() {
     enabled: Boolean(session.data && currentUser),
   });
 
+  // Agent chip — transient preview state from home. Persist it after router state
+  // is cleared, but reset it when this route instance moves to another session.
+  const [agentPreview, setAgentPreview] = useState<{ sessionPrefix: string; agentId?: AgentId }>(() => ({
+    sessionPrefix,
+    agentId: location.state.initialAgentId,
+  }));
+  if (agentPreview.sessionPrefix !== sessionPrefix) {
+    setAgentPreview({ sessionPrefix, agentId: location.state.initialAgentId });
+  } else if (location.state.initialAgentId && agentPreview.agentId !== location.state.initialAgentId) {
+    setAgentPreview({ sessionPrefix, agentId: location.state.initialAgentId });
+  }
+  const activeAgent = agentPreview.agentId ? getAgentSurface(agentPreview.agentId) : undefined;
+
+  // Auto-send initial message refs — useRef instead of module-level Set so each
+  // component instance tracks its own state (StrictMode-safe, no cross-session leak).
+  const initialMessageRef = useRef<string | null>(location.state.initialMessage ?? null);
+  const consumedInitialMessageRef = useRef(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -80,11 +101,17 @@ function SessionPage() {
   };
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
 
-  useEffect(() => {
+  // Reset when switching sessions — done during render (not in an effect) so React
+  // StrictMode's double-invoked effects can't wipe the optimistic user/ai bubbles
+  // the initial-send effect adds on entry (React's "adjust state on prop change").
+  const [trackedPrefix, setTrackedPrefix] = useState(sessionPrefix);
+  if (trackedPrefix !== sessionPrefix) {
+    setTrackedPrefix(sessionPrefix);
     setLiveMessages([]);
     setComposerText('');
     setStreaming(false);
-  }, [sessionPrefix]);
+    setPendingAttachments([]);
+  }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
   useEffect(() => {
@@ -133,8 +160,8 @@ function SessionPage() {
     }
   }, [projectId, sessionId]);
 
-  const send = useCallback(async () => {
-    const text = composerText.trim();
+  const send = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? composerText).trim();
     if (!text || streaming || hasUploadingAttachments) return;
 
     const attachmentPaths = pendingAttachments
@@ -215,14 +242,33 @@ function SessionPage() {
       showToast(t('toast.send_failed', { message: msg }));
     } finally {
       setStreaming(false);
-      // Refetch and wait for new history data before clearing live messages to avoid flash.
-      await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+      // Guard against empty sessionId (race where session hasn't resolved yet).
+      if (sessionId) {
+        // Refetch and wait for new history data before clearing live messages to avoid flash.
+        await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+      }
       setLiveMessages([]);
       void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
     }
   }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
+
+  // Auto-send the first message handed over from the home composer via router state.
+  // Deferred until session.data resolves so `sessionId` is non-empty when the
+  // finally-block refetch runs. useRef guards ensure exactly one send per mount
+  // (StrictMode-safe — refs survive the double-invoke cycle).
+  useEffect(() => {
+    if (consumedInitialMessageRef.current) return;
+    if (!session.data) return;                        // wait for session UUID to resolve
+    if (!initialMessageRef.current) return;
+    consumedInitialMessageRef.current = true;
+    const msg = initialMessageRef.current;
+    initialMessageRef.current = null;
+    // Clear router state so a hard refresh doesn't resend, but don't block send on it.
+    void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined }) });
+    void send(msg);
+  }, [session.data, send, navigate]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
@@ -256,6 +302,17 @@ function SessionPage() {
             </p>
           </div>
           <div className="cw-session-head-actions">
+            {activeAgent && (
+              <span
+                className="cw-session-agent-chip"
+                data-agent={activeAgent.id}
+                title="이 세션에서 선택된 에이전트 (미리보기)"
+              >
+                <Icon name={activeAgent.icon} size={13} />
+                <span>{activeAgent.label}</span>
+                <span className="cw-preview-pill cw-preview-pill--micro">Preview</span>
+              </span>
+            )}
             {sess && <IntentBadge intent={sess.intent} />}
             {sess && (
               <ShareSelect mode={sess.shareMode} onChange={(mode) => shareMutation.mutate(mode)} />

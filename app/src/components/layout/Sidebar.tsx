@@ -6,11 +6,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
-import { createSession, deleteSession, listSessions } from '@/api/sessions';
+import { listSessions } from '@/api/sessions';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconPocket } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
@@ -20,13 +20,13 @@ import {
   useLayoutStore,
   SIDEBAR_MOBILE_BREAKPOINT,
 } from '@/stores/layout';
-import { useToastStore } from '@/components/Toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useNewProjectDialog } from '@/components/NewProjectDialog';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
+import { SessionsOverlay } from '@/components/SessionsOverlay';
 import { canAdministerSession } from '@/lib/permissions';
 import { shortSessionId } from '@/lib/sessionId';
-import { ApiError } from '@/api/client';
+import { useSessionDelete } from '@/lib/useSessionDelete';
 import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import { LanguageToggle } from '@/components/LanguageToggle';
@@ -106,6 +106,7 @@ function SectionHeader({
   onAdd,
   addLabel,
   addDisabled,
+  onViewAll,
 }: {
   label: string;
   expanded: boolean;
@@ -113,6 +114,7 @@ function SectionHeader({
   onAdd?: () => void;
   addLabel?: string;
   addDisabled?: boolean;
+  onViewAll?: () => void;
 }) {
   const { t } = useTranslation('common');
   return (
@@ -131,6 +133,15 @@ function SectionHeader({
         />
         <span>{label}</span>
       </button>
+      {onViewAll && (
+        <button
+          type="button"
+          className="cw-section-viewall"
+          onClick={(e) => { e.stopPropagation(); onViewAll(); }}
+        >
+          View all ›
+        </button>
+      )}
       {onAdd && (
         <button
           type="button"
@@ -150,8 +161,6 @@ function SectionHeader({
 export function Sidebar() {
   const { t } = useTranslation(['common', 'project']);
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const showToast = useToastStore((s) => s.show);
   const currentUser = useAuthStore((s) => s.currentUser);
   const sidebarMode = useLayoutStore((s) => s.sidebarMode);
   const setSidebarMode = useLayoutStore((s) => s.setSidebarMode);
@@ -241,47 +250,27 @@ export function Sidebar() {
     if (isMobile || sidebarMode !== 'hidden') setRevealed(false);
   }, [activeProjectSlug, activeSessionId, activeRoute, sidebarMode]);
 
-  const createSessionMutation = useMutation({
-    mutationFn: (projectId: string) => createSession(projectId),
-    onSuccess: async (session) => {
-      await queryClient.invalidateQueries({ queryKey: ['sessions', activeProjectSlug] });
-      showToast(t('project:toast.session_created'));
-      if (activeProject) {
-        navigate({
-          to: '/projects/$projectSlug/sessions/$sessionPrefix',
-          params: { projectSlug: activeProject.slug, sessionPrefix: shortSessionId(session.id) },
-        });
-      }
-    },
-    onError: (err) => {
-      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
-      showToast(t('project:toast.session_create_failed', { message: msg }));
-    },
-  });
+  // New session starts on the project home composer ("new conversation" surface)
+  // so the user states intent before dispatch — not via an empty session here.
+  const startNewSession = useCallback(() => {
+    if (!activeProject) return;
+    navigate({
+      to: '/projects/$projectSlug',
+      params: { projectSlug: activeProject.slug },
+      state: { focusComposer: true },
+    });
+  }, [activeProject, navigate]);
 
+  const [sessionsOverlayOpen, setSessionsOverlayOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
   const projectCreator = useNewProjectDialog();
-  const deleteMutation = useMutation({
-    mutationFn: (sessionId: string) => deleteSession(sessionId),
-    onSuccess: async (_, deletedId) => {
-      if (activeProjectSlug) {
-        await queryClient.invalidateQueries({ queryKey: ['sessions', activeProjectSlug] });
-      }
-      // deletedId is the full UUID; invalidate both full-UUID and prefix-based keys.
-      await queryClient.invalidateQueries({ queryKey: ['session', deletedId] });
-      await queryClient.invalidateQueries({ queryKey: ['session', shortSessionId(deletedId)] });
-      // activeSessionId is now a 12-char prefix — compare against the prefix of the deleted id.
+  const deleteMutation = useSessionDelete(activeProjectSlug ?? '', {
+    onDeleted: (deletedId) => {
+      // If the deleted session was the one being viewed, leave it for the project home.
       if (activeSessionId === shortSessionId(deletedId) && activeProject) {
         navigate({ to: '/projects/$projectSlug', params: { projectSlug: activeProject.slug } });
       }
-      showToast(t('project:toast.session_deleted'));
       setPendingDelete(null);
-    },
-    onError: (err) => {
-      const msg = err instanceof ApiError
-        ? (err.status === 403 ? t('project:toast.no_delete_permission') : err.message)
-        : err instanceof Error ? err.message : 'delete failed';
-      showToast(t('project:toast.session_delete_failed', { message: msg }));
     },
   });
 
@@ -416,9 +405,9 @@ export function Sidebar() {
               label={t('sidebar.section_sessions')}
               expanded={sessionsExpanded}
               onToggle={toggleSessions}
-              onAdd={() => createSessionMutation.mutate(activeProject.id)}
-              addLabel={createSessionMutation.isPending ? t('sidebar.creating_session') : t('sidebar.new_session')}
-              addDisabled={createSessionMutation.isPending}
+              onAdd={startNewSession}
+              addLabel={t('sidebar.new_session')}
+              onViewAll={() => setSessionsOverlayOpen(true)}
             />
             <div className="cw-sessions-list" data-expanded={sessionsExpanded ? 'true' : 'false'}>
               {(sessionsQuery.data ?? []).filter((s) => s.origin === 'user').map((session) => {
@@ -492,6 +481,13 @@ export function Sidebar() {
       )}
 
       {projectCreator.dialog}
+
+      {sessionsOverlayOpen && activeProject && (
+        <SessionsOverlay
+          projectSlug={activeProject.slug}
+          onClose={() => setSessionsOverlayOpen(false)}
+        />
+      )}
       </aside>
     </>
   );

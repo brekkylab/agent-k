@@ -64,6 +64,11 @@
     "empty_title": "Schedule 준비 중",
     "empty_body": "스케줄 기능은 곧 추가됩니다."
   },
+  "home": {
+    "preview_pill_aria": "미리보기 — 아직 서버에 전달되지 않습니다",
+    "attach_coming_soon": "파일 추가 기능은 곧 추가됩니다.",
+    "suggested_prompts_aria": "추천 프롬프트 (미리보기)"
+  },
   "settings_page": {
     "section_label": "프로젝트 설정",
     "owned_by": "소유자",
