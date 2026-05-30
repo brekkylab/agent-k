@@ -82,6 +82,17 @@ export function WelcomeCarousel() {
   activeRef.current = active;
   const reduced = prefersReducedMotion();
 
+  // WCAG 2.2.2 (Pause, Stop, Hide) — 자동 전환은 다음 세 가지 중 하나라도
+  // 켜지면 멈춘다. hover는 사용자 요구로 제외 ("호버 시 진행바가 멈추면 안 됨").
+  //  · userPaused: 명시적 pause/play 토글
+  //  · focusedWithin: 키보드 사용자가 carousel 내부로 focus 진입 (mouse hover와 다른 시나리오)
+  //  · pageHidden: 탭이 background로 숨겨짐
+  const [userPaused, setUserPaused] = useState(false);
+  const [focusedWithin, setFocusedWithin] = useState(false);
+  const [pageHidden, setPageHidden] = useState(
+    typeof document !== 'undefined' ? document.hidden : false,
+  );
+
   const scrollToIndex = useCallback((i: number) => {
     const track = trackRef.current;
     if (!track) return;
@@ -107,15 +118,24 @@ export function WelcomeCarousel() {
     };
   }, []);
 
-  // 자동 전환 — 슬라이드가 바뀌면(자동·수동 모두) 다음 5초 카운트를 새로 시작.
-  // pause 로직 없음: hover/focus와 무관하게 항상 진행한다.
+  // page hidden 추적 — 탭이 background에 있으면 자동 전환이 시각 없는 사용자에게
+  // 의미 없는 변화를 만들지 않게 한다.
   useEffect(() => {
-    if (reduced) return;
+    const onVis = () => setPageHidden(document.hidden);
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  const isPaused = userPaused || focusedWithin || pageHidden;
+
+  // 자동 전환 — 슬라이드가 바뀌면 다음 카운트를 새로 시작. isPaused가 false인 동안에만.
+  useEffect(() => {
+    if (reduced || isPaused) return;
     const t = window.setTimeout(() => {
       scrollToIndex((activeRef.current + 1) % SLIDES.length);
     }, AUTO_ADVANCE_MS);
     return () => window.clearTimeout(t);
-  }, [reduced, scrollToIndex, active]);
+  }, [reduced, isPaused, scrollToIndex, active]);
 
   const go = useCallback((i: number) => {
     scrollToIndex((i + SLIDES.length) % SLIDES.length);
@@ -126,6 +146,12 @@ export function WelcomeCarousel() {
     else if (e.key === 'ArrowLeft') { e.preventDefault(); go(active - 1); }
   };
 
+  // focus가 container 안에서 옮겨다닐 때(arrow → dot 등)는 blur로 보지 않는다.
+  const onBlurCapture = (e: React.FocusEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setFocusedWithin(false);
+  };
+
   return (
     <div
       className="cw-welcome-carousel"
@@ -134,6 +160,15 @@ export function WelcomeCarousel() {
       aria-label="제품 소개"
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onFocus={(e) => {
+        // 마우스 클릭으로 인한 focus는 무시. 키보드(Tab) 진입만 pause trigger —
+        // 사용자가 carousel을 "살펴보는" 시나리오는 키보드 사용자 한정이고, pause
+        // 버튼을 마우스로 누른 직후 그 button이 focus되는 false positive를 피한다.
+        if ((e.target as HTMLElement).matches(':focus-visible')) {
+          setFocusedWithin(true);
+        }
+      }}
+      onBlur={onBlurCapture}
     >
       <div className="cw-welcome-track cw-scroll-quiet" ref={trackRef}>
         {SLIDES.map((s, i) => (
@@ -192,9 +227,14 @@ export function WelcomeCarousel() {
               onClick={() => go(i)}
             >
               <span className="cw-welcome-dot-track">
+                {/* key로 fill element를 강제 remount해 CSS animation을 새로
+                   시작시킨다. active 슬라이드가 바뀌거나 isPaused 토글이
+                   풀리면 자동 전환 setTimeout이 새 7초로 reset되는데, 진행바도
+                   같은 시점에 0부터 시작해야 둘이 동기화된다. */}
                 <span
+                  key={`${active}-${isPaused ? 'paused' : 'running'}`}
                   className="cw-welcome-dot-fill"
-                  data-run={i === active && !reduced}
+                  data-run={i === active && !reduced && !isPaused}
                   style={{ animationDuration: `${AUTO_ADVANCE_MS}ms` }}
                 />
               </span>
@@ -210,6 +250,21 @@ export function WelcomeCarousel() {
         >
           <Icon name="chevron-right" size={18} />
         </button>
+
+        {/* WCAG 2.2.2 (Pause, Stop, Hide) — 5초 이상 자동 업데이트되는
+           콘텐츠는 명시적 pause 컨트롤이 필요. reduced motion일 때는
+           자동 전환 자체가 꺼져 있어 토글을 숨긴다. */}
+        {!reduced && (
+          <button
+            type="button"
+            className="cw-welcome-pause"
+            aria-label={userPaused ? '자동 전환 다시 시작' : '자동 전환 멈추기'}
+            aria-pressed={userPaused}
+            onClick={() => setUserPaused((v) => !v)}
+          >
+            <Icon name={userPaused ? 'play' : 'pause'} size={14} />
+          </button>
+        )}
       </div>
     </div>
   );

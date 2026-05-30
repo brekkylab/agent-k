@@ -1340,6 +1340,35 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   background: color-mix(in oklch, white, transparent 74%);
 }
 
+/* WCAG 2.2.2 pause/play — arrow보다 살짝 작게 잡아 navigation control과
+   구분하되 같은 컨트롤 행 안에 함께 둔다. aria-pressed=true(=paused)일 때
+   배경을 더 진하게 해 "지금 멈춰 있다"는 신호가 분명히 보이도록. */
+.cw-welcome-pause {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklch, white, transparent 76%);
+  background: color-mix(in oklch, white, transparent 86%);
+  color: white;
+  cursor: pointer;
+  transition: background 120ms;
+}
+.cw-welcome-pause:hover {
+  background: color-mix(in oklch, white, transparent 74%);
+}
+.cw-welcome-pause[aria-pressed="true"] {
+  background: white;
+  color: var(--cw-accent);
+}
+.cw-welcome-pause:focus-visible,
+.cw-welcome-arrow:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 2px;
+}
+
 .cw-welcome-dots {
   display: flex;
   align-items: center;

@@ -7,10 +7,11 @@ export type IconName =
   | 'shield' | 'x' | 'arrow-left' | 'analysis' | 'brainstorm' | 'writing'
   | 'recap' | 'general' | 'more' | 'upload' | 'trash' | 'download'
   | 'list' | 'grid' | 'chevron-right' | 'chevron-left' | 'paperclip'
-  | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio';
+  | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio'
+  | 'pause' | 'play';
 
 type PreviewIconName =
-  | 'lock' | 'eye' | 'eye-off' | 'message-square' | 'messages-square' | 'clipboard-list'
+  | 'lock' | 'eye' | 'eye-off' | 'pause' | 'play' | 'message-square' | 'messages-square' | 'clipboard-list'
   | 'lightbulb' | 'pencil' | 'home' | 'folder' | 'folder-open' | 'users'
   | 'settings' | 'plus' | 'chevron-down' | 'chevron-right' | 'chevron-left' | 'more-horizontal' | 'check'
   | 'x' | 'arrow-left' | 'send' | 'search' | 'file-text' | 'file-spreadsheet'
@@ -22,6 +23,8 @@ const previewIconPath: Record<PreviewIconName, string> = {
   lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
   'eye-off': '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
+  pause: '<rect width="4" height="16" x="6" y="4" rx="1"/><rect width="4" height="16" x="14" y="4" rx="1"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
   'message-square': '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   'messages-square': '<path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>',
   'clipboard-list': '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
@@ -71,6 +74,8 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   lock: 'lock',
   eye: 'eye',
   'eye-off': 'eye-off',
+  pause: 'pause',
+  play: 'play',
   'message-square': 'message-square',
   'file-text': 'file-text',
   file: 'file',
