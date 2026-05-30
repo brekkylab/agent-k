@@ -1,10 +1,39 @@
 // Map raw backend payloads to the app-live domain types used in views.
 // Default values for missing metadata (intent, references, etc.) are filled here.
 
-export const SUBAGENT_PREFIX = 'subagent_';
+import type {
+  Automation,
+  CreatedTrigger,
+  FileAsset,
+  Message,
+  MessageSender,
+  Project,
+  Run,
+  RunEvent,
+  Session,
+  ToolCallInvocation,
+  Trigger,
+  TriggerSpec,
+  User,
+} from '@/domain/types';
+import type {
+  AiloyPart,
+  AiloyToolCall,
+  BackendAutomation,
+  BackendDirent,
+  BackendMember,
+  BackendProject,
+  BackendRun,
+  BackendRunEvent,
+  BackendSession,
+  BackendTrigger,
+  BackendTriggerSpec,
+  BackendUser,
+  CreatedTriggerResponse,
+  SessionMessageItem,
+} from './backend-types';
 
-import type { FileAsset, Message, MessageSender, Project, Session, ToolCallInvocation, User } from '@/domain/types';
-import type { AiloyPart, AiloyToolCall, BackendDirent, BackendMember, BackendProject, BackendSession, BackendUser, SessionMessageItem } from './backend-types';
+export const SUBAGENT_PREFIX = 'subagent_';
 
 const USER_COLOR_TOKENS = [
   'var(--cw-cozy-clay)',
@@ -35,6 +64,7 @@ export function toUser(backend: BackendUser): User {
   return {
     id: backend.id,
     name,
+    username: backend.username,
     roleLabel: backend.role === 'admin' ? 'Admin' : 'Member',
     avatar: initials(name),
     color: deterministicColor(backend.id),
@@ -46,6 +76,7 @@ export function toMemberUser(member: BackendMember): User {
   return {
     id: member.user_id,
     name,
+    username: member.username,
     roleLabel: 'Member',
     avatar: initials(name),
     color: deterministicColor(member.user_id),
@@ -250,4 +281,72 @@ function formatBytes(bytes: number): string {
 export function compactDate(value: string | null | undefined): string {
   if (!value) return '—';
   return value.slice(0, 10);
+}
+
+// ── Automation transformers ────────────────────────────────────────────────
+
+export function toAutomation(backend: BackendAutomation): Automation {
+  return {
+    id: backend.id,
+    projectId: backend.project_id,
+    name: backend.name,
+    description: backend.description,
+    prompts: backend.prompts,
+    enabled: backend.enabled,
+    createdBy: backend.created_by,
+    createdAt: backend.created_at,
+    updatedAt: backend.updated_at,
+  };
+}
+
+export function toTriggerSpec(spec: BackendTriggerSpec): TriggerSpec {
+  if (spec.kind === 'cron') {
+    return { kind: 'cron', expr: spec.expr, tz: spec.tz ?? null };
+  }
+  return { kind: 'webhook' };
+}
+
+export function toTrigger(backend: BackendTrigger): Trigger {
+  return {
+    id: backend.id,
+    automationId: backend.automation_id,
+    kind: backend.kind,
+    spec: toTriggerSpec(backend.spec),
+    enabled: backend.enabled,
+    nextFireAt: backend.next_fire_at,
+    createdAt: backend.created_at,
+    updatedAt: backend.updated_at,
+  };
+}
+
+export function toCreatedTrigger(backend: CreatedTriggerResponse): CreatedTrigger {
+  return {
+    trigger: toTrigger(backend.trigger),
+    webhookToken: backend.webhook_token ?? null,
+  };
+}
+
+export function toRun(backend: BackendRun): Run {
+  return {
+    id: backend.id,
+    automationId: backend.automation_id,
+    triggerId: backend.trigger_id,
+    sessionId: backend.session_id,
+    status: backend.status,
+    scheduledFor: backend.scheduled_for,
+    leaseUntil: backend.lease_until,
+    previousRunId: backend.previous_run_id,
+    createdAt: backend.created_at,
+    updatedAt: backend.updated_at,
+  };
+}
+
+export function toRunEvent(backend: BackendRunEvent): RunEvent {
+  return {
+    id: backend.id,
+    runId: backend.run_id,
+    ts: backend.ts,
+    kind: backend.kind,
+    payload: backend.payload,
+  };
 }

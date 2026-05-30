@@ -34,6 +34,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
   const { data: rawEntries = [], isLoading } = useQuery({
     queryKey: ['dirents', 'artifacts', projectId, sessionId],
     queryFn: () => listDirentsRaw(scope, true),
+    enabled: Boolean(sessionId),
   });
 
   // Show files only, strip scope prefix for display

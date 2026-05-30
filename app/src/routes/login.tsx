@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { getMe, login, signupAndLogin } from '@/api/auth';
 import { getToken, ApiError } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { WelcomeCarousel } from '@/components/WelcomeCarousel';
 import { Icon } from '@/components/Icon';
+import { consumeLogoutReason, consumeRedirectAfterLogin, type LogoutReason } from '@/lib/forceLogout';
 
 type Mode = 'login' | 'signup';
 
@@ -36,6 +37,13 @@ function AuthPanel() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [expiredReason, setExpiredReason] = useState<LogoutReason | null>(null);
+  const dismissExpiredReason = useCallback(() => setExpiredReason(null), []);
+
+  useEffect(() => {
+    const reason = consumeLogoutReason();
+    if (reason) setExpiredReason(reason);
+  }, []);
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -54,7 +62,8 @@ function AuthPanel() {
       }
       const me = await getMe();
       setCurrentUser(me);
-      navigate({ to: '/projects' });
+      const redirectTo = consumeRedirectAfterLogin();
+      navigate({ to: redirectTo ?? '/projects' });
     } catch (err) {
       setError(messageOf(err, mode));
     } finally {
@@ -67,9 +76,13 @@ function AuthPanel() {
   return (
     <main className="cw-welcome-panel">
       <div className="cw-welcome-card">
+        {/* 옵션 A: session-expired toast를 카드 안 상단에 inline으로. brand 위에
+           먼저 보여서 "왜 다시 로그인해야 하는지" 컨텍스트가 폼보다 먼저 닿는다. */}
+        {expiredReason && <SessionExpiredBanner reason={expiredReason} onDismiss={dismissExpiredReason} />}
         <span className="cw-welcome-brand">Cowork for Teams</span>
         <h2 className="cw-welcome-card-title">{isSignup ? '계정 만들기' : '오늘은 무엇을 함께 만들까요?'}</h2>
         <p className="cw-welcome-card-sub">
+
           {isSignup
             ? '가입하면 개인 프로젝트가 자동으로 생성됩니다.'
             : '팀과 에이전트가 기다리고 있어요.'}
@@ -162,6 +175,31 @@ function ModeLink({ onClick, children }: { onClick: () => void; children: React.
     <button type="button" className="cw-welcome-link" onClick={onClick}>
       {children}
     </button>
+  );
+}
+
+function SessionExpiredBanner({ reason, onDismiss }: { reason: LogoutReason; onDismiss: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 5000);
+    return () => clearTimeout(t);
+  }, [onDismiss]);
+
+  const message = reason === 'expired'
+    ? '세션이 만료되어 다시 로그인이 필요합니다.'
+    : '인증 정보가 유효하지 않습니다. 다시 로그인해 주세요.';
+
+  return (
+    <div className="cw-welcome-notice" role="status" aria-live="polite">
+      <span>{message}</span>
+      <button
+        type="button"
+        className="cw-welcome-notice-close"
+        aria-label="닫기"
+        onClick={onDismiss}
+      >
+        <Icon name="x" size={14} />
+      </button>
+    </div>
   );
 }
 

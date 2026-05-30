@@ -1,0 +1,92 @@
+// Agent / mode selector for the project-home composer, shown as a segmented tab
+// row attached to the top of the composer box. Picks WHICH agent surface drives
+// the conversation — a different axis from the LLM model picker.
+//
+// Mock for now: the selection is not wired to create-session / dispatch yet
+// (the backend's CreateSessionRequest only takes project_id, with
+// deny_unknown_fields). The IDs below are the real intended agent surfaces so the
+// seam is concrete — a follow-up PR routes the home-composer agent hint here.
+
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { Icon } from '@/components/Icon';
+import { AGENT_SURFACES, type AgentId } from '@/domain/agentSurfaces';
+
+// Renders only the tab row — the wrapping container lives in the home route
+// so the picker and composer share one bordered box.
+export function ComposerAgentPicker({
+  value,
+  onChange,
+}: {
+  value: AgentId;
+  onChange: (id: AgentId) => void;
+}) {
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [indicator, setIndicator] = useState({ left: 0, width: 0 });
+
+  useLayoutEffect(() => {
+    const tabs = tabsRef.current;
+    if (!tabs) return;
+
+    const activeTab = tabs.querySelector<HTMLButtonElement>(`button[data-agent="${value}"]`);
+    if (!activeTab) return;
+
+    const updateIndicator = () => {
+      const tabsRect = tabs.getBoundingClientRect();
+      const tabRect = activeTab.getBoundingClientRect();
+      setIndicator({
+        left: tabRect.left - tabsRect.left,
+        width: tabRect.width,
+      });
+    };
+
+    updateIndicator();
+
+    const resizeObserver = new ResizeObserver(updateIndicator);
+    resizeObserver.observe(tabs);
+    resizeObserver.observe(activeTab);
+    window.addEventListener('resize', updateIndicator);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateIndicator);
+    };
+  }, [value]);
+
+  const indicatorStyle = {
+    '--cw-agent-indicator-left': `${indicator.left}px`,
+    '--cw-agent-indicator-width': `${indicator.width}px`,
+  } as CSSProperties;
+
+  return (
+    <div
+      ref={tabsRef}
+      role="group"
+      aria-label="에이전트 선택"
+      className="cw-agent-tabs"
+    >
+      <span
+        key={value}
+        aria-hidden
+        className="cw-agent-tab-indicator"
+        data-agent={value}
+        style={indicatorStyle}
+      />
+      {AGENT_SURFACES.map((agent) => {
+        const isActive = agent.id === value;
+        return (
+          <button
+            key={agent.id}
+            type="button"
+            aria-pressed={isActive}
+            data-agent={agent.id}
+            className={`cw-agent-tab${isActive ? ' is-active' : ''}`}
+            onClick={() => onChange(agent.id)}
+          >
+            <Icon name={agent.icon} size={15} />
+            <span>{agent.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}

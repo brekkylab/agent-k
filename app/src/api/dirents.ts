@@ -1,4 +1,4 @@
-import { ApiError, BASE_URL, getToken, request } from './client';
+import { ApiError, BASE_URL, getToken, notifyUnauthorized, request } from './client';
 import type { BackendDirent, BackendDirentBatchOp, BackendDirentBatchResult } from './backend-types';
 import { toFileAsset } from './transformers';
 import type { FileAsset } from '@/domain/types';
@@ -145,6 +145,9 @@ export async function fetchFileBlob(globalPath: string): Promise<Blob> {
   const response = await fetch(url, { headers });
   if (!response.ok) {
     const raw = await response.text().catch(() => '');
+    let parsed: unknown;
+    try { parsed = raw ? JSON.parse(raw) : undefined; } catch { parsed = raw; }
+    notifyUnauthorized(response.status, parsed);
     throw new ApiError(response.status, raw || `${response.status} ${response.statusText}`);
   }
   return response.blob();
