@@ -117,8 +117,7 @@ export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mo
       document.removeEventListener('mousedown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-    // commit is defined in the closure and depends on `mode`/`onChange`; the
-    // effect re-binds on every focusIdx change so Enter targets the right row.
+    // `commit` is a stable closure here; effect re-binds per focusIdx so Enter targets the right row.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, focusIdx]);
 
@@ -176,7 +175,7 @@ export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mo
                 (key === mode ? ' is-selected' : '') +
                 (idx === focusIdx ? ' is-focused' : '')
               }
-              onMouseMove={() => setFocusIdx(idx)}
+              onMouseEnter={() => setFocusIdx(idx)}
               onClick={() => commit(key)}
             >
               <Icon name={shareMeta[key].icon} />
