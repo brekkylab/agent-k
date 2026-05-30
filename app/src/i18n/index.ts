@@ -20,10 +20,12 @@ export const I18N_NAMESPACES = [
   'members',
 ] as const;
 
-// All namespaces — including `common` — are loaded lazily via vite chunks.
-// The `<Suspense fallback={null}>` wrapper around the router covers the
-// first paint while `common` resolves; the file is ~100 bytes so the gap
-// is invisible on real devices.
+// All namespaces are loaded lazily via Vite chunks. Each route declares the
+// ns it needs via `loadNs()` in its TanStack Router loader, so the relevant
+// chunks are awaited before the route mounts — no `useTranslation` call
+// leaks to the outer Suspense boundary and triggers a blank flash. The
+// `<Suspense fallback={null}>` in `main.tsx` is a safety net for the rare
+// case where a component reaches for an ns that no ancestor loader covers.
 void i18n
   .use(
     resourcesToBackend(
