@@ -71,11 +71,15 @@ two things stay broken until LibreOffice computes the sheet. **After
 `save()`, always run both** (do not skip these or hand-roll `libreoffice`
 yourself — these helpers already do it right):
 
-**1. `autofit_columns(path)`** — resize every column from the *real
-computed value*. Without it, formula/currency columns are guessed too
-narrow and show `######` in Excel. Number-format aware (`₩2,989,000`) and
-east-asian-width aware for CJK that a formula returns. **Required whenever
-any column holds formulas or currency.**
+**1. `autofit_columns(path, header_row=3)`** — resize every column from
+the *real computed value*. Without it, formula/currency columns are
+guessed too narrow and show `######` in Excel. Number-format aware
+(`₩2,989,000`) and east-asian-width aware for CJK that a formula returns.
+**Required whenever any column holds formulas or currency.** The default
+`header_row=3` matches the `XLSXReportSkill` layout (title r1 / spacer r2 /
+header r3); for an **edited external file** whose header sits on r1, pass
+`header_row=1` — otherwise rows above r3 are skipped and the header
+columns get mis-measured.
 
 **2. `verify_formulas(path)`** — recalculate and return error cells
 (`#NAME?` from a missing `_xlfn.` prefix, `#REF!`, `#DIV/0!`, ...). An

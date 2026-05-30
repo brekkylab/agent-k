@@ -327,6 +327,7 @@ class XLSXReportSkill:
         self.render_layout(ws, title, headers, rows)
         self.apply_style(ws)
         self.configure_sheet(ws)
+        return ws
 
     # ----- LAYOUT -----
 
