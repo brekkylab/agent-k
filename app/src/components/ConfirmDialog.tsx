@@ -59,7 +59,7 @@ export function ConfirmDialog({
       }}
     >
       <div className="cw-dialog">
-        <button className="cw-close" onClick={onClose} aria-label="close" disabled={pending}>
+        <button className="cw-close" onClick={onClose} aria-label={t('actions.close')} disabled={pending}>
           <Icon name="x" />
         </button>
         <h2 style={{ margin: '0 0 8px', fontSize: 18, letterSpacing: '-0.015em' }}>{title}</h2>

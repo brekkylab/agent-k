@@ -54,10 +54,6 @@
     "section_label": "주기 실행",
     "title": "일정"
   },
-  "settings_page_meta": {
-    "section_label": "프로젝트 메타데이터",
-    "title": "설정"
-  },
   "skills_page": {
     "subtitle": "재사용 가능한 프롬프트 템플릿과 도구 바인딩을 한곳에서 관리합니다.",
     "empty_title": "Skills 준비 중",
@@ -83,7 +79,6 @@
     "delete_project_button": "프로젝트 삭제",
     "delete_dialog_title": "프로젝트를 삭제하시겠어요?",
     "delete_dialog_body": "\"{{name}}\"의 모든 세션·메시지·업로드가 함께 정리됩니다. 이 작업은 되돌릴 수 없습니다.",
-    "cancel_aria_name": "이름 편집 취소",
     "errors": {
       "login_expired": "로그인이 만료되었습니다. 다시 로그인해 주세요.",
       "no_permission": "권한이 없습니다 (소유자만 가능)",

@@ -467,7 +467,7 @@ export function Sidebar() {
             </div>
             <LanguageToggle />
             <button
-              aria-label="logout"
+              aria-label={t('common:actions.logout')}
               onClick={() => forceLogout({ reason: 'manual' })}
               style={{ border: 0, background: 'transparent', padding: 0, color: 'var(--cw-ink-3)', cursor: 'pointer' }}
             >
