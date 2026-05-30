@@ -2403,7 +2403,10 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   }
   /* 모션 비선호 사용자에겐 활성 점을 풀로 채워 활성 위치를 명확히 한다
      (자동전환은 꺼지므로 카운트다운이라는 정보가 무의미하므로). */
-  .cw-welcome-dot[data-active="true"] .cw-welcome-dot-fill { transform: scaleX(1); }
+  /* !important로 같은 블록의 transform: none을 이긴다 — 위 blanket rule이
+     active dot fill에도 transform: none을 강제하는데, 의도는 active 위치에선
+     scaleX(1)로 꽉 채워 위치 표시를 유지하는 것. */
+  .cw-welcome-dot[data-active="true"] .cw-welcome-dot-fill { transform: scaleX(1) !important; }
 }
 
 .cw-welcome-panel {
