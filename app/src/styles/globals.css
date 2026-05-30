@@ -520,7 +520,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-artifact-preview section { border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); padding: 10px; background: var(--cw-bg); margin-bottom: 8px; }
 .cw-artifact-preview section p { margin: 5px 0; font-size: 12px; }
 
-.cw-dialog-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: oklch(0.18 0.01 60 / .26); }
+.cw-dialog-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: oklch(0.18 0.01 60 / .26); }
 .cw-dialog { position: relative; width: min(440px, calc(100vw - 32px)); border: 1px solid var(--cw-border); border-radius: var(--cw-radius-xl); background: var(--cw-bg); box-shadow: var(--cw-shadow-popover); padding: 24px; animation: cw-enter .22s ease both; }
 .cw-close { position: absolute; top: 12px; right: 12px; border: 0; background: transparent; padding: 4px; border-radius: var(--cw-radius-sm); color: var(--cw-ink-4); cursor: pointer; }
 .cw-close:hover { color: var(--cw-ink); background: var(--cw-paper-3); }
@@ -593,6 +593,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 
 .cw-project-card,
 .cw-session-card {
+  cursor: pointer;
   min-height: 126px;
   justify-content: flex-start;
   padding: 14px;
@@ -953,16 +954,20 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   max-width: 920px;
   margin: 0 auto;
 }
+/* Rounded single-row pill (PR #114 base): the session composer keeps its compact
+   pill controls here. Project home uses the separate .cw-home-composer selectors. */
 .cw-composer-box {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 46px;
-  padding: 6px 6px 6px 14px;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 5px 7px 5px 18px;
   border: 1px solid var(--cw-border);
-  border-radius: 999px;
+  border-radius: 24px;
   background: var(--cw-paper);
   transition: border-color 120ms, box-shadow 120ms;
+  /* Shared name so navigating home <-> session morphs the box (see route viewTransition). */
+  view-transition-name: cw-composer;
 }
 .cw-composer-box:focus-within {
   border-color: var(--cw-border-hover);
@@ -971,15 +976,91 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-composer input {
   flex: 1;
   min-width: 0;
-  height: 34px;
+  min-height: 24px;
+  max-height: 200px;
   border: 0;
-  border-radius: 0;
   background: transparent;
-  padding: 0;
+  padding: 7px 0;
   outline: 0;
+  resize: none;
+  overflow-y: hidden;
+  font: inherit;
   font-size: 14px;
+  line-height: 1.5;
   color: var(--cw-fg-1);
 }
+.cw-home-composer {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  margin-top: -1px;
+  border-top: 0;
+  background: transparent;
+  padding: 0;
+  z-index: 2;
+}
+.cw-home-composer-box {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--cw-agent-accent);
+  border-radius: 20px;
+  background: var(--cw-paper);
+  position: relative;
+  z-index: 0;
+  transition: box-shadow 120ms;
+}
+.cw-home-composer-box:focus-within {
+  box-shadow: 0 0 0 2.5px color-mix(in oklch, var(--cw-agent-accent), transparent 90%);
+}
+.cw-home-composer-input {
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: calc(4.5em + 8px);
+  max-height: 200px;
+  border: 0;
+  background: transparent;
+  padding: 4px 0;
+  outline: 0;
+  resize: none;
+  overflow-y: hidden;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--cw-fg-1);
+}
+.cw-home-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cw-home-composer-actions-spacer { flex: 1; }
+
+/* home -> session composer morph (route navigate with viewTransition: true).
+   Home assigns `cw-composer` to the agent-composer wrap; the session composer
+   assigns it to the compact box, so navigation still reads as one morphing area. */
+::view-transition-group(cw-composer) {
+  animation-duration: 480ms;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+::view-transition-old(cw-composer),
+::view-transition-new(cw-composer) {
+  /* Fade the differing inner content (large toolbar vs pill) so the reshape reads
+     as one element morphing rather than two boxes stacked. */
+  animation-duration: 320ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(cw-composer),
+  ::view-transition-old(cw-composer),
+  ::view-transition-new(cw-composer) { animation: none; }
+}
+.cw-home-composer-input::placeholder,
 .cw-composer input::placeholder { color: var(--cw-fg-4); }
 .cw-send-button {
   width: 34px;
@@ -996,18 +1077,162 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .cw-send-button:hover:not(:disabled) { background: var(--cw-primary-hover, var(--cw-primary)); }
 .cw-send-button:disabled { opacity: 0.45; cursor: not-allowed; }
-.cw-artifact-button {
-  height: 38px;
-  border-radius: 999px;
-  padding: 0 14px;
-  white-space: nowrap;
+.cw-send-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in oklch, var(--cw-fg-on-primary, white), transparent 55%);
+  border-top-color: var(--cw-fg-on-primary, white);
+  border-radius: 50%;
+  animation: cw-spin 0.6s linear infinite;
 }
+@keyframes cw-spin { to { transform: rotate(360deg); } }
+.cw-attach-button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--cw-fg-3);
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.cw-attach-button:hover:not(:disabled) { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+.cw-attach-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .cw-composer small {
-  grid-column: 1 / -1;
   text-align: center;
   color: var(--cw-fg-4);
   font-size: 11px;
 }
+.cw-home-composer small {
+  text-align: center;
+  color: var(--cw-fg-4);
+  font-size: 11px;
+}
+.cw-model-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  border-radius: var(--cw-radius-full);
+  border: 1px solid var(--cw-border);
+  background: var(--cw-bg);
+  color: var(--cw-fg-2);
+  padding: 0 10px;
+  font-size: 12px;
+}
+.cw-model-picker select { border: 0; outline: 0; background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
+
+/* Project home — "new conversation" surface */
+.cw-project-hero.is-slim { align-items: center; padding-bottom: var(--cw-space-4); margin-bottom: var(--cw-space-5); }
+.cw-project-hero.is-slim h1 { font-size: var(--cw-text-2xl); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Sidebar SESSIONS "View all" — hidden until the section header is hovered (Claude pattern). */
+.cw-section-viewall {
+  border: 0;
+  background: transparent;
+  color: var(--cw-fg-3);
+  font-size: 11px;
+  padding: 2px 6px;
+  margin-left: auto;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms, color 120ms;
+}
+.cw-section-header:hover .cw-section-viewall,
+.cw-section-viewall:focus-visible { opacity: 1; }
+.cw-section-viewall:hover { color: var(--cw-fg-1); }
+
+/* z-index ladder (keep these in sync when adding new layers):
+   25  toast
+   30  marquee / misc
+   48–51  sidebar (drawer, reveal, resizer)
+   58  sessions-overlay backdrop
+   60  sessions-overlay panel
+   70  ConfirmDialog backdrop (always the topmost modal, even over the overlay) */
+
+/* "View all" sessions overlay — wide modal floating over the main area. */
+.cw-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  background: color-mix(in oklch, var(--cw-ink) 38%, transparent);
+}
+.cw-sessions-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 60;
+  width: min(880px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--cw-paper);
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-lg);
+  box-shadow: 0 20px 60px color-mix(in oklch, var(--cw-ink), transparent 68%);
+  overflow: hidden;
+}
+.cw-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--cw-border);
+}
+.cw-overlay-head h2 { margin: 0; font-size: var(--cw-text-lg); }
+.cw-overlay-close {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--cw-radius-sm);
+  background: transparent;
+  color: var(--cw-fg-3);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.cw-overlay-close:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+.cw-overlay-body { padding: 20px; overflow-y: auto; }
+.cw-overlay-body .cw-session-grid { margin-bottom: 0; }
+.cw-home-blank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 58vh;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+.cw-home-blank .cw-agent-composer-wrap { width: 100%; }
+.cw-home-blank .cw-home-composer-box { width: 100%; }
+.cw-home-greeting { margin: 0; text-align: center; font-size: var(--cw-text-lg); color: var(--cw-fg-2); font-weight: 500; }
+.cw-suggested-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.cw-suggested-chip {
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-full);
+  background: var(--cw-bg);
+  color: var(--cw-fg-3);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.cw-suggested-chip:hover { background: var(--cw-bg-muted); border-color: var(--cw-border-hover); color: var(--cw-fg-1); }
 
 /* ── Attachment tray (composer) & attachment chips ───────────────────────── */
 .cw-attach-chip {
@@ -1088,6 +1313,217 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   text-align: center;
 }
 
+/* Agent composer wrap — shared container that holds the picker tabs row + the
+   composer box. The border and accent colour are owned here so both children
+   inherit from a single source. data-agent drives per-agent CSS custom property
+   swaps with a smooth colour transition (@property enables cross-fade). */
+@property --cw-agent-accent      { syntax: '<color>'; inherits: true; initial-value: oklch(0.55 0.13 68); }
+@property --cw-agent-accent-soft { syntax: '<color>'; inherits: true; initial-value: oklch(0.96 0.025 68); }
+@property --cw-agent-send-bg     { syntax: '<color>'; inherits: true; initial-value: oklch(0.38 0.11 68); }
+
+.cw-agent-composer-wrap {
+  --cw-agent-accent:      oklch(0.55 0.13 68);
+  --cw-agent-accent-soft: oklch(0.96 0.025 68);
+  --cw-agent-send-bg:     oklch(0.38 0.11 68);
+  /* Wrap is layout-only. The composer-box (below) owns the paper surface +
+     agent-tinted border; the active tab indicator owns the selected bookmark. */
+  background: transparent;
+  border: 0;
+  overflow: visible;
+  view-transition-name: cw-composer;
+}
+.cw-agent-composer-wrap .cw-home-composer {
+  /* Pull the composer paper 1px under the active bookmark so their borders
+     meet without a hairline gap. */
+  margin-top: -1px;
+  position: relative;
+  z-index: 2;
+}
+/* Per-agent accent swaps. The same custom properties feed the home composer
+   and the session preview chip, keeping visual state in one selector family. */
+.cw-agent-composer-wrap[data-agent="coworker"],
+.cw-session-agent-chip[data-agent="coworker"] {
+  --cw-agent-accent: oklch(0.55 0.13 68);
+  --cw-agent-accent-soft: oklch(0.96 0.025 68);
+  --cw-agent-send-bg: oklch(0.38 0.11 68);
+}
+.cw-agent-composer-wrap[data-agent="speedwagon"],
+.cw-session-agent-chip[data-agent="speedwagon"] {
+  --cw-agent-accent: oklch(0.52 0.13 240);
+  --cw-agent-accent-soft: oklch(0.95 0.025 240);
+  --cw-agent-send-bg: oklch(0.38 0.12 240);
+}
+.cw-agent-composer-wrap[data-agent="deep-research"],
+.cw-session-agent-chip[data-agent="deep-research"] {
+  --cw-agent-accent: oklch(0.52 0.10 155);
+  --cw-agent-accent-soft: oklch(0.95 0.020 155);
+  --cw-agent-send-bg: oklch(0.38 0.09 155);
+}
+.cw-agent-composer-wrap[data-agent="buddy"],
+.cw-session-agent-chip[data-agent="buddy"] {
+  --cw-agent-accent: oklch(0.58 0.12 20);
+  --cw-agent-accent-soft: oklch(0.96 0.028 20);
+  --cw-agent-send-bg: oklch(0.42 0.11 20);
+}
+
+/* Picker tabs row — transparent so only the active bookmark tab carries color. */
+.cw-agent-tabs-area {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 0 36px;
+  background: transparent;
+  border-bottom: 0;
+  position: relative;
+}
+.cw-agent-tabs {
+  --cw-agent-indicator-left: 0px;
+  --cw-agent-indicator-width: 0px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 0;
+  background: transparent;
+  overflow: visible;
+  position: relative;
+  isolation: isolate;
+}
+.cw-agent-tab-indicator {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  z-index: 1;
+  width: var(--cw-agent-indicator-width);
+  height: 34px;
+  border-radius: 14px 14px 0 0;
+  background: var(--cw-agent-accent);
+  pointer-events: none;
+  transform: translateX(var(--cw-agent-indicator-left));
+  animation: cw-agent-tab-appear 140ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes cw-agent-tab-appear {
+  from {
+    opacity: 0;
+    transform: translateX(var(--cw-agent-indicator-left)) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(var(--cw-agent-indicator-left)) translateY(0);
+  }
+}
+/* Inactive tabs (v3 colours): muted text + slight opacity — fade behind active. */
+.cw-agent-tab {
+  position: relative;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--cw-fg-4);
+  opacity: 0.7;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 120ms, opacity 120ms;
+}
+.cw-agent-tab:hover { color: var(--cw-fg-2); opacity: 1; }
+/* Active tab: accent bookmark with rounded top corners. Bottom edge meets the
+   composer-box top exactly (no overlap) — same accent colour as the box border
+   makes the two reads as one continuous accent stroke at the join. */
+.cw-agent-tab.is-active {
+  background: transparent;
+  color: var(--cw-paper);
+  opacity: 1;
+  font-weight: 600;
+  border-radius: 14px 14px 0 0;
+  margin-bottom: -1px;
+}
+
+/* composer-box owns the paper frame: agent-tinted border + radius. */
+.cw-agent-composer-wrap .cw-home-composer-box {
+  border: 1px solid var(--cw-agent-accent);
+  border-radius: 20px;
+  background: var(--cw-paper);
+  position: relative;
+  z-index: 0;
+  transition: box-shadow 120ms;
+}
+.cw-agent-composer-wrap .cw-home-composer-box:focus-within {
+  box-shadow: 0 0 0 2.5px color-mix(in oklch, var(--cw-agent-accent), transparent 90%);
+}
+.cw-agent-composer-wrap .cw-send-button { background: var(--cw-agent-send-bg); }
+.cw-agent-composer-wrap .cw-send-button:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--cw-agent-send-bg), black 6%);
+}
+
+/* Preview pill — right-edge of the tabs row, tonally muted */
+.cw-preview-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--cw-radius-full);
+  background: var(--cw-bg-muted);
+  color: var(--cw-fg-4);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Suggested prompts fade-in animation (re-plays when key changes on agent switch) */
+.cw-suggested-prompts {
+  animation: cw-prompt-fade-in 180ms ease-out;
+}
+@keyframes cw-prompt-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cw-suggested-prompts { animation: none; }
+  .cw-agent-composer-wrap { transition: none; }
+  .cw-agent-tab-indicator,
+  .cw-agent-tab {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Accessibility utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Session header agent identity chip — shows which agent was selected in home */
+.cw-session-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--cw-radius-full);
+  border: 1px solid color-mix(in oklch, var(--cw-agent-accent) 40%, var(--cw-border));
+  background: color-mix(in oklch, var(--cw-agent-accent-soft) 50%, var(--cw-paper));
+  color: var(--cw-fg-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+.cw-preview-pill--micro { font-size: 9px; padding: 1px 5px; }
+
 .cw-empty-state {
   display: flex;
   align-items: flex-start;
@@ -1116,10 +1552,12 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   .cw-project-card,
   .cw-session-card { min-height: 118px; }
   .cw-composer { grid-template-columns: 1fr; padding: 12px 18px; }
-  .cw-artifact-button { width: 100%; }
   .cw-message-body { max-width: calc(100vw - 82px); }
   .cw-file-row { min-height: 58px; }
   .cw-file-path { align-items: flex-start; flex-direction: column; gap: 10px; }
+  /* Composer sits in the upper third so the iOS keyboard doesn't cover it. */
+  .cw-home-blank { min-height: auto; justify-content: flex-start; padding-top: 12vh; }
+  .cw-home-blank .cw-home-composer { padding: 0; }
 }
 
 /* Authoritative pass from Design System preview/icons-nav-files.html.

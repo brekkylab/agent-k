@@ -109,6 +109,7 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   grid: 'grid-3x3',
   'chevron-right': 'chevron-right',
   'chevron-left': 'chevron-left',
+  paperclip: 'paperclip',
   /* PDF doesn't have its own Lucide glyph — reuse file-text and let colour
      (cw-file-pdf rose tint) carry the type signal. */
   'file-pdf': 'file-text',
@@ -116,7 +117,6 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   'file-archive': 'file-archive',
   'file-video': 'file-video',
   'file-audio': 'file-audio',
-  paperclip: 'paperclip',
 };
 
 export function Icon({ name, size = 16, className = '', strokeWidth = 2, style, ...props }: SVGProps<SVGSVGElement> & { name: IconName; size?: number }) {
