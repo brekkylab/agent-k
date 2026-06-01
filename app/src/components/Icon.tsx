@@ -4,14 +4,14 @@ export type IconName =
   | 'home' | 'folder' | 'folder-open' | 'users' | 'settings' | 'lock' | 'eye'
   | 'message-square' | 'file-text' | 'file' | 'sheet' | 'image' | 'search' | 'plus'
   | 'send' | 'sparkles' | 'check' | 'chevron' | 'zap' | 'calendar' | 'circle-play' | 'rocket' | 'artifact'
-  | 'shield' | 'x' | 'arrow-left' | 'writing' | 'recap'
+  | 'shield' | 'x' | 'arrow-left' | 'analysis' | 'brainstorm' | 'writing' | 'recap'
   | 'more' | 'upload' | 'trash' | 'download' | 'copy'
   | 'list' | 'grid' | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left' | 'paperclip'
   | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio'
   | 'sticky-notes';
 
 type PreviewIconName =
-  | 'lock' | 'eye' | 'message-square' | 'messages-square'
+  | 'lock' | 'eye' | 'message-square' | 'messages-square' | 'clipboard-list' | 'lightbulb'
   | 'pencil' | 'home' | 'folder' | 'folder-open' | 'users'
   | 'settings' | 'plus' | 'chevron-down' | 'chevron-right' | 'chevron-left' | 'more-horizontal' | 'check'
   | 'x' | 'arrow-left' | 'send' | 'search' | 'file-text' | 'file-spreadsheet'
@@ -25,6 +25,8 @@ const previewIconPath: Record<PreviewIconName, string> = {
   eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
   'message-square': '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   'messages-square': '<path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/>',
+  'clipboard-list': '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+  lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
   pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
   home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
   folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
@@ -94,6 +96,8 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   shield: 'shield-check',
   x: 'x',
   'arrow-left': 'arrow-left',
+  analysis: 'clipboard-list',
+  brainstorm: 'lightbulb',
   writing: 'pencil',
   recap: 'messages-square',
   more: 'more-horizontal',
@@ -107,6 +111,7 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   grid: 'grid-3x3',
   'chevron-right': 'chevron-right',
   'chevron-left': 'chevron-left',
+  paperclip: 'paperclip',
   /* PDF doesn't have its own Lucide glyph — reuse file-text and let colour
      (cw-file-pdf rose tint) carry the type signal. */
   'file-pdf': 'file-text',
@@ -114,7 +119,6 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   'file-archive': 'file-archive',
   'file-video': 'file-video',
   'file-audio': 'file-audio',
-  paperclip: 'paperclip',
   'sticky-notes': 'sticky-notes',
 };
 
