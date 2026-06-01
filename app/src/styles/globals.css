@@ -206,26 +206,30 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-projects-list[data-expanded="false"] .cw-nav-row:not(.is-active),
 .cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread) { display: none; }
 
-/* Quiet scrollbar — always visible but faint so users can tell content is
-   scrollable, without claiming a wide gutter. Resting thumb is ~20% opacity
-   of fg-3, brightening to ~45% on hover. Track is invisible to avoid the
-   chunky lane look. WebKit width is 6px so the reserved space is narrow but
-   the bar is still hittable for drag-scroll. */
+/* Quiet scrollbar — macOS-style: thumb is invisible at rest, fades in
+   while the user is actively scrolling or hovering the scroll area. The
+   gutter stays a narrow 6px so resting layout doesn't read as "padded".
+   Scroll activity adds `.is-scrolling`; a small JS in main.tsx clears
+   the class after a brief idle so the thumb fades back out. */
 .cw-scroll-quiet {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 22%, transparent) transparent;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 200ms ease;
 }
-.cw-scroll-quiet:hover {
-  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 45%, transparent) transparent;
+.cw-scroll-quiet:hover,
+.cw-scroll-quiet.is-scrolling {
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 38%, transparent) transparent;
 }
 .cw-scroll-quiet::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
 .cw-scroll-quiet::-webkit-scrollbar-track { background: transparent; }
 .cw-scroll-quiet::-webkit-scrollbar-thumb {
-  background-color: color-mix(in oklch, var(--cw-fg-3) 22%, transparent);
+  background-color: transparent;
   border-radius: 3px;
+  transition: background-color 200ms ease;
 }
-.cw-scroll-quiet:hover::-webkit-scrollbar-thumb {
-  background-color: color-mix(in oklch, var(--cw-fg-3) 45%, transparent);
+.cw-scroll-quiet:hover::-webkit-scrollbar-thumb,
+.cw-scroll-quiet.is-scrolling::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--cw-fg-3) 38%, transparent);
 }
 
 .cw-brand-lockup { display: flex; align-items: center; gap: 9px; border: 0; background: transparent; padding: 6px 8px 18px; border-radius: var(--cw-radius-md); min-width: 0; }
