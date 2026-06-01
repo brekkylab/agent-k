@@ -26,6 +26,30 @@ export function stripScopePrefix(s: DirentScope, path: string): string {
   return path;
 }
 
+/** Parse a global dirent path into its scope and scope-relative path.
+ *  Returns null if the path does not match a known scope pattern. */
+export function parseGlobalPath(path: string): { scope: DirentScope; relativePath: string } | null {
+  // projects/{pid}/sessions/{sid}/inputs/{...}
+  const inputsMatch = path.match(/^projects\/([^/]+)\/sessions\/([^/]+)\/inputs\/(.+)$/);
+  if (inputsMatch) {
+    const [, projectId, sessionId, relativePath] = inputsMatch as [string, string, string, string];
+    return { scope: { kind: 'inputs', projectId, sessionId }, relativePath };
+  }
+  // projects/{pid}/sessions/{sid}/artifacts/{...}
+  const artifactsMatch = path.match(/^projects\/([^/]+)\/sessions\/([^/]+)\/artifacts\/(.+)$/);
+  if (artifactsMatch) {
+    const [, projectId, sessionId, relativePath] = artifactsMatch as [string, string, string, string];
+    return { scope: { kind: 'artifacts', projectId, sessionId }, relativePath };
+  }
+  // projects/{pid}/shared/{...}
+  const sharedMatch = path.match(/^projects\/([^/]+)\/shared\/(.+)$/);
+  if (sharedMatch) {
+    const [, projectId, relativePath] = sharedMatch as [string, string, string];
+    return { scope: { kind: 'shared', projectId }, relativePath };
+  }
+  return null;
+}
+
 function encodePath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
