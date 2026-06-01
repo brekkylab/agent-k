@@ -11,19 +11,19 @@ import { ApiError } from '@/api/client';
 import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface InviteDialogProps {
-  projectId: string;
+  projectSlug: string;
   onClose: () => void;
 }
 
-export function InviteDialog({ projectId, onClose }: InviteDialogProps) {
+export function InviteDialog({ projectSlug, onClose }: InviteDialogProps) {
   const queryClient = useQueryClient();
   const [username, setUsername] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: (name: string) => addMember(projectId, name),
+    mutationFn: (name: string) => addMember(projectSlug, name),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['members', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['members', projectSlug] });
       onClose();
     },
     onError: (err) => {
@@ -56,7 +56,7 @@ export function InviteDialog({ projectId, onClose }: InviteDialogProps) {
           초대할 사용자의 username을 입력하세요. 가입된 사용자만 추가할 수 있습니다.
         </p>
         <p style={{ color: 'var(--cw-ink-4)', margin: '0 0 14px', fontSize: 11, fontFamily: 'var(--cw-font-mono)' }}>
-          POST /projects/{projectId.slice(0, 8)}…/members
+          POST /projects/{projectSlug.slice(0, 8)}…/members
         </p>
         <form onSubmit={submit}>
           <div className="cw-field">
