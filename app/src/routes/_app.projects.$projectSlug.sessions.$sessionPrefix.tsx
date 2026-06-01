@@ -59,6 +59,11 @@ function SessionPage() {
     queryKey: ['messages', sessionId],
     queryFn: () => listMessages(sessionId),
     enabled: Boolean(session.data && currentUser),
+    // Refetch on every entry so the backend's mark-read side effect runs, which
+    // clears the sidebar unread badge via the dataUpdatedAt effect below. Without
+    // this, the QueryClient's default 30s staleTime kept re-entries within that
+    // window from triggering mark-read and the badge stayed visible.
+    staleTime: 0,
   });
 
   // Agent chip — transient preview state from home. Persist it after router state
