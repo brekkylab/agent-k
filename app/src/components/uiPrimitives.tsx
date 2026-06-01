@@ -89,37 +89,19 @@ export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mo
     }
   }, [mode, t]);
 
-  // Outside-click + global keyboard handlers, only mounted while open.
+  // Outside-click dismissal, only mounted while open. Keyboard is handled on
+  // the trigger's onKeyDown (see below) — the trigger keeps DOM focus while
+  // the panel is open, so a document keydown listener isn't needed and would
+  // re-read the very keypress that opened the panel (it's attached by this
+  // effect mid-event), closing it again on Enter.
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
       if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
     };
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setOpen(false);
-        triggerRef.current?.focus();
-      } else if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        setFocusIdx((i) => (i + 1) % SHARE_MODES.length);
-      } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        setFocusIdx((i) => (i - 1 + SHARE_MODES.length) % SHARE_MODES.length);
-      } else if (event.key === 'Enter') {
-        event.preventDefault();
-        commit(SHARE_MODES[focusIdx]);
-      }
-    };
     document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-    // `commit` is a stable closure here; effect re-binds per focusIdx so Enter targets the right row.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, focusIdx]);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [open]);
 
   function commit(next: ShareMode) {
     onChange(next);
@@ -135,10 +117,40 @@ export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mo
   }
 
   function onTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (!open && (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
-      event.preventDefault();
-      setFocusIdx(SHARE_MODES.indexOf(mode));
-      setOpen(true);
+    if (!open) {
+      // Closed: open on Enter / Space / ArrowDown, focusing the current mode.
+      if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        setFocusIdx(SHARE_MODES.indexOf(mode));
+        setOpen(true);
+      }
+      return;
+    }
+    // Open: navigate / commit / dismiss. Handled here rather than on a
+    // document listener so the keydown that opened the panel can't be
+    // re-read and immediately close it.
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        setFocusIdx((i) => (i + 1) % SHARE_MODES.length);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        setFocusIdx((i) => (i - 1 + SHARE_MODES.length) % SHARE_MODES.length);
+        break;
+      case 'Enter':
+      case ' ':
+        event.preventDefault();
+        commit(SHARE_MODES[focusIdx]);
+        break;
+      case 'Escape':
+        event.preventDefault();
+        setOpen(false);
+        break;
+      case 'Tab':
+        // Let focus move naturally, but don't leave an orphaned open panel.
+        setOpen(false);
+        break;
     }
   }
 
