@@ -1,5 +1,6 @@
 import { ApiError, getBaseUrl, getToken, notifyUnauthorized } from './client';
 import { getMe } from './auth';
+import type { MessageOutput } from './backend-types';
 
 export interface SessionTitleUpdatedEvent {
   type: 'session_title_updated';
@@ -8,7 +9,38 @@ export interface SessionTitleUpdatedEvent {
   title: string;
 }
 
-export type AppWsEvent = SessionTitleUpdatedEvent;
+export interface RunUserMessage {
+  sender_user_id: string;
+  content: string;
+  attachments: string[];
+  created_at: string;
+}
+
+export interface AgentRunStartedEvent {
+  type: 'agent_run_started';
+  session_id: string;
+  user_message: RunUserMessage;
+}
+
+export interface AgentMessageEvent {
+  type: 'agent_message';
+  session_id: string;
+  seq: number;
+  output: MessageOutput;
+}
+
+export interface AgentErrorEvent {
+  type: 'agent_error';
+  session_id: string;
+  message: string;
+}
+
+export interface AgentRunDoneEvent {
+  type: 'agent_run_done';
+  session_id: string;
+}
+
+export type AppWsEvent = SessionTitleUpdatedEvent | AgentRunStartedEvent | AgentMessageEvent | AgentErrorEvent | AgentRunDoneEvent;
 
 type Handler = (event: AppWsEvent) => void;
 
@@ -31,6 +63,7 @@ class AppWebSocketManager {
   private active = false;
   private rapidCloseCount = 0;
   private connectionStartTime = 0;  // replaces lastCloseTime: records when the socket was created
+  private subscribedSessions = new Set<string>();
 
   connect(token: string): void {
     this.active = true;
@@ -39,6 +72,13 @@ class AppWebSocketManager {
     this.connectionStartTime = Date.now();
     const ws = new WebSocket(url);
     this.ws = ws;
+
+    ws.onopen = () => {
+      // Replay all active session subscriptions on (re)connect
+      for (const sessionId of this.subscribedSessions) {
+        ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));
+      }
+    };
 
     ws.onmessage = (evt) => {
       try {
@@ -100,9 +140,26 @@ class AppWebSocketManager {
     ws.onerror = () => { ws.close(); };
   }
 
+  subscribeSession(sessionId: string): void {
+    this.subscribedSessions.add(sessionId);
+    // 소켓이 열려 있으면 즉시 제어 프레임 전송
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));
+    }
+    // 소켓이 닫혀 있으면 reconnect 후 onopen에서 재전송됨
+  }
+
+  unsubscribeSession(sessionId: string): void {
+    this.subscribedSessions.delete(sessionId);
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: 'unsubscribe', session_id: sessionId }));
+    }
+  }
+
   disconnect(): void {
     this.active = false;
     this.rapidCloseCount = 0;
+    this.subscribedSessions.clear();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

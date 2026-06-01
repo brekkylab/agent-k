@@ -5,7 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
-import { listMessages, streamMessage } from '@/api/messages';
+import { listMessages, sendMessage, deriveStreamState } from '@/api/messages';
+import { appWs } from '@/api/ws';
+import type { AppWsEvent } from '@/api/ws';
+import type { MessageOutput } from '@/api/backend-types';
 import { getProject, listMembers } from '@/api/projects';
 import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
@@ -84,6 +87,13 @@ function SessionPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // WS 구동: seq 순서로 정렬된 outputs 맵 (catch-up + live 멱등 병합용)
+  const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
+  // 낙관적 유저 버블 ID (agent_run_started 도착 시 교체 여부 결정)
+  const optimisticUserIdRef = useRef<string | null>(null);
+  // agent_run_started 미도착 시 자동 복구용 타임아웃 ref
+  const runStartedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [composerText, setComposerText] = useState('');
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -108,6 +118,8 @@ function SessionPage() {
     setComposerText('');
     setStreaming(false);
     setPendingAttachments([]);
+    wsOutputsRef.current.clear();        // <-- 추가
+    optimisticUserIdRef.current = null;  // <-- 추가
   }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
@@ -159,7 +171,8 @@ function SessionPage() {
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? composerText).trim();
-    if (!text || streaming || hasUploadingAttachments) return;
+    const uploading = pendingAttachments.some((a) => a.status === 'uploading');
+    if (!text || streaming || uploading) return;
 
     const attachmentPaths = pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
@@ -168,9 +181,12 @@ function SessionPage() {
     setComposerText('');
     setPendingAttachments([]);
 
+    // 낙관적 유저 버블 (WS agent_run_started 도착 전까지 즉각적 피드백)
     const nowIso = new Date().toISOString();
+    const optimisticUserId = `live-user-${Date.now()}`;
+    optimisticUserIdRef.current = optimisticUserId;
     const userMsg: Message = {
-      id: `live-user-${Date.now()}`,
+      id: optimisticUserId,
       sessionId: sessionPrefix,
       sender: { kind: 'user', userId: currentUser?.id ?? 'user' },
       createdAt: nowIso,
@@ -178,78 +194,38 @@ function SessionPage() {
       status: 'done',
       attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
     };
-    const aiId = `live-ai-${Date.now()}`;
-    setLiveMessages((prev) => [...prev, userMsg, {
-      id: aiId,
-      sessionId: sessionPrefix,
-      sender: { kind: 'agent' as const, name: 'agent-k' },
-      createdAt: nowIso,
-      body: '',
-      status: 'streaming' as const,
-    }]);
+    setLiveMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
 
-    const ctrl = new AbortController();
-
     try {
-      for await (const update of streamMessage(sessionPrefix, text, ctrl.signal, attachmentPaths.length > 0 ? attachmentPaths : undefined)) {
-        const isDone = update.status === 'done';
-        const doneOrStreaming = isDone ? 'done' as const : 'streaming' as const;
-
-        setLiveMessages((prev) => {
-          // Update main agent-k bubble
-          let next: Message[] = prev.map((m) => {
-            if (m.id !== aiId) return m;
-            const updatedToolCalls = update.toolCalls.length > 0
-              ? update.toolCalls.map((tc) => ({ ...tc }))
-              : m.toolCalls;
-            return { ...m, body: update.text, status: doneOrStreaming, toolCalls: updatedToolCalls };
-          });
-
-          // Apply subagent bubble updates — stable id derived from sender name
-          for (const sub of update.subagentUpdates) {
-            const subId = `live-sub-${sub.sourceAgent}`;
-            const exists = next.some((m) => m.id === subId);
-            if (exists) {
-              next = next.map((m) =>
-                m.id === subId ? { ...m, body: sub.text, status: doneOrStreaming } : m,
-              );
-            } else {
-              next = [...next, {
-                id: subId,
-                sessionId: sessionPrefix,
-                sender: { kind: 'agent' as const, name: sub.sourceAgent },
-                createdAt: nowIso,
-                body: sub.text,
-                status: 'streaming' as const,
-              }];
-            }
-          }
-
-          return next;
-        });
-
-        if (update.status === 'error') {
-          showToast(`스트리밍 실패: ${update.errorText ?? 'unknown'}`);
-          break;
+      await sendMessage(sessionId, text, attachmentPaths.length > 0 ? attachmentPaths : undefined);
+      // agent_run_started가 10초 내에 도착하지 않으면 자동 복구
+      if (runStartedTimeoutRef.current) clearTimeout(runStartedTimeoutRef.current);
+      runStartedTimeoutRef.current = setTimeout(() => {
+        if (optimisticUserIdRef.current === optimisticUserId) {
+          setStreaming(false);
+          setLiveMessages([]);
+          wsOutputsRef.current.clear();
+          optimisticUserIdRef.current = null;
+          runStartedTimeoutRef.current = null;
+          showToast('에이전트 연결에 실패했습니다. 다시 시도해주세요.');
         }
-      }
+      }, 10_000);
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'stream failed';
-      showToast(`전송 실패: ${msg}`);
-    } finally {
-      setStreaming(false);
-      // Guard against empty sessionId (race where session hasn't resolved yet).
-      if (sessionId) {
-        // Refetch and wait for new history data before clearing live messages to avoid flash.
-        await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+      // 전송 실패 (네트워크, 403, 423 등) — 즉시 복구
+      if (runStartedTimeoutRef.current) {
+        clearTimeout(runStartedTimeoutRef.current);
+        runStartedTimeoutRef.current = null;
       }
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'send failed';
+      showToast(`전송 실패: ${msg}`);
+      setStreaming(false);
       setLiveMessages([]);
-      void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
-      void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
-      void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+      wsOutputsRef.current.clear();
+      optimisticUserIdRef.current = null;
     }
-  }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
+    // 성공 시: WS 이벤트(agent_run_done)가 completion을 처리함. finally 블록 없음.
+  }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments]);
 
   const duplicateMutation = useDuplicateSession(projectSlug);
 
@@ -268,6 +244,146 @@ function SessionPage() {
     void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined }) });
     void send(msg);
   }, [session.data, send, navigate]);
+
+  // WS 세션 구독 — sessionId 변경 시 구독/해제.
+  useEffect(() => {
+    if (!sessionId) return;
+    appWs.subscribeSession(sessionId);
+    return () => {
+      appWs.unsubscribeSession(sessionId);
+    };
+  }, [sessionId]);
+
+  // WS 이벤트 핸들러 — agent 응답을 WS 이벤트로 구동.
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const unsubscribe = appWs.subscribe((event: AppWsEvent) => {
+      // 이 세션과 관련 없는 이벤트는 무시
+      if (!('session_id' in event) || event.session_id !== sessionId) return;
+
+      if (event.type === 'agent_run_started') {
+        // agent_run_started 도착 — 복구 타임아웃 취소
+        if (runStartedTimeoutRef.current) {
+          clearTimeout(runStartedTimeoutRef.current);
+          runStartedTimeoutRef.current = null;
+        }
+        // outputs 맵 초기화 (새 run 시작)
+        wsOutputsRef.current.clear();
+        setStreaming(true);
+
+        // 낙관적 유저 버블이 있으면 유지, 없으면(다른 탭/유저) event에서 추가
+        setLiveMessages((prev) => {
+          const hasOptimistic = optimisticUserIdRef.current &&
+            prev.some((m) => m.id === optimisticUserIdRef.current);
+          if (hasOptimistic) {
+            // 이미 낙관적 버블 있음 — AI 버블만 추가
+            const nowIso = new Date().toISOString();
+            return [...prev, {
+              id: `live-ai-${sessionId}`,
+              sessionId: sessionPrefix,
+              sender: { kind: 'agent' as const, name: 'agent-k' },
+              createdAt: nowIso,
+              body: '',
+              status: 'streaming' as const,
+            }];
+          } else {
+            // 다른 탭/유저: event.user_message에서 유저 버블 추가
+            const { user_message } = event;
+            const nowIso = new Date().toISOString();
+            return [...prev,
+              {
+                id: `live-user-ws-${sessionId}`,
+                sessionId: sessionPrefix,
+                sender: { kind: 'user', userId: user_message.sender_user_id },
+                createdAt: user_message.created_at ?? nowIso,
+                body: user_message.content,
+                status: 'done' as const,
+                attachments: user_message.attachments.length > 0 ? user_message.attachments : undefined,
+              },
+              {
+                id: `live-ai-${sessionId}`,
+                sessionId: sessionPrefix,
+                sender: { kind: 'agent' as const, name: 'agent-k' },
+                createdAt: nowIso,
+                body: '',
+                status: 'streaming' as const,
+              }
+            ];
+          }
+        });
+      }
+
+      if (event.type === 'agent_message') {
+        const { seq, output } = event;
+        wsOutputsRef.current.set(seq, output);
+
+        // seq 순서로 정렬한 outputs에서 StreamUpdate 재계산
+        const sortedOutputs = [...wsOutputsRef.current.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([, v]) => v);
+        const update = deriveStreamState(sortedOutputs, 'streaming');
+
+        const aiId = `live-ai-${sessionId}`;
+        setLiveMessages((prev) => {
+          let next = prev.map((m) => {
+            if (m.id !== aiId) return m;
+            const updatedToolCalls = update.toolCalls.length > 0
+              ? update.toolCalls.map((tc) => ({ ...tc }))
+              : m.toolCalls;
+            return { ...m, body: update.text, status: 'streaming' as const, toolCalls: updatedToolCalls };
+          });
+          // 서브에이전트 버블 upsert
+          for (const sub of update.subagentUpdates) {
+            const subId = `live-sub-${sub.sourceAgent}`;
+            const exists = next.some((m) => m.id === subId);
+            const nowIso = new Date().toISOString();
+            if (exists) {
+              next = next.map((m) =>
+                m.id === subId ? { ...m, body: sub.text, status: 'streaming' as const } : m,
+              );
+            } else {
+              next = [...next, {
+                id: subId,
+                sessionId: sessionPrefix,
+                sender: { kind: 'agent' as const, name: sub.sourceAgent },
+                createdAt: nowIso,
+                body: sub.text,
+                status: 'streaming' as const,
+              }];
+            }
+          }
+          return next;
+        });
+      }
+
+      if (event.type === 'agent_error') {
+        showToast(`에이전트 오류: ${event.message}`);
+        setStreaming(false);
+        setLiveMessages([]);
+        wsOutputsRef.current.clear();
+        optimisticUserIdRef.current = null;
+      }
+
+      if (event.type === 'agent_run_done') {
+        // 완료: history refetch → liveMessages clear → streaming stop → invalidate
+        void (async () => {
+          if (sessionId) {
+            await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+          }
+          setLiveMessages([]);
+          wsOutputsRef.current.clear();
+          optimisticUserIdRef.current = null;
+          setStreaming(false);
+          void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
+          void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
+          void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+        })();
+      }
+    });
+
+    return unsubscribe;
+  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),

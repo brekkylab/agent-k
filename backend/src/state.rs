@@ -2,14 +2,22 @@ use std::{path::PathBuf, sync::Arc};
 
 use agent_k::knowledge_base::SharedStore;
 use ailoy::agent::Agent;
+use ailoy::message::MessageOutput;
 use dashmap::DashMap;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 use uuid::Uuid;
 
-use crate::{auth::JwtConfig, events::WsEvent, repository::AppRepository};
+use crate::{auth::JwtConfig, events::{RunUserMessage, WsEvent}, repository::AppRepository};
+
+pub struct ActiveRun {
+    pub user_message: RunUserMessage,
+    pub(crate) next_seq: u64,
+    pub(crate) outputs: Vec<(u64, MessageOutput)>,
+}
 
 pub struct AppState {
     agents: DashMap<Uuid, Arc<Mutex<Agent>>>,
+    active_runs: DashMap<Uuid, Arc<RwLock<ActiveRun>>>,
     pub repository: AppRepository,
     pub store: SharedStore,
     pub jwt: JwtConfig,
@@ -40,6 +48,7 @@ impl AppState {
         let (ws_tx, _) = broadcast::channel(128);
         Self {
             agents: DashMap::new(),
+            active_runs: DashMap::new(),
             repository,
             store,
             jwt,
@@ -59,5 +68,52 @@ impl AppState {
 
     pub fn get_agent(&self, id: &Uuid) -> Option<Arc<Mutex<Agent>>> {
         self.agents.get(id).map(|entry| entry.value().clone())
+    }
+
+    pub fn start_run(&self, session_id: Uuid, user_message: RunUserMessage) {
+        use dashmap::mapref::entry::Entry;
+        match self.active_runs.entry(session_id) {
+            Entry::Vacant(e) => {
+                e.insert(Arc::new(RwLock::new(ActiveRun {
+                    user_message,
+                    next_seq: 0,
+                    outputs: vec![],
+                })));
+            }
+            Entry::Occupied(_) => {
+                tracing::warn!(%session_id, "start_run: session already has an active run; ignoring duplicate");
+            }
+        }
+    }
+
+    pub async fn push_output(&self, session_id: &Uuid, output: MessageOutput) -> Option<u64> {
+        let entry = self.active_runs.get(session_id)?;
+        let run_arc = entry.value().clone();
+        drop(entry);
+        let mut run = run_arc.write().await;
+        let seq = run.next_seq;
+        run.next_seq += 1;
+        run.outputs.push((seq, output));
+        Some(seq)
+    }
+
+    pub async fn snapshot(
+        &self,
+        session_id: &Uuid,
+    ) -> Option<(RunUserMessage, Vec<(u64, MessageOutput)>)> {
+        let entry = self.active_runs.get(session_id)?;
+        let run_arc = entry.value().clone();
+        drop(entry);
+        let run = run_arc.read().await;
+        Some((run.user_message.clone(), run.outputs.clone()))
+    }
+
+    /// Removes the active run record for `session_id`.
+    ///
+    /// # Invariant
+    /// Must be called exactly once per `start_run`, on both success and error paths.
+    /// Failing to call this leaks the in-memory run buffer indefinitely.
+    pub fn end_run(&self, session_id: &Uuid) {
+        self.active_runs.remove(session_id);
     }
 }

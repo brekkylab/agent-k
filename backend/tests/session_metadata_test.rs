@@ -384,6 +384,7 @@ async fn first_message_stream_broadcasts_title_via_websocket() {
                 );
                 break;
             }
+            Ok(Ok(_)) => continue, // other WsEvent variants; keep waiting
             Ok(Err(_)) => panic!("ws_tx channel closed before title event arrived"),
             Err(_) => panic!("no session_title_updated WS event received within {timeout:?}"),
         }
