@@ -992,13 +992,33 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   border: 1px solid var(--cw-border);
   border-radius: 24px;
   background: var(--cw-paper);
-  transition: border-color 120ms, box-shadow 120ms;
+  transition: border-color 120ms, box-shadow 120ms, border-radius 200ms ease, padding 200ms ease;
   /* Shared name so navigating home <-> session morphs the box (see route viewTransition). */
   view-transition-name: cw-composer;
 }
 .cw-composer-box:focus-within {
   border-color: var(--cw-border-hover);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--cw-accent), transparent 86%);
+}
+.cw-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+/* Expanded — long-form layout. The textarea sits on its own row spanning the
+   full width; the action buttons drop below, right-aligned. Triggered the
+   moment text in compact mode would wrap to a second row, so users get the
+   home-composer-like writing surface before the buttons can crowd the line. */
+.cw-composer-box[data-expanded="true"] {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 10px 14px 8px;
+  border-radius: 18px;
+}
+.cw-composer-box[data-expanded="true"] .cw-composer-actions {
+  justify-content: flex-end;
+  padding-top: 2px;
 }
 .cw-composer textarea {
   flex: 1;
@@ -1015,6 +1035,14 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-size: 14px;
   line-height: 1.5;
   color: var(--cw-fg-1);
+}
+.cw-composer-box[data-expanded="true"] textarea {
+  width: 100%;
+  padding: 2px 0;
+  /* In column flex the container has no explicit height, so flex:1 collapses
+     the textarea to its min-height. Let the auto-grow effect's inline height
+     drive sizing instead. */
+  flex: 0 0 auto;
 }
 .cw-home-composer {
   position: static;

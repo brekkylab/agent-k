@@ -91,6 +91,12 @@ function SessionPage() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const [composerText, setComposerText] = useState('');
+  // Composer layout — false = compact pill (textarea + buttons inline),
+  // true = stacked layout (textarea on top, actions row below). We flip to
+  // expanded the moment text would wrap to a second row in compact mode and
+  // collapse back only when the field empties, so partial edits don't
+  // oscillate between layouts.
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [copyToSharedPaths, setCopyToSharedPaths] = useState<string[] | null>(null);
@@ -132,9 +138,17 @@ function SessionPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [allMessages.length, streaming]);
 
-  // Auto-grow the composer textarea between a single-row rest state and a 200px cap.
-  // Reset to auto first so deleting lines shrinks the box back down. Overflow stays
-  // hidden until the cap is hit to avoid a phantom scrollbar from sub-pixel rounding.
+  // Auto-grow the composer textarea + drive the compact↔expanded layout flip.
+  // Reset to auto first so deleting lines shrinks the box; overflow stays hidden
+  // until we hit the 200px cap to avoid a phantom scrollbar from sub-pixel
+  // rounding.
+  //
+  // Layout trigger:
+  //   - empty text  → compact (pill, inline actions)
+  //   - while compact, if scrollHeight indicates the text just wrapped to a
+  //     second row in the narrow inline-width context, flip to expanded.
+  //   - once expanded, stay until the field empties (don't toggle back while
+  //     the user is mid-edit; ChatGPT-style stability).
   useEffect(() => {
     const ta = composerRef.current;
     if (!ta) return;
@@ -142,7 +156,20 @@ function SessionPage() {
     const next = Math.min(ta.scrollHeight, 200);
     ta.style.height = `${next}px`;
     ta.style.overflowY = ta.scrollHeight > 200 ? 'auto' : 'hidden';
-  }, [composerText]);
+
+    if (composerText.length === 0) {
+      setComposerExpanded(false);
+    } else if (!composerExpanded) {
+      const cs = getComputedStyle(ta);
+      const padTop = parseFloat(cs.paddingTop) || 0;
+      const padBot = parseFloat(cs.paddingBottom) || 0;
+      const lineHeight = parseFloat(cs.lineHeight) || 24;
+      // +4px slack so sub-pixel rounding doesn't flip on a single-line value.
+      if (ta.scrollHeight > lineHeight + padTop + padBot + 4) {
+        setComposerExpanded(true);
+      }
+    }
+  }, [composerText, composerExpanded]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -413,7 +440,7 @@ function SessionPage() {
               ))}
             </div>
           )}
-          <div className="cw-composer-box">
+          <div className="cw-composer-box" data-expanded={composerExpanded ? 'true' : 'false'}>
             <textarea
               ref={composerRef}
               value={composerText}
@@ -423,19 +450,21 @@ function SessionPage() {
               disabled={streaming}
               rows={1}
             />
-            <button
-              type="button"
-              className="cw-attach-btn"
-              aria-label="파일 첨부"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={streaming}
-              style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
-            >
-              <Icon name="paperclip" size={13} />
-            </button>
-            <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || streaming || hasUploadingAttachments}>
-              <Icon name="send" size={12} />
-            </button>
+            <div className="cw-composer-actions">
+              <button
+                type="button"
+                className="cw-attach-btn"
+                aria-label="파일 첨부"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={streaming}
+                style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
+              >
+                <Icon name="paperclip" size={13} />
+              </button>
+              <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || streaming || hasUploadingAttachments}>
+                <Icon name="send" size={12} />
+              </button>
+            </div>
           </div>
           <input
             ref={fileInputRef}
