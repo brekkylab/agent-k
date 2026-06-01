@@ -255,6 +255,23 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-btn-primary:hover { background: var(--cw-primary-hover); }
 .cw-btn-secondary { background: var(--cw-bg); color: var(--cw-fg-1); border: 1px solid var(--cw-border); }
 .cw-btn-secondary:hover { border-color: var(--cw-border-hover); background: var(--cw-bg-muted); }
+
+/* Ghost icon-only button — base for IconButton primitive. Modifiers (e.g.
+   .cw-rail-action) layer on top to override size or add row-hover gating. */
+.cw-icon-button { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--cw-ink-3); border-radius: 6px; padding: 0; cursor: pointer; transition: background 120ms, color 120ms; }
+.cw-icon-button:hover { background: var(--cw-paper-3); color: var(--cw-ink-1); }
+.cw-icon-button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Expandable variant: 30×30 square that grows on hover to reveal the label.
+   Label uses max-width transition so width animates smoothly with content. */
+.cw-icon-button.is-expandable { width: auto; min-width: 30px; justify-content: flex-start; }
+.cw-icon-button.is-expandable .cw-icon-button-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex: 0 0 30px; }
+.cw-icon-button.is-expandable .cw-icon-button-label { max-width: 0; overflow: hidden; white-space: nowrap; font-size: 12px; font-weight: 500; padding: 0; transition: max-width 180ms ease, padding 180ms ease; }
+.cw-icon-button.is-expandable:hover .cw-icon-button-label,
+.cw-icon-button.is-expandable.is-armed .cw-icon-button-label { max-width: 200px; padding-right: 10px; }
+/* Armed (two-click confirm) state. Primary-tone bg to read as a CTA: "this
+   click executes". Disarms on mouse-leave (handled in JS). */
+.cw-icon-button.is-armed,
+.cw-icon-button.is-armed:hover { background: var(--cw-primary); color: var(--cw-fg-on-primary); }
 .wide { width: 100%; }
 
 .cw-project-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -495,15 +512,12 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-simple-page ol { line-height: 1.8; color: var(--cw-fg-2); }
 
 .cw-pocket { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: var(--cw-radius-sm); border: 1px solid var(--cw-line-soft); background: var(--cw-bg); flex: 0 0 auto; }
-.cw-intent-analysis, .cw-file-pdf { background: oklch(0.96 0.018 210); color: var(--cw-icon-analysis); }
-.cw-intent-brainstorm { background: oklch(0.97 0.025 75); color: var(--cw-icon-brainstorm); }
-.cw-intent-writing, .cw-file-doc { background: oklch(0.965 0.018 340); color: var(--cw-icon-writing); }
-.cw-intent-recap, .cw-file-folder { background: oklch(0.96 0.018 150); color: var(--cw-icon-recap); }
-.cw-intent-general { background: oklch(0.965 0.020 25); color: var(--cw-icon-general); }
+.cw-file-pdf { background: oklch(0.96 0.018 210); color: var(--cw-icon-analysis); }
+.cw-file-doc { background: oklch(0.965 0.018 340); color: var(--cw-icon-writing); }
+.cw-file-folder { background: oklch(0.96 0.018 150); color: var(--cw-icon-recap); }
 .cw-file-sheet { background: oklch(0.96 0.018 150); color: var(--cw-cozy-sage); }
 .cw-file-image { background: oklch(0.965 0.018 45); color: var(--cw-cozy-clay); }
-.cw-intent-dot { width: 7px; height: 7px; border-radius: 2px; background: var(--cw-fg-3); }
-.cw-intent-badge, .cw-share-pill, .cw-share-select { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; border-radius: var(--cw-radius-full); border: 1px solid var(--cw-border); background: var(--cw-bg); color: var(--cw-fg-2); padding: 4px 9px; font-size: 12px; }
+.cw-share-pill, .cw-share-select { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; border-radius: var(--cw-radius-full); border: 1px solid var(--cw-border); background: var(--cw-bg); color: var(--cw-fg-2); padding: 4px 9px; font-size: 12px; }
 .cw-share-select select { border: 0; outline: 0; background: transparent; color: inherit; }
 .cw-share-pill.private, .cw-share-select.private { background: var(--cw-share-private-bg); border-color: var(--cw-share-private-border); color: var(--cw-share-private-fg); }
 .cw-share-pill.readonly, .cw-share-select.readonly { background: var(--cw-share-readonly-bg); border-color: var(--cw-share-readonly-border); color: var(--cw-share-readonly-fg); }
@@ -529,11 +543,6 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-dialog .cw-field input:focus-visible { outline: 2px solid var(--cw-accent-line); outline-offset: 0; border-color: var(--cw-accent-line); }
 .cw-dialog .cw-field input[aria-invalid="true"] { border-color: color-mix(in oklch, var(--cw-destructive), transparent 40%); }
 .cw-dialog-warn { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 7px 12px; border-radius: var(--cw-radius-md); background: color-mix(in oklch, var(--cw-destructive), white 92%); border: 1px solid color-mix(in oklch, var(--cw-destructive), transparent 65%); color: oklch(0.42 0.14 25); font-size: 12.5px; line-height: 1.4; }
-.cw-intent-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
-.cw-intent-grid button { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; text-align: left; border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); background: var(--cw-bg-subtle); padding: 12px; }
-.cw-intent-grid button span:last-child { grid-column: 2; color: var(--cw-fg-3); font-size: 12px; }
-.cw-intent-grid button.is-active { border-color: var(--cw-accent-line); background: var(--cw-accent-soft); }
-
 @keyframes cw-enter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cw-rise { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes cw-ping { 50% { opacity: .25; } }
@@ -721,11 +730,6 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   background: var(--cw-paper-3);
   color: var(--cw-ink-3);
 }
-.cw-intent-general { background: color-mix(in oklch, var(--cw-cozy-clay) 14%, var(--cw-paper)); color: var(--cw-cozy-clay); }
-.cw-intent-analysis { background: color-mix(in oklch, var(--cw-cozy-teal) 14%, var(--cw-paper)); color: var(--cw-cozy-teal); }
-.cw-intent-brainstorm { background: color-mix(in oklch, var(--cw-cozy-honey) 18%, var(--cw-paper)); color: oklch(0.50 0.13 75); }
-.cw-intent-writing { background: color-mix(in oklch, var(--cw-cozy-plum) 14%, var(--cw-paper)); color: var(--cw-cozy-plum); }
-.cw-intent-recap { background: color-mix(in oklch, var(--cw-cozy-sage) 14%, var(--cw-paper)); color: var(--cw-cozy-sage); }
 .cw-share-pill,
 .cw-share-select {
   min-height: 20px;
@@ -735,7 +739,6 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-size: 10px;
   font-weight: 500;
 }
-.cw-intent-badge { min-height: 24px; padding: 3px 10px 3px 8px; font-size: 11px; }
 
 .cw-file-browser {
   border-radius: 12px;
@@ -1920,24 +1923,24 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .cw-rail-trigger-meta { color: var(--cw-ink-3); white-space: pre-line; line-height: 1.4; }
 .cw-rail-trigger-none { font-style: italic; color: var(--cw-ink-4); }
+/* Rail-action layers over .cw-icon-button: smaller (24×24), uses radius-sm,
+   hidden by default and revealed only when the parent row is hovered/active
+   (the visibility selectors below). The opacity transition is added on top
+   of the base button transition so reveal animates. */
 .cw-rail-action {
-  border: 0;
-  background: transparent;
-  color: var(--cw-ink-3);
   width: 24px;
   height: 24px;
   flex: 0 0 24px;
   border-radius: var(--cw-radius-sm);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   opacity: 0;
   transition: opacity 120ms, background 120ms, color 120ms;
 }
-.cw-rail-row-automation:hover .cw-rail-action { opacity: 1; transition-delay: 300ms; }
-.cw-rail-row-automation:focus-within .cw-rail-action { opacity: 1; transition-delay: 0s; }
-.cw-rail-row-automation.is-active .cw-rail-action { opacity: 1; transition-delay: 0s; }
+/* 300ms delay applies ONLY to opacity so the action's own hover bg/color
+   respond immediately once it's visible. (Single transition-delay value
+   would cascade across all transitioned properties.) */
+.cw-rail-row-automation:hover .cw-rail-action { opacity: 1; transition-delay: 300ms, 0s, 0s; }
+.cw-rail-row-automation:focus-within .cw-rail-action { opacity: 1; transition-delay: 0s, 0s, 0s; }
+.cw-rail-row-automation.is-active .cw-rail-action { opacity: 1; transition-delay: 0s, 0s, 0s; }
 .cw-rail-action:hover { background: var(--cw-paper-4); color: var(--cw-ink); }
 
 /* Rail header: large "Automations" title + icon create button */
@@ -2186,14 +2189,21 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   max-height: calc(100vh - 32px);
   overflow: auto;
 }
+/* Grid so title shares row 1 with actions while meta sits on its own row 2
+   spanning full width — the actions' hover-expand only competes with title
+   for row-1 space, never with meta. */
 .cw-run-drawer-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  row-gap: 6px;
+  align-items: center;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--cw-line-soft);
 }
+.cw-run-drawer-head > .cw-run-drawer-title { grid-column: 1; grid-row: 1; min-width: 0; }
+.cw-run-drawer-head > .cw-run-drawer-actions { grid-column: 2; grid-row: 1; }
+.cw-run-drawer-head > .cw-run-drawer-meta { grid-column: 1 / -1; grid-row: 2; }
 .cw-run-drawer-title { display: inline-flex; align-items: center; gap: 8px; }
 .cw-run-drawer-title strong { font-size: 14px; font-weight: 650; color: var(--cw-ink); }
 .cw-run-drawer-meta {
@@ -2201,7 +2211,6 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 6px;
   font-size: 12px;
   color: var(--cw-ink-3);
 }

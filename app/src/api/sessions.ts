@@ -32,3 +32,13 @@ export async function updateSessionShareMode(sessionId: string, shareMode: Share
 export async function deleteSession(sessionId: string): Promise<void> {
   await request(`/sessions/${sessionId}`, { method: 'DELETE' });
 }
+
+// User-facing label is "Duplicate" (the action clones the entire session
+// — messages + sandbox); the backend endpoint is still `/fork` since that
+// is the internal mechanism name.
+export async function duplicateSession(sessionId: string): Promise<Session> {
+  const raw = await request<BackendSession>(`/sessions/${sessionId}/fork`, {
+    method: 'POST',
+  });
+  return toSession(raw);
+}
