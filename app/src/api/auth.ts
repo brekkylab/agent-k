@@ -47,7 +47,15 @@ export async function signupAndLogin(input: SignupInput): Promise<User> {
   const detected = i18n.language;
   const isSupported = (SUPPORTED_LANGUAGES as readonly string[]).includes(detected);
   if (isSupported && detected !== user.preferredLanguage) {
-    return updateMe({ preferredLanguage: detected as SupportedLanguage });
+    // Best-effort: signup + login already succeeded, so a failed language
+    // sync must not throw — otherwise the caller (login.tsx) would surface
+    // it as a login error and the user would be stranded on /login despite
+    // having a valid token. The user can toggle from the sidebar later.
+    try {
+      return await updateMe({ preferredLanguage: detected as SupportedLanguage });
+    } catch (err) {
+      console.warn('[i18n] failed to sync browser language to backend on signup', err);
+    }
   }
   return user;
 }

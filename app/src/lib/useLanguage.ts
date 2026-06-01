@@ -20,6 +20,13 @@ export function useLanguage() {
   const mutation = useMutation({
     mutationFn: (lang: SupportedLanguage) => updateMe({ preferredLanguage: lang }),
     onSuccess: (user) => setCurrentUser(user),
+    onError: (err) => {
+      // Backend sync is a nice-to-have; the local UI already changed via
+      // i18n.changeLanguage + localStorage cache. Surface the failure to
+      // logs so it's debuggable, but don't propagate (otherwise the
+      // toggle button would throw inside React Query's error boundary).
+      console.warn('[i18n] failed to sync preferred_language to backend', err);
+    },
   });
   const { mutate } = mutation;
 

@@ -27,6 +27,27 @@ describe('josa', () => {
     });
   });
 
+  describe('ㄹ 받침 + 으로/로 (예외: ㄹ은 받침 없음처럼 처리)', () => {
+    it.each([
+      ['서울', '으로/로', '서울로'],
+      ['파일', '으로/로', '파일로'],
+      ['카멜', '으로/로', '카멜로'],
+    ])('%s + %s = %s', (noun, pair, expected) => {
+      expect(josa(noun, pair as Parameters<typeof josa>[1])).toBe(expected);
+    });
+
+    // Other particle pairs still treat ㄹ as a regular batchim — only 으로/로
+    // is the exception. Regression guard.
+    it.each([
+      ['서울', '을/를', '서울을'],
+      ['서울', '이/가', '서울이'],
+      ['서울', '은/는', '서울은'],
+      ['서울', '와/과', '서울과'],
+    ])('%s + %s = %s (ㄹ behaves as normal batchim outside 으로/로)', (noun, pair, expected) => {
+      expect(josa(noun, pair as Parameters<typeof josa>[1])).toBe(expected);
+    });
+  });
+
   describe('한글 외 문자로 끝나는 경우 (받침 없음으로 간주)', () => {
     it.each([
       ['report.pdf', '을/를', 'report.pdf를'],
