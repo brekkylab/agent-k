@@ -61,7 +61,11 @@ body.is-resizing-sidebar .cw-app-shell { transition: none; }
   height: 100vh; height: 100dvh;
   background: var(--cw-bg-subtle);
   border-right: 1px solid var(--cw-border);
-  padding: 14px 10px 10px;
+  /* asymmetric padding: the scrollbar gutter already provides visual breathing
+     room on the right, so we cut padding-right to 4px to tighten the gap
+     between session text and the sidebar's right edge. Left padding stays at
+     10px for balance with the brand mark and section labels. */
+  padding: 14px 4px 10px 10px;
   display: flex; flex-direction: column; gap: 2px;
   overflow: hidden;
   z-index: 10;
@@ -206,30 +210,34 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-projects-list[data-expanded="false"] .cw-nav-row:not(.is-active),
 .cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread) { display: none; }
 
-/* Quiet scrollbar — macOS-style: thumb is invisible at rest, fades in
-   while the user is actively scrolling or hovering the scroll area. The
-   gutter stays a narrow 6px so resting layout doesn't read as "padded".
-   Scroll activity adds `.is-scrolling`; a small JS in main.tsx clears
-   the class after a brief idle so the thumb fades back out. */
+/* Quiet scrollbar — ChatGPT-style. A faint thumb is always visible so the
+   scrollable signal never disappears, and brightens to a near-default tone
+   when the user hovers the scroll area.
+   `scrollbar-width: thin` is critical here: without it macOS Chrome reserves
+   an OS-default gutter (~15px) regardless of `::-webkit-scrollbar { width }`
+   when the system pref is "Show scroll bars: Always". `thin` cuts the gutter
+   in half to ~7-8px — the floor we can hit purely in CSS. Going narrower
+   requires either OS-level overlay scrollbars or a custom scroller. */
 .cw-scroll-quiet {
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-  transition: scrollbar-color 200ms ease;
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 20%, transparent) transparent;
+  transition: scrollbar-color 160ms ease;
 }
-.cw-scroll-quiet:hover,
-.cw-scroll-quiet.is-scrolling {
-  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 38%, transparent) transparent;
+.cw-scroll-quiet:hover {
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 55%, transparent) transparent;
 }
+/* WebKit fallback for older Chromium (pre-121) and Safari, where the
+   pseudo-element controls width too. Same color steps as the standard
+   `scrollbar-color` above for visual parity. */
 .cw-scroll-quiet::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
 .cw-scroll-quiet::-webkit-scrollbar-track { background: transparent; }
 .cw-scroll-quiet::-webkit-scrollbar-thumb {
-  background-color: transparent;
+  background-color: color-mix(in oklch, var(--cw-fg-3) 20%, transparent);
   border-radius: 3px;
-  transition: background-color 200ms ease;
+  transition: background-color 160ms ease;
 }
-.cw-scroll-quiet:hover::-webkit-scrollbar-thumb,
-.cw-scroll-quiet.is-scrolling::-webkit-scrollbar-thumb {
-  background-color: color-mix(in oklch, var(--cw-fg-3) 38%, transparent);
+.cw-scroll-quiet:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--cw-fg-3) 55%, transparent);
 }
 
 .cw-brand-lockup { display: flex; align-items: center; gap: 9px; border: 0; background: transparent; padding: 6px 8px 18px; border-radius: var(--cw-radius-md); min-width: 0; }

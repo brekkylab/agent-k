@@ -5,10 +5,7 @@ import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
 import { ApiError, setUnauthorizedHandler } from '@/api/client';
 import { forceLogout, setLogoutRouter } from '@/lib/forceLogout';
-import { installScrollActivity } from '@/lib/scrollActivity';
 import './styles/globals.css';
-
-installScrollActivity();
 
 const queryClient = new QueryClient({
   defaultOptions: {
