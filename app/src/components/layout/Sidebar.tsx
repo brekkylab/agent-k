@@ -25,6 +25,7 @@ import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { SessionsOverlay } from '@/components/SessionsOverlay';
 import { canAdministerSession } from '@/lib/permissions';
 import { shortSessionId } from '@/lib/sessionId';
+import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { useSessionDelete } from '@/lib/useSessionDelete';
 import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
@@ -231,8 +232,8 @@ export function Sidebar() {
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions', activeProjectSlug],
-    queryFn: () => listSessions(activeProject!.id),
-    enabled: Boolean(activeProjectSlug) && Boolean(activeProject),
+    queryFn: () => listSessions(activeProjectSlug!),
+    enabled: Boolean(activeProjectSlug),
   });
 
   const activeSessionId = useActiveSessionId();
@@ -258,6 +259,7 @@ export function Sidebar() {
 
   const [sessionsOverlayOpen, setSessionsOverlayOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
+  const [pendingDuplicate, setPendingDuplicate] = useState<Session | null>(null);
   const projectCreator = useNewProjectDialog();
   const deleteMutation = useSessionDelete(activeProjectSlug ?? '', {
     onDeleted: (deletedId) => {
@@ -268,6 +270,8 @@ export function Sidebar() {
       setPendingDelete(null);
     },
   });
+
+  const duplicateMutation = useDuplicateSession(activeProjectSlug ?? '');
 
   function openProject(slug: string) {
     navigate({ to: '/projects/$projectSlug', params: { projectSlug: slug } });
@@ -429,11 +433,13 @@ export function Sidebar() {
                     )}
                     <SessionTitleText title={session.title} />
                     {session.isAutoAppend && <span className="auto-dot">●</span>}
-                    {canDelete && (
-                      <span className="cw-session-menu-wrap">
-                        <SessionCardMenu onDelete={() => setPendingDelete(session)} />
-                      </span>
-                    )}
+                    <span className="cw-session-menu-wrap">
+                      <SessionCardMenu
+                        onDuplicate={() => setPendingDuplicate(session)}
+                        duplicateDisabled={!session.lastMessageAt}
+                        onDelete={canDelete ? () => setPendingDelete(session) : undefined}
+                      />
+                    </span>
                   </div>
                 );
               })}
@@ -471,6 +477,29 @@ export function Sidebar() {
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(pendingDelete.id)}
           onClose={() => setPendingDelete(null)}
+        />
+      )}
+
+      {pendingDuplicate && (
+        <ConfirmDialog
+          title="세션을 복제하시겠어요?"
+          body={`"${pendingDuplicate.title}"의 메시지와 sandbox 상태를 새 세션으로 복제합니다. 세션이 사용 중이면 복제에 실패할 수 있습니다.`}
+          confirmLabel="복제"
+          pending={duplicateMutation.isPending}
+          onConfirm={() => {
+            duplicateMutation.mutate(pendingDuplicate.id, {
+              onSuccess: (newSession) => {
+                setPendingDuplicate(null);
+                if (activeProject) {
+                  openSession(activeProject.slug, shortSessionId(newSession.id));
+                }
+              },
+              onError: () => setPendingDuplicate(null),
+            });
+          }}
+          onClose={() => {
+            if (!duplicateMutation.isPending) setPendingDuplicate(null);
+          }}
         />
       )}
 

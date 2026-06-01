@@ -72,6 +72,12 @@ def main() -> None:
             .replace("+00:00", "Z")
         )
 
+    def title_ts(offset_sec: int) -> str:
+        # Match the backend's deterministic format in
+        # `backend/src/repository/automation.rs::automation_session_title`:
+        # "{automation_name} · {kind_label} · %Y-%m-%d %H:%M".
+        return (base + timedelta(seconds=offset_sec)).strftime("%Y-%m-%d %H:%M")
+
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA foreign_keys = ON")
 
@@ -157,18 +163,28 @@ def main() -> None:
     )
 
     # ── Sessions (one per run; origin='automation') ───────────────────────
+    # Session titles mirror the backend's deterministic format for
+    # automation-created sessions:
+    #   "{automation_name} · {kind_label} · {scheduled_for as %Y-%m-%d %H:%M}"
+    # kind_label maps 'cron' → 'recurring'; 'webhook' / 'manual' stay verbatim.
     sessions = [
-        (SESS_A1_1, PROJECT_KLIENT, OLIVE_ID, "private", "Daily summary 진행 중",
+        (SESS_A1_1, PROJECT_KLIENT, OLIVE_ID, "private",
+         f"Daily summary · recurring · {title_ts(100)}",
          None, None, ts(100), ts(110), "automation"),
-        (SESS_A1_2, PROJECT_KLIENT, OLIVE_ID, "private", "Daily summary (예정)",
+        (SESS_A1_2, PROJECT_KLIENT, OLIVE_ID, "private",
+         f"Daily summary · recurring · {title_ts(90)}",
          None, None, ts(120), ts(120), "automation"),
-        (SESS_A1_3, PROJECT_KLIENT, OLIVE_ID, "private", "Daily summary (어제)",
+        (SESS_A1_3, PROJECT_KLIENT, OLIVE_ID, "private",
+         f"Daily summary · recurring · {title_ts(80)}",
          None, None, ts(80), ts(95), "automation"),
-        (SESS_A2_1, PROJECT_KLIENT, OLIVE_ID, "private", "Weekly digest (지난주)",
+        (SESS_A2_1, PROJECT_KLIENT, OLIVE_ID, "private",
+         f"Weekly digest · recurring · {title_ts(50)}",
          None, None, ts(50), ts(75), "automation"),
-        (SESS_A3_1, PROJECT_KLIENT, OLIVE_ID, "private", "On-call ping INC-4471",
+        (SESS_A3_1, PROJECT_KLIENT, OLIVE_ID, "private",
+         f"On-call ping · webhook · {title_ts(40)}",
          None, None, ts(40), ts(60), "automation"),
-        (SESS_A4_1, PROJECT_KLIENT, OLIVE_ID, "private", "Backfill ledger 5/15-19",
+        (SESS_A4_1, PROJECT_KLIENT, OLIVE_ID, "private",
+         f"Backfill ledger · manual · {title_ts(30)}",
          None, None, ts(30), ts(48), "automation"),
     ]
     conn.executemany(
