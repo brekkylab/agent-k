@@ -404,7 +404,7 @@ function SessionPage() {
           </div>
         </div>
 
-        <div className="cw-messages">
+        <div className="cw-messages cw-scroll-quiet">
           {allMessages.map((msg) => (
             <MessageBubble
               key={msg.id}
