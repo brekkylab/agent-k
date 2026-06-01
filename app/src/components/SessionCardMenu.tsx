@@ -6,6 +6,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface SessionCardMenuProps {
   onDelete: () => void;
@@ -40,7 +41,10 @@ export function SessionCardMenu({ onDelete }: SessionCardMenuProps) {
     };
   }, [open]);
 
-  // Close on outside click or Escape.
+  // ESC routes through the modal stack with `disabled: !open` so a closed
+  // menu sits silently and lets the next stack entry (dialog or page handler)
+  // win — that prevents a stale keydown listener from grabbing focus.
+  useDialogEscape(() => setOpen(false), { disabled: !open });
   useEffect(() => {
     if (!open) return;
     function onDocClick(e: MouseEvent) {
@@ -49,13 +53,8 @@ export function SessionCardMenu({ onDelete }: SessionCardMenuProps) {
       if (popoverRef.current?.contains(target)) return;
       setOpen(false);
     }
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setOpen(false); }
     document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onKey);
-    };
+    return () => document.removeEventListener('mousedown', onDocClick);
   }, [open]);
 
   return (

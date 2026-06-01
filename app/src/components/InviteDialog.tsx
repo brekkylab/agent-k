@@ -3,11 +3,12 @@
 // expose for regular owners — so we follow Slack/Discord's username-entry
 // pattern instead. Backend resolves username → user_id and 404s if unknown.
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { addMember } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { ApiError } from '@/api/client';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface InviteDialogProps {
   projectId: string;
@@ -18,13 +19,6 @@ export function InviteDialog({ projectId, onClose }: InviteDialogProps) {
   const queryClient = useQueryClient();
   const [username, setUsername] = useState('');
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape' && !mutation.isPending) onClose(); }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose]);
 
   const mutation = useMutation({
     mutationFn: (name: string) => addMember(projectId, name),
@@ -49,6 +43,7 @@ export function InviteDialog({ projectId, onClose }: InviteDialogProps) {
   }
 
   const pending = mutation.isPending;
+  useDialogEscape(onClose, { disabled: pending });
 
   return (
     <div className="cw-dialog-backdrop" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget && !pending) onClose(); }}>

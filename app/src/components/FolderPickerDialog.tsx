@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './Icon';
 import { buildFolderTree, nameOf, type FolderNode } from '@/domain/files';
 import type { BackendDirent } from '@/api/backend-types';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface FolderPickerDialogProps {
   title: string;
@@ -106,9 +107,11 @@ export function FolderPickerDialog({
     return s;
   }, [sources]);
 
+  // ESC goes through the modal stack so it wins over the files page's own
+  // selection-clear handler when this picker is opened from there.
+  useDialogEscape(onClose, { disabled: pending });
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !pending) onClose();
       if (e.key === 'Enter' && selected !== null && !pending) {
         e.preventDefault();
         onConfirm(selected);
@@ -116,7 +119,7 @@ export function FolderPickerDialog({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onConfirm, pending, selected]);
+  }, [onConfirm, pending, selected]);
 
   const downOnBackdropRef = useRef(false);
 

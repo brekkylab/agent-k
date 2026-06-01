@@ -4,6 +4,7 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface ConfirmDialogProps {
   title: string;
@@ -28,15 +29,19 @@ export function ConfirmDialog({
   onClose,
   confirmOnEnter = false,
 }: ConfirmDialogProps) {
+  // ESC routes through the modal stack so dialogs win over background page
+  // handlers (e.g. file selection clear). Enter stays on a separate listener
+  // since it isn't part of the modal-stack contract.
+  useDialogEscape(onClose, { disabled: pending });
   useEffect(() => {
+    if (!confirmOnEnter) return;
     function onKey(e: KeyboardEvent) {
       if (pending) return;
-      if (e.key === 'Escape') onClose();
-      else if (e.key === 'Enter' && confirmOnEnter) onConfirm();
+      if (e.key === 'Enter') onConfirm();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onConfirm, pending, confirmOnEnter]);
+  }, [onConfirm, pending, confirmOnEnter]);
 
   // Track where mousedown started so a drag (e.g. selecting body text) that
   // ends on the backdrop doesn't close the dialog.

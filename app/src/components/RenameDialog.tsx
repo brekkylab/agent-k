@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Icon } from './Icon';
 import type { BackendDirent } from '@/api/backend-types';
 import { nameOf } from '@/domain/files';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface RenameDialogProps {
   entry: BackendDirent;
@@ -41,16 +42,17 @@ export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose
   const trimmed = value.trim();
   const submitDisabled = trimmed.length === 0 || pending;
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !pending) {
-        if (step === 'confirm-ext') { setStep('input'); }
-        else { onClose(); }
-      }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, pending, step]);
+  // The rename dialog has a two-step flow: ext-change confirmation rolls back
+  // to the input step before fully closing. Both transitions are dispatched
+  // from a single onClose-shaped callback so the modal-stack hook can drive
+  // them uniformly.
+  useDialogEscape(
+    () => {
+      if (step === 'confirm-ext') setStep('input');
+      else onClose();
+    },
+    { disabled: pending },
+  );
 
   function handleChange(v: string) {
     setValue(v);
