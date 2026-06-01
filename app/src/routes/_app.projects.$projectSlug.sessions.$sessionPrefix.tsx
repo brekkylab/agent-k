@@ -93,6 +93,13 @@ function SessionPage() {
   const optimisticUserIdRef = useRef<string | null>(null);
   // agent_run_started 미도착 시 자동 복구용 타임아웃 ref
   const runStartedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror of the `streaming` state, accessible from WS event handler closures
+  // without adding `streaming` to the effect dependency array (which would
+  // re-register the handler on every state transition).
+  const streamingRef = useRef(false);
+  // Tracks the highest seq seen; when a new seq exceeds this, outputs are
+  // already in insertion order and the sort can be skipped.
+  const maxSeqRef = useRef<number>(-1);
 
   const [composerText, setComposerText] = useState('');
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
@@ -117,8 +124,10 @@ function SessionPage() {
     setLiveMessages([]);
     setComposerText('');
     setStreaming(false);
+    streamingRef.current = false;
     setPendingAttachments([]);
     wsOutputsRef.current.clear();        // <-- 추가
+    maxSeqRef.current = -1;
     optimisticUserIdRef.current = null;  // <-- 추가
   }
 
@@ -172,7 +181,7 @@ function SessionPage() {
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? composerText).trim();
     const uploading = pendingAttachments.some((a) => a.status === 'uploading');
-    if (!text || streaming || uploading) return;
+    if (!text || !sessionId || streaming || uploading) return;
 
     const attachmentPaths = pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
@@ -196,6 +205,7 @@ function SessionPage() {
     };
     setLiveMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
+    streamingRef.current = true;
 
     try {
       await sendMessage(sessionId, text, attachmentPaths.length > 0 ? attachmentPaths : undefined);
@@ -203,12 +213,17 @@ function SessionPage() {
       if (runStartedTimeoutRef.current) clearTimeout(runStartedTimeoutRef.current);
       runStartedTimeoutRef.current = setTimeout(() => {
         if (optimisticUserIdRef.current === optimisticUserId) {
+          // agent_run_started never arrived — the run may still be executing
+          // server-side. Reset streaming UI silently and refetch history once
+          // so any already-persisted messages surface without alarming the user.
+          streamingRef.current = false;
           setStreaming(false);
           setLiveMessages([]);
           wsOutputsRef.current.clear();
+          maxSeqRef.current = -1;
           optimisticUserIdRef.current = null;
           runStartedTimeoutRef.current = null;
-          showToast('에이전트 연결에 실패했습니다. 다시 시도해주세요.');
+          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
         }
       }, 10_000);
     } catch (err) {
@@ -220,6 +235,7 @@ function SessionPage() {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'send failed';
       showToast(`전송 실패: ${msg}`);
       setStreaming(false);
+      streamingRef.current = false;
       setLiveMessages([]);
       wsOutputsRef.current.clear();
       optimisticUserIdRef.current = null;
@@ -270,7 +286,9 @@ function SessionPage() {
         }
         // outputs 맵 초기화 (새 run 시작)
         wsOutputsRef.current.clear();
+        maxSeqRef.current = -1;
         setStreaming(true);
+        streamingRef.current = true;
 
         // 낙관적 유저 버블이 있으면 유지, 없으면(다른 탭/유저) event에서 추가
         setLiveMessages((prev) => {
@@ -318,11 +336,17 @@ function SessionPage() {
         const { seq, output } = event;
         wsOutputsRef.current.set(seq, output);
 
-        // seq 순서로 정렬한 outputs에서 StreamUpdate 재계산
-        const sortedOutputs = [...wsOutputsRef.current.entries()]
-          .sort(([a], [b]) => a - b)
-          .map(([, v]) => v);
-        const update = deriveStreamState(sortedOutputs, 'streaming');
+        // Fast path: if seq is strictly greater than maxSeqRef (the common
+        // in-order case), Map insertion order is already sorted — no sort needed.
+        // Slow path: out-of-order delivery (catch-up replay race) triggers a
+        // full sort. In both cases duplicates are idempotent via Map.set.
+        const outOfOrder = seq <= maxSeqRef.current;
+        if (seq > maxSeqRef.current) maxSeqRef.current = seq;
+
+        const outputs = outOfOrder
+          ? [...wsOutputsRef.current.entries()].sort(([a], [b]) => a - b).map(([, v]) => v)
+          : [...wsOutputsRef.current.values()];
+        const update = deriveStreamState(outputs, 'streaming');
 
         const aiId = `live-ai-${sessionId}`;
         setLiveMessages((prev) => {
@@ -360,8 +384,10 @@ function SessionPage() {
       if (event.type === 'agent_error') {
         showToast(`에이전트 오류: ${event.message}`);
         setStreaming(false);
+        streamingRef.current = false;
         setLiveMessages([]);
         wsOutputsRef.current.clear();
+        maxSeqRef.current = -1;
         optimisticUserIdRef.current = null;
       }
 
@@ -373,12 +399,34 @@ function SessionPage() {
           }
           setLiveMessages([]);
           wsOutputsRef.current.clear();
+          maxSeqRef.current = -1;
           optimisticUserIdRef.current = null;
           setStreaming(false);
+          streamingRef.current = false;
           void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
           void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
           void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
         })();
+      }
+
+      if (event.type === 'agent_run_idle') {
+        // The server has no active run for this session (completed before we
+        // subscribed, or server restarted). If the client is currently in
+        // streaming mode, reset cleanly — refetch history once to surface any
+        // persisted messages.
+        if (streamingRef.current) {
+          if (runStartedTimeoutRef.current) {
+            clearTimeout(runStartedTimeoutRef.current);
+            runStartedTimeoutRef.current = null;
+          }
+          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+          setLiveMessages([]);
+          wsOutputsRef.current.clear();
+          maxSeqRef.current = -1;
+          optimisticUserIdRef.current = null;
+          setStreaming(false);
+          streamingRef.current = false;
+        }
       }
     });
 
@@ -511,7 +559,7 @@ function SessionPage() {
             >
               <Icon name="paperclip" size={13} />
             </button>
-            <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || streaming || hasUploadingAttachments}>
+            <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
               <Icon name="send" size={12} />
             </button>
           </div>

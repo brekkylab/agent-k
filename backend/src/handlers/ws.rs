@@ -87,6 +87,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                             Ok(sid) => broadcast_sessions.lock().await.contains(&sid),
                             Err(_) => false,
                         },
+                        WsEvent::AgentRunIdle { session_id } => match Uuid::parse_str(session_id) {
+                            Ok(sid) => broadcast_sessions.lock().await.contains(&sid),
+                            Err(_) => false,
+                        },
                     };
 
                     if !forward {
@@ -146,6 +150,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                         continue;
                     };
 
+                    // Insert BEFORE snapshot so we don't miss live broadcasts between
+                    // snapshot and replay completion. The client deduplicates by seq
+                    // (Map.set is idempotent), so a duplicate AgentMessage is harmless.
                     inbound_sessions.lock().await.insert(session_id);
 
                     // Replay any in-progress run so the spectator catches up.
@@ -172,6 +179,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                                     break 'inbound;
                                 }
                             }
+                        }
+                    } else {
+                        // No active run — send AgentRunIdle so any client that is stuck
+                        // in streaming=true (e.g. reconnect after run completion, or
+                        // server restart mid-run) can reset its UI state.
+                        let idle = crate::events::WsEvent::AgentRunIdle {
+                            session_id: session_id.to_string(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&idle) {
+                            let _ = inbound_tx.send(Message::Text(json.into())).await;
                         }
                     }
                 }

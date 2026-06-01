@@ -352,9 +352,10 @@ pub async fn send_message_and_wait(
     loop {
         let history = get_message_history(app, id, token).await;
         let items = history["items"].as_array().cloned().unwrap_or_default();
-        if items.len() > before + 1 {
-            // Return only the newly produced items (drop the prior history),
-            // shaped like the legacy outputs for `extract_text`.
+        if items.len() > before {
+            // Wait for at least one new item — user message is persisted atomically
+            // with agent messages on run completion. Return only the newly produced
+            // items (drop the prior history), shaped like the legacy outputs for `extract_text`.
             return serde_json::Value::Array(items.into_iter().skip(before).collect());
         }
         if tokio::time::Instant::now() >= deadline {

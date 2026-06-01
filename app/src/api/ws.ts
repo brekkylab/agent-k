@@ -40,7 +40,12 @@ export interface AgentRunDoneEvent {
   session_id: string;
 }
 
-export type AppWsEvent = SessionTitleUpdatedEvent | AgentRunStartedEvent | AgentMessageEvent | AgentErrorEvent | AgentRunDoneEvent;
+export interface AgentRunIdleEvent {
+  type: 'agent_run_idle';
+  session_id: string;
+}
+
+export type AppWsEvent = SessionTitleUpdatedEvent | AgentRunStartedEvent | AgentMessageEvent | AgentErrorEvent | AgentRunDoneEvent | AgentRunIdleEvent;
 
 type Handler = (event: AppWsEvent) => void;
 

@@ -32,4 +32,7 @@ pub enum WsEvent {
     AgentRunDone {
         session_id: String,
     },
+    AgentRunIdle {
+        session_id: String,
+    },
 }
