@@ -81,6 +81,7 @@ function SessionPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const [composerText, setComposerText] = useState('');
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
@@ -123,6 +124,18 @@ function SessionPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [allMessages.length, streaming]);
+
+  // Auto-grow the composer textarea between a single-row rest state and a 200px cap.
+  // Reset to auto first so deleting lines shrinks the box back down. Overflow stays
+  // hidden until the cap is hit to avoid a phantom scrollbar from sub-pixel rounding.
+  useEffect(() => {
+    const ta = composerRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const next = Math.min(ta.scrollHeight, 200);
+    ta.style.height = `${next}px`;
+    ta.style.overflowY = ta.scrollHeight > 200 ? 'auto' : 'hidden';
+  }, [composerText]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -249,6 +262,15 @@ function SessionPage() {
     }
   }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
 
+  // Enter sends; Shift+Enter inserts a newline. isComposing guards Korean/IME
+  // composition so confirming a character with Enter doesn't fire a send.
+  const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void send();
+    }
+  }, [send]);
+
   // Auto-send the first message handed over from the home composer via router state.
   // Deferred until session.data resolves so `sessionId` is non-empty when the
   // finally-block refetch runs. useRef guards ensure exactly one send per mount
@@ -352,11 +374,14 @@ function SessionPage() {
             </div>
           )}
           <div className="cw-composer-box">
-            <input
+            <textarea
+              ref={composerRef}
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
+              onKeyDown={handleComposerKeyDown}
               placeholder="Message Cowork and the team…"
               disabled={streaming}
+              rows={1}
             />
             <button
               type="button"

@@ -997,7 +997,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   border-color: var(--cw-border-hover);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--cw-accent), transparent 86%);
 }
-.cw-composer input {
+.cw-composer textarea {
   flex: 1;
   min-width: 0;
   min-height: 24px;
@@ -1085,7 +1085,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   ::view-transition-new(cw-composer) { animation: none; }
 }
 .cw-home-composer-input::placeholder,
-.cw-composer input::placeholder { color: var(--cw-fg-4); }
+.cw-composer textarea::placeholder { color: var(--cw-fg-4); }
 .cw-send-button {
   width: 34px;
   height: 34px;
