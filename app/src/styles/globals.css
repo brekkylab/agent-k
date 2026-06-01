@@ -584,7 +584,19 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-nav-row .cw-pocket,
 .cw-session-row .cw-pocket { width: 18px; height: 18px; border-radius: 5px; border: 0; }
 .cw-session-row .cw-pocket { width: 16px; height: 16px; border-radius: 4px; }
-.cw-session-row .cw-unread-badge { min-width: 32px; padding: 0 10px; justify-content: center; }
+/* Sidebar-context unread badge: same 16px height as IconPocket so the session
+   row baseline doesn't shift. Width grows from a 16×16 circle (1 digit) to a
+   pill (2 digits, or "99+"). 100+ collapses to "99+" in JSX. */
+.cw-session-row .cw-unread-badge.cw-unread-badge-compact {
+  height: 16px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--cw-radius-full);
+  justify-content: center;
+  font-size: 9.5px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
 .cw-nav-home { background: color-mix(in oklch, var(--cw-cozy-clay) 16%, var(--cw-paper)); color: var(--cw-cozy-clay); }
 .cw-nav-files { background: color-mix(in oklch, var(--cw-cozy-honey) 22%, var(--cw-paper)); color: oklch(0.50 0.13 75); }
 .cw-nav-skills, .cw-nav-schedule { background: color-mix(in oklch, var(--cw-cozy-mustard) 24%, var(--cw-paper)); color: oklch(0.50 0.11 90); }
