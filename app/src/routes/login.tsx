@@ -3,7 +3,7 @@ import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { getMe, login, signupAndLogin } from '@/api/auth';
 import { getBaseUrl, setBaseUrl, getToken, ApiError } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
-import { consumeLogoutReason, consumeRedirectAfterLogin, type LogoutReason } from '@/lib/forceLogout';
+import { consumeLogoutReason, consumeRedirectAfterLogin, resetLogoutGuard, type LogoutReason } from '@/lib/forceLogout';
 
 type Mode = 'login' | 'signup';
 
@@ -50,6 +50,8 @@ function LoginPage() {
       }
       const me = await getMe();
       setCurrentUser(me);
+      // Re-arm the guard so the next session can trigger forceLogout again.
+      resetLogoutGuard();
       const redirectTo = consumeRedirectAfterLogin();
       navigate({ to: redirectTo ?? '/projects' });
     } catch (err) {
