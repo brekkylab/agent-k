@@ -90,11 +90,12 @@ function LoginPage() {
         <form onSubmit={onSubmit}>
           <label>
             Backend URL
-            <input value={baseUrl} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:8080" />
+            <input name="backendUrl" value={baseUrl} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:8080" />
           </label>
           <label>
             Username
             <input
+              name="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete={isSignup ? 'username' : 'username'}
@@ -106,6 +107,7 @@ function LoginPage() {
             <label>
               Display name <span style={{ fontWeight: 400, color: 'var(--cw-ink-4)', textTransform: 'none', letterSpacing: 0 }}>(선택)</span>
               <input
+                name="displayName"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="팀원들이 보게 될 이름"
@@ -115,6 +117,7 @@ function LoginPage() {
           <label>
             Password
             <input
+              name="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
