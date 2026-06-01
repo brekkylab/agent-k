@@ -17,7 +17,7 @@ import koProject from '../locales/ko/project.json';
 import enSession from '../locales/en/session.json';
 import koSession from '../locales/ko/session.json';
 
-import type { SessionIntent, ShareMode } from '@/domain/types';
+import type { ShareMode } from '@/domain/types';
 
 type JsonShape = Record<string, unknown>;
 
@@ -28,7 +28,6 @@ function getNested(obj: JsonShape, path: string): unknown {
   );
 }
 
-const INTENTS: SessionIntent[] = ['general', 'analysis', 'brainstorm', 'writing', 'recap'];
 const SHARE_MODES: ShareMode[] = ['private', 'shared_readonly', 'shared_chat'];
 
 function collectKeys(obj: JsonShape, prefix = ''): string[] {
@@ -66,14 +65,6 @@ describe('translation key parity', () => {
 // might still match but the new key is missing from both. These exhaustive
 // checks ensure every enum value is materialized in both locales.
 describe('dynamic key exhaustiveness', () => {
-  describe.each(INTENTS)('intent.%s', (intent) => {
-    it.each(['label', 'note'] as const)('en/ko define common.intent.%s.%s', (field) => {
-      const path = `intent.${intent}.${field}`;
-      expect(typeof getNested(enCommon, path)).toBe('string');
-      expect(typeof getNested(koCommon, path)).toBe('string');
-    });
-  });
-
   describe.each(SHARE_MODES)('share.%s', (mode) => {
     it.each(['label', 'short_label', 'desc'] as const)('en/ko define common.share.%s.%s', (field) => {
       const path = `share.${mode}.${field}`;

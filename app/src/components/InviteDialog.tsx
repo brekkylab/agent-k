@@ -11,13 +11,14 @@ import { Icon } from '@/components/Icon';
 import { ApiError } from '@/api/client';
 
 interface InviteDialogProps {
-  projectId: string;
+  projectRef: string;
   onClose: () => void;
 }
 
-export function InviteDialog({ projectId, onClose }: InviteDialogProps) {
+export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
   const { t } = useTranslation('dialogs');
   const { t: tCommon } = useTranslation('common');
+
 
   const queryClient = useQueryClient();
   const [username, setUsername] = useState('');
@@ -42,9 +43,9 @@ export function InviteDialog({ projectId, onClose }: InviteDialogProps) {
   }
 
   const mutation = useMutation({
-    mutationFn: (name: string) => addMember(projectId, name),
+    mutationFn: (name: string) => addMember(projectRef, name),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['members', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['members', projectRef] });
       onClose();
     },
     onError: (err) => {
@@ -76,7 +77,7 @@ export function InviteDialog({ projectId, onClose }: InviteDialogProps) {
           {t('invite.description')}
         </p>
         <p style={{ color: 'var(--cw-ink-4)', margin: '0 0 14px', fontSize: 11, fontFamily: 'var(--cw-font-mono)' }}>
-          POST /projects/{projectId.slice(0, 8)}…/members
+          POST /projects/{projectRef}/members
         </p>
         <form onSubmit={submit}>
           <div className="cw-field">

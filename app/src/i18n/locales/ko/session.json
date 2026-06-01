@@ -34,6 +34,7 @@
   "artifacts_header": "산출물",
   "menu": {
     "options": "세션 옵션",
+    "duplicate": "세션 복제",
     "delete": "세션 삭제"
   },
   "artifact": {

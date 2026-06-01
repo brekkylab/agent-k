@@ -1,7 +1,7 @@
 // Session card — rich session preview (title, snippet, time, share, unread).
 // Shared by the project home (previously) and the "View all" sessions overlay.
 
-import { IntentIcon, SharePill } from '@/components/uiPrimitives';
+import { SharePill } from '@/components/uiPrimitives';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import { timeAgo } from '@/lib/timeAgo';
@@ -30,7 +30,6 @@ export function SessionCard({
     >
       <div className="cw-session-card-head">
         <span className="cw-session-card-title">
-          <IntentIcon intent={session.intent} force />
           <SessionTitleText title={session.title} />
         </span>
         <span className="cw-session-right">

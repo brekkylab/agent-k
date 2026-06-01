@@ -11,7 +11,7 @@ import { listMessages, streamMessage } from '@/api/messages';
 import { getProject, listMembers } from '@/api/projects';
 import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
-import { Avatar, IntentBadge, SharePill, ShareSelect } from '@/components/uiPrimitives';
+import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
@@ -28,6 +28,8 @@ import { AttachmentPreview } from '@/components/AttachmentPreview';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { loadNs } from '@/i18n/loader';
+import { useDuplicateSession } from '@/lib/useDuplicateSession';
+import { shortSessionId } from '@/lib/sessionId';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
@@ -254,6 +256,8 @@ function SessionPage() {
     }
   }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
 
+  const duplicateMutation = useDuplicateSession(projectSlug);
+
   // Auto-send the first message handed over from the home composer via router state.
   // Deferred until session.data resolves so `sessionId` is non-empty when the
   // finally-block refetch runs. useRef guards ensure exactly one send per mount
@@ -288,6 +292,7 @@ function SessionPage() {
   const creator = userList.find((u) => u.id === sess?.creatorId);
   const usersForRender: User[] = [...userList, AI_USER];
   const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
+  const sessionForkable = !streaming && allMessages.length > 0;
 
   return (
     <div className="cw-session-layout cw-page-enter">
@@ -313,7 +318,29 @@ function SessionPage() {
                 <span className="cw-preview-pill cw-preview-pill--micro">Preview</span>
               </span>
             )}
-            {sess && <IntentBadge intent={sess.intent} />}
+            {sess && (
+              <IconButton
+                icon="sticky-notes"
+                label="세션 복제"
+                title={
+                  !sessionForkable
+                    ? (streaming ? '응답 생성이 끝난 뒤 복제할 수 있습니다' : '메시지가 있는 세션만 복제할 수 있습니다')
+                  : duplicateMutation.isPending ? '복제 중...'
+                  : 'Duplicate session'
+                }
+                expandedText={duplicateMutation.isPending ? '복제 중...' : '세션 복제'}
+                confirmText="한 번 더 눌러 복제"
+                disabled={!sessionForkable || duplicateMutation.isPending}
+                onClick={() => duplicateMutation.mutate(sessionId, {
+                  onSuccess: (newSession) => {
+                    navigate({
+                      to: '/projects/$projectSlug/sessions/$sessionPrefix',
+                      params: { projectSlug, sessionPrefix: shortSessionId(newSession.id) },
+                    });
+                  },
+                })}
+              />
+            )}
             {sess && (
               <ShareSelect mode={sess.shareMode} onChange={(mode) => shareMutation.mutate(mode)} />
             )}
