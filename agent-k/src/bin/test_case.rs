@@ -113,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
     if positional.len() != 2 {
         eprintln!(
-            "usage: test_case <agent> <case_no> [--model openai|claude|gemini|kimi]\n\
+            "usage: test_case <agent> <case_no> [--model openai|claude|gemini|kimi] [--no-skill]\n\
              agents: coworker, deep-research"
         );
         std::process::exit(2);

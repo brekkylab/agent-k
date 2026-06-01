@@ -5,6 +5,7 @@ use ailoy::{
     runenv::{FileEntry, RunEnv, SandboxConfig, VolumeMount},
 };
 
+const XLSX_SKILL_DIR: &str = "/workspace/skills/xlsx";
 pub const GUEST_ATTACHED_DIR: &str = "/workspace/attached";
 pub const GUEST_SHARED_DIR: &str = "/workspace/shared";
 pub const GUEST_ARTIFACTS_DIR: &str = "/workspace/artifacts";
@@ -22,6 +23,11 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 - You can also obtain the information needed to perform a task by running a script.
 - Prefer the available tools when they can accomplish the task.
 - You are free to install and remove packages.
+
+## Skills
+- An "Available Skills" table is appended to this system prompt. It lists every loaded skill with the absolute path to its `SKILL.md`.
+- For any task whose domain matches an entry in that table, your FIRST action MUST be to read the SKILL.md at the listed path — either via `cat <SKILL.md path>` or the `read` tool — and you must follow that file literally, including every "DO NOT" rule.
+- Inside a skill directory, the ONLY path you may pass to the `read` tool (or `cat`) is the `SKILL.md`. Do not `read` supporting files (scripts, data, etc.) — even partial / offset+limit reads are forbidden — unless the SKILL.md explicitly directs you to.
 
 ## Input files
 - The user may mention files in the query outside the home directory.
@@ -41,6 +47,10 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 pub struct CoworkerSandboxOptions {
     pub sandbox_name: Option<String>,
     pub persist: bool,
+    /// When true, the bundled PPTX and XLSX skills are materialised under
+    /// [`PPTX_SKILL_DIR`] / [`XLSX_SKILL_DIR`] and surfaced via the
+    /// auto-rendered "Available Skills" table. Default `false`; the CLI
+    /// wrappers (`run`, `test_case`) flip this on explicitly.
     pub with_skill: bool,
 }
 
@@ -110,7 +120,7 @@ pub async fn get_coworker_agent_with_opts(
     let mut config = SandboxConfig::default();
     config.name = opts.sandbox_name;
     config.persist = opts.persist;
-    config.image = "brekkylab/agent-k:latest".into();
+    config.image = "brekkylab/agent-k-libreoffice:latest".into();
     config.cpus = 8;
     config.memory_mib = 1024;
     config.workdir = "/workspace".into();
@@ -146,19 +156,34 @@ pub async fn get_coworker_agent_with_opts(
         .max_tokens(32_000);
     if opts.with_skill {
         let pptx_dir = PathBuf::from(PPTX_SKILL_DIR);
-        spec = spec.skill(
-            &pptx_dir,
-            [
-                FileEntry::new(
-                    pptx_dir.join("SKILL.md"),
-                    include_bytes!("skill/pptx/SKILL.md").to_vec(),
-                ),
-                FileEntry::new(
-                    pptx_dir.join("script/verify_pptx.py"),
-                    include_bytes!("skill/pptx/script/verify_pptx.py").to_vec(),
-                ),
-            ],
-        );
+        let xlsx_dir = PathBuf::from(XLSX_SKILL_DIR);
+        spec = spec
+            .skill(
+                &pptx_dir,
+                [
+                    FileEntry::new(
+                        pptx_dir.join("SKILL.md"),
+                        include_bytes!("skill/pptx/SKILL.md").to_vec(),
+                    ),
+                    FileEntry::new(
+                        pptx_dir.join("script/verify_pptx.py"),
+                        include_bytes!("skill/pptx/script/verify_pptx.py").to_vec(),
+                    ),
+                ],
+            )
+            .skill(
+                &xlsx_dir,
+                [
+                    FileEntry::new(
+                        xlsx_dir.join("SKILL.md"),
+                        include_bytes!("skill/xlsx/SKILL.md").to_vec(),
+                    ),
+                    FileEntry::new(
+                        xlsx_dir.join("xlsx_skill.py"),
+                        include_bytes!("skill/xlsx/script/xlsx_skill.py").to_vec(),
+                    ),
+                ],
+            );
     }
     Agent::try_with_runenv(spec, RunEnv::sandbox(config).await?)
 }

@@ -2,9 +2,32 @@
 // Concerns: base URL configuration, auth header injection, JSON parse, typed errors.
 // All endpoint modules call request<T>() — there is no other fetch in the app.
 
-const BASE_URL_KEY = 'cowork.v2.baseUrl';
 const TOKEN_KEY = 'cowork.v2.token';
-const DEFAULT_BASE_URL = import.meta.env.VITE_BACKEND_V2_URL ?? 'http://127.0.0.1:8080';
+export const BASE_URL = import.meta.env.VITE_BACKEND_V2_URL ?? 'http://127.0.0.1:8080';
+
+export type UnauthorizedReason = 'expired' | 'invalid';
+let unauthorizedHandler: ((reason: UnauthorizedReason) => void) | null = null;
+// Guard against multiple in-flight 401 responses all firing the handler.
+let unauthorizedTriggered = false;
+
+export function setUnauthorizedHandler(cb: (reason: UnauthorizedReason) => void): void {
+  unauthorizedHandler = cb;
+  unauthorizedTriggered = false;
+}
+
+// Source: backend/src/auth/jwt.rs — the error message emitted on ExpiredSignature.
+// If this string changes the expired-session banner will silently stop appearing.
+const JWT_EXPIRED_MESSAGE = 'token has expired';
+
+export function notifyUnauthorized(status: number, body: unknown, skipAuth?: boolean): void {
+  if (status !== 401 || skipAuth || !unauthorizedHandler || unauthorizedTriggered) return;
+  unauthorizedTriggered = true;
+  const msg = typeof body === 'object' && body && 'error' in body
+    ? String((body as Record<string, unknown>).error)
+    : '';
+  const reason: UnauthorizedReason = msg === JWT_EXPIRED_MESSAGE ? 'expired' : 'invalid';
+  unauthorizedHandler(reason);
+}
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public body?: unknown) {
@@ -24,22 +47,14 @@ function writeStored(key: string, value: string | null): void {
   } catch { /* noop */ }
 }
 
-export function getBaseUrl(): string {
-  return readStored(BASE_URL_KEY) ?? DEFAULT_BASE_URL;
-}
-
-export function setBaseUrl(url: string): string {
-  const trimmed = url.replace(/\/+$/, '') || DEFAULT_BASE_URL;
-  writeStored(BASE_URL_KEY, trimmed);
-  return trimmed;
-}
-
 export function getToken(): string | null {
   return readStored(TOKEN_KEY);
 }
 
 export function setToken(token: string | null): void {
   writeStored(TOKEN_KEY, token);
+  // A new token means a new session — reset the guard so future 401s trigger the handler.
+  if (token) unauthorizedTriggered = false;
 }
 
 interface RequestOptions extends Omit<RequestInit, 'body'> {
@@ -69,7 +84,7 @@ export async function request<T = unknown>(path: string, options: RequestOptions
     resolvedBody = JSON.stringify(body);
   }
 
-  const response = await fetch(`${getBaseUrl()}${path}`, {
+  const response = await fetch(`${BASE_URL}${path}`, {
     ...rest,
     headers,
     body: resolvedBody,
@@ -82,6 +97,7 @@ export async function request<T = unknown>(path: string, options: RequestOptions
     const msg = typeof parsed === 'object' && parsed && 'error' in parsed
       ? String((parsed as Record<string, unknown>).error)
       : (raw || `${response.status} ${response.statusText}`);
+    notifyUnauthorized(response.status, parsed, skipAuth);
     throw new ApiError(response.status, msg, parsed);
   }
 
@@ -107,7 +123,7 @@ export async function* streamSse(
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const response = await fetch(`${getBaseUrl()}${path}`, {
+  const response = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -116,6 +132,9 @@ export async function* streamSse(
 
   if (!response.ok || !response.body) {
     const raw = await response.text().catch(() => '');
+    let parsed: unknown;
+    try { parsed = raw ? JSON.parse(raw) : undefined; } catch { parsed = raw; }
+    notifyUnauthorized(response.status, parsed);
     throw new ApiError(response.status, raw || `${response.status} ${response.statusText}`);
   }
 
