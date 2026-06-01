@@ -260,7 +260,10 @@ async fn resolve_agent_for(
 
     let mut agent = build_session_agent(state, project_id, session_id)
         .await
-        .map_err(|e| AppError::internal(e))?;
+        .map_err(|e| {
+            tracing::error!(%session_id, %project_id, "build_session_agent failed: {e}");
+            AppError::internal(e)
+        })?;
 
     agent.state.history = history;
     tracing::info!(%session_id, "agent lazy-created with history restored");
@@ -815,7 +818,7 @@ pub async fn send_message(
 
     // Run the agent on a background task — progress is streamed over the WebSocket.
     let state2 = state.clone();
-    tokio::spawn(async move {
+    let run_handle = tokio::spawn(async move {
         let mut agent = guard; // OwnedMutexGuard — held for the run's lifetime
         let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
         let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
@@ -846,6 +849,7 @@ pub async fn send_message(
         drop(run);
 
         if let Some(err) = run_error {
+            tracing::error!(%session_id, "agent run failed: {err}");
             // Truncate in-memory history to match DB state so the agent stays consistent.
             agent.state.history.truncate(prev_len);
             drop(agent);
@@ -904,6 +908,24 @@ pub async fn send_message(
         let _ = state2.ws_tx.send(WsEvent::AgentRunDone {
             session_id: session_id.to_string(),
         });
+    });
+
+    // Monitor for panics: if the run task panics, end_run is never called and the
+    // session stays stuck. This task catches JoinError and forces cleanup.
+    let state_mon = state.clone();
+    tokio::spawn(async move {
+        if let Err(join_err) = run_handle.await {
+            tracing::error!(
+                %session_id,
+                err = %join_err,
+                "agent background task panicked; forcing end_run and AgentError"
+            );
+            state_mon.end_run(&session_id);
+            let _ = state_mon.ws_tx.send(WsEvent::AgentError {
+                session_id: session_id.to_string(),
+                message: "에이전트가 예기치 않게 종료되었습니다.".to_string(),
+            });
+        }
     });
 
     Ok((StatusCode::ACCEPTED, Json(RunAck { status: "started" })))

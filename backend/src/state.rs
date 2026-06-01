@@ -12,7 +12,7 @@ use crate::{
     repository::AppRepository,
 };
 
-pub struct ActiveRun {
+pub struct ActiveAgentRun {
     pub user_message: RunUserMessage,
     pub(crate) next_seq: u64,
     pub(crate) outputs: Vec<(u64, MessageOutput)>,
@@ -20,7 +20,7 @@ pub struct ActiveRun {
 
 pub struct AppState {
     agents: DashMap<Uuid, Arc<Mutex<Agent>>>,
-    active_runs: DashMap<Uuid, Arc<RwLock<ActiveRun>>>,
+    active_agent_runs: DashMap<Uuid, Arc<RwLock<ActiveAgentRun>>>,
     pub repository: AppRepository,
     pub store: SharedStore,
     pub jwt: JwtConfig,
@@ -51,7 +51,7 @@ impl AppState {
         let (ws_tx, _) = broadcast::channel(128);
         Self {
             agents: DashMap::new(),
-            active_runs: DashMap::new(),
+            active_agent_runs: DashMap::new(),
             repository,
             store,
             jwt,
@@ -75,9 +75,9 @@ impl AppState {
 
     pub fn start_run(&self, session_id: Uuid, user_message: RunUserMessage) {
         use dashmap::mapref::entry::Entry;
-        match self.active_runs.entry(session_id) {
+        match self.active_agent_runs.entry(session_id) {
             Entry::Vacant(e) => {
-                e.insert(Arc::new(RwLock::new(ActiveRun {
+                e.insert(Arc::new(RwLock::new(ActiveAgentRun {
                     user_message,
                     next_seq: 0,
                     outputs: vec![],
@@ -90,7 +90,7 @@ impl AppState {
     }
 
     pub async fn push_output(&self, session_id: &Uuid, output: MessageOutput) -> Option<u64> {
-        let entry = self.active_runs.get(session_id)?;
+        let entry = self.active_agent_runs.get(session_id)?;
         let run_arc = entry.value().clone();
         drop(entry);
         let mut run = run_arc.write().await;
@@ -104,7 +104,7 @@ impl AppState {
         &self,
         session_id: &Uuid,
     ) -> Option<(RunUserMessage, Vec<(u64, MessageOutput)>)> {
-        let entry = self.active_runs.get(session_id)?;
+        let entry = self.active_agent_runs.get(session_id)?;
         let run_arc = entry.value().clone();
         drop(entry);
         let run = run_arc.read().await;
@@ -117,6 +117,6 @@ impl AppState {
     /// Must be called exactly once per `start_run`, on both success and error paths.
     /// Failing to call this leaks the in-memory run buffer indefinitely.
     pub fn end_run(&self, session_id: &Uuid) {
-        self.active_runs.remove(session_id);
+        self.active_agent_runs.remove(session_id);
     }
 }
