@@ -84,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut positional: Vec<&str> = Vec::new();
     let mut model_arg: Option<&str> = None;
+    let mut no_skill = false;
     let mut i = 0;
     while i < argv.len() {
         let a = argv[i].as_str();
@@ -99,6 +100,10 @@ async fn main() -> anyhow::Result<()> {
                 model_arg = Some(&s["--model=".len()..]);
                 i += 1;
             }
+            "--no-skill" => {
+                no_skill = true;
+                i += 1;
+            }
             s => {
                 positional.push(s);
                 i += 1;
@@ -108,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
     if positional.len() != 2 {
         eprintln!(
-            "usage: test_case <agent> <case_no> [--model openai|claude|gemini|kimi]\n\
+            "usage: test_case <agent> <case_no> [--model openai|claude|gemini|kimi] [--no-skill]\n\
              agents: coworker, deep-research"
         );
         std::process::exit(2);
@@ -159,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
                 DATA_DIR,
                 SHARED_DATA_DIR,
                 ARTIFACT_DIR,
+                !no_skill,
             )
             .await?
         }

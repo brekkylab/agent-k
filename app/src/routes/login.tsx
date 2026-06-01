@@ -3,10 +3,12 @@ import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getMe, login, signupAndLogin } from '@/api/auth';
-import { getBaseUrl, setBaseUrl, getToken } from '@/api/client';
+import { getToken } from '@/api/client';
 import { apiErrorToMessage } from '@/api/error-messages';
 import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
+import { WelcomeCarousel } from '@/components/WelcomeCarousel';
+import { Icon } from '@/components/Icon';
 import { consumeLogoutReason, consumeRedirectAfterLogin, type LogoutReason } from '@/lib/forceLogout';
 
 type Mode = 'login' | 'signup';
@@ -22,6 +24,17 @@ export const Route = createFileRoute('/login')({
 });
 
 function LoginPage() {
+  return (
+    <div className="cw-welcome">
+      <aside className="cw-welcome-showcase">
+        <WelcomeCarousel />
+      </aside>
+      <AuthPanel />
+    </div>
+  );
+}
+
+function AuthPanel() {
   // Both ns are guaranteed by the route loader; `useTranslation` is purely
   // for the `t` binding here.
   const { t } = useTranslation(['auth', 'errors']);
@@ -29,12 +42,12 @@ function LoginPage() {
   const queryClient = useQueryClient();
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
   const [mode, setMode] = useState<Mode>('login');
-  const [baseUrl, setUrl] = useState(getBaseUrl());
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [expiredReason, setExpiredReason] = useState<LogoutReason | null>(null);
   const dismissExpiredReason = useCallback(() => setExpiredReason(null), []);
 
@@ -53,7 +66,6 @@ function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      setBaseUrl(baseUrl);
       if (mode === 'login') {
         await login({ username, password });
       } else {
@@ -81,45 +93,38 @@ function LoginPage() {
   const isSignup = mode === 'signup';
 
   return (
-    <div className="cw-live-login">
-      {expiredReason && <SessionExpiredBanner reason={expiredReason} onDismiss={dismissExpiredReason} />}
-      <div className="cw-live-login-card">
-        <h1>{t('card.title')}</h1>
-        <p style={{ color: 'var(--cw-ink-3)', marginTop: 0 }}>
-          {isSignup ? t('card.tagline_signup') : t('card.tagline_login')}
+    <main className="cw-welcome-panel">
+      <div className="cw-welcome-card">
+        {/* session-expired toast lives inline at the top of the card —
+            "왜 다시 로그인해야 하는지" context lands before the form does. */}
+        {expiredReason && <SessionExpiredBanner reason={expiredReason} onDismiss={dismissExpiredReason} />}
+        <span className="cw-welcome-brand">Cowork for Teams</span>
+        <h2 className="cw-welcome-card-title">
+          {isSignup ? t('welcome.title_signup') : t('welcome.title_login')}
+        </h2>
+        <p className="cw-welcome-card-sub">
+          {isSignup ? t('welcome.subtitle_signup') : t('welcome.subtitle_login')}
         </p>
 
-        <div role="tablist" aria-label="auth mode" style={{
-          display: 'inline-flex',
-          gap: 4,
-          padding: 4,
-          marginTop: 6,
-          marginBottom: 14,
-          background: 'var(--cw-paper-3)',
-          borderRadius: 999,
-        }}>
+        <div role="group" aria-label={t('welcome.tabs_aria')} className="cw-welcome-tabs">
           <ModeTab active={!isSignup} onClick={() => switchMode('login')}>{t('modes.login')}</ModeTab>
           <ModeTab active={isSignup} onClick={() => switchMode('signup')}>{t('modes.signup')}</ModeTab>
         </div>
 
         <form onSubmit={onSubmit}>
           <label>
-            {t('fields.backend_url')}
-            <input value={baseUrl} onChange={(e) => setUrl(e.target.value)} placeholder={t('fields.backend_url_placeholder')} />
-          </label>
-          <label>
             {t('fields.username')}
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              autoComplete={isSignup ? 'username' : 'username'}
+              autoComplete="username"
               autoFocus
               required
             />
           </label>
           {isSignup && (
             <label>
-              {t('fields.display_name')} <span style={{ fontWeight: 400, color: 'var(--cw-ink-4)', textTransform: 'none', letterSpacing: 0 }}>{t('fields.display_name_optional')}</span>
+              {t('fields.display_name')} <span className="cw-welcome-optional">{t('fields.display_name_optional')}</span>
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
@@ -129,15 +134,27 @@ function LoginPage() {
           )}
           <label>
             {t('fields.password')}
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete={isSignup ? 'new-password' : 'current-password'}
-              required
-            />
+            <div className="cw-input-with-toggle">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={isSignup ? 'new-password' : 'current-password'}
+                required
+              />
+              <button
+                type="button"
+                className="cw-input-toggle"
+                aria-label={showPassword ? t('welcome.password_hide') : t('welcome.password_show')}
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((v) => !v)}
+                tabIndex={-1}
+              >
+                <Icon name={showPassword ? 'eye-off' : 'eye'} size={16} />
+              </button>
+            </div>
           </label>
-          {error && <div className="cw-live-login-error">{error}</div>}
+          {error && <div className="cw-form-error">{error}</div>}
           <button type="submit" className="cw-btn-primary wide" disabled={submitting}>
             {submitting
               ? (isSignup ? t('submit.signup_busy') : t('submit.login_busy'))
@@ -145,18 +162,15 @@ function LoginPage() {
           </button>
         </form>
 
-        <p style={{ color: 'var(--cw-ink-3)', fontSize: 12, marginTop: 18 }}>
+        <p className="cw-welcome-switch">
           {isSignup ? (
-            <>{t('switch.to_login_prefix')} <ModeLink onClick={() => switchMode('login')}>{t('switch.to_login_link')}</ModeLink></>
+            <>{t('switch.to_login_prefix')} <ModeLink onClick={() => switchMode('login')}>{t('switch.to_login_link')}</ModeLink>{t('switch.to_login_suffix')}</>
           ) : (
-            <>
-              {t('switch.to_signup_prefix')} <ModeLink onClick={() => switchMode('signup')}>{t('switch.to_signup_link')}</ModeLink>{t('switch.to_signup_suffix')}
-              {' '}{t('switch.demo_label')} <code>olive / cowork-demo</code>
-            </>
+            <>{t('switch.to_signup_prefix')} <ModeLink onClick={() => switchMode('signup')}>{t('switch.to_signup_link')}</ModeLink>{t('switch.to_signup_suffix')}</>
           )}
         </p>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -164,23 +178,10 @@ function ModeTab({ active, onClick, children }: { active: boolean; onClick: () =
   return (
     <button
       type="button"
-      role="tab"
-      aria-selected={active}
+      aria-pressed={active}
+      className="cw-welcome-tab"
+      data-active={active}
       onClick={onClick}
-      style={{
-        appearance: 'none',
-        border: 0,
-        background: active ? 'var(--cw-paper)' : 'transparent',
-        color: active ? 'var(--cw-ink)' : 'var(--cw-ink-3)',
-        padding: '6px 14px',
-        borderRadius: 999,
-        fontSize: 12.5,
-        fontWeight: active ? 600 : 500,
-        boxShadow: active ? 'var(--cw-shadow-sm)' : 'none',
-        cursor: 'pointer',
-        transition: 'background 120ms, color 120ms',
-        fontFamily: 'inherit',
-      }}
     >
       {children}
     </button>
@@ -189,22 +190,7 @@ function ModeTab({ active, onClick, children }: { active: boolean; onClick: () =
 
 function ModeLink({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        appearance: 'none',
-        border: 0,
-        background: 'transparent',
-        padding: 0,
-        color: 'var(--cw-accent)',
-        textDecoration: 'underline',
-        textUnderlineOffset: 2,
-        cursor: 'pointer',
-        fontSize: 'inherit',
-        fontFamily: 'inherit',
-      }}
-    >
+    <button type="button" className="cw-welcome-link" onClick={onClick}>
       {children}
     </button>
   );
@@ -223,32 +209,15 @@ function SessionExpiredBanner({ reason, onDismiss }: { reason: LogoutReason; onD
     : t('session_expired.invalid');
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 16,
-      left: '50%',
-      transform: 'translateX(-50%)',
-      background: 'var(--cw-paper)',
-      border: '1px solid var(--cw-border)',
-      borderRadius: 8,
-      padding: '10px 16px',
-      fontSize: 13,
-      color: 'var(--cw-ink-2)',
-      boxShadow: 'var(--cw-shadow-md)',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      zIndex: 9999,
-      whiteSpace: 'nowrap',
-    }}>
-      {message}
+    <div className="cw-welcome-notice" role="status" aria-live="polite">
+      <span>{message}</span>
       <button
         type="button"
-        onClick={onDismiss}
+        className="cw-welcome-notice-close"
         aria-label={t('session_expired.dismiss')}
-        style={{ border: 0, background: 'transparent', padding: 0, color: 'var(--cw-ink-4)', cursor: 'pointer', lineHeight: 1 }}
+        onClick={onDismiss}
       >
-        ✕
+        <Icon name="x" size={14} />
       </button>
     </div>
   );

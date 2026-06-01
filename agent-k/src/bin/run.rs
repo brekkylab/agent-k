@@ -96,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
         DATA_DIR,
         SHARED_DATA_DIR,
         ARTIFACT_DIR,
+        true,
     )
     .await?;
     println!(

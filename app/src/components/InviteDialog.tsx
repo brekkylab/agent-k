@@ -92,7 +92,7 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
             />
           </div>
           {error && (
-            <div className="cw-live-login-error" style={{ marginBottom: 12 }}>{error}</div>
+            <div className="cw-form-error" style={{ marginBottom: 12 }}>{error}</div>
           )}
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 14 }}>
             <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>{tCommon('actions.cancel')}</button>
