@@ -250,12 +250,20 @@ function SessionPage() {
       showToast(`전송 실패: ${msg}`);
     } finally {
       setStreaming(false);
-      // Guard against empty sessionId (race where session hasn't resolved yet).
-      if (sessionId) {
-        // Refetch and wait for new history data before clearing live messages to avoid flash.
-        await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+      // On the success path we wait for the refetched history before clearing
+      // liveMessages so the optimistic bubbles cross-fade into the persisted
+      // ones without a flash. On the failure path (or empty sessionId race)
+      // the refetch can throw — wrap it so we always clear liveMessages and
+      // don't leave the empty streaming AI bubble parked on screen.
+      try {
+        if (sessionId) {
+          await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+        }
+      } catch {
+        // toast already shown in the outer catch
+      } finally {
+        setLiveMessages([]);
       }
-      setLiveMessages([]);
       void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
