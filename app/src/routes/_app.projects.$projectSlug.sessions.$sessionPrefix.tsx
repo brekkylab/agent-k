@@ -404,7 +404,8 @@ function SessionPage() {
           </div>
         </div>
 
-        <div className="cw-messages cw-scroll-quiet">
+        <div className="cw-messages-scroll">
+        <div className="cw-messages">
           {allMessages.map((msg) => (
             <MessageBubble
               key={msg.id}
@@ -424,6 +425,7 @@ function SessionPage() {
             <div className="cw-live"><span />AI 답변 중…</div>
           )}
           <div ref={messagesEndRef} />
+        </div>
         </div>
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>

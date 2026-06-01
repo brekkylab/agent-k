@@ -320,12 +320,15 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-chat-head { padding: 34px 28px 18px; border-bottom: 1px solid var(--cw-border); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cw-chat-head p { display: flex; align-items: center; gap: 7px; color: var(--cw-fg-3); margin: 14px 0 0; }
 .cw-session-head-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-/* Asymmetric padding: the scrollbar gutter sits on the right edge, so the
-   28px right pad would just create awkward dead space between the message
-   bubble and the bar. Keep 28px on the left for visual alignment with the
-   chat head and composer; drop to 8px on the right so the scrollbar reads
-   as "at the rightmost end of the chat" rather than floating in a buffer. */
-.cw-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 8px 24px 28px; width: 100%; max-width: 860px; margin: 0 auto; }
+/* Two-layer chat scroll: `.cw-messages-scroll` is the actual scroller and
+   spans the full chat-surface width, so the scrollbar lives at the chat
+   panel's rightmost edge (just before the side panel) regardless of how
+   the inner content is sized. `.cw-messages` keeps the 860px max-width and
+   auto-margin centering, but no longer owns the scrolling itself — so on
+   wide screens the bubble column can stay narrow without dragging the
+   scrollbar inward with it. */
+.cw-messages-scroll { flex: 1; min-height: 0; overflow-y: auto; width: 100%; }
+.cw-messages { padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
 .cw-message-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .cw-message-meta span { border: 1px solid var(--cw-border); color: var(--cw-fg-3); border-radius: var(--cw-radius-sm); padding: 1px 5px; font-size: 10px; }
 .cw-message-meta time { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
@@ -588,7 +591,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
   .cw-session-side { display: none; }
   .cw-chat-surface { border-right: 0; min-height: 80vh; }
   .cw-chat-head { padding: 28px 18px 18px; flex-direction: column; }
-  .cw-messages { padding: 22px 6px 120px 18px; }
+  .cw-messages { padding: 22px 18px 120px; }
   .cw-composer { grid-template-columns: 1fr; padding: 12px 18px; }
   .cw-file-browser { grid-template-columns: 1fr; }
   .cw-folder-tree { border-right: 0; border-bottom: 1px solid var(--cw-border); }
