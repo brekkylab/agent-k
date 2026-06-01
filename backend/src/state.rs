@@ -1,13 +1,16 @@
 use std::{path::PathBuf, sync::Arc};
 
 use agent_k::knowledge_base::SharedStore;
-use ailoy::agent::Agent;
-use ailoy::message::MessageOutput;
+use ailoy::{agent::Agent, message::MessageOutput};
 use dashmap::DashMap;
 use tokio::sync::{Mutex, RwLock, broadcast};
 use uuid::Uuid;
 
-use crate::{auth::JwtConfig, events::{RunUserMessage, WsEvent}, repository::AppRepository};
+use crate::{
+    auth::JwtConfig,
+    events::{RunUserMessage, WsEvent},
+    repository::AppRepository,
+};
 
 pub struct ActiveRun {
     pub user_message: RunUserMessage,

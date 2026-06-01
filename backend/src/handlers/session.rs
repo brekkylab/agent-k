@@ -167,17 +167,15 @@ async fn collect_artifact_paths(artifacts_dir: &std::path::Path) -> HashSet<Stri
         };
         loop {
             match rd.next_entry().await {
-                Ok(Some(entry)) => {
-                    match entry.metadata().await {
-                        Ok(m) if m.is_dir() => stack.push(entry.path()),
-                        Ok(_) => {
-                            if let Ok(rel) = entry.path().strip_prefix(artifacts_dir) {
-                                paths.insert(rel.to_string_lossy().into_owned());
-                            }
+                Ok(Some(entry)) => match entry.metadata().await {
+                    Ok(m) if m.is_dir() => stack.push(entry.path()),
+                    Ok(_) => {
+                        if let Ok(rel) = entry.path().strip_prefix(artifacts_dir) {
+                            paths.insert(rel.to_string_lossy().into_owned());
                         }
-                        Err(_) => {}
                     }
-                }
+                    Err(_) => {}
+                },
                 Ok(None) => break,
                 Err(_) => break,
             }
@@ -888,12 +886,19 @@ pub async fn send_message(
             }
         }
 
-        if let Err(e) = state2.repository.append_messages(session_id, &to_persist).await {
+        if let Err(e) = state2
+            .repository
+            .append_messages(session_id, &to_persist)
+            .await
+        {
             tracing::error!(%session_id, "failed to persist messages: {e}");
         }
 
         // Auto-mark sender as having read
-        let _ = state2.repository.mark_session_read(session_id, sender_id).await;
+        let _ = state2
+            .repository
+            .mark_session_read(session_id, sender_id)
+            .await;
 
         state2.end_run(&session_id);
         let _ = state2.ws_tx.send(WsEvent::AgentRunDone {

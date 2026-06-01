@@ -13,10 +13,7 @@ use serde::Deserialize;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use uuid::Uuid;
 
-use crate::{
-    events::WsEvent,
-    state::AppState,
-};
+use crate::{events::WsEvent, state::AppState};
 
 #[derive(Deserialize)]
 pub struct WsQueryParams {
@@ -76,10 +73,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                     // Determine whether this event should be forwarded and serialize it.
                     let forward = match &event {
                         // Forward title updates only to clients subscribed to that session.
-                        WsEvent::SessionTitleUpdated { session_id, .. } => match Uuid::parse_str(session_id) {
-                            Ok(sid) => broadcast_sessions.lock().await.contains(&sid),
-                            Err(_) => false,
-                        },
+                        WsEvent::SessionTitleUpdated { session_id, .. } => {
+                            match Uuid::parse_str(session_id) {
+                                Ok(sid) => broadcast_sessions.lock().await.contains(&sid),
+                                Err(_) => false,
+                            }
+                        }
                         WsEvent::AgentRunStarted { session_id, .. }
                         | WsEvent::AgentMessage { session_id, .. }
                         | WsEvent::AgentError { session_id, .. }
@@ -150,8 +149,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                     inbound_sessions.lock().await.insert(session_id);
 
                     // Replay any in-progress run so the spectator catches up.
-                    if let Some((user_message, outputs)) =
-                        inbound_state.snapshot(&session_id).await
+                    if let Some((user_message, outputs)) = inbound_state.snapshot(&session_id).await
                     {
                         let started = WsEvent::AgentRunStarted {
                             session_id: session_id.to_string(),
