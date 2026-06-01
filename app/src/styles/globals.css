@@ -206,15 +206,27 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-projects-list[data-expanded="false"] .cw-nav-row:not(.is-active),
 .cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread) { display: none; }
 
-/* Quiet scrollbar — transparent by default. Pointer hover snaps to a faint tone
-   instantly. Focus is intentionally NOT a trigger so clicking a row and leaving
-   the area hides the scrollbar even though keyboard focus remains. */
-.cw-scroll-quiet { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-.cw-scroll-quiet:hover { scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 40%, transparent) transparent; }
-.cw-scroll-quiet::-webkit-scrollbar { width: 8px; height: 8px; }
+/* Quiet scrollbar — always visible but faint so users can tell content is
+   scrollable, without claiming a wide gutter. Resting thumb is ~20% opacity
+   of fg-3, brightening to ~45% on hover. Track is invisible to avoid the
+   chunky lane look. WebKit width is 6px so the reserved space is narrow but
+   the bar is still hittable for drag-scroll. */
+.cw-scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 22%, transparent) transparent;
+}
+.cw-scroll-quiet:hover {
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 45%, transparent) transparent;
+}
+.cw-scroll-quiet::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
 .cw-scroll-quiet::-webkit-scrollbar-track { background: transparent; }
-.cw-scroll-quiet::-webkit-scrollbar-thumb { background-color: transparent; border-radius: 4px; }
-.cw-scroll-quiet:hover::-webkit-scrollbar-thumb { background-color: color-mix(in oklch, var(--cw-fg-3) 40%, transparent); }
+.cw-scroll-quiet::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--cw-fg-3) 22%, transparent);
+  border-radius: 3px;
+}
+.cw-scroll-quiet:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--cw-fg-3) 45%, transparent);
+}
 
 .cw-brand-lockup { display: flex; align-items: center; gap: 9px; border: 0; background: transparent; padding: 6px 8px 18px; border-radius: var(--cw-radius-md); min-width: 0; }
 .cw-brand-lockup:hover { background: var(--cw-bg-muted); }
