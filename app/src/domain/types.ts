@@ -2,7 +2,6 @@ export type UserId = string;
 export type ProjectId = string;
 export type SessionId = string;
 export type ShareMode = 'private' | 'shared_readonly' | 'shared_chat';
-export type SessionIntent = 'general' | 'analysis' | 'brainstorm' | 'writing' | 'recap';
 export type RouteKey = 'projects' | 'project' | 'session' | 'files' | 'skills' | 'schedule' | 'members' | 'settings' | 'auth' | 'demo';
 
 export interface User {
@@ -32,7 +31,6 @@ export interface Session {
   creatorId: UserId;
   shareMode: ShareMode;
   origin: SessionOrigin;
-  intent: SessionIntent;
   updatedAt: string;
   lastMessageAt: string | null;
   lastMessageSnippet: string | null;
@@ -102,7 +100,6 @@ export interface SkillPreview {
   updatedAt: string;
   promptTemplate?: string;
   toolBindings?: string[];
-  defaultIntent?: SessionIntent;
   sourceSessionId?: SessionId;
   sourceMessageRange?: { startTurn: number; endTurn: number };
 }

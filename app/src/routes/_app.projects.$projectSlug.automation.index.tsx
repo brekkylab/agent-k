@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@/components/Icon';
+import { IconButton } from '@/components/uiPrimitives';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { summarizeCron } from '@/components/SchedulePicker';
 import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, listRuns, listTriggers } from '@/api/automations';
 import { listMessages } from '@/api/messages';
 import { formatMessageTime } from '@/lib/formatMessageTime';
+import { useDuplicateSession } from '@/lib/useDuplicateSession';
+import { shortSessionId } from '@/lib/sessionId';
 import type { Automation, Message, Run, Trigger } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')({
@@ -321,6 +323,7 @@ function AutomationsPage() {
       void queryClient.invalidateQueries({ queryKey: ['runs', automationId] });
     },
   });
+  const duplicateMutation = useDuplicateSession(projectSlug);
   const [pendingManualRun, setPendingManualRun] = useState<Automation | null>(null);
   const triggerManualRun = (automationId: string) => {
     if (manualRunMutation.isPending) return;
@@ -341,30 +344,37 @@ function AutomationsPage() {
   const renderRunDetail = (run: Run) => {
     const status = effectiveStatus(run);
     const cancellable = status === 'queued' || status === 'running';
+    const forkable = !cancellable;
     const trigger = run.triggerId ? triggerById[run.triggerId] ?? null : null;
     return (
     <>
       <header className="cw-run-drawer-head">
-        <div>
-          <div className="cw-run-drawer-title">
-            <StatusDot status={status} />
-            <strong>{automationById[run.automationId]?.name}</strong>
-            <span className="cw-run-attempt">#{shortRunId(run)}</span>
-          </div>
-          <div className="cw-run-drawer-meta">
-            <TriggerBadge trigger={trigger} placement="below-start" />
-            <span>{STATUS_LABEL[status]}</span>
-            <span>·</span>
-            <span>{formatRunWhen(run)}</span>
-            <span>·</span>
-            {status === 'queued' ? (
-              <span>scheduled {formatScheduledAt(run.scheduledFor)}</span>
-            ) : (
-              <span>duration {formatRunDuration(run)}</span>
-            )}
-          </div>
+        <div className="cw-run-drawer-title">
+          <StatusDot status={status} />
+          <strong>{automationById[run.automationId]?.name}</strong>
+          <span className="cw-run-attempt">#{shortRunId(run)}</span>
         </div>
         <div className="cw-run-drawer-actions">
+          <IconButton
+            icon="sticky-notes"
+            label="이 run의 세션 복제"
+            title={
+              !forkable ? '완료된 run만 복제할 수 있습니다'
+              : duplicateMutation.isPending ? '복제 중...'
+              : '이 run의 세션을 복제'
+            }
+            expandedText={duplicateMutation.isPending ? '복제 중...' : '세션으로 복제'}
+            confirmText="한 번 더 눌러 복제"
+            disabled={!forkable || duplicateMutation.isPending}
+            onClick={() => duplicateMutation.mutate(run.sessionId, {
+              onSuccess: (newSession) => {
+                navigate({
+                  to: '/projects/$projectSlug/sessions/$sessionPrefix',
+                  params: { projectSlug, sessionPrefix: shortSessionId(newSession.id) },
+                });
+              },
+            })}
+          />
           {cancellable && (
             <button
               type="button"
@@ -383,6 +393,18 @@ function AutomationsPage() {
           >
             <Icon name="x" size={16} />
           </button>
+        </div>
+        <div className="cw-run-drawer-meta">
+          <TriggerBadge trigger={trigger} placement="below-start" />
+          <span>{STATUS_LABEL[status]}</span>
+          <span>·</span>
+          <span>{formatRunWhen(run)}</span>
+          <span>·</span>
+          {status === 'queued' ? (
+            <span>scheduled {formatScheduledAt(run.scheduledFor)}</span>
+          ) : (
+            <span>duration {formatRunDuration(run)}</span>
+          )}
         </div>
       </header>
 
@@ -794,22 +816,16 @@ function RailAction({
   onClick: () => void;
   disabled?: boolean;
 }) {
-  const handle = (e: MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    if (disabled) return;
-    onClick();
-  };
   return (
-    <button
-      type="button"
-      className="cw-rail-action"
-      title={label}
-      aria-label={label}
+    <IconButton
+      icon={icon}
+      label={label}
+      onClick={onClick}
       disabled={disabled}
-      onClick={handle}
-    >
-      <Icon name={icon} size={13} />
-    </button>
+      className="cw-rail-action"
+      iconSize={13}
+      stopPropagation
+    />
   );
 }
 

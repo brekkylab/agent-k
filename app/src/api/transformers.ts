@@ -1,5 +1,5 @@
 // Map raw backend payloads to the app-live domain types used in views.
-// Default values for missing metadata (intent, references, etc.) are filled here.
+// Default values for missing metadata (references, etc.) are filled here.
 
 import type {
   Automation,
@@ -110,7 +110,6 @@ export function toSession(backend: BackendSession): Session {
     creatorId: backend.creator_id,
     shareMode: backend.share_mode,
     origin: backend.origin,
-    intent: 'general',
     updatedAt: compactDate(backend.updated_at),
     lastMessageAt: backend.last_message_at,
     lastMessageSnippet: backend.last_message_snippet,

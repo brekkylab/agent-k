@@ -199,7 +199,7 @@ function MembersPage() {
       )}
 
       {inviteOpen && (
-        <InviteDialog projectSlug={projectSlug} onClose={() => setInviteOpen(false)} />
+        <InviteDialog projectRef={projectSlug} onClose={() => setInviteOpen(false)} />
       )}
 
       {removeTarget && (
