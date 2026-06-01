@@ -76,6 +76,7 @@ pub(crate) async fn build_session_agent(
     let opts = agent_k::agents::CoworkerSandboxOptions {
         sandbox_name: Some(sandbox_name_for(&session_id)),
         persist: true,
+        with_skill: true,
     };
     agent_k::agents::get_coworker_agent_with_opts(
         TOP_LEVEL_AGENT_NAME,
@@ -266,7 +267,7 @@ async fn resolve_agent_for(
         .await
         .map_err(|e| AppError::internal(e))?;
 
-    agent.state.history = history;
+    agent.state.history.extend(history);
     tracing::info!(%session_id, "agent lazy-created with history restored");
 
     if let Some(existing) = state.get_agent(&session_id) {
@@ -709,7 +710,7 @@ pub async fn clear_message_history(
             .clear_messages(session.id)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
-        agent.state.history.clear();
+        agent.state.history.retain(|m| m.role == Role::System);
     } else {
         state
             .repository

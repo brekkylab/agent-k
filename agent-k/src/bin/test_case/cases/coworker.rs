@@ -179,5 +179,70 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )],
             shared_files: Vec::new(),
         },
+        // Case 12 — pptx create (Q2 business review for exec meeting)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "이번 분기 사업 정리 발표자료 하나 만들어줘.\n\n\
+                 임원회의 때 쓸 거고 너무 화려하지 않게.\n\
+                 10장 내외로 적당히 요약해줘.\n\n\
+                 내용은:\n\
+                 - 매출은 전년 대비 좀 늘었고\n\
+                 - 일본 쪽은 정체\n\
+                 - 동남아는 꽤 성장함\n\
+                 - 운영 비용이 좀 많이 늘어남\n\
+                 - 하반기에는 자동화랑 AI 쪽 투자 예정\n\n\
+                 그래프나 표도 적당히 넣어주고\n\
+                 마지막에는 액션아이템 정리 슬라이드 하나 넣어줘.\n\n\
+                 파일명은 artifacts/result/q2_review.pptx 로 저장해줘 \
+                 (artifacts/result/ 디렉토리가 없으면 만들어). \
+                 (Environment: 첨부파일은 artifacts/ 아래에 이미 있음; \
+                 헬퍼 스크립트는 /tmp 가 아니라 working directory에 둬.)",
+            )]),
+            files: Vec::new(),
+            shared_files: Vec::new(),
+        },
+        // Case 13 — pptx create (team-meeting market review, startup feel)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "artifacts/market_research.txt 참고해서\n\
+                 팀 회의용 ppt 만들어줘.\n\n\
+                 내용 너무 길지 않게 요약하고\n\
+                 중요한 포인트 위주로 정리해줘.\n\
+                 차트나 비교표 적당히 넣어주고\n\
+                 스타트업 느낌 나게 깔끔하게 만들어줘.\n\n\
+                 파일명은 market_review.pptx 로 저장해줘",
+            )]),
+            files: vec![(
+                include_bytes!("market_research.txt").to_vec(),
+                PathBuf::from("market_research.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 14 — pptx create (Q1 2026 실적보고서, gaming startup exec meeting)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "첨부한 txt 내용 보고 PPT 좀 만들어줘. 다음 주에 임원 회의 \
+                 발표용이야.\n\
+                 10장 내외로 깔끔하게, 차트나 표 들어가면 좋고. 너무 화려하지 \
+                 말고. 회사는 게임 스타트업이야",
+            )]),
+            files: vec![(
+                include_bytes!("2026_1분기_실적보고서.txt").to_vec(),
+                PathBuf::from("2026_1분기_실적보고서.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 15 — pptx create (NORTH AVENUE brand ops review, marketing/brand team internal)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "이거 정리해서 PPT 좀 만들어줘. 다음 주에 마케팅·브랜드팀 \
+                 같이 모여서 한 해 운영 돌아보는 자리야. 10장 정도면 될 듯.",
+            )]),
+            files: vec![(
+                include_bytes!("브랜드 운영 기록 정리본.txt").to_vec(),
+                PathBuf::from("브랜드 운영 기록 정리본.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
     ]
 }

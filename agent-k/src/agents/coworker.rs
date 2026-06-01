@@ -1,13 +1,14 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ailoy::{
     agent::{Agent, AgentSpec},
-    runenv::{RunEnv, SandboxConfig, VolumeMount},
+    runenv::{FileEntry, RunEnv, SandboxConfig, VolumeMount},
 };
 
 pub const GUEST_ATTACHED_DIR: &str = "/workspace/attached";
 pub const GUEST_SHARED_DIR: &str = "/workspace/shared";
 pub const GUEST_ARTIFACTS_DIR: &str = "/workspace/artifacts";
+pub const PPTX_SKILL_DIR: &str = "/workspace/skills/pptx";
 
 const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to plan and perform tasks based on the user's query.
 
@@ -40,6 +41,7 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 pub struct CoworkerSandboxOptions {
     pub sandbox_name: Option<String>,
     pub persist: bool,
+    pub with_skill: bool,
 }
 
 /// name: Identity of the model
@@ -50,6 +52,7 @@ pub async fn get_coworker_agent(
     input_dir: impl AsRef<Path>,
     shared_data_dir: impl AsRef<Path>,
     artifacts_dir: impl AsRef<Path>,
+    with_skill: bool,
 ) -> anyhow::Result<Agent> {
     get_coworker_agent_with_opts(
         name,
@@ -57,7 +60,10 @@ pub async fn get_coworker_agent(
         input_dir,
         shared_data_dir,
         artifacts_dir,
-        CoworkerSandboxOptions::default(),
+        CoworkerSandboxOptions {
+            with_skill,
+            ..Default::default()
+        },
     )
     .await
 }
@@ -133,10 +139,26 @@ pub async fn get_coworker_agent_with_opts(
         .replace("{{ARTIFACTS}}", GUEST_ARTIFACTS_DIR)
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
-    let spec = AgentSpec::new(model.as_ref())
+    let mut spec = AgentSpec::new(model.as_ref())
         .instruction(inst)
         .system_tools()
         .web_search_tool(vec![])
         .max_tokens(32_000);
+    if opts.with_skill {
+        let pptx_dir = PathBuf::from(PPTX_SKILL_DIR);
+        spec = spec.skill(
+            &pptx_dir,
+            [
+                FileEntry::new(
+                    pptx_dir.join("SKILL.md"),
+                    include_bytes!("skill/pptx/SKILL.md").to_vec(),
+                ),
+                FileEntry::new(
+                    pptx_dir.join("script/verify_pptx.py"),
+                    include_bytes!("skill/pptx/script/verify_pptx.py").to_vec(),
+                ),
+            ],
+        );
+    }
     Agent::try_with_runenv(spec, RunEnv::sandbox(config).await?)
 }

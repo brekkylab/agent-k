@@ -84,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut positional: Vec<&str> = Vec::new();
     let mut model_arg: Option<&str> = None;
+    let mut no_skill = false;
     let mut i = 0;
     while i < argv.len() {
         let a = argv[i].as_str();
@@ -97,6 +98,10 @@ async fn main() -> anyhow::Result<()> {
             }
             s if s.starts_with("--model=") => {
                 model_arg = Some(&s["--model=".len()..]);
+                i += 1;
+            }
+            "--no-skill" => {
+                no_skill = true;
                 i += 1;
             }
             s => {
@@ -159,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
                 DATA_DIR,
                 SHARED_DATA_DIR,
                 ARTIFACT_DIR,
+                !no_skill,
             )
             .await?
         }
