@@ -385,8 +385,7 @@ async fn update_project_name_regenerates_slug() {
     let token = common::login(&app, "alice", "password123").await;
 
     let payload = serde_json::json!({ "name": "Old Name" });
-    let (status, created) =
-        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    let (status, created) = common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
     assert_eq!(status, StatusCode::CREATED, "create failed: {created}");
     assert_eq!(created["slug"], "old-name");
     let project_id = created["id"].as_str().unwrap().to_string();
@@ -406,15 +405,13 @@ async fn update_project_name_regenerates_slug() {
     assert_eq!(body["slug"], "cool-stuff");
 
     // Old slug is retired but still resolves the same project.
-    let (status, fetched) = common::authed(
-        &app,
-        "GET",
-        &format!("/projects/{old_slug}"),
-        &token,
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "retired slug should still resolve: {fetched}");
+    let (status, fetched) =
+        common::authed(&app, "GET", &format!("/projects/{old_slug}"), &token, None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "retired slug should still resolve: {fetched}"
+    );
     assert_eq!(fetched["id"], project_id.as_str());
     assert_eq!(fetched["slug"], "cool-stuff");
 }
@@ -457,8 +454,7 @@ async fn update_project_same_slug_noop() {
     let token = common::login(&app, "alice", "password123").await;
 
     let payload = serde_json::json!({ "name": "Stable Name" });
-    let (status, created) =
-        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    let (status, created) = common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
     assert_eq!(status, StatusCode::CREATED, "create failed: {created}");
     assert_eq!(created["slug"], "stable-name");
     let project_id = created["id"].as_str().unwrap().to_string();
@@ -489,15 +485,21 @@ async fn update_project_slug_collision_appends_suffix() {
 
     // Another project already owns the slug "shared".
     let payload = serde_json::json!({ "name": "shared" });
-    let (status, blocker) =
-        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
-    assert_eq!(status, StatusCode::CREATED, "create blocker failed: {blocker}");
+    let (status, blocker) = common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create blocker failed: {blocker}"
+    );
     assert_eq!(blocker["slug"], "shared");
 
     let payload = serde_json::json!({ "name": "Other" });
-    let (status, target) =
-        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
-    assert_eq!(status, StatusCode::CREATED, "create target failed: {target}");
+    let (status, target) = common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create target failed: {target}"
+    );
     let target_id = target["id"].as_str().unwrap().to_string();
 
     // Renaming target to a value that slugifies to "shared" should bump to -2.
