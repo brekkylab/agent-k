@@ -295,6 +295,8 @@ export function toAutomation(backend: BackendAutomation): Automation {
     description: backend.description,
     prompts: backend.prompts,
     enabled: backend.enabled,
+    agentType: backend.agent_type,
+    model: backend.model,
     createdBy: backend.created_by,
     createdAt: backend.created_at,
     updatedAt: backend.updated_at,
@@ -338,6 +340,8 @@ export function toRun(backend: BackendRun): Run {
     scheduledFor: backend.scheduled_for,
     leaseUntil: backend.lease_until,
     previousRunId: backend.previous_run_id,
+    agentType: backend.agent_type,
+    model: backend.model,
     createdAt: backend.created_at,
     updatedAt: backend.updated_at,
   };

@@ -117,6 +117,8 @@ export interface Automation {
   description: string | null;
   prompts: string[];
   enabled: boolean;
+  agentType: string | null;
+  model: string | null;
   createdBy: UserId;
   createdAt: string;
   updatedAt: string;
@@ -149,6 +151,8 @@ export interface Run {
   scheduledFor: string;
   leaseUntil: string | null;
   previousRunId: RunId | null;
+  agentType: string | null;
+  model: string | null;
   createdAt: string;
   updatedAt: string;
 }

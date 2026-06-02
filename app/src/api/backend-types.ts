@@ -132,6 +132,8 @@ export interface BackendAutomation {
   description: string | null;
   prompts: string[];
   enabled: boolean;
+  agent_type: string | null;
+  model: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -146,6 +148,8 @@ export interface CreateAutomationRequest {
   name: string;
   description?: string | null;
   prompts: string[];
+  agent_type?: string | null;
+  model?: string | null;
 }
 
 export interface UpdateAutomationRequest {
@@ -153,6 +157,8 @@ export interface UpdateAutomationRequest {
   description?: string | null;
   prompts?: string[];
   enabled?: boolean;
+  agent_type?: string | null;
+  model?: string | null;
 }
 
 // ── Trigger ────────────────────────────────────────────────────────────────
@@ -211,6 +217,8 @@ export interface BackendRun {
   scheduled_for: string;
   lease_until: string | null;
   previous_run_id: string | null;
+  agent_type: string | null;
+  model: string | null;
   created_at: string;
   updated_at: string;
 }
