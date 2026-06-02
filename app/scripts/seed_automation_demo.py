@@ -108,31 +108,31 @@ def main() -> None:
                 "어제 진행된 세션을 1-2줄 요약으로 정리해줘.",
                 "오늘 우선순위 항목 3개를 뽑아줘.",
             ], ensure_ascii=False),
-            1, OLIVE_ID, ts(1), ts(1),
+            1, "buddy", "anthropic/claude-haiku-4-5", OLIVE_ID, ts(1), ts(1),
         ),
         (
             AUTO_A2, PROJECT_KLIENT, "Weekly digest",
             "주간 핵심 결정 정리 (금요일 발송)",
             json.dumps(["이번 주 핵심 결정 사항을 정리해줘."], ensure_ascii=False),
-            1, OLIVE_ID, ts(2), ts(2),
+            1, "speedwagon", "google/gemini-3-flash", OLIVE_ID, ts(2), ts(2),
         ),
         (
             AUTO_A3, PROJECT_KLIENT, "On-call ping",
             "외부 인시던트 시스템에서 호출하는 핸드오프",
             json.dumps(["인시던트 내용을 받아 1줄 요약과 담당자를 추정해줘."], ensure_ascii=False),
-            0, OLIVE_ID, ts(3), ts(3),   # disabled
+            0, "buddy", "openai/gpt-5.4-nano", OLIVE_ID, ts(3), ts(3),   # disabled
         ),
         (
             AUTO_A4, PROJECT_KLIENT, "Backfill ledger",
             "수동 실행만 — 누락된 ledger 항목 재처리",
             json.dumps(["주어진 기간의 누락 ledger 항목을 다시 처리해줘."], ensure_ascii=False),
-            1, OLIVE_ID, ts(4), ts(4),
+            1, "coworker", "openai/gpt-5.4-mini", OLIVE_ID, ts(4), ts(4),
         ),
     ]
     conn.executemany(
         "INSERT INTO automations "
-        "(id, project_id, name, description, prompts_json, enabled, created_by, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(id, project_id, name, description, prompts_json, enabled, agent_type, model, created_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         automations,
     )
 
@@ -167,31 +167,40 @@ def main() -> None:
     # automation-created sessions:
     #   "{automation_name} · {kind_label} · {scheduled_for as %Y-%m-%d %H:%M}"
     # kind_label maps 'cron' → 'schedule'; 'webhook' / 'manual' stay verbatim.
+    # The Daily summary runs (a1_*) pin an explicit agent_type + model to show
+    # them in the run detail; the rest stay NULL (= recommended / coworker).
     sessions = [
         (SESS_A1_1, PROJECT_KLIENT, OLIVE_ID, "private",
          f"Daily summary · schedule · {title_ts(100)}",
-         None, None, ts(100), ts(110), "automation"),
+         None, None, ts(100), ts(110), "automation",
+         "buddy", "anthropic/claude-haiku-4-5"),
         (SESS_A1_2, PROJECT_KLIENT, OLIVE_ID, "private",
          f"Daily summary · schedule · {title_ts(90)}",
-         None, None, ts(120), ts(120), "automation"),
+         None, None, ts(120), ts(120), "automation",
+         "coworker", "openai/gpt-5.4-mini"),
         (SESS_A1_3, PROJECT_KLIENT, OLIVE_ID, "private",
          f"Daily summary · schedule · {title_ts(80)}",
-         None, None, ts(80), ts(95), "automation"),
+         None, None, ts(80), ts(95), "automation",
+         "speedwagon", "anthropic/claude-sonnet-4-6"),
         (SESS_A2_1, PROJECT_KLIENT, OLIVE_ID, "private",
          f"Weekly digest · schedule · {title_ts(50)}",
-         None, None, ts(50), ts(75), "automation"),
+         None, None, ts(50), ts(75), "automation",
+         "speedwagon", "google/gemini-3-flash"),
         (SESS_A3_1, PROJECT_KLIENT, OLIVE_ID, "private",
          f"On-call ping · webhook · {title_ts(40)}",
-         None, None, ts(40), ts(60), "automation"),
+         None, None, ts(40), ts(60), "automation",
+         "buddy", "openai/gpt-5.4-nano"),
         (SESS_A4_1, PROJECT_KLIENT, OLIVE_ID, "private",
          f"Backfill ledger · manual · {title_ts(30)}",
-         None, None, ts(30), ts(48), "automation"),
+         None, None, ts(30), ts(48), "automation",
+         "coworker", "openai/gpt-5.4-mini"),
     ]
     conn.executemany(
         "INSERT INTO sessions "
         "(id, project_id, creator_id, share_mode, title, "
-        " last_message_at, last_message_snippet, created_at, updated_at, origin) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " last_message_at, last_message_snippet, created_at, updated_at, origin, "
+        " agent_type, model) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         sessions,
     )
 
