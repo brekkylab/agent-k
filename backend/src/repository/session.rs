@@ -132,6 +132,10 @@ pub struct DbSession {
     pub title: Option<String>,
     pub last_message_at: Option<DateTime<Utc>>,
     pub last_message_snippet: Option<String>,
+    /// Agent surface driving the session (coworker | rag | deep-research | buddy).
+    pub agent_type: Option<String>,
+    /// Explicit model pin ("provider/model-id"); `None` = recommended.
+    pub model: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -177,6 +181,8 @@ impl SqliteRepository {
             last_message_snippet: row
                 .try_get::<Option<String>, _>("last_message_snippet")
                 .unwrap_or(None),
+            agent_type: row.try_get::<Option<String>, _>("agent_type").unwrap_or(None),
+            model: row.try_get::<Option<String>, _>("model").unwrap_or(None),
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "sessions.created_at",
@@ -203,16 +209,32 @@ impl SqliteRepository {
         creator_id: Uuid,
         origin: SessionOrigin,
     ) -> RepositoryResult<DbSession> {
+        self.create_session_full(project_id, creator_id, origin, None, None)
+            .await
+    }
+
+    /// Create a session with an agent surface + optional model pin (stored
+    /// verbatim; validated by the caller). `None` model = "recommended".
+    pub async fn create_session_full(
+        &self,
+        project_id: Uuid,
+        creator_id: Uuid,
+        origin: SessionOrigin,
+        agent_type: Option<&str>,
+        model: Option<&str>,
+    ) -> RepositoryResult<DbSession> {
         let id = Uuid::new_v4();
         let now = Self::now_string();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', ?, ?, ?);",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, agent_type, model, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', ?, ?, ?, ?, ?);",
         )
         .bind(id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
         .bind(origin.as_str())
+        .bind(agent_type)
+        .bind(model)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -227,6 +249,8 @@ impl SqliteRepository {
             title: None,
             last_message_at: None,
             last_message_snippet: None,
+            agent_type: agent_type.map(str::to_string),
+            model: model.map(str::to_string),
             created_at: Self::parse_timestamp(now.clone(), "sessions.created_at")?,
             updated_at: Self::parse_timestamp(now, "sessions.updated_at")?,
         })
@@ -235,7 +259,7 @@ impl SqliteRepository {
     pub async fn get_session(&self, id: Uuid) -> RepositoryResult<Option<DbSession>> {
         let row = sqlx::query(
             "SELECT id, project_id, creator_id, share_mode, origin, title, last_message_at, \
-                    last_message_snippet, created_at, updated_at \
+                    last_message_snippet, agent_type, model, created_at, updated_at \
              FROM sessions WHERE id = ?;",
         )
         .bind(id.to_string())
@@ -256,7 +280,7 @@ impl SqliteRepository {
 
         let row = sqlx::query(
             "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.origin, s.title, \
-                    s.last_message_at, s.last_message_snippet, s.created_at, s.updated_at,
+                    s.last_message_at, s.last_message_snippet, s.agent_type, s.model, s.created_at, s.updated_at,
                     CASE
                         WHEN p.owner_id = ?1 THEN 'admin'
                         WHEN s.creator_id = ?1 AND pm.user_id IS NOT NULL THEN 'admin'
@@ -300,7 +324,7 @@ impl SqliteRepository {
         let uid = requesting_user_id.to_string();
         let rows = sqlx::query(
             "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.origin, s.title, \
-                    s.last_message_at, s.last_message_snippet, s.created_at, s.updated_at
+                    s.last_message_at, s.last_message_snippet, s.agent_type, s.model, s.created_at, s.updated_at
              FROM sessions s
              JOIN projects p ON p.id = s.project_id
              WHERE p.owner_id = ?1
@@ -328,7 +352,7 @@ impl SqliteRepository {
 
         let rows = sqlx::query(
             "SELECT s.id, s.project_id, s.creator_id, s.share_mode, s.origin, s.title, \
-                    s.last_message_at, s.last_message_snippet, s.created_at, s.updated_at
+                    s.last_message_at, s.last_message_snippet, s.agent_type, s.model, s.created_at, s.updated_at
              FROM sessions s
              JOIN projects p ON p.id = s.project_id
              WHERE s.project_id = ?1
@@ -376,13 +400,24 @@ impl SqliteRepository {
         })
     }
 
+    /// Pin the resolved model onto a "recommended" (NULL) session so it doesn't
+    /// drift when the chain/availability later changes.
+    pub async fn set_session_model(&self, session_id: Uuid, model: &str) -> RepositoryResult<()> {
+        sqlx::query("UPDATE sessions SET model = ? WHERE id = ?")
+            .bind(model)
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn list_all_sessions_in_project(
         &self,
         project_id: Uuid,
     ) -> RepositoryResult<Vec<DbSession>> {
         let rows = sqlx::query(
             "SELECT id, project_id, creator_id, share_mode, origin, title, last_message_at, \
-                    last_message_snippet, created_at, updated_at \
+                    last_message_snippet, agent_type, model, created_at, updated_at \
              FROM sessions WHERE project_id = ? \
              ORDER BY created_at DESC",
         )
@@ -410,13 +445,15 @@ impl SqliteRepository {
 
         sqlx::query(
             "INSERT INTO sessions (id, project_id, creator_id, share_mode, title, \
-                                   created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', ?, ?, ?);",
+                                   agent_type, model, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', ?, ?, ?, ?, ?);",
         )
         .bind(new_id.to_string())
         .bind(source.project_id.to_string())
         .bind(new_creator_id.to_string())
         .bind(&source.title)
+        .bind(&source.agent_type)
+        .bind(&source.model)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
