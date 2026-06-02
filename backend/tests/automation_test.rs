@@ -666,7 +666,7 @@ async fn create_automation_accepts_retired_slug() {
         "PATCH",
         &format!("/projects/{pid}"),
         &token,
-        Some(json!({ "name": "Renamed", "slug": "renamed" })),
+        Some(json!({ "name": "Renamed" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "rename failed: {renamed}");

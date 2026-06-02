@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
 import { listSessions } from '@/api/sessions';
@@ -29,6 +30,7 @@ import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { useSessionDelete } from '@/lib/useSessionDelete';
 import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
+import { LanguageToggle } from '@/components/LanguageToggle';
 import type { Session } from '@/domain/types';
 
 function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => void }) {
@@ -86,13 +88,14 @@ function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => v
     [setRevealed, setSidebarMode, setExpandedWidth],
   );
 
+  const { t } = useTranslation('common');
   return (
     <div
       className="cw-sidebar-resizer"
       onPointerDown={onPointerDown}
       role="separator"
       aria-orientation="vertical"
-      aria-label="사이드바 폭 조절"
+      aria-label={t('sidebar.resizer_label')}
     />
   );
 }
@@ -114,6 +117,7 @@ function SectionHeader({
   addDisabled?: boolean;
   onViewAll?: () => void;
 }) {
+  const { t } = useTranslation('common');
   return (
     <div className="cw-section-header">
       <button
@@ -145,8 +149,8 @@ function SectionHeader({
           className="cw-section-add"
           onClick={(e) => { e.stopPropagation(); onAdd(); }}
           disabled={addDisabled}
-          aria-label={addLabel ?? `${label} 추가`}
-          title={addLabel ?? `${label} 추가`}
+          aria-label={addLabel ?? t('sidebar.add_label', { label })}
+          title={addLabel ?? t('sidebar.add_label', { label })}
         >
           <Icon name="plus" size={14} />
         </button>
@@ -156,6 +160,7 @@ function SectionHeader({
 }
 
 export function Sidebar() {
+  const { t } = useTranslation(['common', 'project']);
   const navigate = useNavigate();
   const currentUser = useAuthStore((s) => s.currentUser);
   const sidebarMode = useLayoutStore((s) => s.sidebarMode);
@@ -294,7 +299,7 @@ export function Sidebar() {
         type="button"
         className="cw-sidebar-hamburger"
         onClick={onHamburgerClick}
-        aria-label={revealed ? '사이드바 닫기' : '사이드바 열기'}
+        aria-label={revealed ? t('sidebar.close') : t('sidebar.open')}
         aria-expanded={revealed}
       >
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" width={18} height={18} aria-hidden="true">
@@ -319,7 +324,7 @@ export function Sidebar() {
         <button
           className="cw-brand-lockup"
           onClick={() => navigate({ to: '/projects' })}
-          aria-label="Cowork projects"
+          aria-label={t('sidebar.brand_label')}
         >
           <img src={logoMark} alt="" />
           <strong>Cowork</strong>
@@ -328,8 +333,8 @@ export function Sidebar() {
           type="button"
           className="cw-sidebar-collapse-btn"
           onClick={sidebarMode === 'hidden' ? expandSidebar : collapseSidebar}
-          aria-label={sidebarMode === 'hidden' ? '사이드바 고정' : '사이드바 접기'}
-          title={sidebarMode === 'hidden' ? '사이드바 고정' : '사이드바 접기'}
+          aria-label={sidebarMode === 'hidden' ? t('sidebar.pin') : t('sidebar.collapse')}
+          title={sidebarMode === 'hidden' ? t('sidebar.pin') : t('sidebar.collapse')}
         >
           <Icon name={sidebarMode === 'hidden' ? 'chevron-right' : 'chevron-left'} size={16} />
         </button>
@@ -337,11 +342,11 @@ export function Sidebar() {
 
       <div className="cw-sidebar-scroll cw-scroll-quiet">
         <SectionHeader
-          label="PROJECTS"
+          label={t('sidebar.section_projects')}
           expanded={projectsExpanded}
           onToggle={toggleProjects}
           onAdd={projectCreator.open}
-          addLabel="새 Project"
+          addLabel={t('sidebar.new_project')}
         />
         <nav className="cw-projects-list" data-expanded={projectsExpanded ? 'true' : 'false'}>
           {(projectsQuery.data ?? []).map((item) => (
@@ -363,37 +368,37 @@ export function Sidebar() {
               className={`cw-nav-row ${activeRoute === 'project' ? 'is-active' : ''}`}
               onClick={() => openProject(activeProject.slug)}
             >
-              <IconPocket tone="home" icon="home" /> <span>Home</span>
+              <IconPocket tone="home" icon="home" /> <span>{t('sidebar.nav.home')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'files' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/files', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="files" icon="folder-open" /> <span>Files</span>
+              <IconPocket tone="files" icon="folder-open" /> <span>{t('sidebar.nav.files')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'skills' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/skills', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="skills" icon="zap" /> <span>Skills</span>
+              <IconPocket tone="skills" icon="zap" /> <span>{t('sidebar.nav.skills')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'automation' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="schedule" icon="circle-play" /> <span>Automation</span>
+              <IconPocket tone="schedule" icon="circle-play" /> <span>{t('sidebar.nav.automation')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'members' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/members', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="members" icon="users" /> <span>Members</span>
+              <IconPocket tone="members" icon="users" /> <span>{t('sidebar.nav.members')}</span>
             </button>
             <button
               className={`cw-nav-row ${activeRoute === 'settings' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/settings', params: { projectSlug: activeProject.slug } })}
             >
-              <IconPocket tone="settings" icon="settings" /> <span>Settings</span>
+              <IconPocket tone="settings" icon="settings" /> <span>{t('sidebar.nav.settings')}</span>
             </button>
           </div>
         )}
@@ -401,11 +406,11 @@ export function Sidebar() {
         {activeProject && (
           <>
             <SectionHeader
-              label="Sessions"
+              label={t('sidebar.section_sessions')}
               expanded={sessionsExpanded}
               onToggle={toggleSessions}
               onAdd={startNewSession}
-              addLabel="새 Session"
+              addLabel={t('sidebar.new_session')}
               onViewAll={() => setSessionsOverlayOpen(true)}
             />
             <div className="cw-sessions-list" data-expanded={sessionsExpanded ? 'true' : 'false'}>
@@ -455,8 +460,9 @@ export function Sidebar() {
             <div className="cw-sidebar-user-meta">
               <b>{currentUser.name.split(' ')[0]}</b>
             </div>
+            <LanguageToggle />
             <button
-              aria-label="logout"
+              aria-label={t('common:actions.logout')}
               onClick={() => forceLogout({ reason: 'manual' })}
               style={{ border: 0, background: 'transparent', padding: 0, color: 'var(--cw-ink-3)', cursor: 'pointer' }}
             >
@@ -470,9 +476,9 @@ export function Sidebar() {
 
       {pendingDelete && (
         <ConfirmDialog
-          title="세션을 삭제하시겠어요?"
-          body={`"${pendingDelete.title}"의 모든 메시지와 sandbox 자원이 함께 정리됩니다. 이 작업은 되돌릴 수 없습니다.`}
-          confirmLabel="삭제"
+          title={t('project:delete_session.title')}
+          body={t('project:delete_session.body', { title: pendingDelete.title })}
+          confirmLabel={t('project:delete_session.confirm')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(pendingDelete.id)}

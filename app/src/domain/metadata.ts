@@ -1,8 +1,13 @@
 import type { IconName } from '../components/Icon';
 import type { ShareMode } from './types';
 
-export const shareMeta: Record<ShareMode, { label: string; shortLabel: string; icon: IconName; className: string; desc: string }> = {
-  private: { label: '비공개', shortLabel: '비공개', icon: 'lock', className: 'private', desc: '나만 봐요' },
-  shared_readonly: { label: '읽기 공유', shortLabel: '읽기', icon: 'eye', className: 'readonly', desc: '팀은 읽을 수 있어요' },
-  shared_chat: { label: '함께 대화', shortLabel: '대화', icon: 'message-square', className: 'chat', desc: '팀과 AI가 함께 답해요' },
+// Static, language-independent metadata for share modes. User-facing labels
+// live in `app/src/i18n/locales/{en,ko}/common.json` under the `share.*` keys;
+// consumers should pull them via `useTranslation()` rather than reading them
+// from here.
+
+export const shareMeta: Record<ShareMode, { icon: IconName; className: string }> = {
+  private: { icon: 'lock', className: 'private' },
+  shared_readonly: { icon: 'eye', className: 'readonly' },
+  shared_chat: { icon: 'message-square', className: 'chat' },
 };

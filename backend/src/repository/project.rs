@@ -234,13 +234,13 @@ impl SqliteRepository {
         let pid = project_id.to_string();
         let rows = sqlx::query(
             "SELECT u.id, u.username, u.password_hash, u.role, u.display_name, u.is_active,
-                    u.created_at, u.updated_at, p.created_at AS added_at
+                    u.preferred_language, u.created_at, u.updated_at, p.created_at AS added_at
              FROM projects p
              JOIN users u ON u.id = p.owner_id
              WHERE p.id = ?1
              UNION ALL
              SELECT u.id, u.username, u.password_hash, u.role, u.display_name, u.is_active,
-                    u.created_at, u.updated_at, pm.added_at
+                    u.preferred_language, u.created_at, u.updated_at, pm.added_at
              FROM project_members pm
              JOIN users u ON u.id = pm.user_id
              WHERE pm.project_id = ?1

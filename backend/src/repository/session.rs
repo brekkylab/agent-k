@@ -773,10 +773,7 @@ impl SqliteRepository {
     /// prefix scan. Returns `Unique` for exactly one match, `Ambiguous` for
     /// two or more (LIMIT 2 keeps this O(1) past the first hit), `None` for
     /// no match.
-    pub async fn lookup_session_by_prefix(
-        &self,
-        prefix: &str,
-    ) -> RepositoryResult<PrefixLookup> {
+    pub async fn lookup_session_by_prefix(&self, prefix: &str) -> RepositoryResult<PrefixLookup> {
         let pattern = format!("{}%", hyphenate_uuid_prefix(prefix));
         let rows = sqlx::query("SELECT id FROM sessions WHERE id LIKE ? LIMIT 2")
             .bind(&pattern)
@@ -833,9 +830,6 @@ mod prefix_tests {
 
     #[test]
     fn hyphenated_prefix_passes_through() {
-        assert_eq!(
-            hyphenate_uuid_prefix("aaaaaaaa-2222"),
-            "aaaaaaaa-2222",
-        );
+        assert_eq!(hyphenate_uuid_prefix("aaaaaaaa-2222"), "aaaaaaaa-2222",);
     }
 }

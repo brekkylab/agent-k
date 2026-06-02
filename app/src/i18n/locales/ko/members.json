@@ -1,0 +1,44 @@
+{
+  "toast": {
+    "left_project": "프로젝트에서 나왔습니다",
+    "member_removed": "멤버를 제거했습니다",
+    "no_permission": "권한이 없습니다",
+    "failed": "실패: {{message}}"
+  },
+  "subtitle": "{{project}} · 프로젝트 멤버를 관리합니다.",
+  "loading": "불러오는 중…",
+  "empty": {
+    "first_invite_title": "첫 멤버를 초대해보세요",
+    "first_invite_hint": "+ Invite 버튼으로 팀원을 추가할 수 있어요"
+  },
+  "actions": {
+    "leave_project": "이 프로젝트에서 나가기"
+  },
+  "fallback": {
+    "title": "멤버 정보를 불러올 수 없습니다",
+    "body": "권한이 없거나 프로젝트가 비어있을 수 있습니다."
+  },
+  "page": {
+    "section_label": "팀 접근",
+    "title": "멤버",
+    "invite": "초대"
+  },
+  "table": {
+    "member": "멤버",
+    "role": "역할",
+    "joined": "참여일",
+    "you_suffix": "(나)"
+  },
+  "badges": {
+    "owner": "Owner",
+    "member": "Member"
+  },
+  "remove": {
+    "self_title": "프로젝트에서 나가시겠어요?",
+    "self_body": "\"{{project}}\" 프로젝트에 더 이상 접근할 수 없게 됩니다.",
+    "member_title": "멤버를 제거하시겠어요?",
+    "member_body": "\"{{name}}\"님을 프로젝트에서 제거합니다. 이 작업은 되돌릴 수 없습니다.",
+    "self_confirm": "나가기",
+    "member_confirm": "제거"
+  }
+}

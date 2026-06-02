@@ -13,6 +13,7 @@ pub struct DbUser {
     pub role: Role,
     pub display_name: Option<String>,
     pub is_active: bool,
+    pub preferred_language: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -24,6 +25,7 @@ pub struct NewUser {
     pub role: Role,
     pub display_name: Option<String>,
     pub is_active: bool,
+    pub preferred_language: String,
 }
 
 pub struct UpdateUser {
@@ -31,6 +33,7 @@ pub struct UpdateUser {
     pub password_hash: Option<String>,
     pub role: Option<Role>,
     pub is_active: Option<bool>,
+    pub preferred_language: Option<String>,
 }
 
 impl SqliteRepository {
@@ -42,6 +45,7 @@ impl SqliteRepository {
             role: Self::parse_role(row.get::<String, _>("role"), "users.role")?,
             display_name: row.get::<Option<String>, _>("display_name"),
             is_active: row.get::<i64, _>("is_active") != 0,
+            preferred_language: row.get::<String, _>("preferred_language"),
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "users.created_at",
@@ -56,8 +60,8 @@ impl SqliteRepository {
     pub async fn create_user(&self, user: NewUser) -> RepositoryResult<DbUser> {
         let now = Self::now_string();
         sqlx::query(
-            "INSERT INTO users (id, username, password_hash, role, display_name, is_active, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
+            "INSERT INTO users (id, username, password_hash, role, display_name, is_active, preferred_language, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
         )
         .bind(user.id.to_string())
         .bind(&user.username)
@@ -65,6 +69,7 @@ impl SqliteRepository {
         .bind(user.role.as_str())
         .bind(&user.display_name)
         .bind(if user.is_active { 1i64 } else { 0i64 })
+        .bind(&user.preferred_language)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -78,6 +83,7 @@ impl SqliteRepository {
             role: user.role,
             display_name: user.display_name,
             is_active: user.is_active,
+            preferred_language: user.preferred_language,
             created_at: Self::parse_timestamp(now.clone(), "users.created_at")?,
             updated_at: Self::parse_timestamp(now, "users.updated_at")?,
         })
@@ -85,7 +91,7 @@ impl SqliteRepository {
 
     pub async fn get_user_by_id(&self, id: Uuid) -> RepositoryResult<Option<DbUser>> {
         let row = sqlx::query(
-            "SELECT id, username, password_hash, role, display_name, is_active, created_at, updated_at \
+            "SELECT id, username, password_hash, role, display_name, is_active, preferred_language, created_at, updated_at \
              FROM users WHERE id = ?;",
         )
         .bind(id.to_string())
@@ -97,7 +103,7 @@ impl SqliteRepository {
 
     pub async fn get_user_by_username(&self, username: &str) -> RepositoryResult<Option<DbUser>> {
         let row = sqlx::query(
-            "SELECT id, username, password_hash, role, display_name, is_active, created_at, updated_at \
+            "SELECT id, username, password_hash, role, display_name, is_active, preferred_language, created_at, updated_at \
              FROM users WHERE username = ?;",
         )
         .bind(username)
@@ -116,7 +122,7 @@ impl SqliteRepository {
             .await?;
 
         let rows = sqlx::query(
-            "SELECT id, username, password_hash, role, display_name, is_active, created_at, updated_at \
+            "SELECT id, username, password_hash, role, display_name, is_active, preferred_language, created_at, updated_at \
              FROM users ORDER BY created_at ASC LIMIT ? OFFSET ?;",
         )
         .bind(size)
@@ -155,6 +161,9 @@ impl SqliteRepository {
             builder
                 .push(", is_active = ")
                 .push_bind(if active { 1i64 } else { 0i64 });
+        }
+        if let Some(ref lang) = update.preferred_language {
+            builder.push(", preferred_language = ").push_bind(lang);
         }
 
         builder.push(" WHERE id = ").push_bind(id.to_string());

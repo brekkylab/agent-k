@@ -3,11 +3,13 @@
 
 import { createFileRoute, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { listMembers, listProjects } from '@/api/projects';
 import { listSessions } from '@/api/sessions';
 import { Icon } from '@/components/Icon';
 import { useNewProjectDialog } from '@/components/NewProjectDialog';
 import { AvatarStack, SectionLabel } from '@/components/uiPrimitives';
+import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 import type { Project, Session, User } from '@/domain/types';
 
@@ -21,10 +23,13 @@ function useActiveProjectSlugFromRoute(): string | null {
 }
 
 export const Route = createFileRoute('/_app/projects/')({
+  // NewProjectDialog is rendered here → `dialogs`. Cards show member badges → `members`.
+  loader: () => loadNs('project', 'members', 'dialogs'),
   component: ProjectsPage,
 });
 
 function ProjectsPage() {
+  const { t } = useTranslation('project');
   const navigate = useNavigate();
   const projects = useQuery({ queryKey: ['projects'], queryFn: listProjects });
   const activeProjectSlug = useActiveProjectSlugFromRoute() ?? projects.data?.[0]?.slug ?? null;
@@ -34,14 +39,14 @@ function ProjectsPage() {
     <section className="cw-page cw-projects-page cw-page-enter">
       <div className="cw-page-head">
         <div>
-          <h1>Your projects</h1>
-          <p>Each project is a workspace. Sessions, files, members, skills, schedule — all live inside.</p>
+          <h1>{t('list_page.title')}</h1>
+          <p>{t('list_page.description')}</p>
         </div>
         <button className="cw-btn-primary" onClick={creator.open}>
-          <Icon name="plus" /> New project
+          <Icon name="plus" /> {t('list_page.new_project')}
         </button>
       </div>
-      <SectionLabel>Projects · {projects.data?.length ?? 0} projects</SectionLabel>
+      <SectionLabel>{t('list_page.section_label', { count: projects.data?.length ?? 0 })}</SectionLabel>
       <div className="cw-project-grid">
         {(projects.data ?? []).map((project) => (
           <ProjectCard
@@ -58,12 +63,14 @@ function ProjectsPage() {
 }
 
 function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive: boolean; onOpen: () => void }) {
+  const { t } = useTranslation(['project', 'common', 'members']);
   const currentUser = useAuthStore((s) => s.currentUser);
   const members = useQuery({ queryKey: ['members', project.slug], queryFn: () => listMembers(project.slug) });
   const sessions = useQuery({ queryKey: ['sessions', project.slug], queryFn: () => listSessions(project.slug) });
   const isOwner = currentUser?.id === project.ownerId;
   const userSessions = (sessions.data ?? []).filter((s) => s.origin === 'user');
-  const latest = latestUpdated(userSessions);
+  const latestRaw = latestUpdated(userSessions);
+  const latest = latestRaw === 'new' ? t('card.latest_new') : latestRaw;
   const memberUsers: User[] = members.data ?? [];
 
   return (
@@ -73,12 +80,15 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
           <Icon name="folder" size={15} />
           <span>{project.name}</span>
         </span>
-        <span className={`cw-role-badge ${isOwner ? 'owner' : 'member'}`}>{isOwner ? 'Owner' : 'Member'}</span>
+        <span className={`cw-role-badge ${isOwner ? 'owner' : 'member'}`}>
+          {isOwner ? t('members:badges.owner') : t('members:badges.member')}
+        </span>
       </div>
-      <p className="cw-project-card-desc">{project.description || '설명 없음'}</p>
+      <p className="cw-project-card-desc">{project.description || t('common:placeholders.no_description')}</p>
       <div className="cw-project-card-footer">
         <AvatarStack users={memberUsers} />
-        <span className="cw-card-stats">{userSessions.length}개 세션 · {latest}</span>
+        <span className="cw-card-stats">{t('card.session_count', { count: userSessions.length, latest })}</span>
+        {/* i18next picks `_one` or `_other` based on `count` automatically. */}
       </div>
     </button>
   );

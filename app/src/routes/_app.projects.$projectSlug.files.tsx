@@ -14,6 +14,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { localizedNoun } from '@/i18n';
+import { loadNs } from '@/i18n/loader';
+import type { TFunction } from 'i18next';
 import {
   copyDirents,
   createFolder,
@@ -51,11 +55,14 @@ const VIEW_KEY = 'cowork.files.viewMode';
 const DRAG_THRESHOLD = 5; // px — under this we treat mousedown as click
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/files')({
+  // Rename / NewFolder / CopyToShared / FolderPicker all live on this page → `dialogs`.
+  loader: () => loadNs('files', 'dialogs'),
   component: FilesPage,
 });
 
 function FilesPage() {
   const { projectSlug } = Route.useParams();
+  const { t, i18n } = useTranslation(['files', 'common']);
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
@@ -150,17 +157,17 @@ function FilesPage() {
       const ok = result.succeeded.length;
       const ko = result.failed.length;
       if (ko === 0) {
-        showToast(ok === 1 ? '파일이 업로드되었습니다' : `${ok}개 파일이 업로드되었습니다`);
+        showToast(t('files:toast.upload_success', { count: ok }));
       } else {
         showToast(
-          `${ok}개 업로드, ${ko}개 실패`,
-          result.failed.map((f) => `${f.path || '(이름 없음)'} — ${f.error}`),
+          t('files:toast.upload_partial', { ok, ko }),
+          result.failed.map((f) => t('files:toast.failed_entry', { path: f.path || t('files:toast.unnamed'), error: f.error })),
         );
       }
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'upload failed';
-      showToast(`업로드 실패: ${msg}`);
+      showToast(t('files:toast.upload_failed', { message: msg }));
     },
   });
 
@@ -178,12 +185,12 @@ function FilesPage() {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
-      showToast('폴더가 생성되었습니다');
+      showToast(t('files:toast.folder_created'));
       setFolderDialogOpen(false);
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'mkdir failed';
-      showToast(`폴더 생성 실패: ${msg}`);
+      showToast(t('files:toast.folder_failed', { message: msg }));
     },
   });
 
@@ -191,7 +198,7 @@ function FilesPage() {
     mutationFn: (entry: BackendDirent) => downloadFile(scope, entry.path),
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'download failed';
-      showToast(`다운로드 실패: ${msg}`);
+      showToast(t('files:toast.download_failed', { message: msg }));
     },
   });
 
@@ -225,9 +232,12 @@ function FilesPage() {
         }
       });
       if (fails.length === 0) {
-        showToast(okCount === 1 ? '삭제되었습니다' : `${okCount}개 항목이 삭제되었습니다`);
+        showToast(t('files:toast.delete_success', { count: okCount }));
       } else {
-        showToast(`${okCount}개 삭제, ${fails.length}개 실패`, fails.map((f) => `${f.path} — ${f.error}`));
+        showToast(
+          t('files:toast.delete_partial', { ok: okCount, ko: fails.length }),
+          fails.map((f) => t('files:toast.failed_entry', { path: f.path, error: f.error })),
+        );
       }
       setSelectedPaths(new Set());
       anchorRef.current = null;
@@ -235,7 +245,7 @@ function FilesPage() {
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'delete failed';
-      showToast(`삭제 실패: ${msg}`);
+      showToast(t('files:toast.delete_failed', { message: msg }));
     },
   });
 
@@ -296,9 +306,9 @@ function FilesPage() {
 
   const bulkDownload = useCallback(() => {
     const files = selectedEntries.filter((e) => e.kind === 'file');
-    if (files.length === 0) { showToast('다운로드할 파일이 선택되지 않았습니다'); return; }
+    if (files.length === 0) { showToast(t('files:toast.no_files_selected')); return; }
     files.forEach((f) => downloadMutation.mutate(f));
-  }, [selectedEntries, downloadMutation, showToast]);
+  }, [selectedEntries, downloadMutation, showToast, t]);
 
   // Single unified mutation for both rename (1-item move with new_name) and
   // bulk move. The `renamingRef` flag tells the success/error handler whether
@@ -313,11 +323,14 @@ function FilesPage() {
       const wasRename = renamingRef.current;
       renamingRef.current = false;
       if (wasRename) {
-        if (ko === 0) showToast('이름이 변경되었습니다');
-        else showToast('이름 변경 실패', res.failed.map((f) => f.error));
+        if (ko === 0) showToast(t('files:toast.rename_success'));
+        else showToast(t('files:toast.rename_failed'), res.failed.map((f) => f.error));
       } else {
-        if (ko === 0) showToast(ok === 1 ? '이동되었습니다' : `${ok}개 이동되었습니다`);
-        else showToast(`${ok}개 이동, ${ko}개 실패`, res.failed.map((f) => `${f.path} — ${f.error}`));
+        if (ko === 0) showToast(t('files:toast.move_success', { count: ok }));
+        else showToast(
+          t('files:toast.move_partial', { ok, ko }),
+          res.failed.map((f) => t('files:toast.failed_entry', { path: f.path, error: f.error })),
+        );
       }
       setPendingRename(null);
       setPendingMove(null);
@@ -328,7 +341,8 @@ function FilesPage() {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'move failed';
       const wasRename = renamingRef.current;
       renamingRef.current = false;
-      showToast(`${wasRename ? '이름 변경' : '이동'} 실패: ${msg}`);
+      const action = t(wasRename ? 'files:toast.rename_action' : 'files:toast.move_action');
+      showToast(t('files:toast.rename_or_move_failed', { action, message: msg }));
     },
   });
 
@@ -339,15 +353,18 @@ function FilesPage() {
       await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = res.succeeded.length;
       const ko = res.failed.length;
-      if (ko === 0) showToast(ok === 1 ? '복사되었습니다' : `${ok}개 복사되었습니다`);
-      else showToast(`${ok}개 복사, ${ko}개 실패`, res.failed.map((f) => `${f.path} — ${f.error}`));
+      if (ko === 0) showToast(t('files:toast.copy_success', { count: ok }));
+      else showToast(
+        t('files:toast.copy_partial', { ok, ko }),
+        res.failed.map((f) => t('files:toast.failed_entry', { path: f.path, error: f.error })),
+      );
       setPendingCopy(null);
       setSelectedPaths(new Set());
       anchorRef.current = null;
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'copy failed';
-      showToast(`복사 실패: ${msg}`);
+      showToast(t('files:toast.copy_failed', { message: msg }));
     },
   });
 
@@ -540,7 +557,7 @@ function FilesPage() {
     ghost.className = 'cw-drag-ghost';
     ghost.textContent = dragPaths.length === 1
       ? nameOf(entry)
-      : `${dragPaths.length}개 항목`;
+      : t('files:ui.drag_items', { count: dragPaths.length });
     document.body.appendChild(ghost);
     e.dataTransfer.setDragImage(ghost, 14, 14);
     requestAnimationFrame(() => ghost.remove());
@@ -552,7 +569,7 @@ function FilesPage() {
     let sources: string[];
     try { sources = JSON.parse(raw); } catch { return false; }
     if (sources.some((s) => destination === s || destination.startsWith(s + '/'))) {
-      showToast('자기 자신 또는 하위 폴더로는 이동할 수 없습니다');
+      showToast(t('files:toast.invalid_move'));
       return true;
     }
     const isCopy = e.altKey || e.ctrlKey || e.metaKey;
@@ -561,22 +578,25 @@ function FilesPage() {
     return true;
   }, [showToast, copyMutation, moveMutation]);
 
-  const deleteCopy = useMemo(() => describeBulkDelete(pendingDelete, entries), [pendingDelete, entries]);
+  const deleteCopy = useMemo(
+    () => describeBulkDelete(pendingDelete, entries, t, i18n.language),
+    [pendingDelete, entries, t, i18n.language],
+  );
   const currentPathKey = currentPath.join('/');
 
   return (
     <section className="cw-page cw-files-page cw-page-enter">
       <div className="cw-page-head">
         <div>
-          <h1>Files</h1>
-          <p>Shared with the whole project. Select files, pin them to a session, then generate artifacts from those citations.</p>
+          <h1>{t('files:page.title')}</h1>
+          <p>{t('files:page.description')}</p>
         </div>
         <div>
           <button className="cw-btn-secondary" onClick={openFolderDialog} disabled={folderMutation.isPending}>
-            <IconPocket tone="add" icon="plus" compact /> New folder
+            <IconPocket tone="add" icon="plus" compact /> {t('files:ui.new_folder')}
           </button>
           <button className="cw-btn-primary" onClick={openUpload} disabled={uploadMutation.isPending}>
-            <IconPocket tone="add" icon="upload" compact /> {uploadMutation.isPending ? 'Uploading…' : 'Upload'}
+            <IconPocket tone="add" icon="upload" compact /> {uploadMutation.isPending ? t('files:ui.uploading') : t('files:ui.upload')}
           </button>
           <input
             ref={fileInputRef}
@@ -639,25 +659,25 @@ function FilesPage() {
           <header className="cw-file-pane-head">
             {selectedPaths.size >= 1 ? (
               <div className="cw-bulk-toolbar cw-bulk-toolbar-inline" role="toolbar" aria-label="bulk actions">
-                <span className="cw-bulk-count">{selectedPaths.size}개 선택됨</span>
+                <span className="cw-bulk-count">{t('files:ui.selected_count', { count: selectedPaths.size })}</span>
                 <button type="button" className="cw-btn-secondary" onClick={bulkDownload}>
-                  <Icon name="download" size={13} /> Download
+                  <Icon name="download" size={13} /> {t('files:ui.download')}
                 </button>
                 {selectedPaths.size === 1 && (
                   <button type="button" className="cw-btn-secondary" onClick={() => setPendingRename(selectedEntries[0]!)}>
-                    <Icon name="writing" size={13} /> Rename
+                    <Icon name="writing" size={13} /> {t('files:ui.rename')}
                   </button>
                 )}
                 <button type="button" className="cw-btn-secondary" onClick={() => setPendingMove(selectedEntries)}>
-                  <Icon name="chevron-right" size={13} /> 이동
+                  <Icon name="chevron-right" size={13} /> {t('files:ui.move')}
                 </button>
                 <button type="button" className="cw-btn-secondary" onClick={() => setPendingCopy(selectedEntries)}>
-                  <Icon name="file" size={13} /> 복사
+                  <Icon name="file" size={13} /> {t('files:ui.copy')}
                 </button>
                 <button type="button" className="cw-btn-secondary cw-btn-destructive" onClick={requestBulkDelete}>
-                  <Icon name="trash" size={13} /> Delete
+                  <Icon name="trash" size={13} /> {t('files:ui.delete')}
                 </button>
-                <button type="button" className="cw-bulk-clear" onClick={clearSelection} aria-label="선택 해제">
+                <button type="button" className="cw-bulk-clear" onClick={clearSelection} aria-label={t('files:ui.clear_selection')}>
                   <Icon name="x" size={13} />
                 </button>
               </div>
@@ -679,11 +699,11 @@ function FilesPage() {
             <div className="cw-file-pane-tools">
               <label className="cw-files-search">
                 <Icon name="search" size={12} />
-                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="이 프로젝트에서 검색" />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('files:ui.search_placeholder')} />
               </label>
-              <div className="cw-view-toggle" role="tablist" aria-label="보기 방식">
-                <button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'is-active' : ''} onClick={() => setViewMode('list')} aria-label="리스트 보기"><Icon name="list" size={14} /></button>
-                <button type="button" role="tab" aria-selected={viewMode === 'grid'} className={viewMode === 'grid' ? 'is-active' : ''} onClick={() => setViewMode('grid')} aria-label="그리드 보기"><Icon name="grid" size={14} /></button>
+              <div className="cw-view-toggle" role="tablist" aria-label={t('files:ui.view_toggle_label')}>
+                <button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'is-active' : ''} onClick={() => setViewMode('list')} aria-label={t('files:ui.list_view')}><Icon name="list" size={14} /></button>
+                <button type="button" role="tab" aria-selected={viewMode === 'grid'} className={viewMode === 'grid' ? 'is-active' : ''} onClick={() => setViewMode('grid')} aria-label={t('files:ui.grid_view')}><Icon name="grid" size={14} /></button>
               </div>
             </div>
           </header>
@@ -716,11 +736,11 @@ function FilesPage() {
           >
             {allRows.length === 0 ? (
               <EmptyState
-                title={view.isSearch ? '검색 결과 없음' : '이 폴더는 비어 있습니다'}
+                title={view.isSearch ? t('files:empty.search_no_results') : t('files:empty.folder_empty_title')}
                 body={view.isSearch
-                  ? '다른 키워드로 시도하거나 검색을 지우세요.'
-                  : '파일을 드래그하거나 Upload를 눌러 첫 파일을 올려보세요.'}
-                action={view.isSearch ? undefined : 'Upload file'}
+                  ? t('files:empty.search_hint')
+                  : t('files:empty.folder_empty_hint')}
+                action={view.isSearch ? undefined : t('files:empty_action.upload')}
                 onAction={view.isSearch ? undefined : openUpload}
                 chip={<Icon name="folder" size={16} />}
               />
@@ -796,7 +816,7 @@ function FilesPage() {
         <ConfirmDialog
           title={deleteCopy.title}
           body={deleteCopy.body}
-          confirmLabel="삭제"
+          confirmLabel={t('files:delete.confirm')}
           destructive
           pending={bulkDeleteMutation.isPending}
           onConfirm={() => bulkDeleteMutation.mutate(pendingDelete)}
@@ -820,8 +840,8 @@ function FilesPage() {
 
       {pendingMove && (
         <FolderPickerDialog
-          title="이동"
-          confirmLabel="이동"
+          title={t('files:ops.move_title')}
+          confirmLabel={t('files:ops.move_confirm')}
           entries={entries}
           sources={pendingMove}
           pending={moveMutation.isPending}
@@ -835,8 +855,8 @@ function FilesPage() {
 
       {pendingCopy && (
         <FolderPickerDialog
-          title="복사"
-          confirmLabel="복사"
+          title={t('files:ops.copy_title')}
+          confirmLabel={t('files:ops.copy_confirm')}
           entries={entries}
           sources={pendingCopy}
           pending={copyMutation.isPending}
@@ -876,6 +896,7 @@ function TreeBranch({
   onDropOnFolder: (destination: string, e: React.DragEvent) => boolean;
   setDropTarget: (path: string | null) => void;
 }) {
+  const { t } = useTranslation('files');
   const isActive = currentPathKey === node.path;
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
@@ -914,7 +935,7 @@ function TreeBranch({
         <button
           type="button"
           className="cw-tree-chevron"
-          aria-label={isOpen ? '접기' : '펼치기'}
+          aria-label={isOpen ? t('ui.collapse') : t('ui.expand')}
           onClick={(e) => { e.stopPropagation(); onToggle(node.path); }}
           style={{ visibility: hasChildren ? 'visible' : 'hidden' }}
         >
@@ -966,10 +987,10 @@ interface RowProps {
 }
 
 
-function folderSubtitle(entry: BackendDirent, entries: BackendDirent[]): string {
+function folderSubtitle(entry: BackendDirent, entries: BackendDirent[], t: TFunction<'files'>): string {
   if (entry.kind !== 'dir') return '';
   const n = countDescendants(entries, entry.path.split('/').filter(Boolean));
-  return n === 0 ? '빈 폴더' : `${n}개 항목`;
+  return n === 0 ? t('ui.empty_folder') : t('ui.item_count', { count: n });
 }
 
 function RowMenu({
@@ -984,12 +1005,13 @@ function RowMenu({
   onCopy: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation('files');
   return (
     <div className="cw-file-menu-wrap">
       <button
         type="button"
         className="cw-file-more"
-        aria-label="더보기"
+        aria-label={t('ui.more')}
         aria-expanded={menuOpen}
         onClick={(e) => { e.stopPropagation(); onMenuToggle(menuOpen ? null : entry.path); }}
       >
@@ -1004,29 +1026,29 @@ function RowMenu({
           {entry.kind === 'file' && (
             <li role="menuitem">
               <button type="button" onClick={() => { onMenuToggle(null); onDownload(); }}>
-                <Icon name="download" size={13} /> Download
+                <Icon name="download" size={13} /> {t('ui.download')}
               </button>
             </li>
           )}
           <li role="menuitem">
             <button type="button" onClick={() => { onMenuToggle(null); onRename(); }}>
-              <Icon name="writing" size={13} /> Rename
+              <Icon name="writing" size={13} /> {t('ui.rename')}
             </button>
           </li>
           <li role="menuitem">
             <button type="button" onClick={() => { onMenuToggle(null); onMove(); }}>
-              <Icon name="chevron-right" size={13} /> 이동…
+              <Icon name="chevron-right" size={13} /> {t('ui.move_dropdown')}
             </button>
           </li>
           <li role="menuitem">
             <button type="button" onClick={() => { onMenuToggle(null); onCopy(); }}>
-              <Icon name="file" size={13} /> 복사…
+              <Icon name="file" size={13} /> {t('ui.copy_dropdown')}
             </button>
           </li>
           <li role="separator" aria-hidden="true" className="cw-file-dropdown-sep" />
           <li role="menuitem">
             <button type="button" className="cw-file-dropdown-destructive" onClick={() => { onMenuToggle(null); onDelete(); }}>
-              <Icon name="trash" size={13} /> Delete
+              <Icon name="trash" size={13} /> {t('ui.delete')}
             </button>
           </li>
         </ul>
@@ -1036,6 +1058,7 @@ function RowMenu({
 }
 
 function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart }: RowProps) {
+  const { t } = useTranslation('files');
   const isDir = entry.kind === 'dir';
   return (
     <div
@@ -1060,7 +1083,7 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
         <span className="meta">
           {showPath && `${entry.path.split('/').slice(0, -1).join('/') || '/'} · `}
           {isDir
-            ? folderSubtitle(entry, entries)
+            ? folderSubtitle(entry, entries, t)
             : `${entry.modified_at ? new Date(entry.modified_at).toLocaleDateString() : '—'} · ${formatBytes(entry.bytes ?? 0)}`}
         </span>
       </span>
@@ -1079,6 +1102,7 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
 }
 
 function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart }: RowProps) {
+  const { t } = useTranslation('files');
   const isDir = entry.kind === 'dir';
   return (
     <div
@@ -1103,7 +1127,7 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
         {showPath
           ? entry.path.split('/').slice(0, -1).join('/') || '/'
           : isDir
-            ? folderSubtitle(entry, entries)
+            ? folderSubtitle(entry, entries, t)
             : formatBytes(entry.bytes ?? 0)}
       </div>
       <RowMenu
@@ -1125,6 +1149,8 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
 function describeBulkDelete(
   pending: BackendDirent[] | null,
   entries: BackendDirent[],
+  t: TFunction<'files'>,
+  lang: string,
 ): { title: string; body: string } | null {
   if (!pending || pending.length === 0) return null;
   if (pending.length === 1) {
@@ -1133,26 +1159,30 @@ function describeBulkDelete(
     if (e.kind === 'dir') {
       const n = countDescendants(entries, e.path.split('/').filter(Boolean));
       return {
-        title: '폴더를 삭제하시겠어요?',
+        title: t('delete.folder_title'),
         body: n > 0
-          ? `${name} 폴더와 그 안의 파일 ${n}개가 함께 삭제됩니다. 되돌릴 수 없습니다.`
-          : `${name} 폴더를 삭제합니다. 되돌릴 수 없습니다.`,
+          ? t('delete.folder_body_with_children', { name, count: n })
+          : t('delete.folder_body_empty', { name }),
       };
     }
-    return { title: '파일을 삭제하시겠어요?', body: `${name} 을(를) 삭제하면 되돌릴 수 없습니다.` };
+    const decorated = localizedNoun(name, '을/를', lang);
+    return {
+      title: t('delete.file_title'),
+      body: t('delete.file_body', { name: decorated }),
+    };
   }
   const folders = pending.filter((e) => e.kind === 'dir');
   const files = pending.filter((e) => e.kind === 'file');
   const parts: string[] = [];
-  if (folders.length) parts.push(`폴더 ${folders.length}개`);
-  if (files.length) parts.push(`파일 ${files.length}개`);
-  let body = `${parts.join(', ')}를 삭제합니다.`;
+  if (folders.length) parts.push(t('delete.summary_folders', { count: folders.length }));
+  if (files.length) parts.push(t('delete.summary_files', { count: files.length }));
+  let body = t('delete.bulk_body_summary', { summary: parts.join(', ') });
   if (folders.length > 0) {
     const total = folders.reduce((sum, f) => sum + countDescendants(entries, f.path.split('/').filter(Boolean)), 0);
-    if (total > 0) body += ` 폴더 내부 파일 ${total}개도 함께 삭제됩니다.`;
+    if (total > 0) body += t('delete.bulk_body_includes', { count: total });
   }
-  body += ' 되돌릴 수 없습니다.';
-  return { title: `${pending.length}개 항목을 삭제하시겠어요?`, body };
+  body += t('delete.bulk_body_undo');
+  return { title: t('delete.bulk_title', { count: pending.length }), body };
 }
 
 function formatBytes(bytes: number): string {

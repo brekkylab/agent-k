@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from './Icon';
 import { shareMeta } from '../domain/metadata';
 import type { ShareMode, User } from '../domain/types';
@@ -47,14 +48,6 @@ export function IconPocket({ tone, icon, compact = false }: { tone: string; icon
   return <span className={`cw-pocket cw-nav-${tone} ${compact ? 'is-compact' : ''}`.trim()}><Icon name={icon} size={compact ? 12 : 13} /></span>;
 }
 
-export function compactTime(value: string): string {
-  if (value === '방금 전' || value === '오늘' || value === '어제' || value.endsWith('h') || value.endsWith('d')) return value;
-  if (value.includes('05-06')) return '5d';
-  if (value.includes('05-04')) return '1w';
-  if (value.includes('05-02')) return '11d';
-  return value.replace(/^2026-/, '').replace('-', '/');
-}
-
 export function byId<T extends { id: string }>(items: T[], id: string): T {
   const item = items.find((candidate) => candidate.id === id);
   if (!item) throw new Error(`Missing item: ${id}`);
@@ -65,9 +58,30 @@ export function InfoRow({ icon, title, meta, children }: { icon: IconName; title
 
 export function ActivityRow({ title, date, children }: { title: string; date: string; children: ReactNode }) { return <article className="cw-activity-row"><span><Icon name="recap" /></span><div><b>{title}</b><p>{children}</p></div><time>{date}</time></article>; }
 
-export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?: boolean }) { return <span className={`cw-share-pill ${shareMeta[mode].className}`}><Icon name={shareMeta[mode].icon} size={compact ? 11 : 12} />{compact ? shareMeta[mode].shortLabel : shareMeta[mode].label}</span>; }
+export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?: boolean }) {
+  const { t } = useTranslation('common');
+  const labelKey = compact ? `share.${mode}.short_label` : `share.${mode}.label`;
+  return (
+    <span className={`cw-share-pill ${shareMeta[mode].className}`}>
+      <Icon name={shareMeta[mode].icon} size={compact ? 11 : 12} />
+      {t(labelKey)}
+    </span>
+  );
+}
 
-export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mode: ShareMode) => void }) { return <label className={`cw-share-select ${shareMeta[mode].className}`}><Icon name={shareMeta[mode].icon} /><select value={mode} onChange={(event) => onChange(event.target.value as ShareMode)}>{(Object.keys(shareMeta) as ShareMode[]).map((key) => <option key={key} value={key}>{shareMeta[key].label}</option>)}</select></label>; }
+export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mode: ShareMode) => void }) {
+  const { t } = useTranslation('common');
+  return (
+    <label className={`cw-share-select ${shareMeta[mode].className}`}>
+      <Icon name={shareMeta[mode].icon} />
+      <select value={mode} onChange={(event) => onChange(event.target.value as ShareMode)}>
+        {(Object.keys(shareMeta) as ShareMode[]).map((key) => (
+          <option key={key} value={key}>{t(`share.${key}.label`)}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 /// Ghost icon-only button. Base style ships in `.cw-icon-button` (globals.css);
 /// pass `className` to layer modifier classes (e.g. `cw-rail-action` adds

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import i18n from '@/i18n';
 import type { User } from '@/domain/types';
 import { getToken, setToken } from '@/api/client';
 
@@ -11,7 +12,14 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>((set) => ({
   currentUser: null,
-  setCurrentUser: (user) => set({ currentUser: user }),
+  setCurrentUser: (user) => {
+    if (user && i18n.language !== user.preferredLanguage) {
+      i18n.changeLanguage(user.preferredLanguage).catch((err) => {
+        console.warn('[i18n] changeLanguage failed during auth hydrate', err);
+      });
+    }
+    set({ currentUser: user });
+  },
   isAuthenticated: () => Boolean(getToken()),
   reset: () => {
     setToken(null);

@@ -3,7 +3,7 @@ import { getMe } from './auth';
 
 // Mock the entire client module — ws.ts imports getToken and notifyUnauthorized from it.
 vi.mock('./client', () => ({
-  getBaseUrl: () => 'http://localhost:8080',
+  BASE_URL: 'http://localhost:8080',
   getToken: vi.fn(() => 'test-token'),
   notifyUnauthorized: vi.fn(),
   ApiError: class ApiError extends Error {
