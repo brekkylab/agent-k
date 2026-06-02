@@ -35,7 +35,7 @@ function ProjectsPage() {
       <div className="cw-page-head">
         <div>
           <h1>Your projects</h1>
-          <p>Each project is a workspace. Sessions, files, members, skills, schedule — all live inside.</p>
+          <p>Each project is a workspace. Sessions, files, members, automation — all live inside.</p>
         </div>
         <button className="cw-btn-primary" onClick={creator.open}>
           <Icon name="plus" /> New project

@@ -372,12 +372,6 @@ export function Sidebar() {
               <IconPocket tone="files" icon="folder-open" /> <span>Files</span>
             </button>
             <button
-              className={`cw-nav-row ${activeRoute === 'skills' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectSlug/skills', params: { projectSlug: activeProject.slug } })}
-            >
-              <IconPocket tone="skills" icon="zap" /> <span>Skills</span>
-            </button>
-            <button
               className={`cw-nav-row ${activeRoute === 'automation' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug: activeProject.slug } })}
             >
@@ -533,12 +527,11 @@ function useParamFromMatches(key: string): string | null {
   return null;
 }
 
-function useActiveRouteKey(): 'project' | 'files' | 'skills' | 'automation' | 'members' | 'settings' | 'session' | 'projects' {
+function useActiveRouteKey(): 'project' | 'files' | 'automation' | 'members' | 'settings' | 'session' | 'projects' {
   const state = useRouterState();
   const path = state.location.pathname;
   if (path.includes('/sessions/')) return 'session';
   if (path.endsWith('/files')) return 'files';
-  if (path.endsWith('/skills')) return 'skills';
   if (/\/automation(\/|$)/.test(path)) return 'automation';
   if (path.endsWith('/members')) return 'members';
   if (path.endsWith('/settings')) return 'settings';

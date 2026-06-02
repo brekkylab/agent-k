@@ -2,7 +2,6 @@ export type UserId = string;
 export type ProjectId = string;
 export type SessionId = string;
 export type ShareMode = 'private' | 'shared_readonly' | 'shared_chat';
-export type RouteKey = 'projects' | 'project' | 'session' | 'files' | 'skills' | 'schedule' | 'members' | 'settings' | 'auth' | 'demo';
 
 export interface User {
   id: UserId;
@@ -89,70 +88,6 @@ export interface Artifact {
   generatedFromFileIds: FileAsset['id'][];
   sections: Array<{ label: string; body: string; evidence?: FileAsset['id'][] }>;
   nextActions: string[];
-}
-
-export interface SkillPreview {
-  id: string;
-  projectId: ProjectId;
-  name: string;
-  description: string;
-  whenToUse: string;
-  body: string;
-  runnable: boolean;
-  createdBy: UserId;
-  createdAt: string;
-  updatedAt: string;
-  promptTemplate?: string;
-  toolBindings?: string[];
-  sourceSessionId?: SessionId;
-  sourceMessageRange?: { startTurn: number; endTurn: number };
-}
-
-export type ScheduleTrigger =
-  | { kind: 'skill'; skillId: SkillPreview['id'] }
-  | { kind: 'prompt'; prompt: string };
-
-export type ScheduleResultTarget =
-  | { kind: 'new_session_each_time' }
-  | { kind: 'append_to_session'; sessionId: SessionId }
-  | { kind: 'activity_feed_only' };
-
-export interface SchedulePreview {
-  id: string;
-  projectId: ProjectId;
-  cron: string;
-  friendlyTime: string;
-  timezone: string;
-  active: boolean;
-  createdBy: UserId;
-  createdAt: string;
-  trigger: ScheduleTrigger;
-  resultTarget: ScheduleResultTarget;
-  resultSessionShareMode?: ShareMode;
-  notifyUserIds: UserId[];
-  nextRunAt?: string;
-}
-
-export interface ActivityEntry {
-  id: string;
-  projectId: ProjectId;
-  scheduleId?: SchedulePreview['id'];
-  occurredAt: string;
-  title: string;
-  body: string;
-}
-
-export interface BootstrapPayload {
-  users: User[];
-  currentUserId: UserId;
-  projects: Project[];
-  sessions: Session[];
-  messages: Message[];
-  files: FileAsset[];
-  artifacts: Artifact[];
-  skills: SkillPreview[];
-  schedules: SchedulePreview[];
-  activityFeed: ActivityEntry[];
 }
 
 // ── Automation domain types ────────────────────────────────────────────────
