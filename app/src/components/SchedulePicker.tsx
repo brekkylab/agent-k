@@ -249,7 +249,9 @@ export function SchedulePicker({
             value={state.dayOfMonth}
             onChange={(e) => update({ dayOfMonth: Math.max(1, Math.min(31, parseInt(e.target.value, 10) || 1)) })}
           />
-          <span className="cw-sched-suffix">{t('sched.day_suffix')}</span>
+          {t('sched.day_suffix') !== 'sched.day_suffix' && (
+            <span className="cw-sched-suffix">{t('sched.day_suffix')}</span>
+          )}
         </div>
       )}
       {state.unit === 'month' && state.monthlyMode === 'weekday' && (
