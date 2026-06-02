@@ -792,9 +792,10 @@ pub async fn send_message(
         attachments: attachments.clone(),
         created_at: now,
     };
-    state.start_run(session_id, user_message.clone());
+    let run_id = state.start_run(session_id, user_message.clone());
     let _ = state.ws_tx.send(WsEvent::AgentRunStarted {
         session_id: session_id.to_string(),
+        run_id: run_id.to_string(),
         user_message,
     });
 
@@ -838,6 +839,7 @@ pub async fn send_message(
                     if let Some(seq) = state2.push_output(&session_id, output.clone()).await {
                         let _ = state2.ws_tx.send(WsEvent::AgentMessage {
                             session_id: session_id.to_string(),
+                            run_id: run_id.to_string(),
                             seq,
                             output,
                         });
@@ -865,7 +867,6 @@ pub async fn send_message(
         }
 
         let mut new_msgs = agent.get_history()[prev_len..].to_vec();
-        drop(agent); // Release OwnedMutexGuard
 
         // Strip the attachment note before persisting — clean content is stored in DB and the
         // note is reconstructed from the `attachments` column when history is replayed.
@@ -893,13 +894,24 @@ pub async fn send_message(
             }
         }
 
+        // [A] Persist before releasing the agent lock. On failure: roll back in-memory history,
+        // send AgentError (not AgentRunDone), and return — the DB remains consistent.
         if let Err(e) = state2
             .repository
             .append_messages(session_id, &to_persist)
             .await
         {
             tracing::error!(%session_id, "failed to persist messages: {e}");
+            agent.state.history.truncate(prev_len);
+            drop(agent);
+            state2.end_run(&session_id);
+            let _ = state2.ws_tx.send(WsEvent::AgentError {
+                session_id: session_id.to_string(),
+                message: "응답 저장에 실패했습니다. 다시 시도해주세요.".to_string(),
+            });
+            return;
         }
+        drop(agent); // Release OwnedMutexGuard only after successful persist
 
         // Auto-mark sender as having read
         let _ = state2
@@ -910,6 +922,7 @@ pub async fn send_message(
         state2.end_run(&session_id);
         let _ = state2.ws_tx.send(WsEvent::AgentRunDone {
             session_id: session_id.to_string(),
+            run_id: run_id.to_string(),
         });
     });
 

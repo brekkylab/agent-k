@@ -15,6 +15,8 @@ use uuid::Uuid;
 
 use crate::{events::WsEvent, state::AppState};
 
+const REVALIDATE_INTERVAL_SECS: u64 = 60;
+
 #[derive(Deserialize)]
 pub struct WsQueryParams {
     token: String,
@@ -66,10 +68,25 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
     let mut broadcast_rx = state.ws_tx.subscribe();
     let broadcast_tx = tx.clone();
     let broadcast_sessions = subscribed_sessions.clone();
+    let broadcast_user_id = user_id;
     let mut broadcast_task = tokio::spawn(async move {
         loop {
             match broadcast_rx.recv().await {
                 Ok(event) => {
+                    // [C] AccessRevoked: server-internal — drop subscription, never forward.
+                    if let WsEvent::AccessRevoked {
+                        session_id,
+                        user_id: revoked_uid,
+                    } = &event
+                    {
+                        if *revoked_uid == broadcast_user_id.to_string() {
+                            if let Ok(sid) = Uuid::parse_str(session_id) {
+                                broadcast_sessions.lock().await.remove(&sid);
+                            }
+                        }
+                        continue;
+                    }
+
                     // Determine whether this event should be forwarded and serialize it.
                     let forward = match &event {
                         // Forward title updates only to clients subscribed to that session.
@@ -82,15 +99,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                         WsEvent::AgentRunStarted { session_id, .. }
                         | WsEvent::AgentMessage { session_id, .. }
                         | WsEvent::AgentError { session_id, .. }
-                        | WsEvent::AgentRunDone { session_id } => match Uuid::parse_str(session_id)
-                        {
-                            Ok(sid) => broadcast_sessions.lock().await.contains(&sid),
-                            Err(_) => false,
-                        },
+                        | WsEvent::AgentRunDone { session_id, .. } => {
+                            match Uuid::parse_str(session_id) {
+                                Ok(sid) => broadcast_sessions.lock().await.contains(&sid),
+                                Err(_) => false,
+                            }
+                        }
                         WsEvent::AgentRunIdle { session_id } => match Uuid::parse_str(session_id) {
                             Ok(sid) => broadcast_sessions.lock().await.contains(&sid),
                             Err(_) => false,
                         },
+                        WsEvent::AccessRevoked { .. } => unreachable!("handled above"),
                     };
 
                     if !forward {
@@ -156,10 +175,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                     inbound_sessions.lock().await.insert(session_id);
 
                     // Replay any in-progress run so the spectator catches up.
-                    if let Some((user_message, outputs)) = inbound_state.snapshot(&session_id).await
+                    if let Some((run_id, user_message, outputs)) =
+                        inbound_state.snapshot(&session_id).await
                     {
                         let started = WsEvent::AgentRunStarted {
                             session_id: session_id.to_string(),
+                            run_id: run_id.to_string(),
                             user_message,
                         };
                         if let Ok(json) = serde_json::to_string(&started) {
@@ -171,6 +192,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                         for (seq, output) in outputs {
                             let event = WsEvent::AgentMessage {
                                 session_id: session_id.to_string(),
+                                run_id: run_id.to_string(),
                                 seq,
                                 output,
                             };
@@ -178,6 +200,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                                 if inbound_tx.send(Message::Text(json.into())).await.is_err() {
                                     break 'inbound;
                                 }
+                            }
+                        }
+
+                        // [B] The run may have ended while we were replaying (Done broadcast
+                        // arrived at Task B before this replay sent AgentRunStarted).
+                        // Send a final Done so the client always reaches a terminal state.
+                        if !inbound_state.has_active_run(&session_id) {
+                            let done = WsEvent::AgentRunDone {
+                                session_id: session_id.to_string(),
+                                run_id: run_id.to_string(),
+                            };
+                            if let Ok(json) = serde_json::to_string(&done) {
+                                let _ = inbound_tx.send(Message::Text(json.into())).await;
                             }
                         }
                     } else {
@@ -200,20 +235,47 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
         }
     });
 
-    // Drop the original tx now that all three tasks hold their own clones.
+    // [C] Task D: periodic re-validation — evict subscriptions whose authz has been revoked.
+    // This acts as a safety net for revocations not covered by AccessRevoked broadcasts
+    // (e.g. share_mode change). Runs every 60 seconds.
+    let revalidate_state = state.clone();
+    let revalidate_sessions = subscribed_sessions.clone();
+    let mut revalidate_task = tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_secs(REVALIDATE_INTERVAL_SECS));
+        interval.tick().await; // skip immediate first tick
+        loop {
+            interval.tick().await;
+            let session_ids: Vec<Uuid> = revalidate_sessions.lock().await.iter().cloned().collect();
+            for sid in session_ids {
+                let authz = revalidate_state
+                    .repository
+                    .get_session_with_authz(sid, user_id)
+                    .await;
+                if !matches!(authz, Ok(Some(_))) {
+                    revalidate_sessions.lock().await.remove(&sid);
+                    tracing::info!(%sid, %user_id, "re-validation: removed stale session subscription");
+                }
+            }
+        }
+    });
+
+    // Drop the original tx now that all tasks hold their own clones.
     // This allows the writer task to observe channel closure (rx.recv() → None)
     // and exit on its own when all senders are gone.
     drop(tx);
 
     // When any task finishes (socket closed, writer dead, broadcast closed),
-    // abort the remaining two so the connection tears down cleanly.
+    // abort the remaining ones so the connection tears down cleanly.
     tokio::select! {
         _ = &mut writer_task => {}
         _ = &mut broadcast_task => {}
         _ = &mut inbound_task => {}
+        _ = &mut revalidate_task => {}
     }
 
     writer_task.abort();
     broadcast_task.abort();
     inbound_task.abort();
+    revalidate_task.abort();
 }

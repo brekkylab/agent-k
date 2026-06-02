@@ -11,8 +11,10 @@ use std::{path::Path, sync::Arc};
 
 use agent_k::agents::GUEST_SHARED_DIR;
 use agent_k_backend::state::AppState;
-use ailoy::agent::{AgentBuilder, default_provider_mut};
-use ailoy::lang_model::LangModelProvider;
+use ailoy::{
+    agent::{AgentBuilder, default_provider_mut},
+    lang_model::LangModelProvider,
+};
 use axum::http::StatusCode;
 use common::{
     delete_session, extract_text, extract_text_from_slice, get_personal_project, login, make_repo,

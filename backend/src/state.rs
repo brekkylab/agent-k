@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub struct ActiveAgentRun {
+    pub run_id: Uuid,
     pub user_message: RunUserMessage,
     pub(crate) next_seq: u64,
     pub(crate) outputs: Vec<(u64, MessageOutput)>,
@@ -73,20 +74,24 @@ impl AppState {
         self.agents.get(id).map(|entry| entry.value().clone())
     }
 
-    pub fn start_run(&self, session_id: Uuid, user_message: RunUserMessage) {
-        use dashmap::mapref::entry::Entry;
-        match self.active_agent_runs.entry(session_id) {
-            Entry::Vacant(e) => {
-                e.insert(Arc::new(RwLock::new(ActiveAgentRun {
-                    user_message,
-                    next_seq: 0,
-                    outputs: vec![],
-                })));
-            }
-            Entry::Occupied(_) => {
-                tracing::warn!(%session_id, "start_run: session already has an active run; ignoring duplicate");
-            }
+    /// Registers an active run for `session_id` and returns the generated `run_id`.
+    ///
+    /// Caller holds the agent `OwnedMutexGuard`, proving no real active run exists.
+    /// If a stale entry is found it is force-replaced and a warning is logged.
+    pub fn start_run(&self, session_id: Uuid, user_message: RunUserMessage) -> Uuid {
+        let run_id = Uuid::new_v4();
+        let fresh = Arc::new(RwLock::new(ActiveAgentRun {
+            run_id,
+            user_message,
+            next_seq: 0,
+            outputs: vec![],
+        }));
+        if self.active_agent_runs.insert(session_id, fresh).is_some() {
+            // Caller holds the agent lock, so no real run is executing.
+            // A remaining entry is a leaked end_run — replace it and warn.
+            tracing::warn!(%session_id, "start_run: replaced stale active-run entry (previous run leaked end_run)");
         }
+        run_id
     }
 
     pub async fn push_output(&self, session_id: &Uuid, output: MessageOutput) -> Option<u64> {
@@ -103,12 +108,16 @@ impl AppState {
     pub async fn snapshot(
         &self,
         session_id: &Uuid,
-    ) -> Option<(RunUserMessage, Vec<(u64, MessageOutput)>)> {
+    ) -> Option<(Uuid, RunUserMessage, Vec<(u64, MessageOutput)>)> {
         let entry = self.active_agent_runs.get(session_id)?;
         let run_arc = entry.value().clone();
         drop(entry);
         let run = run_arc.read().await;
-        Some((run.user_message.clone(), run.outputs.clone()))
+        Some((run.run_id, run.user_message.clone(), run.outputs.clone()))
+    }
+
+    pub fn has_active_run(&self, session_id: &Uuid) -> bool {
+        self.active_agent_runs.contains_key(session_id)
     }
 
     /// Removes the active run record for `session_id`.

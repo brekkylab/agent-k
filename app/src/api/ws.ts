@@ -19,12 +19,14 @@ export interface RunUserMessage {
 export interface AgentRunStartedEvent {
   type: 'agent_run_started';
   session_id: string;
+  run_id: string;
   user_message: RunUserMessage;
 }
 
 export interface AgentMessageEvent {
   type: 'agent_message';
   session_id: string;
+  run_id: string;
   seq: number;
   output: MessageOutput;
 }
@@ -38,6 +40,7 @@ export interface AgentErrorEvent {
 export interface AgentRunDoneEvent {
   type: 'agent_run_done';
   session_id: string;
+  run_id: string;
 }
 
 export interface AgentRunIdleEvent {

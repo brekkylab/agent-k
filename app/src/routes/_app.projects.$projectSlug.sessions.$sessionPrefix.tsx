@@ -100,6 +100,11 @@ function SessionPage() {
   // Tracks the highest seq seen; when a new seq exceeds this, outputs are
   // already in insertion order and the sort can be skipped.
   const maxSeqRef = useRef<number>(-1);
+  // [B] run_id tracking for race-condition guards.
+  // currentRunIdRef: run_id of the active run being tracked on this client.
+  // doneRunIdsRef: set of run_ids we've already processed a Done for.
+  const currentRunIdRef = useRef<string | null>(null);
+  const doneRunIdsRef = useRef<Set<string>>(new Set());
 
   const [composerText, setComposerText] = useState('');
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
@@ -126,9 +131,11 @@ function SessionPage() {
     setStreaming(false);
     streamingRef.current = false;
     setPendingAttachments([]);
-    wsOutputsRef.current.clear();        // <-- 추가
+    wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
-    optimisticUserIdRef.current = null;  // <-- 추가
+    optimisticUserIdRef.current = null;
+    currentRunIdRef.current = null;
+    doneRunIdsRef.current.clear();
   }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
@@ -213,15 +220,11 @@ function SessionPage() {
       if (runStartedTimeoutRef.current) clearTimeout(runStartedTimeoutRef.current);
       runStartedTimeoutRef.current = setTimeout(() => {
         if (optimisticUserIdRef.current === optimisticUserId) {
-          // agent_run_started never arrived — the run may still be executing
-          // server-side. Reset streaming UI silently and refetch history once
-          // so any already-persisted messages surface without alarming the user.
+          // [G] agent_run_started never arrived — but the run may still be executing.
+          // Preserve the user bubble (liveMessages) so it doesn't disappear mid-run.
+          // Just stop the spinner and refetch once; if a late started arrives it resumes.
           streamingRef.current = false;
           setStreaming(false);
-          setLiveMessages([]);
-          wsOutputsRef.current.clear();
-          maxSeqRef.current = -1;
-          optimisticUserIdRef.current = null;
           runStartedTimeoutRef.current = null;
           void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
         }
@@ -279,14 +282,27 @@ function SessionPage() {
       if (!('session_id' in event) || event.session_id !== sessionId) return;
 
       if (event.type === 'agent_run_started') {
+        const { run_id } = event;
+
+        // [B] Sequence 1: if Done for this run already arrived, ignore the late Started.
+        if (doneRunIdsRef.current.has(run_id)) return;
+
         // agent_run_started 도착 — 복구 타임아웃 취소
         if (runStartedTimeoutRef.current) {
           clearTimeout(runStartedTimeoutRef.current);
           runStartedTimeoutRef.current = null;
         }
-        // outputs 맵 초기화 (새 run 시작)
-        wsOutputsRef.current.clear();
-        maxSeqRef.current = -1;
+
+        // [B] Sequence 2: only clear accumulated outputs when this is a genuinely new run.
+        // If currentRunId already equals run_id, pre-start messages are already in
+        // wsOutputsRef and should not be wiped (live arrived before replay started).
+        const isNewRun = currentRunIdRef.current !== run_id;
+        if (isNewRun) {
+          wsOutputsRef.current.clear();
+          maxSeqRef.current = -1;
+        }
+        currentRunIdRef.current = run_id;
+
         setStreaming(true);
         streamingRef.current = true;
 
@@ -333,7 +349,9 @@ function SessionPage() {
       }
 
       if (event.type === 'agent_message') {
-        const { seq, output } = event;
+        const { run_id, seq, output } = event;
+        // [B] Ignore messages from a different run (stale live broadcast vs. newer run).
+        if (currentRunIdRef.current !== null && run_id !== currentRunIdRef.current) return;
         wsOutputsRef.current.set(seq, output);
 
         // Fast path: if seq is strictly greater than maxSeqRef (the common
@@ -382,16 +400,34 @@ function SessionPage() {
       }
 
       if (event.type === 'agent_error') {
+        // [G] Clear the run_started timeout — error is a terminal state.
+        if (runStartedTimeoutRef.current) {
+          clearTimeout(runStartedTimeoutRef.current);
+          runStartedTimeoutRef.current = null;
+        }
         showToast(`에이전트 오류: ${event.message}`);
         setStreaming(false);
         streamingRef.current = false;
         setLiveMessages([]);
         wsOutputsRef.current.clear();
         maxSeqRef.current = -1;
+        currentRunIdRef.current = null;
         optimisticUserIdRef.current = null;
       }
 
       if (event.type === 'agent_run_done') {
+        const { run_id } = event;
+        // [B] Track completed run_ids to guard against late agent_run_started (Sequence 1).
+        doneRunIdsRef.current.add(run_id);
+        // Ignore Done events for runs we're not currently tracking.
+        if (currentRunIdRef.current !== null && run_id !== currentRunIdRef.current) return;
+
+        // [G] Clear the run_started timeout — done is a terminal state.
+        if (runStartedTimeoutRef.current) {
+          clearTimeout(runStartedTimeoutRef.current);
+          runStartedTimeoutRef.current = null;
+        }
+
         // 완료: history refetch → liveMessages clear → streaming stop → invalidate
         void (async () => {
           if (sessionId) {
@@ -400,6 +436,7 @@ function SessionPage() {
           setLiveMessages([]);
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
+          currentRunIdRef.current = null;
           optimisticUserIdRef.current = null;
           setStreaming(false);
           streamingRef.current = false;
