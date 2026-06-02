@@ -238,6 +238,17 @@ pub async fn update_project(
         None
     };
 
+    // Validate and serialize any recommendation-chain overrides. Keys must be
+    // known agent types and values catalogued model ids (provider availability
+    // not required); `None` leaves the stored chains unchanged.
+    let new_chains = match payload.recommended_chains {
+        None => None,
+        Some(chains) => {
+            crate::model::validate_chains(&chains).map_err(AppError::bad_request)?;
+            Some(serde_json::to_string(&chains).map_err(|e| AppError::internal(e.to_string()))?)
+        }
+    };
+
     let updated = state
         .repository
         .update_project(
@@ -245,6 +256,7 @@ pub async fn update_project(
             payload.name,
             payload.description.map(Some),
             new_slug,
+            new_chains,
         )
         .await
         .map_err(|e| match e {
