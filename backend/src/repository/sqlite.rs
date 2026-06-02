@@ -120,6 +120,7 @@ mod tests {
             role,
             display_name: None,
             is_active: true,
+            preferred_language: "en".to_string(),
         }
     }
 
@@ -344,6 +345,7 @@ mod tests {
                 display_name: Some("Carol".to_string()),
                 password_hash: None,
                 is_active: None,
+                preferred_language: None,
             },
         )
         .await

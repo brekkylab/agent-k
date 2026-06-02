@@ -237,7 +237,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-session-row.is-active { background: color-mix(in oklch, var(--cw-accent) 12%, var(--cw-bg-subtle)); color: var(--cw-fg-1); font-weight: 600; }
 .cw-session-row.is-unread { color: var(--cw-fg-1); font-weight: 600; }
 .auto-dot { margin-left: auto; color: var(--cw-accent); font-size: 10px; }
-.cw-sidebar-user { border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
+.cw-sidebar-user { border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
 .cw-sidebar-user-meta { min-width: 0; }
 .cw-sidebar-user-meta b { display: block; font-size: 13px; color: var(--cw-fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-sidebar-user-meta span { display: block; font-family: var(--cw-font-mono); font-size: 10px; color: var(--cw-fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2677,6 +2677,42 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   }
 }
 
+.cw-lang-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--cw-ink), transparent 92%);
+}
+
+.cw-lang-toggle__btn {
+  border: 0;
+  background: transparent;
+  color: var(--cw-ink-3);
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.cw-lang-toggle__btn:hover:not(:disabled):not(.is-active) {
+  color: var(--cw-ink);
+}
+
+.cw-lang-toggle__btn.is-active {
+  background: white;
+  color: var(--cw-ink);
+  box-shadow: 0 1px 2px color-mix(in oklch, var(--cw-ink), transparent 88%);
+}
+
+.cw-lang-toggle__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 /* ============================================================================
    Automations page — GH Actions-style runs view
    ============================================================================ */

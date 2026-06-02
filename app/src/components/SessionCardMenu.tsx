@@ -5,6 +5,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 
 interface SessionCardMenuProps {
@@ -16,6 +17,7 @@ interface SessionCardMenuProps {
 interface MenuRect { top: number; left: number; }
 
 export function SessionCardMenu({ onDuplicate, duplicateDisabled, onDelete }: SessionCardMenuProps) {
+  const { t } = useTranslation('session');
   const hasActions = Boolean(onDuplicate || onDelete);
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<MenuRect | null>(null);
@@ -68,7 +70,7 @@ export function SessionCardMenu({ onDuplicate, duplicateDisabled, onDelete }: Se
       <button
         ref={buttonRef}
         type="button"
-        aria-label="세션 옵션"
+        aria-label={t('menu.options')}
         aria-expanded={open}
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
         style={{
@@ -138,7 +140,7 @@ export function SessionCardMenu({ onDuplicate, duplicateDisabled, onDelete }: Se
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
             >
               <Icon name="sticky-notes" size={13} />
-              세션 복제
+              {t('menu.duplicate')}
             </button>
           )}
           {onDelete && (
@@ -164,7 +166,7 @@ export function SessionCardMenu({ onDuplicate, duplicateDisabled, onDelete }: Se
               onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
             >
               <Icon name="trash" size={13} />
-              세션 삭제
+              {t('menu.delete')}
             </button>
           )}
         </div>,

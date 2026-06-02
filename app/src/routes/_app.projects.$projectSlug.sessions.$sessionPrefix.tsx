@@ -4,6 +4,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { localizedNoun } from '@/i18n';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
 import { listMessages, sendMessage, deriveStreamState } from '@/api/messages';
 import { appWs } from '@/api/ws';
@@ -16,7 +18,6 @@ import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimi
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
-import { shareMeta } from '@/domain/metadata';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { AI_USER, SUBAGENT_PREFIX } from '@/api/transformers';
 import { formatMessageTime, formatMessageTimeFull } from '@/lib/formatMessageTime';
@@ -29,10 +30,13 @@ import { AttachmentChip } from '@/components/AttachmentChip';
 import { AttachmentPreview } from '@/components/AttachmentPreview';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { loadNs } from '@/i18n/loader';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
+  // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
+  loader: () => loadNs('session', 'dialogs'),
   component: SessionPage,
 });
 
@@ -42,6 +46,7 @@ function stripSubagentPrefix(name: string): string {
 
 function SessionPage() {
   const { projectSlug, sessionPrefix } = Route.useParams();
+  const { t } = useTranslation(['session', 'common']);
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -475,11 +480,11 @@ function SessionPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
-      showToast('공유 모드가 변경되었습니다');
+      showToast(t('toast.share_mode_changed'));
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'update failed';
-      showToast(`공유 변경 실패: ${msg}`);
+      showToast(t('toast.share_change_failed', { message: msg }));
     },
   });
 
@@ -497,9 +502,9 @@ function SessionPage() {
           <div>
             <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
             <p>
-              {creator && <>Started by <Avatar user={creator} small /> {creator.name} · </>}
-              {sess?.references.length ?? 0} files ·{' '}
-              <Avatar user={AI_USER} small /> Cowork Default
+              {creator && <>{t('chat.started_by')} <Avatar user={creator} small /> {creator.name} · </>}
+              {t('chat.files_count', { count: sess?.references.length ?? 0 })} ·{' '}
+              <Avatar user={AI_USER} small /> {t('chat.default_label')}
             </p>
           </div>
           <div className="cw-session-head-actions">
@@ -560,7 +565,7 @@ function SessionPage() {
             />
           ))}
           {streaming && (
-            <div className="cw-live"><span />AI 답변 중…</div>
+            <div className="cw-live"><span />{t('ui.ai_responding')}</div>
           )}
           <div ref={messagesEndRef} />
         </div>
@@ -583,20 +588,20 @@ function SessionPage() {
             <input
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
-              placeholder="Message Cowork and the team…"
+              placeholder={t('ui.composer_placeholder')}
               disabled={streaming}
             />
             <button
               type="button"
               className="cw-attach-btn"
-              aria-label="파일 첨부"
+              aria-label={t('ui.attach_file')}
               onClick={() => fileInputRef.current?.click()}
               disabled={streaming}
               style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
             >
               <Icon name="paperclip" size={13} />
             </button>
-            <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
+            <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
               <Icon name="send" size={12} />
             </button>
           </div>
@@ -607,29 +612,29 @@ function SessionPage() {
             style={{ display: 'none' }}
             onChange={(e) => void handleFileSelect(e)}
           />
-          <small>Enter to send · Reference files with @filename</small>
+          <small>{t('ui.composer_hint')}</small>
         </form>
       </section>
 
       <aside className="cw-session-side">
-        <h3>Members</h3>
+        <h3>{t('side.members')}</h3>
         {userList.map((user) => (
           <div className="cw-side-row" key={user.id}>
             <Avatar user={user} small />
             {user.name}
           </div>
         ))}
-        <h3>Referenced files</h3>
+        <h3>{t('side.referenced_files')}</h3>
         {sess?.references.length
           ? <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 11 }}>{sess.references.join(', ')}</p>
-          : <p>No pinned files yet.</p>}
-        <h3>Access</h3>
+          : <p>{t('side.no_pinned_files')}</p>}
+        <h3>{t('side.access')}</h3>
         {sess && <SharePill mode={sess.shareMode} />}
-        {sess && <p>{shareMeta[sess.shareMode].desc}</p>}
-        <h3>Session</h3>
+        {sess && <p>{t(`common:share.${sess.shareMode}.desc`)}</p>}
+        <h3>{t('side.session')}</h3>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
-          project · {project.data?.name ?? '...'}
+          {t('side.project_label', { name: project.data?.name ?? '...' })}
         </p>
         <ArtifactsPanel
           projectId={projectId}
@@ -668,6 +673,7 @@ function ArtifactChip({
   onCopyToShared: (paths: string[]) => void;
   onDeleted: (path: string) => void;
 }) {
+  const { t, i18n } = useTranslation('session');
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -692,10 +698,10 @@ function ArtifactChip({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
       onDeleted(path);
-      showToast('삭제되었습니다');
+      showToast(t('toast.artifact_deleted'));
       setConfirmDelete(false);
     },
-    onError: () => showToast('삭제 실패'),
+    onError: () => showToast(t('toast.artifact_delete_failed')),
   });
 
   return (
@@ -716,12 +722,12 @@ function ArtifactChip({
           >
             <li>
               <button type="button" onClick={() => downloadFile(scope, path)}>
-                <Icon name="download" size={13} /> 다운로드
+                <Icon name="download" size={13} /> {t('artifact.download')}
               </button>
             </li>
             <li>
               <button type="button" onClick={() => onCopyToShared([path])}>
-                <Icon name="file" size={13} /> 공유 디렉토리로 복사
+                <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
               </button>
             </li>
             <li>
@@ -730,7 +736,7 @@ function ArtifactChip({
                 className="cw-file-dropdown-destructive"
                 onClick={() => setConfirmDelete(true)}
               >
-                <Icon name="trash" size={13} /> 삭제
+                <Icon name="trash" size={13} /> {t('artifact.delete')}
               </button>
             </li>
           </ul>
@@ -738,9 +744,9 @@ function ArtifactChip({
       </div>
       {confirmDelete && (
         <ConfirmDialog
-          title="삭제 확인"
-          body={`"${filename}"을(를) 삭제하시겠습니까?`}
-          confirmLabel="삭제"
+          title={t('delete_artifact.title')}
+          body={t('delete_artifact.body', { name: `"${localizedNoun(filename, '을/를', i18n.language)}"` })}
+          confirmLabel={t('delete_artifact.confirm')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate()}
@@ -790,13 +796,14 @@ function MessageBubble({
   onCopyToShared?: (paths: string[]) => void;
   onArtifactDeleted?: (path: string) => void;
 }) {
+  const { t } = useTranslation('session');
   const isAi = message.sender.kind === 'agent';
   const isSelf = message.sender.kind === 'user' && message.sender.userId === currentUserId;
 
   const displayUser: User = isAi
     ? (users.find((u) => u.id === 'ai') ?? AI_USER)
     : (users.find((u) => u.id === (message.sender as { userId: string }).userId)
-      ?? { id: 'unknown', name: 'Member', roleLabel: 'Member', avatar: 'M', color: 'var(--cw-ink-3)' });
+      ?? { id: 'unknown', name: 'Member', roleLabel: 'Member', avatar: 'M', color: 'var(--cw-ink-3)', preferredLanguage: 'en' });
 
   const isStreaming = message.status === 'streaming';
   const timeLabel = formatMessageTime(message.createdAt);
@@ -809,7 +816,7 @@ function MessageBubble({
       {isAi ? <span className="cw-ai-chip">AI</span> : <Avatar user={displayUser} />}
       <div className="cw-message-body">
         <div className="cw-message-meta">
-          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · 나` : isAi ? (agentLabel ?? 'AI') : displayUser.name.split(' ')[0]}</b>
+          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · ${t('ui.self_label')}` : isAi ? (agentLabel ?? 'AI') : displayUser.name.split(' ')[0]}</b>
           <time dateTime={message.createdAt} data-tooltip={formatMessageTimeFull(message.createdAt)}>{timeLabel}</time>
         </div>
         <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
@@ -832,7 +839,7 @@ function MessageBubble({
             </div>
           ) : (
             <details key={tc.id} className="cw-toolcall">
-              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ' · 실행 중…' : ''}</summary>
+              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ` · ${t('ui.tool_running')}` : ''}</summary>
               {tc.arguments !== undefined && (
                 <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
                   ? tc.arguments

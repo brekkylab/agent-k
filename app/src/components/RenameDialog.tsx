@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import type { BackendDirent } from '@/api/backend-types';
 import { nameOf } from '@/domain/files';
@@ -16,21 +17,12 @@ function extOf(name: string): string {
   return dot > 0 ? name.slice(dot) : '';
 }
 
-function validate(raw: string, originalName: string, existing: string[]): string | null {
-  const name = raw.trim();
-  if (name.length === 0) return null;
-  if (/[/\\]/.test(name)) return '이름에 / 또는 \\ 문자는 사용할 수 없습니다.';
-  if (/^\.+$/.test(name)) return '. 만으로 이루어진 이름은 사용할 수 없습니다.';
-  if (name === originalName) return '현재 이름과 동일합니다.';
-  if (existing.some((e) => e.toLowerCase() === name.toLowerCase())) {
-    return `"${name}" 이름이 이미 있습니다.`;
-  }
-  return null;
-}
-
 type Step = 'input' | 'confirm-ext';
 
 export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose }: RenameDialogProps) {
+  const { t } = useTranslation('dialogs');
+  const { t: tCommon } = useTranslation('common');
+
   const originalName = nameOf(entry);
   const originalExt = entry.kind === 'file' ? extOf(originalName) : '';
 
@@ -40,6 +32,18 @@ export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose
 
   const trimmed = value.trim();
   const submitDisabled = trimmed.length === 0 || pending;
+
+  function validate(raw: string, existing: string[]): string | null {
+    const name = raw.trim();
+    if (name.length === 0) return null;
+    if (/[/\\]/.test(name)) return t('rename.validation.slash_blocked');
+    if (/^\.+$/.test(name)) return t('rename.validation.dots_only');
+    if (name === originalName) return t('rename.validation.same_as_current');
+    if (existing.some((e) => e.toLowerCase() === name.toLowerCase())) {
+      return t('rename.validation.duplicate', { name });
+    }
+    return null;
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -59,7 +63,7 @@ export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose
 
   function submit() {
     if (submitDisabled) return;
-    const err = validate(value, originalName, existingNames.filter((n) => n !== originalName));
+    const err = validate(value, existingNames.filter((n) => n !== originalName));
     if (err) { setSubmitError(err); return; }
 
     // Warn only for files with changed extension.
@@ -72,6 +76,8 @@ export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose
   }
 
   const downOnBackdropRef = useRef(false);
+  const fromExt = originalExt || t('rename.extension_unknown');
+  const toExt = extOf(trimmed) || t('rename.extension_unknown');
 
   return (
     <div
@@ -86,19 +92,19 @@ export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose
       }}
     >
       <form className="cw-dialog" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-        <button type="button" className="cw-close" onClick={onClose} disabled={pending} aria-label="close">
+        <button type="button" className="cw-close" onClick={onClose} disabled={pending} aria-label={tCommon('actions.close')}>
           <Icon name="x" />
         </button>
 
-        <h2 style={{ margin: '0 0 6px', fontSize: 18, letterSpacing: '-0.015em' }}>이름 변경</h2>
+        <h2 style={{ margin: '0 0 6px', fontSize: 18, letterSpacing: '-0.015em' }}>{t('rename.title')}</h2>
         <p style={{ color: 'var(--cw-ink-3)', margin: '0 0 16px', fontSize: 13, lineHeight: 1.55 }}>
-          현재 이름: <strong style={{ color: 'var(--cw-ink-2)' }}>{originalName}</strong>
+          {t('rename.current_name')}: <strong style={{ color: 'var(--cw-ink-2)' }}>{originalName}</strong>
         </p>
 
         {step === 'input' ? (
           <>
             <label className="cw-field">
-              <span>새 이름</span>
+              <span>{t('rename.new_name')}</span>
               <input
                 autoFocus
                 value={value}
@@ -114,9 +120,9 @@ export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
-              <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>취소</button>
+              <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>{tCommon('actions.cancel')}</button>
               <button type="submit" className="cw-btn-primary" disabled={submitDisabled}>
-                {pending ? '변경 중…' : '변경'}
+                {pending ? t('rename.submitting') : t('rename.submit')}
               </button>
             </div>
           </>
@@ -124,13 +130,11 @@ export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose
           <>
             <div className="cw-dialog-warn" role="alert" style={{ marginBottom: 16 }}>
               <Icon name="x" size={12} />
-              {' '}확장자가 <strong>{originalExt || '(없음)'}</strong>에서{' '}
-              <strong>{extOf(trimmed) || '(없음)'}</strong>으로 바뀝니다.
-              파일이 제대로 열리지 않을 수 있습니다.
+              {' '}{t('rename.extension_warning', { from: fromExt, to: toExt })}
             </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button type="button" className="cw-btn-secondary" onClick={() => setStep('input')} disabled={pending}>
-                돌아가기
+                {t('rename.back')}
               </button>
               <button
                 type="button"
@@ -138,7 +142,7 @@ export function RenameDialog({ entry, existingNames, pending, onConfirm, onClose
                 disabled={pending}
                 onClick={() => onConfirm(trimmed)}
               >
-                {pending ? '변경 중…' : '확장자 포함하여 변경'}
+                {pending ? t('rename.submitting') : t('rename.force_submit')}
               </button>
             </div>
           </>

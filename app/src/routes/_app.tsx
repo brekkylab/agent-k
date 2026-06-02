@@ -3,6 +3,7 @@ import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, getToken } from '@/api/client';
 import { getMe } from '@/api/auth';
+import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 import { useLayoutStore } from '@/stores/layout';
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -27,6 +28,12 @@ export const Route = createFileRoute('/_app')({
       // Network error or 5xx: fall through and let the page handle it.
     }
   },
+  // Sidebar mounts SessionCardMenu (`session`) and triggers NewProjectDialog
+  // (`dialogs`) in addition to its own `common`/`project` ns. These must all
+  // be guaranteed at the shell level — any route that doesn't independently
+  // load them would otherwise unmount the entire shell when the user opens
+  // a sidebar menu, re-introducing the blank-flash.
+  loader: () => loadNs('common', 'project', 'session', 'dialogs'),
   component: AppShell,
 });
 

@@ -439,6 +439,7 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
             role: auth::Role::Admin,
             display_name: None,
             is_active: true,
+            preferred_language: "en".to_string(),
         })
         .await
         .unwrap();
@@ -451,6 +452,7 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
         role: auth::Role::Admin,
         display_name: None,
         is_active: true,
+        preferred_language: "en".to_string(),
     })
     .await
     .unwrap();
@@ -464,6 +466,7 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
             password_hash: None,
             role: None,
             is_active: Some(false), // make admin1 inactive
+            preferred_language: None,
         },
     )
     .await
@@ -526,6 +529,7 @@ async fn count_admins_starts_at_zero_and_increments() {
         role: auth::Role::Admin,
         display_name: None,
         is_active: true,
+        preferred_language: "en".to_string(),
     })
     .await
     .unwrap();

@@ -9,6 +9,7 @@ export interface BackendUser {
   display_name?: string | null;
   role?: 'admin' | 'user' | string;
   is_active?: boolean;
+  preferred_language?: string;
   created_at?: string;
   updated_at?: string;
 }

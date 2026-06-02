@@ -60,7 +60,7 @@ fn session_dirs(
     (root.join("inputs"), shared, root.join("artifacts"))
 }
 
-pub(crate) async fn build_session_agent(
+pub async fn build_session_agent(
     state: &Arc<AppState>,
     project_id: Uuid,
     session_id: Uuid,
