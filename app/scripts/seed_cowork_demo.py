@@ -220,9 +220,12 @@ def seed_rows(db: Path) -> None:
 
     # last_message_at and last_message_snippet are derived from the last message per session.
     # Offsets match the message timestamps below so the values are consistent.
+    # agent_type/model: explicit pins for a couple of demo sessions; the rest
+    # stay NULL (= recommended, resolved at first build).
     sessions = [
         (
             SESSION_Q2, PROJECT_KLIENT, OLIVE_ID, "shared_chat",
+            "coworker", "anthropic/claude-sonnet-4-6",
             "Q2 시장 분석 시작점",
             ts(31),
             "수요 측 갱신 압박부터 보고, 경쟁사 스캔과 교차 검증하면 좋을 것 같아요. SMB 갱신 사이클이 18% 단축됐다는 신호가 가장 강합니다.",
@@ -230,6 +233,7 @@ def seed_rows(db: Path) -> None:
         ),
         (
             SESSION_DECISION, PROJECT_KLIENT, OLIVE_ID, "shared_chat",
+            "deep-research", "google/gemini-3.5-flash",
             "보드 메모 결정 누적",
             ts(33),
             "현재 결정 스레드는 SMB retention을 최우선으로 두는 방향입니다. 메모 v3에 'market evidence for SMB retention priority' 슬롯을 채울 준비가 됐어요.",
@@ -237,6 +241,7 @@ def seed_rows(db: Path) -> None:
         ),
         (
             SESSION_ATTACHED, PROJECT_KLIENT, OLIVE_ID, "shared_chat",
+            None, None,
             "설문 데이터 분석 요청",
             ts(36),
             "survey_raw.csv 기반으로 이탈 위험 응답자의 공통 pain point를 추출하면 'pricing unclear'와 'missing integrations'가 주요 원인입니다.",
@@ -244,6 +249,7 @@ def seed_rows(db: Path) -> None:
         ),
         (
             SESSION_GTM, PROJECT_GTM, MILO_ID, "shared_chat",
+            None, None,
             "H2 ICP 메시지 순서 검토",
             ts(37),
             "H2 launch sequence에서 ICP별 메시지 순서를 다시 보고 싶어.",
@@ -251,6 +257,7 @@ def seed_rows(db: Path) -> None:
         ),
         (
             SESSION_REPORT, PROJECT_GTM, MILO_ID, "shared_chat",
+            None, None,
             "GTM 요약 보고서 생성",
             ts(40),
             "GTM_summary_report.md와 ICP_comparison_table.csv를 Artifacts에 저장했습니다. 보고서에는 ICP 우선순위와 런치 타임라인이 포함되어 있습니다.",
@@ -258,7 +265,7 @@ def seed_rows(db: Path) -> None:
         ),
     ]
     conn.executemany(
-        "INSERT INTO sessions (id, project_id, creator_id, share_mode, title, last_message_at, last_message_snippet, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO sessions (id, project_id, creator_id, share_mode, agent_type, model, title, last_message_at, last_message_snippet, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         sessions,
     )
 
