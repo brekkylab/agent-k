@@ -21,3 +21,11 @@ ALTER TABLE sessions ADD COLUMN model TEXT;
 -- catalog model ids regardless of provider availability; resolution still walks
 -- the chain and picks the first available (then the chain's last entry).
 ALTER TABLE projects ADD COLUMN recommended_chains TEXT;
+
+-- Per-automation agent surface + model selection, copied onto the session a
+-- triggered run creates (where build_session_agent resolves them just like a
+-- user session). Both nullable and additive:
+--   agent_type NULL -> defaults to 'coworker' at agent-build time.
+--   model      NULL -> "recommended" (resolved via the project's chain).
+ALTER TABLE automations ADD COLUMN agent_type TEXT;
+ALTER TABLE automations ADD COLUMN model TEXT;

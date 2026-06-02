@@ -420,6 +420,8 @@ mod tests {
                     "demo".to_string(),
                     Some("desc".to_string()),
                     vec!["first prompt".to_string(), "second prompt".to_string()],
+                    None,
+                    None,
                     user_id,
                 )
                 .await
@@ -437,6 +439,8 @@ mod tests {
                     Some("renamed".to_string()),
                     None,
                     Some(vec!["only one".to_string()]),
+                    None,
+                    None,
                     None,
                 )
                 .await
@@ -457,7 +461,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
 
@@ -500,7 +504,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
 
@@ -550,7 +554,7 @@ mod tests {
             let repo = Arc::new(make_repo("sqlite::memory:").await);
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -596,7 +600,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -622,7 +626,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -642,7 +646,7 @@ mod tests {
                 .unwrap();
 
             // Disable: queued row must flip to cancelled + emit cancelled event.
-            repo.update_automation(auto.id, None, None, None, Some(false))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(false))
                 .await
                 .unwrap();
             let after_disable = repo.get_run(run.id).await.unwrap().unwrap();
@@ -658,7 +662,7 @@ mod tests {
             );
 
             // Re-enable must NOT bring it back — the row stays terminal.
-            repo.update_automation(auto.id, None, None, None, Some(true))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(true))
                 .await
                 .unwrap();
             let after_reenable = repo.get_run(run.id).await.unwrap().unwrap();
@@ -676,10 +680,10 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
-            repo.update_automation(auto.id, None, None, None, Some(false))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(false))
                 .await
                 .unwrap();
             let err = repo
@@ -703,7 +707,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let trigger = repo
@@ -718,7 +722,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            repo.update_automation(auto.id, None, None, None, Some(false))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(false))
                 .await
                 .unwrap();
             let err = repo
@@ -741,7 +745,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -752,7 +756,7 @@ mod tests {
                 .create_run(auto.id, None, session.id, Utc::now(), None)
                 .await
                 .unwrap();
-            repo.update_automation(auto.id, None, None, None, Some(false))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(false))
                 .await
                 .unwrap();
             let outcome = repo
@@ -775,7 +779,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -811,7 +815,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -862,7 +866,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -904,7 +908,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let stale = Utc::now() - ChronoDuration::hours(24);
@@ -922,11 +926,11 @@ mod tests {
                 .unwrap();
 
             // Disable + re-enable; cron next_fire_at should move forward.
-            repo.update_automation(auto.id, None, None, None, Some(false))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(false))
                 .await
                 .unwrap();
             let before = Utc::now();
-            repo.update_automation(auto.id, None, None, None, Some(true))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(true))
                 .await
                 .unwrap();
             let refreshed = repo.get_trigger(trigger.id).await.unwrap().unwrap();
@@ -946,7 +950,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -971,7 +975,7 @@ mod tests {
                 .unwrap();
             // Disable while the run is running. Existing logic only cancels
             // QUEUED rows on disable, so the running row remains running.
-            repo.update_automation(auto.id, None, None, None, Some(false))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(false))
                 .await
                 .unwrap();
             // Lease expires; reaper must cancel (not requeue) because the
@@ -999,7 +1003,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let now = Utc::now();
@@ -1016,7 +1020,7 @@ mod tests {
             .await
             .unwrap();
             // Trigger is enabled but its automation is disabled → excluded.
-            repo.update_automation(auto.id, None, None, None, Some(false))
+            repo.update_automation(auto.id, None, None, None, None, None, Some(false))
                 .await
                 .unwrap();
             assert!(repo.list_due_cron_triggers(now).await.unwrap().is_empty());
@@ -1027,7 +1031,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -1096,7 +1100,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -1137,7 +1141,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let spec = TriggerSpec::Webhook {};
@@ -1232,7 +1236,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -1281,7 +1285,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -1352,7 +1356,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
 
@@ -1406,7 +1410,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let session = repo
@@ -1449,7 +1453,7 @@ mod tests {
             let repo = make_repo("sqlite::memory:").await;
             let (project_id, user_id) = fixtures(&repo).await;
             let auto = repo
-                .create_automation(project_id, "a".into(), None, vec!["p".into()], user_id)
+                .create_automation(project_id, "a".into(), None, vec!["p".into()], None, None, user_id)
                 .await
                 .unwrap();
             let original = TriggerSpec::Cron {
