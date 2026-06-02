@@ -11,6 +11,7 @@ import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
+import { getModelCatalog, modelLabel } from '@/api/models';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { shareMeta } from '@/domain/metadata';
@@ -48,6 +49,12 @@ function SessionPage() {
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const session = useQuery({ queryKey: ['session', sessionPrefix], queryFn: () => getSession(sessionPrefix) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
+  // Catalog (with this project's chains) to label the session's effective model.
+  const catalog = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
 
   // The project/session queries key off the URL slug + prefix, but everything
   // session-scoped (messages, dirent scopes, attachments, artifacts) keys off the
@@ -74,7 +81,13 @@ function SessionPage() {
   } else if (location.state.initialAgentId && agentPreview.agentId !== location.state.initialAgentId) {
     setAgentPreview({ sessionPrefix, agentId: location.state.initialAgentId });
   }
-  const activeAgent = agentPreview.agentId ? getAgentSurface(agentPreview.agentId) : undefined;
+  // Prefer the session's stored agent_type (authoritative); fall back to the
+  // router-state preview only before the session has loaded (smooth from home).
+  const activeAgent = session.data?.agentType
+    ? getAgentSurface(session.data.agentType)
+    : agentPreview.agentId
+      ? getAgentSurface(agentPreview.agentId)
+      : undefined;
 
   // Auto-send initial message refs — useRef instead of module-level Set so each
   // component instance tracks its own state (StrictMode-safe, no cross-session leak).
@@ -289,6 +302,12 @@ function SessionPage() {
   const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
   const sessionForkable = !streaming && allMessages.length > 0;
 
+  // `sessions.model` is authoritative: an explicit pin, or — for a recommended
+  // session — the model materialized at first build (see build_session_agent).
+  // So just label it; catalog only maps the id → display name. (NULL only in the
+  // brief pre-build window of an unsent session → falls back to the default text.)
+  const sessionModelLabel = sess?.model ? modelLabel(catalog.data, sess.model) : undefined;
+
   return (
     <div className="cw-session-layout cw-page-enter">
       <section className="cw-chat-surface">
@@ -298,7 +317,8 @@ function SessionPage() {
             <p>
               {creator && <>Started by <Avatar user={creator} small /> {creator.name} · </>}
               {sess?.references.length ?? 0} files ·{' '}
-              <Avatar user={AI_USER} small /> Cowork Default
+              <Avatar user={AI_USER} small />{' '}
+              <span title="이 세션에서 사용 중인 모델">{sessionModelLabel ?? 'Cowork Default'}</span>
             </p>
           </div>
           <div className="cw-session-head-actions">
@@ -306,11 +326,10 @@ function SessionPage() {
               <span
                 className="cw-session-agent-chip"
                 data-agent={activeAgent.id}
-                title="이 세션에서 선택된 에이전트 (미리보기)"
+                title="이 세션의 에이전트"
               >
                 <Icon name={activeAgent.icon} size={13} />
                 <span>{activeAgent.label}</span>
-                <span className="cw-preview-pill cw-preview-pill--micro">Preview</span>
               </span>
             )}
             {sess && (
