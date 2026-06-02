@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { getProject, listMembers } from '@/api/projects';
 import { createSession } from '@/api/sessions';
 import { AvatarStack } from '@/components/uiPrimitives';
@@ -14,13 +15,17 @@ import { DEFAULT_AGENT_ID, getAgentSurface, type AgentId } from '@/domain/agentS
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
+import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/')({
+  // Home composer + toasts live on `project`; `common` comes from parents.
+  loader: () => loadNs('project'),
   component: ProjectHome,
 });
 
 function ProjectHome() {
   const { projectSlug } = Route.useParams();
+  const { t } = useTranslation('project');
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -67,7 +72,7 @@ function ProjectHome() {
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
-      showToast(`세션 생성 실패: ${msg}`);
+      showToast(t('toast.session_create_failed', { message: msg }));
     },
   });
 
@@ -100,7 +105,7 @@ function ProjectHome() {
         >
           <div className="cw-agent-tabs-area">
             <ComposerAgentPicker value={selectedAgentId} onChange={setSelectedAgentId} />
-            <span className="cw-preview-pill" aria-label="미리보기: 아직 서버에 전달되지 않습니다">Preview</span>
+            <span className="cw-preview-pill" aria-label={t('home.preview_pill_aria')}>Preview</span>
           </div>
           <ProjectHomeComposer
             value={composerText}
@@ -110,7 +115,7 @@ function ProjectHome() {
             pending={startSessionMutation.isPending}
             placeholder={activeAgent.placeholder}
             focusSignal={focusNonce}
-            onAttachClick={() => showToast('파일 추가 기능은 곧 추가됩니다.')}
+            onAttachClick={() => showToast(t('home.attach_coming_soon'))}
             modelPicker={<ComposerModelPicker value={selectedModelId} onChange={setSelectedModelId} />}
           />
         </div>
@@ -118,7 +123,7 @@ function ProjectHome() {
         <div
           key={selectedAgentId}
           className="cw-suggested-prompts"
-          aria-label="추천 프롬프트 (미리보기)"
+          aria-label={t('home.suggested_prompts_aria')}
         >
           {activeAgent.prompts.map((prompt) => (
             <button

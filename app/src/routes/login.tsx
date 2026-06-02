@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { getMe, login, signupAndLogin } from '@/api/auth';
-import { getToken, ApiError } from '@/api/client';
+import { getToken } from '@/api/client';
+import { apiErrorToMessage } from '@/api/error-messages';
+import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 import { WelcomeCarousel } from '@/components/WelcomeCarousel';
 import { Icon } from '@/components/Icon';
@@ -13,6 +17,9 @@ export const Route = createFileRoute('/login')({
   beforeLoad: () => {
     if (getToken()) throw redirect({ to: '/projects' });
   },
+  // Login page consumes `auth` + `errors` only. `common` is intentionally
+  // skipped here so the auth screen stays as light as possible.
+  loader: () => loadNs('auth', 'errors'),
   component: LoginPage,
 });
 
@@ -28,7 +35,11 @@ function LoginPage() {
 }
 
 function AuthPanel() {
+  // Both ns are guaranteed by the route loader; `useTranslation` is purely
+  // for the `t` binding here.
+  const { t } = useTranslation(['auth', 'errors']);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
   const [mode, setMode] = useState<Mode>('login');
   const [username, setUsername] = useState('');
@@ -61,11 +72,19 @@ function AuthPanel() {
         await signupAndLogin({ username, password, displayName });
       }
       const me = await getMe();
+      // Prime the ['me'] cache so /_app's useQuery hits cache instead of
+      // refetching the identical payload right after this navigation.
+      queryClient.setQueryData(['me'], me);
       setCurrentUser(me);
       const redirectTo = consumeRedirectAfterLogin();
       navigate({ to: redirectTo ?? '/projects' });
     } catch (err) {
-      setError(messageOf(err, mode));
+      const scope = mode === 'signup' ? 'auth_signup' : 'auth_login';
+      const fallbackKey = mode === 'signup'
+        ? 'errors.fallback_signup'
+        : 'errors.fallback_login';
+      const { key, params, fallback } = apiErrorToMessage(err, scope);
+      setError(t(key, { ...params, defaultValue: fallback ?? t(fallbackKey) }));
     } finally {
       setSubmitting(false);
     }
@@ -76,26 +95,25 @@ function AuthPanel() {
   return (
     <main className="cw-welcome-panel">
       <div className="cw-welcome-card">
-        {/* 옵션 A: session-expired toast를 카드 안 상단에 inline으로. brand 위에
-           먼저 보여서 "왜 다시 로그인해야 하는지" 컨텍스트가 폼보다 먼저 닿는다. */}
+        {/* session-expired toast lives inline at the top of the card —
+            "왜 다시 로그인해야 하는지" context lands before the form does. */}
         {expiredReason && <SessionExpiredBanner reason={expiredReason} onDismiss={dismissExpiredReason} />}
         <span className="cw-welcome-brand">Cowork for Teams</span>
-        <h2 className="cw-welcome-card-title">{isSignup ? '계정 만들기' : '오늘은 무엇을 함께 만들까요?'}</h2>
+        <h2 className="cw-welcome-card-title">
+          {isSignup ? t('welcome.title_signup') : t('welcome.title_login')}
+        </h2>
         <p className="cw-welcome-card-sub">
-
-          {isSignup
-            ? '가입하면 개인 프로젝트가 자동으로 생성됩니다.'
-            : '팀과 에이전트가 기다리고 있어요.'}
+          {isSignup ? t('welcome.subtitle_signup') : t('welcome.subtitle_login')}
         </p>
 
-        <div role="group" aria-label="로그인 또는 회원가입 선택" className="cw-welcome-tabs">
-          <ModeTab active={!isSignup} onClick={() => switchMode('login')}>로그인</ModeTab>
-          <ModeTab active={isSignup} onClick={() => switchMode('signup')}>회원가입</ModeTab>
+        <div role="group" aria-label={t('welcome.tabs_aria')} className="cw-welcome-tabs">
+          <ModeTab active={!isSignup} onClick={() => switchMode('login')}>{t('modes.login')}</ModeTab>
+          <ModeTab active={isSignup} onClick={() => switchMode('signup')}>{t('modes.signup')}</ModeTab>
         </div>
 
         <form onSubmit={onSubmit}>
           <label>
-            Username
+            {t('fields.username')}
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -106,16 +124,16 @@ function AuthPanel() {
           </label>
           {isSignup && (
             <label>
-              Display name <span className="cw-welcome-optional">(선택)</span>
+              {t('fields.display_name')} <span className="cw-welcome-optional">{t('fields.display_name_optional')}</span>
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="팀원들이 보게 될 이름"
+                placeholder={t('fields.display_name_placeholder')}
               />
             </label>
           )}
           <label>
-            Password
+            {t('fields.password')}
             <div className="cw-input-with-toggle">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -127,7 +145,7 @@ function AuthPanel() {
               <button
                 type="button"
                 className="cw-input-toggle"
-                aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 보이기'}
+                aria-label={showPassword ? t('welcome.password_hide') : t('welcome.password_show')}
                 aria-pressed={showPassword}
                 onClick={() => setShowPassword((v) => !v)}
                 tabIndex={-1}
@@ -139,16 +157,16 @@ function AuthPanel() {
           {error && <div className="cw-form-error">{error}</div>}
           <button type="submit" className="cw-btn-primary wide" disabled={submitting}>
             {submitting
-              ? (isSignup ? '가입 중…' : '로그인 중…')
-              : (isSignup ? '회원가입 후 시작' : '로그인')}
+              ? (isSignup ? t('submit.signup_busy') : t('submit.login_busy'))
+              : (isSignup ? t('submit.signup') : t('submit.login'))}
           </button>
         </form>
 
         <p className="cw-welcome-switch">
           {isSignup ? (
-            <>이미 계정이 있다면 <ModeLink onClick={() => switchMode('login')}>로그인</ModeLink>으로 돌아가세요.</>
+            <>{t('switch.to_login_prefix')} <ModeLink onClick={() => switchMode('login')}>{t('switch.to_login_link')}</ModeLink>{t('switch.to_login_suffix')}</>
           ) : (
-            <>처음이세요? <ModeLink onClick={() => switchMode('signup')}>회원가입</ModeLink>으로 시작할 수 있어요.</>
+            <>{t('switch.to_signup_prefix')} <ModeLink onClick={() => switchMode('signup')}>{t('switch.to_signup_link')}</ModeLink>{t('switch.to_signup_suffix')}</>
           )}
         </p>
       </div>
@@ -179,14 +197,16 @@ function ModeLink({ onClick, children }: { onClick: () => void; children: React.
 }
 
 function SessionExpiredBanner({ reason, onDismiss }: { reason: LogoutReason; onDismiss: () => void }) {
+  const { t } = useTranslation('auth');
+
   useEffect(() => {
-    const t = setTimeout(onDismiss, 5000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(onDismiss, 5000);
+    return () => clearTimeout(timer);
   }, [onDismiss]);
 
   const message = reason === 'expired'
-    ? '세션이 만료되어 다시 로그인이 필요합니다.'
-    : '인증 정보가 유효하지 않습니다. 다시 로그인해 주세요.';
+    ? t('session_expired.expired')
+    : t('session_expired.invalid');
 
   return (
     <div className="cw-welcome-notice" role="status" aria-live="polite">
@@ -194,27 +214,11 @@ function SessionExpiredBanner({ reason, onDismiss }: { reason: LogoutReason; onD
       <button
         type="button"
         className="cw-welcome-notice-close"
-        aria-label="닫기"
+        aria-label={t('session_expired.dismiss')}
         onClick={onDismiss}
       >
         <Icon name="x" size={14} />
       </button>
     </div>
   );
-}
-
-function messageOf(err: unknown, mode: Mode): string {
-  if (err instanceof ApiError) {
-    if (mode === 'signup') {
-      if (err.status === 409) return '이미 사용 중인 username입니다. 다른 username을 시도해 주세요.';
-      if (err.status === 422 || err.status === 400) return `입력 검증 실패: ${err.message}`;
-    }
-    if (mode === 'login') {
-      if (err.status === 401) return '아이디 또는 비밀번호가 올바르지 않습니다.';
-      if (err.status === 403) return '비활성화된 계정입니다.';
-    }
-    return `${err.status} — ${err.message}`;
-  }
-  if (err instanceof Error) return err.message;
-  return mode === 'signup' ? 'Signup failed' : 'Login failed';
 }

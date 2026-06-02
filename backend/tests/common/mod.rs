@@ -97,6 +97,7 @@ pub async fn make_admin_app() -> (axum::Router, String, uuid::Uuid) {
         role: auth::Role::Admin,
         display_name: None,
         is_active: true,
+        preferred_language: "en".to_string(),
     })
     .await
     .unwrap();

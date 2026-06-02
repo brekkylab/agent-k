@@ -7,6 +7,7 @@ import type {
   FileAsset,
   Message,
   MessageSender,
+  PreferredLanguage,
   Project,
   Run,
   RunEvent,
@@ -33,7 +34,13 @@ import type {
   SessionMessageItem,
 } from './backend-types';
 
+import { FALLBACK_TITLE } from '@/lib/sessionConstants';
+
 export const SUBAGENT_PREFIX = 'subagent_';
+
+function normalizeLanguage(value: string | undefined): PreferredLanguage {
+  return value === 'ko' ? 'ko' : 'en';
+}
 
 const USER_COLOR_TOKENS = [
   'var(--cw-cozy-clay)',
@@ -68,6 +75,7 @@ export function toUser(backend: BackendUser): User {
     roleLabel: backend.role === 'admin' ? 'Admin' : 'Member',
     avatar: initials(name),
     color: deterministicColor(backend.id),
+    preferredLanguage: normalizeLanguage(backend.preferred_language),
   };
 }
 
@@ -80,6 +88,7 @@ export function toMemberUser(member: BackendMember): User {
     roleLabel: 'Member',
     avatar: initials(name),
     color: deterministicColor(member.user_id),
+    preferredLanguage: 'en',
   };
 }
 
@@ -89,6 +98,7 @@ export const AI_USER: User = {
   roleLabel: 'Agent',
   avatar: 'CW',
   color: 'var(--cw-ink)',
+  preferredLanguage: 'en',
 };
 
 export function toProject(backend: BackendProject, memberIds: string[] = []): Project {
@@ -106,7 +116,7 @@ export function toSession(backend: BackendSession): Session {
   return {
     id: backend.id,
     projectId: backend.project_id,
-    title: backend.title ?? '새 대화',
+    title: backend.title ?? FALLBACK_TITLE,
     creatorId: backend.creator_id,
     shareMode: backend.share_mode,
     origin: backend.origin,

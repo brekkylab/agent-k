@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { addMember } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { ApiError } from '@/api/client';
@@ -15,6 +16,10 @@ interface InviteDialogProps {
 }
 
 export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
+  const { t } = useTranslation('dialogs');
+  const { t: tCommon } = useTranslation('common');
+
+
   const queryClient = useQueryClient();
   const [username, setUsername] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +30,17 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose]);
+
+  function messageOf(err: unknown): string {
+    if (err instanceof ApiError) {
+      if (err.status === 404) return t('invite.errors.not_found');
+      if (err.status === 409) return t('invite.errors.already_member');
+      if (err.status === 403) return t('invite.errors.forbidden');
+      return `${err.status} — ${err.message}`;
+    }
+    if (err instanceof Error) return err.message;
+    return t('invite.errors.generic');
+  }
 
   const mutation = useMutation({
     mutationFn: (name: string) => addMember(projectRef, name),
@@ -42,7 +58,7 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
     setError(null);
     const cleaned = username.trim();
     if (!cleaned) {
-      setError('username을 입력해 주세요.');
+      setError(t('invite.validation.username_required'));
       return;
     }
     mutation.mutate(cleaned);
@@ -53,12 +69,12 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
   return (
     <div className="cw-dialog-backdrop" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget && !pending) onClose(); }}>
       <div className="cw-dialog">
-        <button className="cw-close" onClick={onClose} aria-label="close" disabled={pending}>
+        <button className="cw-close" onClick={onClose} aria-label={tCommon('actions.close')} disabled={pending}>
           <Icon name="x" />
         </button>
-        <h2 style={{ margin: '0 0 8px', fontSize: 18, letterSpacing: '-0.015em' }}>멤버 초대</h2>
+        <h2 style={{ margin: '0 0 8px', fontSize: 18, letterSpacing: '-0.015em' }}>{t('invite.title')}</h2>
         <p style={{ color: 'var(--cw-ink-3)', margin: '0 0 4px', fontSize: 13, lineHeight: 1.6 }}>
-          초대할 사용자의 username을 입력하세요. 가입된 사용자만 추가할 수 있습니다.
+          {t('invite.description')}
         </p>
         <p style={{ color: 'var(--cw-ink-4)', margin: '0 0 14px', fontSize: 11, fontFamily: 'var(--cw-font-mono)' }}>
           POST /projects/{projectRef}/members
@@ -69,7 +85,7 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
             <input
               value={username}
               onChange={(e) => { setUsername(e.target.value); setError(null); }}
-              placeholder="username"
+              placeholder={t('invite.username_placeholder')}
               autoFocus
               disabled={pending}
               autoComplete="off"
@@ -79,24 +95,13 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
             <div className="cw-form-error" style={{ marginBottom: 12 }}>{error}</div>
           )}
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 14 }}>
-            <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>취소</button>
+            <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>{tCommon('actions.cancel')}</button>
             <button type="submit" className="cw-btn-primary" disabled={pending || !username.trim()}>
-              {pending ? '초대 중…' : '초대'}
+              {pending ? t('invite.submitting') : t('invite.submit')}
             </button>
           </div>
         </form>
       </div>
     </div>
   );
-}
-
-function messageOf(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 404) return '해당 username을 가진 사용자를 찾을 수 없습니다.';
-    if (err.status === 409) return '이미 이 프로젝트의 멤버입니다.';
-    if (err.status === 403) return '멤버를 초대할 권한이 없습니다 (project owner만 가능).';
-    return `${err.status} — ${err.message}`;
-  }
-  if (err instanceof Error) return err.message;
-  return '초대에 실패했습니다.';
 }
