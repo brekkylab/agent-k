@@ -63,10 +63,10 @@ function formatRunDuration(run: Run, t: TFunction<'automation'>): string {
   const end = Date.parse(run.updatedAt);
   if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '—';
   const sec = Math.max(0, Math.round((end - start) / 1000));
-  if (sec < 60) return `${sec}s`;
+  if (sec < 60) return t('relative.dur_s', { count: sec });
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  return s === 0 ? t('relative.dur_m', { count: m }) : t('relative.dur_ms', { m, s });
 }
 
 function formatScheduledAt(iso: string, t: TFunction<'automation'>): string {
@@ -411,15 +411,14 @@ function AutomationsPage() {
         </div>
         <div className="cw-run-drawer-meta">
           <TriggerBadge trigger={trigger} placement="below-start" />
-          <span>{t(STATUS_KEY[status])}</span>
-          <span>·</span>
           <span>{formatRunWhen(run, t)}</span>
           <span>·</span>
-          {status === 'queued' ? (
-            <span>{t('run_detail.scheduled', { when: formatScheduledAt(run.scheduledFor, t) })}</span>
-          ) : (
-            <span>{t('run_detail.duration', { value: formatRunDuration(run, t) })}</span>
-          )}
+          <span>
+            {t(STATUS_KEY[status])}
+            {status === 'queued'
+              ? `(${t('run_detail.scheduled', { when: formatScheduledAt(run.scheduledFor, t) })})`
+              : `(${t('run_detail.duration', { value: formatRunDuration(run, t) })})`}
+          </span>
           {/* force the session info (agent + model) onto its own line */}
           <span className="cw-run-meta-break" aria-hidden />
           {agentSurface && (
@@ -500,15 +499,6 @@ function AutomationsPage() {
         <div>
           <h1>{t('list.title')}</h1>
           <p>{t('list.subtitle')}</p>
-        </div>
-        <div>
-          <button
-            className="cw-btn-primary"
-            type="button"
-            onClick={() => navigate({ to: '/projects/$projectSlug/automation/new', params: { projectSlug } })}
-          >
-            <Icon name="plus" size={14} /> {t('list.new')}
-          </button>
         </div>
       </header>
 
@@ -703,7 +693,7 @@ function AutomationsPage() {
                 disabled={safePage === 0}
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
               >
-                <Icon name="arrow-left" size={12} /> {t('list.prev')}
+                <Icon name="chevron-left" size={12} /> {t('list.prev')}
               </button>
               <span className="cw-page-indicator">
                 {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, visibleRuns.length)} / {visibleRuns.length}

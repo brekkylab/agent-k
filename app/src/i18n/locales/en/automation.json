@@ -106,7 +106,10 @@
     "in_minutes": "in {{count}}m",
     "in_hours": "in {{count}}h",
     "tomorrow": "tomorrow",
-    "in_days": "in {{count}}d"
+    "in_days": "in {{count}}d",
+    "dur_s": "{{count}}s",
+    "dur_m": "{{count}}m",
+    "dur_ms": "{{m}}m {{s}}s"
   },
   "run_detail": {
     "duplicate_label": "Duplicate this run's session",
