@@ -20,6 +20,8 @@ export interface Project {
   description: string;
   ownerId: UserId;
   memberIds: UserId[];
+  /** Per-agent_type recommendation-chain overrides (agent_type → ordered model ids). */
+  recommendedChains: Record<string, string[]>;
 }
 
 export type SessionOrigin = 'user' | 'automation';
@@ -38,6 +40,8 @@ export interface Session {
   references: FileAsset['id'][];
   artifactId?: string;
   isAutoAppend?: boolean;
+  agentType: string | null;
+  model: string | null;
 }
 
 export type MessageSender =

@@ -99,6 +99,7 @@ export function toProject(backend: BackendProject, memberIds: string[] = []): Pr
     description: backend.description || '',
     ownerId: backend.owner_id,
     memberIds: memberIds.length > 0 ? memberIds : [backend.owner_id],
+    recommendedChains: backend.recommended_chains ?? {},
   };
 }
 
@@ -115,6 +116,8 @@ export function toSession(backend: BackendSession): Session {
     lastMessageSnippet: backend.last_message_snippet,
     unreadCount: backend.unread_count,
     references: [],
+    agentType: backend.agent_type ?? null,
+    model: backend.model ?? null,
   };
 }
 
