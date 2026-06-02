@@ -295,6 +295,8 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-chat-surface { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
 .cw-chat-head { padding: 34px 28px 18px; border-bottom: 1px solid var(--cw-border); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cw-chat-head p { display: flex; align-items: center; gap: 7px; color: var(--cw-fg-3); margin: 14px 0 0; }
+/* Session title shares its row with the agent chip (mode lives at title level). */
+.cw-session-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .cw-session-head-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .cw-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
 .cw-message-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
@@ -1346,24 +1348,28 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 /* Per-agent accent swaps. The same custom properties feed the home composer
    and the session preview chip, keeping visual state in one selector family. */
 .cw-agent-composer-wrap[data-agent="coworker"],
+.cw-agent-pickwrap[data-agent="coworker"],
 .cw-session-agent-chip[data-agent="coworker"] {
   --cw-agent-accent: oklch(0.55 0.13 68);
   --cw-agent-accent-soft: oklch(0.96 0.025 68);
   --cw-agent-send-bg: oklch(0.38 0.11 68);
 }
 .cw-agent-composer-wrap[data-agent="speedwagon"],
+.cw-agent-pickwrap[data-agent="speedwagon"],
 .cw-session-agent-chip[data-agent="speedwagon"] {
   --cw-agent-accent: oklch(0.52 0.13 240);
   --cw-agent-accent-soft: oklch(0.95 0.025 240);
   --cw-agent-send-bg: oklch(0.38 0.12 240);
 }
 .cw-agent-composer-wrap[data-agent="deep-research"],
+.cw-agent-pickwrap[data-agent="deep-research"],
 .cw-session-agent-chip[data-agent="deep-research"] {
   --cw-agent-accent: oklch(0.52 0.10 155);
   --cw-agent-accent-soft: oklch(0.95 0.020 155);
   --cw-agent-send-bg: oklch(0.38 0.09 155);
 }
 .cw-agent-composer-wrap[data-agent="buddy"],
+.cw-agent-pickwrap[data-agent="buddy"],
 .cw-session-agent-chip[data-agent="buddy"] {
   --cw-agent-accent: oklch(0.58 0.12 20);
   --cw-agent-accent-soft: oklch(0.96 0.028 20);
@@ -1447,6 +1453,18 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-weight: 600;
   border-radius: 14px 14px 0 0;
   margin-bottom: -1px;
+}
+
+/* Standalone variant: the picker stands on its own (no composer box beneath),
+   so the indicator is a fully-rounded pill on all four corners and doesn't
+   overlap anything below it. */
+.cw-agent-tabs.is-standalone .cw-agent-tab-indicator {
+  border-radius: 10px;
+  bottom: 0;
+}
+.cw-agent-tabs.is-standalone .cw-agent-tab.is-active {
+  border-radius: 10px;
+  margin-bottom: 0;
 }
 
 /* composer-box owns the paper frame: agent-tinted border + radius. */
@@ -2288,6 +2306,17 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-run-preview .cw-ai-prose { font-size: 13px; }
 .cw-run-preview .cw-message p { margin: 0; line-height: 1.55; }
 .cw-run-preview-empty { color: var(--cw-ink-3); font-size: 12px; margin: 4px 0; }
+
+/* Full-width flex item: forces the session info (agent + model) to wrap onto
+   its own line within the run-drawer meta row. */
+.cw-run-meta-break { flex-basis: 100%; height: 0; }
+/* Compact the agent chip here so it sits inline with the 12px meta text. */
+.cw-run-drawer-meta .cw-session-agent-chip {
+  padding: 5px 8px;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1;
+}
 
 /* ── Trigger badge hover popover ──────────────────────────────────────── */
 .cw-trigger-badge-host { position: relative; cursor: default; }

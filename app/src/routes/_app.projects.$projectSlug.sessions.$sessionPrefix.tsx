@@ -313,7 +313,19 @@ function SessionPage() {
       <section className="cw-chat-surface">
         <div className="cw-chat-head">
           <div>
-            <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
+            <div className="cw-session-title-row">
+              <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
+              {activeAgent && (
+                <span
+                  className="cw-session-agent-chip"
+                  data-agent={activeAgent.id}
+                  title="이 세션의 에이전트"
+                >
+                  <Icon name={activeAgent.icon} size={13} />
+                  <span>{activeAgent.label}</span>
+                </span>
+              )}
+            </div>
             <p>
               {creator && <>Started by <Avatar user={creator} small /> {creator.name} · </>}
               {sess?.references.length ?? 0} files ·{' '}
@@ -322,16 +334,6 @@ function SessionPage() {
             </p>
           </div>
           <div className="cw-session-head-actions">
-            {activeAgent && (
-              <span
-                className="cw-session-agent-chip"
-                data-agent={activeAgent.id}
-                title="이 세션의 에이전트"
-              >
-                <Icon name={activeAgent.icon} size={13} />
-                <span>{activeAgent.label}</span>
-              </span>
-            )}
             {sess && (
               <IconButton
                 icon="sticky-notes"

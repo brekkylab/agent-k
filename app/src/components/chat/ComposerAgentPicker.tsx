@@ -11,12 +11,17 @@ import { AGENT_SURFACES, type AgentId } from '@/domain/agentSurfaces';
 
 // Renders only the tab row — the wrapping container lives in the home route
 // so the picker and composer share one bordered box.
+//
+// `standalone` rounds all four corners of the active-tab indicator (a pill); the
+// default leaves the bottom square so it sits flush on the composer box.
 export function ComposerAgentPicker({
   value,
   onChange,
+  standalone = false,
 }: {
   value: AgentId;
   onChange: (id: AgentId) => void;
+  standalone?: boolean;
 }) {
   const tabsRef = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
@@ -60,7 +65,7 @@ export function ComposerAgentPicker({
       ref={tabsRef}
       role="group"
       aria-label="에이전트 선택"
-      className="cw-agent-tabs"
+      className={`cw-agent-tabs${standalone ? ' is-standalone' : ''}`}
     >
       <span
         key={value}
