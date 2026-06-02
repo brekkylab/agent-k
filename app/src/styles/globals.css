@@ -795,7 +795,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-file-more { width: 24px; height: 24px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--cw-ink-4); cursor: pointer; transition: background 120ms, color 120ms; }
 .cw-file-row:hover .cw-file-more { color: var(--cw-ink); }
 .cw-file-more:hover, .cw-file-more[aria-expanded="true"] { background: var(--cw-paper-3); color: var(--cw-ink); }
-.cw-file-dropdown { position: absolute; top: calc(100% + 4px); right: 0; z-index: 120; min-width: 148px; padding: 4px; list-style: none; margin: 0; background: var(--cw-paper); border: 1px solid var(--cw-line); border-radius: 10px; box-shadow: 0 4px 16px color-mix(in oklch, var(--cw-ink) 10%, transparent); }
+.cw-file-dropdown { position: absolute; top: calc(100% + 4px); right: 0; z-index: 120; min-width: 160px; width: max-content; padding: 4px; list-style: none; margin: 0; background: var(--cw-paper); border: 1px solid var(--cw-line); border-radius: 10px; box-shadow: 0 4px 16px color-mix(in oklch, var(--cw-ink) 10%, transparent); }
 .cw-file-dropdown li button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--cw-ink-2); font-size: 12.5px; cursor: pointer; text-align: left; white-space: nowrap; }
 .cw-file-dropdown li button:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
 .cw-file-dropdown-sep { height: 1px; background: var(--cw-line); margin: 3px 4px; }

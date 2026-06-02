@@ -114,7 +114,7 @@ function SessionPage() {
   const [composerText, setComposerText] = useState('');
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
-  const [copyToSharedPaths, setCopyToSharedPaths] = useState<string[] | null>(null);
+  const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
 
   type PendingAttachment = {
     tempId: string;
@@ -558,7 +558,7 @@ function SessionPage() {
               artifactPaths={msg.artifacts}
               projectId={projectId}
               sessionId={sessionId}
-              onCopyToShared={setCopyToSharedPaths}
+              onCopyToShared={(scope, paths) => setCopyToShared({ scope, paths })}
               onArtifactDeleted={() => {
                 void queryClient.invalidateQueries({ queryKey: ['messages', sessionId] });
               }}
@@ -639,19 +639,19 @@ function SessionPage() {
         <ArtifactsPanel
           projectId={projectId}
           sessionId={sessionId}
-          onCopyToShared={(paths) => setCopyToSharedPaths(paths)}
+          onCopyToShared={(scope, paths) => setCopyToShared({ scope, paths })}
         />
       </aside>
 
-      {copyToSharedPaths !== null && (
+      {copyToShared !== null && (
         <CopyToSharedDialog
-          open={copyToSharedPaths !== null}
+          open={copyToShared !== null}
           projectId={projectId}
-          sessionId={sessionId}
-          sourcePaths={copyToSharedPaths}
-          onClose={() => setCopyToSharedPaths(null)}
+          sourceScope={copyToShared.scope}
+          sourcePaths={copyToShared.paths}
+          onClose={() => setCopyToShared(null)}
           onDone={() => {
-            setCopyToSharedPaths(null);
+            setCopyToShared(null);
             void queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
           }}
         />
@@ -670,7 +670,7 @@ function ArtifactChip({
   path: string;
   projectId: string;
   sessionId: string;
-  onCopyToShared: (paths: string[]) => void;
+  onCopyToShared: (scope: DirentScope, paths: string[]) => void;
   onDeleted: (path: string) => void;
 }) {
   const { t, i18n } = useTranslation('session');
@@ -726,7 +726,7 @@ function ArtifactChip({
               </button>
             </li>
             <li>
-              <button type="button" onClick={() => onCopyToShared([path])}>
+              <button type="button" onClick={() => onCopyToShared(scope, [path])}>
                 <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
               </button>
             </li>
@@ -793,7 +793,7 @@ function MessageBubble({
   artifactPaths?: string[];
   projectId?: string;
   sessionId?: string;
-  onCopyToShared?: (paths: string[]) => void;
+  onCopyToShared?: (scope: DirentScope, paths: string[]) => void;
   onArtifactDeleted?: (path: string) => void;
 }) {
   const { t } = useTranslation('session');
@@ -827,7 +827,7 @@ function MessageBubble({
         {message.attachments && message.attachments.length > 0 && (
           <div className="cw-msg-attachments" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
             {message.attachments.map((path) => (
-              <AttachmentPreview key={path} globalPath={path} />
+              <AttachmentPreview key={path} globalPath={path} onCopyToShared={onCopyToShared} />
             ))}
           </div>
         )}

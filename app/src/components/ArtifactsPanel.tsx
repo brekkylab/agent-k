@@ -15,9 +15,8 @@ import { useToastStore } from './Toast';
 interface ArtifactsPanelProps {
   projectId: string;
   sessionId: string;
-  /** Called when user requests "copy to shared" for the given relative paths.
-   *  Pass null if CopyToSharedDialog is not yet wired. */
-  onCopyToShared?: (relativePaths: string[]) => void;
+  /** Called when user requests "copy to shared" for the given scope + relative paths. */
+  onCopyToShared?: (scope: DirentScope, relativePaths: string[]) => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -149,7 +148,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
                     <ul className="cw-file-dropdown" onClick={() => setMenuOpen(null)}>
                       {onCopyToShared && (
                         <li>
-                          <button type="button" onClick={() => onCopyToShared([...selected])}>
+                          <button type="button" onClick={() => onCopyToShared(scope, [...selected])}>
                             <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
                           </button>
                         </li>
@@ -202,7 +201,7 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
                     </li>
                     {onCopyToShared && (
                       <li>
-                        <button type="button" onClick={() => onCopyToShared([entry.path])}>
+                        <button type="button" onClick={() => onCopyToShared(scope, [entry.path])}>
                           <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
                         </button>
                       </li>

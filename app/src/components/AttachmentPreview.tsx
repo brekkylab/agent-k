@@ -1,56 +1,76 @@
-import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { fetchFileBlob, downloadFileByGlobalPath } from '@/api/dirents';
+import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { downloadFileByGlobalPath, parseGlobalPath, type DirentScope } from '@/api/dirents';
 import { Icon } from './Icon';
 import { FileTypeIcon } from './FileTypeIcon';
 
-interface Props { globalPath: string; }
-
-function isImagePath(path: string): boolean {
-  return /\.(png|jpe?g|webp|gif|svg)$/i.test(path);
+interface Props {
+  globalPath: string;
+  onCopyToShared?: (scope: DirentScope, paths: string[]) => void;
 }
 
-export function AttachmentPreview({ globalPath }: Props) {
+export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
+  const { t } = useTranslation('session');
   const filename = globalPath.split('/').pop() ?? globalPath;
-  const isImage = isImagePath(filename);
-
-  const blobQuery = useQuery({
-    queryKey: ['file-blob', globalPath],
-    queryFn: () => fetchFileBlob(globalPath),
-    enabled: isImage,
-    staleTime: Infinity,
-    gcTime: 5 * 60 * 1000,
-  });
-
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const chipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!blobQuery.data) return;
-    const url = URL.createObjectURL(blobQuery.data);
-    setObjectUrl(url);
-    return () => { URL.revokeObjectURL(url); };
-  }, [blobQuery.data]);
+    if (!menuOpen) return;
+    function onPtr(e: PointerEvent) {
+      if (chipRef.current && !chipRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', onPtr);
+    return () => document.removeEventListener('pointerdown', onPtr);
+  }, [menuOpen]);
 
-  if (isImage) {
-    return (
-      <div className="cw-attach-preview">
-        {objectUrl
-          ? <img src={objectUrl} alt={filename} className="cw-attach-thumb" />
-          : <div className="cw-attach-loading"><Icon name="image" size={16} /></div>}
-        <span className="cw-attach-label">{filename}</span>
-      </div>
-    );
+  const parsed = parseGlobalPath(globalPath);
+  const canCopy = Boolean(onCopyToShared && parsed);
+
+  function handleDownload() {
+    void downloadFileByGlobalPath(globalPath);
+    setMenuOpen(false);
+  }
+
+  function handleCopyToShared() {
+    if (onCopyToShared && parsed) {
+      onCopyToShared(parsed.scope, [parsed.relativePath]);
+    }
+    setMenuOpen(false);
   }
 
   return (
-    <button
-      type="button"
+    <div
+      ref={chipRef}
       className="cw-attach-chip cw-attach-chip--file"
-      onClick={() => void downloadFileByGlobalPath(globalPath)}
-      title={`Download ${filename}`}
+      style={{ cursor: 'pointer', position: 'relative', overflow: 'visible' }}
+      onClick={() => setMenuOpen((prev) => !prev)}
+      title={filename}
     >
       <FileTypeIcon filename={filename} size={16} />
-      <span>{filename}</span>
-    </button>
+      <span className="cw-attach-name">{filename}</span>
+      {menuOpen && (
+        <ul
+          className="cw-file-dropdown"
+          style={{ top: 'calc(100% + 4px)', left: 0 }}
+          onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
+        >
+          <li>
+            <button type="button" onClick={handleDownload}>
+              <Icon name="download" size={13} /> {t('artifact.download')}
+            </button>
+          </li>
+          {canCopy && (
+            <li>
+              <button type="button" onClick={handleCopyToShared}>
+                <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
   );
 }
