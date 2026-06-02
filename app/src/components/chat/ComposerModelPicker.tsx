@@ -1,66 +1,78 @@
-// Provider model selector for the composer, in the ChatGPT/Claude style: pick the
-// underlying LLM (Claude / OpenAI / Gemini model) for the conversation. This is a
-// mock for now — the selection is not yet wired to the router/dispatcher — but the
-// labels are the real provider model names, grouped by provider.
+// Model selector for the composer. Picks the underlying LLM for the
+// conversation, grouped by capability tier. Tiers are display-only group
+// headers — never selected directly. The first option is "recommended"
+// (value = empty string → null), which resolves dynamically per agent type at
+// agent-build time. Models in the active agent's recommendation chain are
+// marked with ★; models whose provider has no API key on this server are
+// disabled.
 
 import { useId } from 'react';
 import { Icon } from '@/components/Icon';
+import {
+  type ModelCatalog,
+  type ModelTier,
+  modelLabel,
+  recommendationFor,
+  tierLabel,
+} from '@/api/models';
 
-export type ModelId = string;
-
-interface ProviderGroup {
-  provider: string;
-  models: { id: ModelId; label: string }[];
-}
-
-export const PROVIDER_MODELS: readonly ProviderGroup[] = [
-  {
-    provider: 'Claude',
-    models: [
-      { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
-      { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-    ],
-  },
-  {
-    provider: 'OpenAI',
-    models: [
-      { id: 'gpt-5.5', label: 'GPT-5.5' },
-      { id: 'gpt-5.4', label: 'GPT-5.4' },
-    ],
-  },
-  {
-    provider: 'Gemini',
-    models: [
-      { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' },
-      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    ],
-  },
-] as const;
-
-export const DEFAULT_MODEL_ID: ModelId = 'claude-opus-4-7';
+const TIER_ORDER: ModelTier[] = ['light', 'standard', 'max'];
 
 export function ComposerModelPicker({
+  catalog,
+  agentType,
   value,
   onChange,
 }: {
-  value: ModelId;
-  onChange: (id: ModelId) => void;
+  catalog: ModelCatalog | undefined;
+  /** Canonical agent_type, used to highlight recommended models. */
+  agentType: string;
+  /** Selected model id, or null for "recommended". */
+  value: string | null;
+  onChange: (id: string | null) => void;
 }) {
   const selectId = useId();
+  const rec = recommendationFor(catalog, agentType);
+  const recommendedSet = new Set(rec?.chain ?? []);
+  // Name the resolved model in the "recommended" label only when it can run;
+  // otherwise stay generic.
+  const resolvedAvailable = rec
+    ? !!catalog?.models.find((m) => m.id === rec.resolvedModel)?.available
+    : false;
+  const resolvedLabel = resolvedAvailable ? modelLabel(catalog, rec!.resolvedModel) : '';
+
   return (
-    <span className="cw-model-picker" title="모델 선택 (미리보기)">
+    <span className="cw-model-picker" title="모델 선택">
       <Icon name="sparkles" size={12} />
-      <label htmlFor={selectId} className="sr-only">모델 선택 (미리보기)</label>
-      <select id={selectId} value={value} onChange={(event) => onChange(event.target.value)}>
-        {PROVIDER_MODELS.map((group) => (
-          <optgroup key={group.provider} label={group.provider}>
-            {group.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label}
-              </option>
-            ))}
-          </optgroup>
-        ))}
+      <label htmlFor={selectId} className="sr-only">모델 선택</label>
+      <select
+        id={selectId}
+        value={value ?? ''}
+        onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
+        disabled={!catalog}
+      >
+        <option value="">{resolvedLabel ? `권장 · ${resolvedLabel}` : '권장 모델'}</option>
+        {TIER_ORDER.map((tier) => {
+          const models = (catalog?.models ?? []).filter((m) => m.tier === tier);
+          if (models.length === 0) return null;
+          return (
+            <optgroup key={tier} label={tierLabel(tier)}>
+              {models.map((model) => {
+                const suffix = !model.available
+                  ? ' (사용 불가)'
+                  : recommendedSet.has(model.id)
+                    ? ' ★'
+                    : '';
+                return (
+                  <option key={model.id} value={model.id} disabled={!model.available}>
+                    {model.label}
+                    {suffix}
+                  </option>
+                );
+              })}
+            </optgroup>
+          );
+        })}
       </select>
     </span>
   );

@@ -72,6 +72,9 @@ export const AGENT_SURFACES: readonly AgentSurface[] = [
 
 export const DEFAULT_AGENT_ID: AgentId = AGENT_SURFACES[0].id;
 
+// `agent_type` (sent to / stored by the backend) is identical to the surface
+// `AgentId` — no mapping needed. So `getAgentSurface` doubles as the lookup for
+// a stored agent_type, and the selected AgentId is sent as-is.
 export function getAgentSurface(id: string | undefined): AgentSurface {
   return AGENT_SURFACES.find((agent) => agent.id === id) ?? AGENT_SURFACES[0];
 }

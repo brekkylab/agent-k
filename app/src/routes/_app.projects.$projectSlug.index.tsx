@@ -6,11 +6,13 @@ import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-route
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getProject, listMembers } from '@/api/projects';
 import { createSession } from '@/api/sessions';
+import { getModelCatalog, recommendationFor } from '@/api/models';
 import { AvatarStack } from '@/components/uiPrimitives';
 import { ProjectHomeComposer, type ProjectHomeComposerSubmission } from '@/components/chat/ProjectHomeComposer';
-import { ComposerModelPicker, DEFAULT_MODEL_ID, type ModelId } from '@/components/chat/ComposerModelPicker';
+import { ComposerModelPicker } from '@/components/chat/ComposerModelPicker';
 import { ComposerAgentPicker } from '@/components/chat/ComposerAgentPicker';
 import { DEFAULT_AGENT_ID, getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
+import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
@@ -28,13 +30,38 @@ function ProjectHome() {
 
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
+  // Catalog rarely changes (only when the server's configured providers do);
+  // keep it fresh for a while so the picker doesn't refetch on every visit.
+  const catalog = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
 
   const [composerText, setComposerText] = useState('');
-  const [selectedModelId, setSelectedModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
   const [selectedAgentId, setSelectedAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
+  // Model selection is remembered per project + agent surface and persisted to
+  // localStorage (see useModelPrefsStore): switching agents — or reloading —
+  // restores that agent's last pick within this project. Missing = "recommended".
+  const byProject = useModelPrefsStore((s) => s.byProject);
+  const setModel = useModelPrefsStore((s) => s.setModel);
+  const selectedModel = byProject[projectSlug]?.[selectedAgentId] ?? null;
+  const setSelectedModel = (id: string | null) => setModel(projectSlug, selectedAgentId, id);
   const [focusNonce, setFocusNonce] = useState(0);
 
   const activeAgent = getAgentSurface(selectedAgentId);
+
+  // The model that will actually run: an explicit pin, or what "recommended"
+  // resolves to (a chain model, or the last-resort fallback). Send is blocked
+  // only when that effective model has no configured provider — i.e. nothing
+  // can run at all. The last-resort (Kimi) is a valid run target when its key
+  // is set, so an available fallback does NOT block send. Judged once the
+  // catalog has loaded.
+  const rec = recommendationFor(catalog.data, selectedAgentId);
+  const effectiveModel = selectedModel ?? rec?.resolvedModel;
+  const effectiveAvailable =
+    !!effectiveModel && !!catalog.data?.models.find((m) => m.id === effectiveModel)?.available;
+  const sendBlocked = !!catalog.data && !effectiveAvailable;
 
   // Sidebar '+' navigates here with focusComposer: bump the focus nonce (so the
   // composer focuses even on a repeat '+'), then consume the signal so a refresh
@@ -49,7 +76,10 @@ function ProjectHome() {
   // session page via router state, where it auto-streams on entry.
   const startSessionMutation = useMutation({
     mutationFn: async (firstMessage: string) => {
-      const session = await createSession(projectSlug);
+      const session = await createSession(projectSlug, {
+        agentType: selectedAgentId,
+        model: selectedModel,
+      });
       return { session, firstMessage };
     },
     onSuccess: async ({ session, firstMessage }) => {
@@ -100,7 +130,6 @@ function ProjectHome() {
         >
           <div className="cw-agent-tabs-area">
             <ComposerAgentPicker value={selectedAgentId} onChange={setSelectedAgentId} />
-            <span className="cw-preview-pill" aria-label="미리보기: 아직 서버에 전달되지 않습니다">Preview</span>
           </div>
           <ProjectHomeComposer
             value={composerText}
@@ -108,10 +137,19 @@ function ProjectHome() {
             onSubmit={handleSubmit}
             disabled={startSessionMutation.isPending}
             pending={startSessionMutation.isPending}
+            sendBlocked={sendBlocked}
+            sendBlockedHint="사용 가능한 모델이 없어요. Provider API 키를 설정하거나 다른 모델을 선택하세요."
             placeholder={activeAgent.placeholder}
             focusSignal={focusNonce}
             onAttachClick={() => showToast('파일 추가 기능은 곧 추가됩니다.')}
-            modelPicker={<ComposerModelPicker value={selectedModelId} onChange={setSelectedModelId} />}
+            modelPicker={
+              <ComposerModelPicker
+                catalog={catalog.data}
+                agentType={selectedAgentId}
+                value={selectedModel}
+                onChange={setSelectedModel}
+              />
+            }
           />
         </div>
 

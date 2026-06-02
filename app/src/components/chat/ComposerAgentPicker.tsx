@@ -2,10 +2,8 @@
 // row attached to the top of the composer box. Picks WHICH agent surface drives
 // the conversation — a different axis from the LLM model picker.
 //
-// Mock for now: the selection is not wired to create-session / dispatch yet
-// (the backend's CreateSessionRequest only takes project_id, with
-// deny_unknown_fields). The IDs below are the real intended agent surfaces so the
-// seam is concrete — a follow-up PR routes the home-composer agent hint here.
+// The selected surface id IS the `agent_type` sent to POST /sessions (no
+// mapping): it selects the recommended model chain and drives agent dispatch.
 
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { Icon } from '@/components/Icon';
