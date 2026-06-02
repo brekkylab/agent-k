@@ -39,6 +39,7 @@ pub async fn bootstrap_admin_if_needed(repo: &AppRepository) {
                     role: Role::Admin,
                     display_name: None,
                     is_active: true,
+                    preferred_language: "en".to_string(),
                 })
                 .await
             {

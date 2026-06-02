@@ -1,0 +1,83 @@
+{
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "close": "Close",
+    "edit": "Edit",
+    "create": "Create",
+    "rename": "Rename",
+    "copy": "Copy",
+    "move": "Move",
+    "retry": "Retry",
+    "logout": "Log out"
+  },
+  "state": {
+    "loading": "Loading…",
+    "saving": "Saving…",
+    "creating": "Creating…",
+    "deleting": "Deleting…",
+    "processing": "Processing…",
+    "empty": "Nothing to show"
+  },
+  "language": {
+    "label": "Language",
+    "english": "English",
+    "korean": "한국어"
+  },
+  "intent": {
+    "general": { "label": "General", "note": "Start freely" },
+    "analysis": { "label": "Analysis", "note": "Evidence-based judgement" },
+    "brainstorm": { "label": "Brainstorm", "note": "Explore options" },
+    "writing": { "label": "Writing", "note": "Draft content" },
+    "recap": { "label": "Recap", "note": "Decisions & summary" }
+  },
+  "share": {
+    "private": {
+      "label": "Private",
+      "short_label": "Private",
+      "desc": "Only visible to you"
+    },
+    "shared_readonly": {
+      "label": "Read-only share",
+      "short_label": "Read",
+      "desc": "Teammates can read"
+    },
+    "shared_chat": {
+      "label": "Chat together",
+      "short_label": "Chat",
+      "desc": "Teammates and AI reply together"
+    }
+  },
+  "sidebar": {
+    "resizer_label": "Sidebar width",
+    "open": "Open sidebar",
+    "close": "Close sidebar",
+    "pin": "Pin sidebar",
+    "collapse": "Collapse sidebar",
+    "add_label": "Add {{label}}",
+    "new_project": "New Project",
+    "new_session": "New Session",
+    "creating_session": "Creating session…",
+    "brand_label": "Cowork projects",
+    "section_projects": "PROJECTS",
+    "section_sessions": "Sessions",
+    "nav": {
+      "home": "Home",
+      "files": "Files",
+      "skills": "Skills",
+      "schedule": "Schedule",
+      "automation": "Automation",
+      "members": "Members",
+      "settings": "Settings"
+    }
+  },
+  "placeholders": {
+    "untitled_session": "Untitled session",
+    "no_description": "No description"
+  },
+  "errors": {
+    "unknown": "Something went wrong. Please try again."
+  }
+}

@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { getProject, listMembers } from '@/api/projects';
 import { createSession } from '@/api/sessions';
 import { getModelCatalog, recommendationFor } from '@/api/models';
@@ -16,13 +17,17 @@ import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
 import { ApiError } from '@/api/client';
+import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/')({
+  // Home composer + toasts live on `project`; `common` comes from parents.
+  loader: () => loadNs('project', 'automation'),
   component: ProjectHome,
 });
 
 function ProjectHome() {
   const { projectSlug } = Route.useParams();
+  const { t } = useTranslation('project');
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -97,7 +102,7 @@ function ProjectHome() {
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'create failed';
-      showToast(`세션 생성 실패: ${msg}`);
+      showToast(t('toast.session_create_failed', { message: msg }));
     },
   });
 
@@ -138,10 +143,10 @@ function ProjectHome() {
             disabled={startSessionMutation.isPending}
             pending={startSessionMutation.isPending}
             sendBlocked={sendBlocked}
-            sendBlockedHint="사용 가능한 모델이 없어요. Provider API 키를 설정하거나 다른 모델을 선택하세요."
+            sendBlockedHint={t('home.send_blocked_hint')}
             placeholder={activeAgent.placeholder}
             focusSignal={focusNonce}
-            onAttachClick={() => showToast('파일 추가 기능은 곧 추가됩니다.')}
+            onAttachClick={() => showToast(t('home.attach_coming_soon'))}
             modelPicker={
               <ComposerModelPicker
                 catalog={catalog.data}
@@ -156,7 +161,7 @@ function ProjectHome() {
         <div
           key={selectedAgentId}
           className="cw-suggested-prompts"
-          aria-label="추천 프롬프트 (미리보기)"
+          aria-label={t('home.suggested_prompts_aria')}
         >
           {activeAgent.prompts.map((prompt) => (
             <button

@@ -1,0 +1,83 @@
+{
+  "actions": {
+    "save": "저장",
+    "cancel": "취소",
+    "delete": "삭제",
+    "confirm": "확인",
+    "close": "닫기",
+    "edit": "편집",
+    "create": "만들기",
+    "rename": "이름 변경",
+    "copy": "복사",
+    "move": "이동",
+    "retry": "다시 시도",
+    "logout": "로그아웃"
+  },
+  "state": {
+    "loading": "불러오는 중…",
+    "saving": "저장 중…",
+    "creating": "생성 중…",
+    "deleting": "삭제 중…",
+    "processing": "처리 중…",
+    "empty": "표시할 내용이 없습니다"
+  },
+  "language": {
+    "label": "언어",
+    "english": "English",
+    "korean": "한국어"
+  },
+  "intent": {
+    "general": { "label": "일반", "note": "자유롭게 시작" },
+    "analysis": { "label": "분석", "note": "자료 기반 판단" },
+    "brainstorm": { "label": "브레인스토밍", "note": "옵션 탐색" },
+    "writing": { "label": "작성", "note": "초안 생성" },
+    "recap": { "label": "정리", "note": "결정/요약" }
+  },
+  "share": {
+    "private": {
+      "label": "비공개",
+      "short_label": "비공개",
+      "desc": "나만 봐요"
+    },
+    "shared_readonly": {
+      "label": "읽기 공유",
+      "short_label": "읽기",
+      "desc": "팀은 읽을 수 있어요"
+    },
+    "shared_chat": {
+      "label": "함께 대화",
+      "short_label": "대화",
+      "desc": "팀과 AI가 함께 답해요"
+    }
+  },
+  "sidebar": {
+    "resizer_label": "사이드바 폭 조절",
+    "open": "사이드바 열기",
+    "close": "사이드바 닫기",
+    "pin": "사이드바 고정",
+    "collapse": "사이드바 접기",
+    "add_label": "{{label}} 추가",
+    "new_project": "새 Project",
+    "new_session": "새 Session",
+    "creating_session": "세션 생성 중…",
+    "brand_label": "Cowork 프로젝트",
+    "section_projects": "프로젝트",
+    "section_sessions": "세션",
+    "nav": {
+      "home": "홈",
+      "files": "파일",
+      "skills": "스킬",
+      "schedule": "일정",
+      "automation": "자동화",
+      "members": "멤버",
+      "settings": "설정"
+    }
+  },
+  "placeholders": {
+    "untitled_session": "새 대화",
+    "no_description": "설명 없음"
+  },
+  "errors": {
+    "unknown": "오류가 발생했어요. 다시 시도해 주세요."
+  }
+}

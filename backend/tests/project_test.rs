@@ -252,11 +252,25 @@ async fn project_delete_cleans_up_agents_in_state() {
     let project = common::get_personal_project(&app, &token).await;
     let project_id = project["id"].as_str().unwrap();
 
-    // Create session via HTTP — this registers an agent in AppState.
+    // Create session via HTTP (only creates a DB record; agents are lazy).
     let session_id = common::post_session_authed(&app, &token, project_id).await;
+
+    // Simulate what happens when the first message is sent: build a local-runenv
+    // agent (no Docker) and register it in state. Skip when no LLM provider is
+    // configured (e.g. CI without API keys).
+    let spec = ailoy::agent::AgentSpec::new("openai/gpt-4o-mini");
+    let agent = {
+        let provider = ailoy::agent::default_provider();
+        match ailoy::agent::Agent::try_with_provider(spec, &provider) {
+            Ok(a) => a,
+            Err(_) => return, // no LLM provider available — skip
+        }
+    };
+    state.insert_agent(session_id, agent);
+
     assert!(
         state.get_agent(&session_id).is_some(),
-        "agent must be in state after session creation"
+        "agent must be in state after manual registration"
     );
 
     // Delete the project — should also clean up the agent.
@@ -371,8 +385,7 @@ async fn update_project_name_regenerates_slug() {
     let token = common::login(&app, "alice", "password123").await;
 
     let payload = serde_json::json!({ "name": "Old Name" });
-    let (status, created) =
-        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    let (status, created) = common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
     assert_eq!(status, StatusCode::CREATED, "create failed: {created}");
     assert_eq!(created["slug"], "old-name");
     let project_id = created["id"].as_str().unwrap().to_string();
@@ -392,15 +405,13 @@ async fn update_project_name_regenerates_slug() {
     assert_eq!(body["slug"], "cool-stuff");
 
     // Old slug is retired but still resolves the same project.
-    let (status, fetched) = common::authed(
-        &app,
-        "GET",
-        &format!("/projects/{old_slug}"),
-        &token,
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "retired slug should still resolve: {fetched}");
+    let (status, fetched) =
+        common::authed(&app, "GET", &format!("/projects/{old_slug}"), &token, None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "retired slug should still resolve: {fetched}"
+    );
     assert_eq!(fetched["id"], project_id.as_str());
     assert_eq!(fetched["slug"], "cool-stuff");
 }
@@ -443,8 +454,7 @@ async fn update_project_same_slug_noop() {
     let token = common::login(&app, "alice", "password123").await;
 
     let payload = serde_json::json!({ "name": "Stable Name" });
-    let (status, created) =
-        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    let (status, created) = common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
     assert_eq!(status, StatusCode::CREATED, "create failed: {created}");
     assert_eq!(created["slug"], "stable-name");
     let project_id = created["id"].as_str().unwrap().to_string();
@@ -475,15 +485,21 @@ async fn update_project_slug_collision_appends_suffix() {
 
     // Another project already owns the slug "shared".
     let payload = serde_json::json!({ "name": "shared" });
-    let (status, blocker) =
-        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
-    assert_eq!(status, StatusCode::CREATED, "create blocker failed: {blocker}");
+    let (status, blocker) = common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create blocker failed: {blocker}"
+    );
     assert_eq!(blocker["slug"], "shared");
 
     let payload = serde_json::json!({ "name": "Other" });
-    let (status, target) =
-        common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
-    assert_eq!(status, StatusCode::CREATED, "create target failed: {target}");
+    let (status, target) = common::authed(&app, "POST", "/projects", &token, Some(payload)).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "create target failed: {target}"
+    );
     let target_id = target["id"].as_str().unwrap().to_string();
 
     // Renaming target to a value that slugifies to "shared" should bump to -2.

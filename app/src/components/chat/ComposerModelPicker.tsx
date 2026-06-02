@@ -7,6 +7,7 @@
 // disabled.
 
 import { useId } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 import {
   type ModelCatalog,
@@ -31,6 +32,7 @@ export function ComposerModelPicker({
   value: string | null;
   onChange: (id: string | null) => void;
 }) {
+  const { t } = useTranslation('automation');
   const selectId = useId();
   const rec = recommendationFor(catalog, agentType);
   const recommendedSet = new Set(rec?.chain ?? []);
@@ -42,16 +44,16 @@ export function ComposerModelPicker({
   const resolvedLabel = resolvedAvailable ? modelLabel(catalog, rec!.resolvedModel) : '';
 
   return (
-    <span className="cw-model-picker" title="모델 선택">
+    <span className="cw-model-picker" title={t('model_picker.select')}>
       <Icon name="sparkles" size={12} />
-      <label htmlFor={selectId} className="sr-only">모델 선택</label>
+      <label htmlFor={selectId} className="sr-only">{t('model_picker.select')}</label>
       <select
         id={selectId}
         value={value ?? ''}
         onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
         disabled={!catalog}
       >
-        <option value="">{resolvedLabel ? `권장 · ${resolvedLabel}` : '권장 모델'}</option>
+        <option value="">{resolvedLabel ? t('model_picker.recommended_named', { label: resolvedLabel }) : t('model_picker.recommended')}</option>
         {TIER_ORDER.map((tier) => {
           const models = (catalog?.models ?? []).filter((m) => m.tier === tier);
           if (models.length === 0) return null;
@@ -59,7 +61,7 @@ export function ComposerModelPicker({
             <optgroup key={tier} label={tierLabel(tier)}>
               {models.map((model) => {
                 const suffix = !model.available
-                  ? ' (사용 불가)'
+                  ? t('model_picker.unavailable_suffix')
                   : recommendedSet.has(model.id)
                     ? ' ★'
                     : '';

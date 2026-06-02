@@ -1,4 +1,4 @@
-import { ApiError, getBaseUrl, getToken, notifyUnauthorized } from './client';
+import { ApiError, BASE_URL, getToken, notifyUnauthorized } from './client';
 import { getMe } from './auth';
 
 export interface SessionTitleUpdatedEvent {
@@ -35,7 +35,7 @@ class AppWebSocketManager {
   connect(token: string): void {
     this.active = true;
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
-    const url = `${toWsUrl(getBaseUrl())}/ws?token=${encodeURIComponent(token)}`;
+    const url = `${toWsUrl(BASE_URL)}/ws?token=${encodeURIComponent(token)}`;
     this.connectionStartTime = Date.now();
     const ws = new WebSocket(url);
     this.ws = ws;

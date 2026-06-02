@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 import { SchedulePicker, summarizeCron, type SchedulePickerValue } from '@/components/SchedulePicker';
 import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
@@ -19,15 +20,18 @@ import {
   updateAutomation as updateAutomationApi,
   updateTrigger as updateTriggerApi,
 } from '@/api/automations';
+import { loadNs } from '@/i18n/loader';
 import type { Trigger, TriggerSpec } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/automation/$automationId')({
+  loader: () => loadNs('automation'),
   component: AutomationSettingsPage,
 });
 
 function AutomationSettingsPage() {
   const { projectSlug, automationId } = Route.useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation('automation');
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
 
@@ -92,7 +96,7 @@ function AutomationSettingsPage() {
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      showToast(`이름 변경 실패: ${msg}`);
+      showToast(t('toast.name_save_failed', { message: msg }));
     },
   });
   const descMutation = useMutation({
@@ -106,7 +110,7 @@ function AutomationSettingsPage() {
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      showToast(`설명 변경 실패: ${msg}`);
+      showToast(t('toast.desc_save_failed', { message: msg }));
     },
   });
   const promptsMutation = useMutation({
@@ -120,7 +124,7 @@ function AutomationSettingsPage() {
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      showToast(`프롬프트 변경 실패: ${msg}`);
+      showToast(t('toast.prompts_save_failed', { message: msg }));
     },
   });
 
@@ -130,11 +134,11 @@ function AutomationSettingsPage() {
       invalidateAutomation();
       setAgentId((updated.agentType as AgentId | null) ?? DEFAULT_AGENT_ID);
       setModel(updated.model);
-      showToast('실행 에이전트·모델을 저장했습니다');
+      showToast(t('toast.agent_model_saved'));
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      showToast(`저장 실패: ${msg}`);
+      showToast(t('toast.agent_model_save_failed', { message: msg }));
     },
   });
 
@@ -178,7 +182,7 @@ function AutomationSettingsPage() {
     onSuccess: () => invalidateTriggers(),
     onError: (err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      showToast(`트리거 수정 실패: ${msg}`);
+      showToast(t('toast.trigger_save_failed', { message: msg }));
     },
   });
 
@@ -253,9 +257,9 @@ function AutomationSettingsPage() {
     return (
       <section className="cw-page cw-automation-settings cw-page-enter">
         <button className="cw-btn-secondary cw-back-link" type="button" onClick={goBack}>
-          <Icon name="arrow-left" size={14} /> Automations
+          <Icon name="arrow-left" size={14} /> {t('back')}
         </button>
-        <p>로딩 중…</p>
+        <p>{t('detail.loading')}</p>
       </section>
     );
   }
@@ -263,10 +267,10 @@ function AutomationSettingsPage() {
     return (
       <section className="cw-page cw-automation-settings cw-page-enter">
         <button className="cw-btn-secondary cw-back-link" type="button" onClick={goBack}>
-          <Icon name="arrow-left" size={14} /> Automations
+          <Icon name="arrow-left" size={14} /> {t('back')}
         </button>
-        <h1>Automation을 찾을 수 없습니다</h1>
-        <p>이 automation은 삭제되었거나 권한이 없습니다.</p>
+        <h1>{t('detail.not_found_title')}</h1>
+        <p>{t('detail.not_found_body')}</p>
       </section>
     );
   }
@@ -288,7 +292,7 @@ function AutomationSettingsPage() {
   return (
     <section className="cw-page cw-automation-settings cw-page-enter">
       <button className="cw-btn-secondary cw-back-link" type="button" onClick={goBack}>
-        <Icon name="arrow-left" size={14} /> Automations
+        <Icon name="arrow-left" size={14} /> {t('back')}
       </button>
 
       <div
@@ -319,7 +323,7 @@ function AutomationSettingsPage() {
               }}
               disabled={nameMutation.isPending}
               maxLength={100}
-              aria-label="Automation 이름"
+              aria-label={t('detail.name_aria')}
               style={{
                 margin: 0,
                 padding: '4px 10px',
@@ -341,7 +345,7 @@ function AutomationSettingsPage() {
               onClick={() => nameMutation.mutate()}
               disabled={nameSaveDisabled}
             >
-              {nameMutation.isPending ? '저장 중…' : '저장'}
+              {nameMutation.isPending ? t('detail.saving') : t('detail.save')}
             </button>
             <button
               type="button"
@@ -352,7 +356,7 @@ function AutomationSettingsPage() {
               }}
               disabled={nameMutation.isPending}
             >
-              취소
+              {t('detail.cancel')}
             </button>
           </>
         ) : (
@@ -361,8 +365,8 @@ function AutomationSettingsPage() {
             <button
               type="button"
               onClick={() => setNameEditMode(true)}
-              aria-label="Automation 이름 편집"
-              title="편집"
+              aria-label={t('detail.name_edit_aria')}
+              title={t('detail.edit_title')}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -385,14 +389,14 @@ function AutomationSettingsPage() {
 
       <div className="cw-settings-stack">
         <section className="cw-settings-card">
-          <h2>일반</h2>
+          <h2>{t('detail.general')}</h2>
           <div className="cw-settings-toggle-row">
             <div>
-              <b>상태</b>
+              <b>{t('detail.status')}</b>
               <p className="cw-settings-hint">
                 {enabled
-                  ? '활성화 상태 — 트리거가 발화되면 실행됩니다.'
-                  : '비활성화 상태 — 트리거가 발화돼도 실행되지 않고, 수동 실행 버튼도 막힙니다.'}
+                  ? t('detail.status_on_hint')
+                  : t('detail.status_off_hint')}
               </p>
             </div>
             <label className="cw-toggle-switch">
@@ -403,20 +407,20 @@ function AutomationSettingsPage() {
                 disabled={toggleAutomationEnabledMutation.isPending}
               />
               <span className="cw-toggle-slider" />
-              <span className="cw-toggle-label">{enabled ? 'On' : 'Off'}</span>
+              <span className="cw-toggle-label">{enabled ? t('detail.on') : t('detail.off')}</span>
             </label>
           </div>
         </section>
 
         <section className="cw-settings-card">
           <header className="cw-settings-card-head">
-            <h2>설명</h2>
+            <h2>{t('detail.description')}</h2>
             {!descEditMode && (
               <button
                 type="button"
                 onClick={() => setDescEditMode(true)}
-                aria-label="설명 편집"
-                title="편집"
+                aria-label={t('detail.description_edit_aria')}
+                title={t('detail.edit_title')}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -448,7 +452,7 @@ function AutomationSettingsPage() {
                     setDescEditMode(false);
                   }
                 }}
-                placeholder="이 automation이 무엇을 하는지"
+                placeholder={t('detail.description_placeholder')}
                 disabled={descMutation.isPending}
                 rows={3}
                 style={{
@@ -474,7 +478,7 @@ function AutomationSettingsPage() {
                   }}
                   disabled={descMutation.isPending}
                 >
-                  취소
+                  {t('detail.cancel')}
                 </button>
                 <button
                   type="button"
@@ -482,7 +486,7 @@ function AutomationSettingsPage() {
                   onClick={() => descMutation.mutate()}
                   disabled={descSaveDisabled}
                 >
-                  {descMutation.isPending ? '저장 중…' : '저장'}
+                  {descMutation.isPending ? t('detail.saving') : t('detail.save')}
                 </button>
               </div>
             </div>
@@ -495,20 +499,20 @@ function AutomationSettingsPage() {
                 lineHeight: 1.6,
               }}
             >
-              {automation.description || '설명이 없습니다.'}
+              {automation.description || t('detail.description_empty')}
             </p>
           )}
         </section>
 
         <section className="cw-settings-card">
           <header className="cw-settings-card-head">
-            <h2>Prompts</h2>
+            <h2>{t('detail.prompts')}</h2>
             {!promptsEditMode && (
               <button
                 type="button"
                 onClick={() => setPromptsEditMode(true)}
-                aria-label="프롬프트 편집"
-                title="편집"
+                aria-label={t('detail.prompts_edit_aria')}
+                title={t('detail.edit_title')}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -527,7 +531,7 @@ function AutomationSettingsPage() {
               </button>
             )}
           </header>
-          <p className="cw-settings-hint">실행 시 순서대로 평가됩니다. 첫 프롬프트가 후속 단계의 컨텍스트가 됩니다.</p>
+          <p className="cw-settings-hint">{t('detail.prompts_hint')}</p>
           {promptsEditMode ? (
             <>
               <ol className="cw-prompt-list">
@@ -538,13 +542,13 @@ function AutomationSettingsPage() {
                       rows={2}
                       value={line}
                       onChange={(e) => updatePrompt(i, e.target.value)}
-                      placeholder="프롬프트를 입력하세요"
+                      placeholder={t('detail.prompt_placeholder')}
                       disabled={promptsMutation.isPending}
                     />
                     <button
                       className="cw-prompt-remove"
                       type="button"
-                      aria-label="Remove prompt"
+                      aria-label={t('detail.remove_prompt')}
                       onClick={() => removePrompt(i)}
                       disabled={prompts.length <= 1 || promptsMutation.isPending}
                     >
@@ -560,7 +564,7 @@ function AutomationSettingsPage() {
                   onClick={addPrompt}
                   disabled={promptsMutation.isPending}
                 >
-                  <Icon name="plus" size={14} /> Add prompt
+                  <Icon name="plus" size={14} /> {t('detail.add_prompt')}
                 </button>
                 <div style={{ display: 'flex', gap: 10 }}>
                   <button
@@ -572,7 +576,7 @@ function AutomationSettingsPage() {
                     }}
                     disabled={promptsMutation.isPending}
                   >
-                    취소
+                    {t('detail.cancel')}
                   </button>
                   <button
                     type="button"
@@ -580,7 +584,7 @@ function AutomationSettingsPage() {
                     onClick={() => promptsMutation.mutate()}
                     disabled={promptsSaveDisabled}
                   >
-                    {promptsMutation.isPending ? '저장 중…' : '저장'}
+                    {promptsMutation.isPending ? t('detail.saving') : t('detail.save')}
                   </button>
                 </div>
               </div>
@@ -600,9 +604,9 @@ function AutomationSettingsPage() {
         </section>
 
         <section className="cw-settings-card">
-          <h2>실행 에이전트 · 모델</h2>
+          <h2>{t('detail.agent_model')}</h2>
           <p className="cw-settings-hint">
-            앞으로 트리거가 발화될 때 생성되는 세션에서 사용할 에이전트와 모델입니다. 진행 중이거나 이미 끝난 실행에는 영향을 주지 않습니다. 모델을 "권장"으로 두면 실행 시점의 추천 체인으로 결정됩니다.
+            {t('detail.agent_model_hint')}
           </p>
           <div
             className="cw-agent-pickwrap"
@@ -628,7 +632,7 @@ function AutomationSettingsPage() {
                 }}
                 disabled={agentModelMutation.isPending}
               >
-                되돌리기
+                {t('detail.revert')}
               </button>
             )}
             <button
@@ -637,32 +641,32 @@ function AutomationSettingsPage() {
               onClick={() => agentModelMutation.mutate()}
               disabled={!agentModelDirty || agentModelMutation.isPending}
             >
-              {agentModelMutation.isPending ? '저장 중…' : '저장'}
+              {agentModelMutation.isPending ? t('detail.saving') : t('detail.save')}
             </button>
           </div>
         </section>
 
         <section className="cw-settings-card">
           <header className="cw-settings-card-head">
-            <h2>Triggers</h2>
+            <h2>{t('detail.triggers')}</h2>
             {!showAddForm && (
               <button
                 className="cw-btn-secondary"
                 type="button"
                 onClick={() => setShowAddForm(true)}
               >
-                <Icon name="plus" size={14} /> Add trigger
+                <Icon name="plus" size={14} /> {t('detail.add_trigger')}
               </button>
             )}
           </header>
 
           {showAddForm && (
             <div className="cw-trigger-draft">
-              <div className="cw-trigger-picker" role="radiogroup" aria-label="Trigger kind">
+              <div className="cw-trigger-picker" role="radiogroup" aria-label={t('detail.trigger_kind_aria')}>
                 {(['cron', 'webhook'] as const).map((kind) => {
                   const active = draftKind === kind;
-                  const label = kind === 'cron' ? 'Schedule' : 'Webhook';
-                  const sub = kind === 'cron' ? '일정에 따라 반복 실행' : '외부 시스템에서 호출';
+                  const label = kind === 'cron' ? t('detail.schedule') : t('detail.webhook');
+                  const sub = kind === 'cron' ? t('detail.schedule_sub') : t('detail.webhook_sub');
                   return (
                     <label key={kind} className={`cw-trigger-option ${active ? 'is-active' : ''}`}>
                       <input
@@ -690,27 +694,27 @@ function AutomationSettingsPage() {
               {draftKind === 'webhook' && (
                 <div className="cw-trigger-detail">
                   <p className="cw-settings-hint">
-                    생성 직후 한 번만 토큰이 노출됩니다. 안전한 곳에 보관하세요.
+                    {t('detail.webhook_token_hint')}
                   </p>
                 </div>
               )}
 
               <div className="cw-trigger-draft-actions">
-                <button className="cw-btn-secondary" type="button" onClick={resetDraft}>Cancel</button>
+                <button className="cw-btn-secondary" type="button" onClick={resetDraft}>{t('detail.draft_cancel')}</button>
                 <button
                   className="cw-btn-primary"
                   type="button"
                   onClick={submitDraft}
                   disabled={createTriggerMutation.isPending}
                 >
-                  <Icon name="check" size={14} /> {createTriggerMutation.isPending ? 'Adding…' : 'Add'}
+                  <Icon name="check" size={14} /> {createTriggerMutation.isPending ? t('detail.adding') : t('detail.add')}
                 </button>
               </div>
             </div>
           )}
 
           {triggers.length === 0 && !showAddForm ? (
-            <p className="cw-settings-empty">트리거가 없습니다. 수동 실행만 가능합니다.</p>
+            <p className="cw-settings-empty">{t('detail.no_triggers')}</p>
           ) : triggers.length > 0 ? (
             <ul className="cw-trigger-list">
               {triggers.map((trigger) => {
@@ -723,7 +727,7 @@ function AutomationSettingsPage() {
                         <header className="cw-trigger-edit-head">
                           <span className="cw-trigger-badge cw-trigger-cron">schedule</span>
                           <label className="cw-trigger-enabled">
-                            <span>{trigger.enabled ? 'enabled' : 'disabled'}</span>
+                            <span>{trigger.enabled ? t('detail.trigger_enabled') : t('detail.trigger_disabled')}</span>
                             <span className="cw-switch">
                               <input
                                 type="checkbox"
@@ -736,9 +740,9 @@ function AutomationSettingsPage() {
                           <button
                             className="cw-trigger-action"
                             type="button"
-                            aria-label="Save"
+                            aria-label={t('detail.save_aria')}
                             onClick={saveEdit}
-                            title="Save"
+                            title={t('detail.save_aria')}
                             disabled={updateTriggerMutation.isPending}
                           >
                             <Icon name="check" size={14} />
@@ -746,9 +750,9 @@ function AutomationSettingsPage() {
                           <button
                             className="cw-trigger-action"
                             type="button"
-                            aria-label="Cancel"
+                            aria-label={t('detail.cancel_aria')}
                             onClick={cancelEdit}
-                            title="Cancel"
+                            title={t('detail.cancel_aria')}
                           >
                             <Icon name="x" size={14} />
                           </button>
@@ -770,11 +774,11 @@ function AutomationSettingsPage() {
                         ) : (
                           <>
                             <code className="cw-trigger-expr">whk_{trigger.id.slice(0, 6)}</code>
-                            <span className="cw-trigger-meta">bearer token</span>
+                            <span className="cw-trigger-meta">{t('detail.bearer_token')}</span>
                           </>
                         )}
                         <label className="cw-trigger-enabled">
-                          <span>{trigger.enabled ? 'enabled' : 'disabled'}</span>
+                          <span>{trigger.enabled ? t('detail.trigger_enabled') : t('detail.trigger_disabled')}</span>
                           <span className="cw-switch">
                             <input
                               type="checkbox"
@@ -787,21 +791,21 @@ function AutomationSettingsPage() {
                         <button
                           className="cw-trigger-action"
                           type="button"
-                          aria-label="Edit trigger"
+                          aria-label={t('detail.edit_trigger_aria')}
                           onClick={() => startEdit(trigger)}
                           disabled={!isCron}
-                          title={!isCron ? '웹훅은 편집 불가' : 'Edit'}
+                          title={!isCron ? t('detail.webhook_not_editable') : t('detail.edit')}
                         >
                           <Icon name="settings" size={14} />
                         </button>
                         <button
                           className={`cw-trigger-action${pendingTriggerDeleteId === trigger.id ? ' is-armed' : ''}`}
                           type="button"
-                          aria-label={pendingTriggerDeleteId === trigger.id ? '한 번 더 눌러 삭제' : 'Delete trigger'}
+                          aria-label={pendingTriggerDeleteId === trigger.id ? t('detail.delete_again') : t('detail.delete_trigger_aria')}
                           onClick={() => removeTrigger(trigger.id)}
                         >
                           {pendingTriggerDeleteId === trigger.id
-                            ? '한 번 더 눌러 삭제'
+                            ? t('detail.delete_again')
                             : <Icon name="trash" size={14} />}
                         </button>
                       </>
@@ -814,15 +818,15 @@ function AutomationSettingsPage() {
         </section>
 
         <section className="cw-settings-card cw-settings-danger">
-          <h2>Danger zone</h2>
-          <p>이 automation을 삭제하면 실행 이력과 webhook 토큰이 모두 사라집니다.</p>
+          <h2>{t('detail.danger_zone')}</h2>
+          <p>{t('detail.danger_body')}</p>
           <button
             className="cw-btn-secondary cw-btn-destructive"
             type="button"
             onClick={() => setShowDeleteAutomationConfirm(true)}
             disabled={deleteAutomationMutation.isPending}
           >
-            <Icon name="trash" size={14} /> Delete automation
+            <Icon name="trash" size={14} /> {t('detail.delete_automation')}
           </button>
         </section>
       </div>
@@ -841,15 +845,15 @@ function AutomationSettingsPage() {
             closeReveal();
             deleteTriggerMutation.mutate(tid);
           } : undefined}
-          discardLabel={discardArmed ? '한 번 더 눌러 삭제' : '트리거 삭제'}
+          discardLabel={discardArmed ? t('detail.delete_again') : t('detail.discard_trigger')}
           discardArmed={discardArmed}
         />
       )}
       {showDeleteAutomationConfirm && (
         <ConfirmDialog
-          title="Automation 삭제"
-          body={`'${automation.name}' automation을 정말 삭제할까요? 실행 이력과 webhook 토큰이 모두 사라집니다.`}
-          confirmLabel="삭제"
+          title={t('detail.delete_confirm_title')}
+          body={t('detail.delete_confirm_body', { name: automation.name })}
+          confirmLabel={t('detail.delete_confirm_label')}
           destructive
           pending={deleteAutomationMutation.isPending}
           onConfirm={() => deleteAutomationMutation.mutate()}

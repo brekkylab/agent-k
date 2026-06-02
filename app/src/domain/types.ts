@@ -2,6 +2,7 @@ export type UserId = string;
 export type ProjectId = string;
 export type SessionId = string;
 export type ShareMode = 'private' | 'shared_readonly' | 'shared_chat';
+export type PreferredLanguage = 'en' | 'ko';
 
 export interface User {
   id: UserId;
@@ -10,6 +11,7 @@ export interface User {
   roleLabel: string;
   avatar: string;
   color: string;
+  preferredLanguage: PreferredLanguage;
 }
 
 export interface Project {

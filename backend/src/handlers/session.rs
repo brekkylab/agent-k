@@ -61,7 +61,7 @@ fn session_dirs(
     (root.join("inputs"), shared, root.join("artifacts"))
 }
 
-pub(crate) async fn build_session_agent(
+pub async fn build_session_agent(
     state: &Arc<AppState>,
     project_id: Uuid,
     session_id: Uuid,
@@ -113,6 +113,7 @@ pub(crate) async fn build_session_agent(
             let opts = agent_k::agents::CoworkerSandboxOptions {
                 sandbox_name: Some(sandbox_name_for(&session_id)),
                 persist: true,
+                with_skill: true,
             };
             agent_k::agents::get_coworker_agent_with_opts(
                 TOP_LEVEL_AGENT_NAME,
@@ -218,17 +219,15 @@ async fn collect_artifact_paths(artifacts_dir: &std::path::Path) -> HashSet<Stri
         };
         loop {
             match rd.next_entry().await {
-                Ok(Some(entry)) => {
-                    match entry.metadata().await {
-                        Ok(m) if m.is_dir() => stack.push(entry.path()),
-                        Ok(_) => {
-                            if let Ok(rel) = entry.path().strip_prefix(artifacts_dir) {
-                                paths.insert(rel.to_string_lossy().into_owned());
-                            }
+                Ok(Some(entry)) => match entry.metadata().await {
+                    Ok(m) if m.is_dir() => stack.push(entry.path()),
+                    Ok(_) => {
+                        if let Ok(rel) = entry.path().strip_prefix(artifacts_dir) {
+                            paths.insert(rel.to_string_lossy().into_owned());
                         }
-                        Err(_) => {}
                     }
-                }
+                    Err(_) => {}
+                },
                 Ok(None) => break,
                 Err(_) => break,
             }
@@ -315,7 +314,7 @@ async fn resolve_agent_for(
         .await
         .map_err(|e| AppError::internal(e))?;
 
-    agent.state.history = history;
+    agent.state.history.extend(history);
     tracing::info!(%session_id, "agent lazy-created with history restored");
 
     if let Some(existing) = state.get_agent(&session_id) {
@@ -781,7 +780,9 @@ pub async fn clear_message_history(
             .clear_messages(session.id)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
-        agent.state.history.clear();
+        // Keep the system message (instruction + Available Skills) so the
+        // agent retains its identity after the conversation is wiped.
+        agent.state.history.retain(|m| m.role == Role::System);
     } else {
         state
             .repository

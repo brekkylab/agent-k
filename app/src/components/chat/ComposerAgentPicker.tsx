@@ -6,6 +6,7 @@
 // mapping): it selects the recommended model chain and drives agent dispatch.
 
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 import { AGENT_SURFACES, type AgentId } from '@/domain/agentSurfaces';
 
@@ -23,6 +24,7 @@ export function ComposerAgentPicker({
   onChange: (id: AgentId) => void;
   standalone?: boolean;
 }) {
+  const { t } = useTranslation('automation');
   const tabsRef = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
 
@@ -64,7 +66,7 @@ export function ComposerAgentPicker({
     <div
       ref={tabsRef}
       role="group"
-      aria-label="에이전트 선택"
+      aria-label={t('agent_picker.group_label')}
       className={`cw-agent-tabs${standalone ? ' is-standalone' : ''}`}
     >
       <span

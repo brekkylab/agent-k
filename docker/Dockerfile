@@ -11,6 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
       wget \
+      libreoffice-writer \
+      libreoffice-calc \
+      libreoffice-impress \
+      fonts-liberation2 \
+      fonts-crosextra-carlito \
+      fonts-crosextra-caladea \
+      fonts-dejavu \
+      fonts-noto-cjk \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 
 WORKDIR /workspace

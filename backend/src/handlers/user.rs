@@ -18,6 +18,18 @@ use crate::{
     state::AppState,
 };
 
+const DEFAULT_LANGUAGE: &str = "en";
+
+fn validate_language(lang: &str) -> ApiResult<()> {
+    if matches!(lang, "en" | "ko") {
+        Ok(())
+    } else {
+        Err(AppError::bad_request(
+            "preferred_language must be 'en' or 'ko'",
+        ))
+    }
+}
+
 pub async fn get_me(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
@@ -60,6 +72,10 @@ pub async fn update_me(
         None
     };
 
+    if let Some(ref lang) = payload.preferred_language {
+        validate_language(lang)?;
+    }
+
     let updated = state
         .repository
         .update_user(
@@ -69,6 +85,7 @@ pub async fn update_me(
                 password_hash: new_password_hash,
                 role: None,
                 is_active: None,
+                preferred_language: payload.preferred_language,
             },
         )
         .await
@@ -109,6 +126,10 @@ pub async fn create_user_admin(
     let id = Uuid::new_v4();
     let role = payload.role.unwrap_or(Role::User);
     let is_active = payload.is_active.unwrap_or(true);
+    let preferred_language = payload
+        .preferred_language
+        .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
+    validate_language(&preferred_language)?;
 
     let user = state
         .repository
@@ -119,6 +140,7 @@ pub async fn create_user_admin(
             role,
             display_name: payload.display_name,
             is_active,
+            preferred_language,
         })
         .await
         .map_err(|e| match e {
@@ -188,6 +210,10 @@ pub async fn update_user_admin(
         })
         .transpose()?;
 
+    if let Some(ref lang) = payload.preferred_language {
+        validate_language(lang)?;
+    }
+
     let updated = state
         .repository
         .update_user(
@@ -197,6 +223,7 @@ pub async fn update_user_admin(
                 password_hash: new_password_hash,
                 role: payload.role,
                 is_active: payload.is_active,
+                preferred_language: payload.preferred_language,
             },
         )
         .await
@@ -228,4 +255,30 @@ pub async fn delete_user_admin(
     tracing::info!(target_user_id = %id, by = %auth.id, "admin deleted user");
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_language;
+
+    #[test]
+    fn validate_language_accepts_en_and_ko() {
+        assert!(validate_language("en").is_ok());
+        assert!(validate_language("ko").is_ok());
+    }
+
+    #[test]
+    fn validate_language_rejects_unsupported_codes() {
+        assert!(validate_language("ja").is_err());
+        assert!(validate_language("zh").is_err());
+        assert!(validate_language("").is_err());
+    }
+
+    #[test]
+    fn validate_language_is_case_sensitive() {
+        // The frontend always sends lowercase codes; reject uppercase so a typo
+        // doesn't silently succeed in the DB.
+        assert!(validate_language("EN").is_err());
+        assert!(validate_language("Ko").is_err());
+    }
 }

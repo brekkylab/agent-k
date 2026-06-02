@@ -1,0 +1,89 @@
+{
+  "rename": {
+    "title": "Rename",
+    "current_name": "Current name",
+    "new_name": "New name",
+    "submit": "Rename",
+    "submitting": "Renaming…",
+    "extension_warning": "The extension changes from {{from}} to {{to}}. The file may not open properly.",
+    "extension_unknown": "(none)",
+    "back": "Go back",
+    "force_submit": "Rename including extension",
+    "validation": {
+      "slash_blocked": "Names cannot contain / or \\.",
+      "dots_only": "Names cannot consist of only dots.",
+      "same_as_current": "Same as the current name.",
+      "duplicate": "Already a file named \"{{name}}\"."
+    }
+  },
+  "new_project": {
+    "title": "New project",
+    "description": "Create a new workspace. You'll be moved into it after creation.",
+    "name_label": "Name",
+    "name_placeholder": "e.g. Quarterly Planning",
+    "description_label": "Description",
+    "optional": "(optional)",
+    "description_placeholder": "What kind of work happens in this project?",
+    "submit": "Create",
+    "submitting": "Creating…",
+    "validation": {
+      "too_long": "Project name must be 100 characters or less.",
+      "duplicate": "A project named \"{{name}}\" already exists."
+    },
+    "errors": {
+      "session_expired": "Your session expired. Please log in again.",
+      "name_taken": "A project with that name already exists.",
+      "invalid": "Please double-check your input.",
+      "generic": "Failed to create the project."
+    }
+  },
+  "new_folder": {
+    "title": "New folder",
+    "description": "Create a new folder in the current location.",
+    "name_label": "Name",
+    "name_placeholder": "e.g. Drafts",
+    "submit": "Create",
+    "submitting": "Creating…",
+    "validation": {
+      "slash_blocked": "Folder names cannot contain / or \\.",
+      "dots_only": "Folder names cannot consist of only dots.",
+      "starts_with_dot": "Names starting with . are treated as hidden and won't appear.",
+      "duplicate": "A folder named \"{{name}}\" already exists."
+    }
+  },
+  "invite": {
+    "title": "Invite member",
+    "description": "Enter the username of the person to invite. Only registered users can be added.",
+    "username_placeholder": "username",
+    "submit": "Invite",
+    "submitting": "Inviting…",
+    "validation": {
+      "username_required": "Please enter a username."
+    },
+    "errors": {
+      "not_found": "No user found with that username.",
+      "already_member": "This user is already a member of this project.",
+      "forbidden": "You don't have permission to invite members (project owner only).",
+      "generic": "Failed to invite the user."
+    }
+  },
+  "copy_to_shared": {
+    "title": "Copy to shared folder",
+    "body_single": "Copy {{name}} to the shared folder.",
+    "body_multi": "Copy {{count}} files to the shared folder.",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "success": "Copied to the shared folder",
+    "failure": "Copy failed",
+    "submit": "Copy",
+    "submitting": "Copying…"
+  },
+  "folder_picker": {
+    "body_single": "Choose a folder to move {{name}} into.",
+    "body_multi": "Choose a folder to move {{count}} items into.",
+    "root": "Project root",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "submitting": "In progress…"
+  }
+}

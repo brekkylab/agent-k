@@ -1,0 +1,66 @@
+{
+  "toast": {
+    "stream_failed": "스트리밍 실패: {{error}}",
+    "send_failed": "전송 실패: {{message}}",
+    "share_mode_changed": "공유 모드가 변경되었습니다",
+    "share_change_failed": "공유 변경 실패: {{message}}",
+    "artifact_deleted": "삭제되었습니다",
+    "artifact_delete_failed": "삭제 실패",
+    "unknown_error": "unknown"
+  },
+  "ui": {
+    "ai_responding": "AI 답변 중…",
+    "attach_file": "파일 첨부",
+    "self_label": "나",
+    "tool_running": "실행 중…",
+    "send_aria": "전송",
+    "composer_placeholder": "Cowork와 팀에 메시지 보내기…",
+    "composer_hint": "Enter로 전송 · @파일명으로 파일 참조",
+    "title_fallback": "…"
+  },
+  "chat": {
+    "started_by": "시작한 사람:",
+    "files_count": "파일 {{count}}개",
+    "default_label": "Cowork 기본",
+    "model_in_use": "이 세션에서 사용 중인 모델",
+    "agent_chip": "이 세션의 에이전트"
+  },
+  "side": {
+    "members": "멤버",
+    "referenced_files": "참조된 파일",
+    "no_pinned_files": "고정된 파일이 아직 없어요.",
+    "access": "접근",
+    "session": "세션",
+    "project_label": "프로젝트 · {{name}}"
+  },
+  "artifacts_header": "산출물",
+  "menu": {
+    "options": "세션 옵션",
+    "duplicate": "세션 복제",
+    "delete": "세션 삭제"
+  },
+  "artifact": {
+    "download": "다운로드",
+    "copy_to_shared": "공유 디렉토리로 복사",
+    "delete": "삭제"
+  },
+  "delete_artifact": {
+    "title": "삭제 확인",
+    "body": "{{name}} 삭제하시겠습니까?",
+    "confirm": "삭제"
+  },
+  "artifacts": {
+    "select_count": "{{count}}개 선택됨",
+    "deselect_all": "전체 해제",
+    "select_all": "전체 선택",
+    "bulk_label": "선택 항목 작업",
+    "more": "더보기",
+    "empty_title": "산출물 없음",
+    "empty_body": "에이전트가 파일을 생성하면 여기에 표시됩니다."
+  },
+  "delete_artifacts_bulk": {
+    "title": "삭제 확인",
+    "body": "{{count}}개 파일을 삭제하시겠습니까?",
+    "confirm": "삭제"
+  }
+}

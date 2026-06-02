@@ -1,4 +1,4 @@
-import { ApiError, getBaseUrl, getToken, notifyUnauthorized, request } from './client';
+import { ApiError, BASE_URL, getToken, notifyUnauthorized, request } from './client';
 import type { BackendDirent, BackendDirentBatchOp, BackendDirentBatchResult } from './backend-types';
 import { toFileAsset } from './transformers';
 import type { FileAsset } from '@/domain/types';
@@ -138,7 +138,7 @@ export async function downloadFileByGlobalPath(globalPath: string): Promise<void
 
 /** Fetch a file by its full global path and return the blob (for thumbnails etc.). */
 export async function fetchFileBlob(globalPath: string): Promise<Blob> {
-  const url = `${getBaseUrl()}/dirents/${encodePath(globalPath)}`;
+  const url = `${BASE_URL}/dirents/${encodePath(globalPath)}`;
   const headers = new Headers();
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);

@@ -6,6 +6,7 @@
 // default chain.
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getModelCatalog, modelLabel, tierLabel } from '@/api/models';
 import { updateProject } from '@/api/projects';
@@ -30,6 +31,7 @@ export function ProjectModelChainsEditor({
   overrides: Chains;
   editable: boolean;
 }) {
+  const { t } = useTranslation('automation');
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   // Default chains (no project_ref) + the full model catalog for labels/availability.
@@ -67,16 +69,16 @@ export function ProjectModelChainsEditor({
         queryClient.invalidateQueries({ queryKey: ['project', projectSlug] }),
         queryClient.invalidateQueries({ queryKey: ['models', projectSlug] }),
       ]);
-      showToast('추천 모델 체인을 저장했습니다');
+      showToast(t('chains_editor.saved'));
     },
-    onError: () => showToast('추천 모델 체인 저장에 실패했습니다'),
+    onError: () => showToast(t('chains_editor.save_failed')),
   });
 
   if (!catalog.data) {
     return (
       <div style={{ marginBottom: 24 }}>
-        <SectionLabel>Model recommendations</SectionLabel>
-        <p style={{ color: 'var(--cw-ink-4)', fontSize: 13 }}>모델 목록을 불러오는 중…</p>
+        <SectionLabel>{t('chains_editor.section_label')}</SectionLabel>
+        <p style={{ color: 'var(--cw-ink-4)', fontSize: 13 }}>{t('chains_editor.loading')}</p>
       </div>
     );
   }
@@ -98,7 +100,7 @@ export function ProjectModelChainsEditor({
 
   return (
     <div style={{ marginBottom: 24 }}>
-      <SectionLabel>Model recommendations</SectionLabel>
+      <SectionLabel>{t('chains_editor.section_label')}</SectionLabel>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {AGENTS.map(({ type, label }) => {
@@ -119,7 +121,7 @@ export function ProjectModelChainsEditor({
                 <b style={{ fontSize: 13, color: 'var(--cw-ink)' }}>
                   {label}
                   {isDefault && (
-                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--cw-ink-4)', fontWeight: 400 }}>(기본값)</span>
+                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--cw-ink-4)', fontWeight: 400 }}>{t('chains_editor.default')}</span>
                   )}
                 </b>
                 {editable && !isDefault && (
@@ -129,7 +131,7 @@ export function ProjectModelChainsEditor({
                     onClick={() => setChain(type, defaults[type] ?? [])}
                     style={{ fontSize: 12, padding: '3px 8px' }}
                   >
-                    기본값으로
+                    {t('chains_editor.reset_to_default')}
                   </button>
                 )}
               </div>
@@ -159,14 +161,14 @@ export function ProjectModelChainsEditor({
                           <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--cw-ink-4)' }}>· {tierLabel(model.tier)}</span>
                         )}
                         {unavailable && (
-                          <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--cw-destructive)' }}>· Provider 없음</span>
+                          <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--cw-destructive)' }}>· {t('chains_editor.no_provider')}</span>
                         )}
                       </span>
                       {editable && (
                         <span style={{ display: 'inline-flex', gap: 2 }}>
-                          <IconBtn label="위로" disabled={i === 0} onClick={() => move(type, i, -1)}><span style={{ fontSize: 13, lineHeight: 1 }}>↑</span></IconBtn>
-                          <IconBtn label="아래로" disabled={i === chain.length - 1} onClick={() => move(type, i, 1)}><span style={{ fontSize: 13, lineHeight: 1 }}>↓</span></IconBtn>
-                          <IconBtn label="제거" disabled={chain.length <= 1} onClick={() => setChain(type, chain.filter((x) => x !== id))}><Icon name="x" size={13} /></IconBtn>
+                          <IconBtn label={t('chains_editor.move_up')} disabled={i === 0} onClick={() => move(type, i, -1)}><span style={{ fontSize: 13, lineHeight: 1 }}>↑</span></IconBtn>
+                          <IconBtn label={t('chains_editor.move_down')} disabled={i === chain.length - 1} onClick={() => move(type, i, 1)}><span style={{ fontSize: 13, lineHeight: 1 }}>↓</span></IconBtn>
+                          <IconBtn label={t('chains_editor.remove')} disabled={chain.length <= 1} onClick={() => setChain(type, chain.filter((x) => x !== id))}><Icon name="x" size={13} /></IconBtn>
                         </span>
                       )}
                     </li>
@@ -188,10 +190,10 @@ export function ProjectModelChainsEditor({
                     color: 'var(--cw-ink-2)',
                   }}
                 >
-                  <option value="">+ 모델 추가…</option>
+                  <option value="">{t('chains_editor.add_model')}</option>
                   {remaining.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.label} ({tierLabel(m.tier)}){m.available ? '' : ' — Provider 없음'}
+                      {m.label} ({tierLabel(m.tier)}){m.available ? '' : t('chains_editor.no_provider_inline')}
                     </option>
                   ))}
                 </select>
@@ -209,7 +211,7 @@ export function ProjectModelChainsEditor({
             onClick={() => save.mutate()}
             disabled={!dirty || save.isPending}
           >
-            {save.isPending ? '저장 중…' : '추천 모델 저장'}
+            {save.isPending ? t('chains_editor.saving') : t('chains_editor.save')}
           </button>
         </div>
       )}
