@@ -33,7 +33,7 @@ const STATUS_LABEL: Record<RunStatus, string> = {
 };
 
 const TRIGGER_LABEL: Record<TriggerKind, string> = {
-  cron: 'recurring', webhook: 'webhook', manual: 'manual',
+  cron: 'schedule', webhook: 'webhook', manual: 'manual',
 };
 
 function formatRunWhen(run: Run): string {
@@ -556,7 +556,7 @@ function AutomationsPage() {
                       </li>
                     ) : triggersByAutomation[automation.id].map((t) => (
                       <li key={t.id}>
-                        <span className={`cw-trigger-badge cw-trigger-${t.kind}`}>{t.kind === 'cron' ? 'recurring' : t.kind}</span>
+                        <span className={`cw-trigger-badge cw-trigger-${t.kind}`}>{t.kind === 'cron' ? 'schedule' : t.kind}</span>
                         <span className="cw-rail-trigger-meta">{triggerSummaryText(t)}</span>
                       </li>
                     ))}
@@ -595,7 +595,7 @@ function AutomationsPage() {
               onChange={setTriggerFilter}
               options={[
                 { value: 'all',     label: 'All triggers' },
-                { value: 'cron',    label: 'recurring' },
+                { value: 'cron',    label: 'schedule' },
                 { value: 'webhook', label: 'webhook' },
                 { value: 'manual',  label: 'manual' },
               ]}

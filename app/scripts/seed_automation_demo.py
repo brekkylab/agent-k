@@ -166,19 +166,19 @@ def main() -> None:
     # Session titles mirror the backend's deterministic format for
     # automation-created sessions:
     #   "{automation_name} · {kind_label} · {scheduled_for as %Y-%m-%d %H:%M}"
-    # kind_label maps 'cron' → 'recurring'; 'webhook' / 'manual' stay verbatim.
+    # kind_label maps 'cron' → 'schedule'; 'webhook' / 'manual' stay verbatim.
     sessions = [
         (SESS_A1_1, PROJECT_KLIENT, OLIVE_ID, "private",
-         f"Daily summary · recurring · {title_ts(100)}",
+         f"Daily summary · schedule · {title_ts(100)}",
          None, None, ts(100), ts(110), "automation"),
         (SESS_A1_2, PROJECT_KLIENT, OLIVE_ID, "private",
-         f"Daily summary · recurring · {title_ts(90)}",
+         f"Daily summary · schedule · {title_ts(90)}",
          None, None, ts(120), ts(120), "automation"),
         (SESS_A1_3, PROJECT_KLIENT, OLIVE_ID, "private",
-         f"Daily summary · recurring · {title_ts(80)}",
+         f"Daily summary · schedule · {title_ts(80)}",
          None, None, ts(80), ts(95), "automation"),
         (SESS_A2_1, PROJECT_KLIENT, OLIVE_ID, "private",
-         f"Weekly digest · recurring · {title_ts(50)}",
+         f"Weekly digest · schedule · {title_ts(50)}",
          None, None, ts(50), ts(75), "automation"),
         (SESS_A3_1, PROJECT_KLIENT, OLIVE_ID, "private",
          f"On-call ping · webhook · {title_ts(40)}",

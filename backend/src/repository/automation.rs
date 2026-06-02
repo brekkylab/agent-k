@@ -73,11 +73,11 @@ fn automation_session_title(
     scheduled_for: DateTime<Utc>,
 ) -> String {
     // DB stores 'cron' for the trigger kind, but in user-visible labels we use
-    // 'recurring' — pairs cleanly against 'webhook' (event-driven) and
+    // 'schedule' — pairs cleanly against 'webhook' (event-driven) and
     // 'manual' (user-driven) on the kind axis. Keep this in sync with the
     // frontend label mapping.
     let kind_label = match trigger_kind {
-        "cron" => "recurring",
+        "cron" => "schedule",
         other => other,
     };
     format!(
