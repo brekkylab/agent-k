@@ -12,7 +12,7 @@ import { AvatarStack } from '@/components/uiPrimitives';
 import { ProjectHomeComposer, type ProjectHomeComposerSubmission } from '@/components/chat/ProjectHomeComposer';
 import { ComposerModelPicker } from '@/components/chat/ComposerModelPicker';
 import { ComposerAgentPicker } from '@/components/chat/ComposerAgentPicker';
-import { DEFAULT_AGENT_ID, getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
+import { DEFAULT_AGENT_ID, type AgentId, type SuggestedPrompt } from '@/domain/agentSurfaces';
 import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
@@ -28,6 +28,7 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/')({
 function ProjectHome() {
   const { projectSlug } = Route.useParams();
   const { t } = useTranslation('project');
+  const { t: tAgent } = useTranslation('automation');
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -54,7 +55,13 @@ function ProjectHome() {
   const setSelectedModel = (id: string | null) => setModel(projectSlug, selectedAgentId, id);
   const [focusNonce, setFocusNonce] = useState(0);
 
-  const activeAgent = getAgentSurface(selectedAgentId);
+  // Agent copy (greeting/placeholder/suggested prompts) is i18n'd in the
+  // `automation` namespace, keyed by the agent surface id.
+  const agentGreeting = tAgent(`agent.${selectedAgentId}.greeting`);
+  const agentPlaceholder = tAgent(`agent.${selectedAgentId}.placeholder`);
+  const agentPrompts = tAgent(`agent.${selectedAgentId}.prompts`, {
+    returnObjects: true,
+  }) as SuggestedPrompt[];
 
   // The model that will actually run: an explicit pin, or what "recommended"
   // resolves to (a chain model, or the last-resort fallback). Send is blocked
@@ -126,7 +133,7 @@ function ProjectHome() {
 
       <div className="cw-home-blank">
         <p className="cw-home-greeting">
-          {activeAgent.greeting}
+          {agentGreeting}
         </p>
 
         <div
@@ -144,7 +151,7 @@ function ProjectHome() {
             pending={startSessionMutation.isPending}
             sendBlocked={sendBlocked}
             sendBlockedHint={t('home.send_blocked_hint')}
-            placeholder={activeAgent.placeholder}
+            placeholder={agentPlaceholder}
             focusSignal={focusNonce}
             onAttachClick={() => showToast(t('home.attach_coming_soon'))}
             modelPicker={
@@ -163,7 +170,7 @@ function ProjectHome() {
           className="cw-suggested-prompts"
           aria-label={t('home.suggested_prompts_aria')}
         >
-          {activeAgent.prompts.map((prompt) => (
+          {agentPrompts.map((prompt) => (
             <button
               key={prompt.label}
               type="button"

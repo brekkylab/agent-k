@@ -725,7 +725,7 @@ function AutomationSettingsPage() {
                     {isEditing && isCron ? (
                       <>
                         <header className="cw-trigger-edit-head">
-                          <span className="cw-trigger-badge cw-trigger-cron">schedule</span>
+                          <span className="cw-trigger-badge cw-trigger-cron">{t('trigger_kind.schedule')}</span>
                           <label className="cw-trigger-enabled">
                             <span>{trigger.enabled ? t('detail.trigger_enabled') : t('detail.trigger_disabled')}</span>
                             <span className="cw-switch">
@@ -764,11 +764,11 @@ function AutomationSettingsPage() {
                     ) : (
                       <>
                         <span className={`cw-trigger-badge cw-trigger-${trigger.kind}`}>
-                          {isCron ? 'schedule' : trigger.kind}
+                          {isCron ? t('trigger_kind.schedule') : t(`trigger_kind.${trigger.kind}`)}
                         </span>
                         {trigger.spec.kind === 'cron' ? (
                           <>
-                            <span className="cw-trigger-summary">{summarizeCron(trigger.spec.expr)}</span>
+                            <span className="cw-trigger-summary">{summarizeCron(trigger.spec.expr, t)}</span>
                             <span className="cw-trigger-meta">{trigger.spec.tz ?? 'UTC'}</span>
                           </>
                         ) : (

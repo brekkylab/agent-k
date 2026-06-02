@@ -58,16 +58,6 @@ export async function getModelCatalog(projectRef?: string): Promise<ModelCatalog
   };
 }
 
-const TIER_LABELS: Record<ModelTier, string> = {
-  light: '경량',
-  standard: '표준',
-  max: '고성능',
-};
-
-export function tierLabel(tier: ModelTier): string {
-  return TIER_LABELS[tier];
-}
-
 export function modelLabel(catalog: ModelCatalog | undefined, id: string): string {
   return catalog?.models.find((m) => m.id === id)?.label ?? id;
 }

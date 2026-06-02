@@ -5,6 +5,8 @@
 // its `W#N` syntax for "the nth weekday of the month".
 
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Icon } from '@/components/Icon';
 
 export type SchedulePickerValue = { expr: string; tz: string };
@@ -25,9 +27,6 @@ interface State {
   customExpr: string;
   tz: string;
 }
-
-const WEEKDAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
-const NTH_NAMES = ['첫째', '둘째', '셋째', '넷째', '다섯째'];
 
 function pad(n: number): string { return n.toString().padStart(2, '0'); }
 
@@ -113,21 +112,34 @@ function parseCron(expr: string, tz: string): State {
   return { ...fallback, unit: 'custom', customExpr: expr };
 }
 
-export function summarizeCron(expr: string): string {
+export function summarizeCron(expr: string, t: TFunction<'automation'>): string {
   const s = parseCron(expr, '');
-  const t = `${pad(s.hour)}:${pad(s.minute)}`;
+  const time = `${pad(s.hour)}:${pad(s.minute)}`;
+  const weekdayArr = t('sched.weekdays', { returnObjects: true }) as string[];
+  const nthArr = t('sched.nth', { returnObjects: true }) as string[];
   switch (s.unit) {
-    case 'hour':  return s.interval === 1 ? '매시간' : `${s.interval}시간마다`;
-    case 'day':   return `매일 ${t}`;
+    case 'hour':
+      return s.interval === 1
+        ? t('sched.summary.every_hour')
+        : t('sched.summary.every_n_hours', { n: s.interval });
+    case 'day':
+      return t('sched.summary.daily', { time });
     case 'week': {
-      if (s.weekdays.size === 0) return `매주 ${t}`;
-      const list = [...s.weekdays].sort((a, b) => a - b).map((d) => WEEKDAY_NAMES[d]).join(',');
-      return `매주 ${list}요일 ${t}`;
+      if (s.weekdays.size === 0) return t('sched.summary.weekly_all', { time });
+      const days = [...s.weekdays].sort((a, b) => a - b).map((d) => weekdayArr[d]).join(',');
+      return t('sched.summary.weekly', { days, time });
     }
     case 'month':
-      if (s.monthlyMode === 'day') return `매월 ${s.dayOfMonth}일 ${t}`;
-      return `매월 ${NTH_NAMES[Math.max(0, s.nth - 1)] ?? `${s.nth}번째`} ${WEEKDAY_NAMES[s.nthWeekday]}요일 ${t}`;
-    case 'custom': return s.customExpr || '(custom)';
+      if (s.monthlyMode === 'day') {
+        return t('sched.summary.monthly_day', { day: s.dayOfMonth, time });
+      }
+      return t('sched.summary.monthly_weekday', {
+        nth: nthArr[s.nth - 1] ?? String(s.nth),
+        weekday: weekdayArr[s.nthWeekday],
+        time,
+      });
+    case 'custom':
+      return s.customExpr || '(custom)';
   }
 }
 
@@ -137,6 +149,9 @@ export function SchedulePicker({
   value: SchedulePickerValue;
   onChange: (next: SchedulePickerValue) => void;
 }) {
+  const { t } = useTranslation('automation');
+  const weekdayArr = t('sched.weekdays', { returnObjects: true }) as string[];
+  const nthArr = t('sched.nth', { returnObjects: true }) as string[];
   const [state, setState] = useState<State>(() => parseCron(value.expr, value.tz));
 
   // Notify upstream whenever state changes; skip the initial mount.
@@ -162,18 +177,14 @@ export function SchedulePicker({
   };
 
   const previewCron = specToCron(state);
-  const summary = summarizeCron(previewCron);
+  const summary = summarizeCron(previewCron, t);
   const intervalDisabled = state.unit !== 'hour';
-
-  const unitLabel: Record<Unit, string> = {
-    hour: '시간', day: '일', week: '주', month: '월', custom: '사용자 정의',
-  };
 
   return (
     <div className="cw-schedule-picker">
       {/* Row 1: Repeat every [N] [unit] */}
       <div className="cw-sched-row">
-        <span className="cw-sched-label">반복 주기</span>
+        <span className="cw-sched-label">{t('sched.repeat_every')}</span>
         <input
           type="number"
           className="cw-sched-num"
@@ -183,25 +194,25 @@ export function SchedulePicker({
           disabled={intervalDisabled}
           aria-disabled={intervalDisabled}
           onChange={(e) => update({ interval: Math.max(1, Math.min(24, parseInt(e.target.value, 10) || 1)) })}
-          title={intervalDisabled ? 'cron으로는 매시간 단위에서만 N>1을 지원합니다.' : ''}
+          title={intervalDisabled ? t('sched.interval_hint') : ''}
         />
         <select
           className="cw-sched-unit"
           value={state.unit}
           onChange={(e) => update({ unit: e.target.value as Unit })}
         >
-          <option value="hour">{unitLabel.hour}마다 (Hourly)</option>
-          <option value="day">{unitLabel.day} (Daily)</option>
-          <option value="week">{unitLabel.week} (Weekly)</option>
-          <option value="month">{unitLabel.month} (Monthly)</option>
-          <option value="custom">{unitLabel.custom} (Custom cron)</option>
+          <option value="hour">{t('sched.opt.hourly')}</option>
+          <option value="day">{t('sched.opt.daily')}</option>
+          <option value="week">{t('sched.opt.weekly')}</option>
+          <option value="month">{t('sched.opt.monthly')}</option>
+          <option value="custom">{t('sched.opt.custom')}</option>
         </select>
       </div>
 
       {/* Row 2: Monthly mode dropdown */}
       {state.unit === 'month' && (
         <div className="cw-sched-row">
-          <span className="cw-sched-label">반복 방식</span>
+          <span className="cw-sched-label">{t('sched.repeat_mode')}</span>
           <select
             className="cw-sched-unit"
             value={state.monthlyMode === 'day' ? `day-${state.dayOfMonth}` : `wk-${state.nth}-${state.nthWeekday}`}
@@ -215,9 +226,12 @@ export function SchedulePicker({
               }
             }}
           >
-            <option value={`day-${state.dayOfMonth}`}>매월 {state.dayOfMonth}일</option>
+            <option value={`day-${state.dayOfMonth}`}>{t('sched.monthly_day_opt', { day: state.dayOfMonth })}</option>
             <option value={`wk-${state.nth}-${state.nthWeekday}`}>
-              매월 {NTH_NAMES[state.nth - 1] ?? `${state.nth}번째`} {WEEKDAY_NAMES[state.nthWeekday]}요일
+              {t('sched.monthly_weekday_opt', {
+                nth: nthArr[state.nth - 1] ?? String(state.nth),
+                weekday: weekdayArr[state.nthWeekday],
+              })}
             </option>
           </select>
         </div>
@@ -226,7 +240,7 @@ export function SchedulePicker({
       {/* Row 2b: Monthly fine-tune controls */}
       {state.unit === 'month' && state.monthlyMode === 'day' && (
         <div className="cw-sched-row">
-          <span className="cw-sched-label">며칠</span>
+          <span className="cw-sched-label">{t('sched.day_of_month')}</span>
           <input
             type="number"
             className="cw-sched-num"
@@ -235,25 +249,25 @@ export function SchedulePicker({
             value={state.dayOfMonth}
             onChange={(e) => update({ dayOfMonth: Math.max(1, Math.min(31, parseInt(e.target.value, 10) || 1)) })}
           />
-          <span className="cw-sched-suffix">일</span>
+          <span className="cw-sched-suffix">{t('sched.day_suffix')}</span>
         </div>
       )}
       {state.unit === 'month' && state.monthlyMode === 'weekday' && (
         <div className="cw-sched-row">
-          <span className="cw-sched-label">상세</span>
+          <span className="cw-sched-label">{t('sched.detail')}</span>
           <select
             className="cw-sched-unit cw-sched-unit-narrow"
             value={state.nth}
             onChange={(e) => update({ nth: parseInt(e.target.value, 10) })}
           >
-            {NTH_NAMES.map((n, i) => <option key={i} value={i + 1}>{n}</option>)}
+            {nthArr.map((n, i) => <option key={i} value={i + 1}>{n}</option>)}
           </select>
           <select
             className="cw-sched-unit cw-sched-unit-narrow"
             value={state.nthWeekday}
             onChange={(e) => update({ nthWeekday: parseInt(e.target.value, 10) })}
           >
-            {WEEKDAY_NAMES.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
+            {weekdayArr.map((d, i) => <option key={i} value={i}>{t('sched.weekday_option', { day: d })}</option>)}
           </select>
         </div>
       )}
@@ -261,9 +275,9 @@ export function SchedulePicker({
       {/* Row 3: Weekly chips */}
       {state.unit === 'week' && (
         <div className="cw-sched-row cw-sched-row-stack">
-          <span className="cw-sched-label">요일</span>
-          <div className="cw-weekday-row" role="group" aria-label="요일">
-            {WEEKDAY_NAMES.map((label, i) => (
+          <span className="cw-sched-label">{t('sched.weekday_label')}</span>
+          <div className="cw-weekday-row" role="group" aria-label={t('sched.weekday_label')}>
+            {weekdayArr.map((label, i) => (
               <button
                 key={i}
                 type="button"
@@ -281,7 +295,7 @@ export function SchedulePicker({
       {/* Row 4: Time-of-day */}
       {(state.unit === 'day' || state.unit === 'week' || state.unit === 'month') && (
         <div className="cw-sched-row">
-          <span className="cw-sched-label">실행 시각</span>
+          <span className="cw-sched-label">{t('sched.run_time')}</span>
           <input
             type="time"
             className="cw-sched-time"
@@ -307,7 +321,7 @@ export function SchedulePicker({
 
       {/* Timezone */}
       <div className="cw-sched-row">
-        <span className="cw-sched-label">Timezone</span>
+        <span className="cw-sched-label">{t('sched.timezone')}</span>
         <input
           type="text"
           className="cw-sched-text"
@@ -322,7 +336,7 @@ export function SchedulePicker({
         <Icon name="calendar" size={14} />
         <span>{summary}</span>
         {state.unit !== 'custom' && (
-          <code title="생성될 cron 표현식">{previewCron}</code>
+          <code title={t('sched.cron_preview_title')}>{previewCron}</code>
         )}
       </div>
     </div>

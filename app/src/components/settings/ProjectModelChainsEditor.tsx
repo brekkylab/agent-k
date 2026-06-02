@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getModelCatalog, modelLabel, tierLabel } from '@/api/models';
+import { getModelCatalog, modelLabel } from '@/api/models';
 import { updateProject } from '@/api/projects';
 import { AGENT_SURFACES } from '@/domain/agentSurfaces';
 import { SectionLabel } from '@/components/uiPrimitives';
@@ -31,7 +31,7 @@ export function ProjectModelChainsEditor({
   overrides: Chains;
   editable: boolean;
 }) {
-  const { t } = useTranslation('automation');
+  const { t } = useTranslation('project');
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   // Default chains (no project_ref) + the full model catalog for labels/availability.
@@ -158,7 +158,7 @@ export function ProjectModelChainsEditor({
                       <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--cw-ink)' }}>
                         {modelLabel(catalog.data, id)}
                         {model && (
-                          <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--cw-ink-4)' }}>· {tierLabel(model.tier)}</span>
+                          <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--cw-ink-4)' }}>· {t(`tier.${model.tier}`, { ns: 'automation' })}</span>
                         )}
                         {unavailable && (
                           <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--cw-destructive)' }}>· {t('chains_editor.no_provider')}</span>
@@ -193,7 +193,7 @@ export function ProjectModelChainsEditor({
                   <option value="">{t('chains_editor.add_model')}</option>
                   {remaining.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.label} ({tierLabel(m.tier)}){m.available ? '' : t('chains_editor.no_provider_inline')}
+                      {m.label} ({t(`tier.${m.tier}`, { ns: 'automation' })}){m.available ? '' : t('chains_editor.no_provider_inline')}
                     </option>
                   ))}
                 </select>

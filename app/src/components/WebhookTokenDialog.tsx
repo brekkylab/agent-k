@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 
 export function WebhookTokenDialog({
@@ -7,7 +8,7 @@ export function WebhookTokenDialog({
   curlSample,
   onClose,
   onDiscard,
-  discardLabel = '생성 취소',
+  discardLabel,
   discardArmed = false,
 }: {
   token: string;
@@ -17,6 +18,7 @@ export function WebhookTokenDialog({
   discardLabel?: string;
   discardArmed?: boolean;
 }) {
+  const { t } = useTranslation('automation');
   const [acknowledged, setAcknowledged] = useState(false);
   const [copied, setCopied] = useState(false);
   const [curlCopied, setCurlCopied] = useState(false);
@@ -64,10 +66,10 @@ export function WebhookTokenDialog({
             <span className="cw-webhook-dialog-icon">
               <Icon name="shield" size={16} />
             </span>
-            <h2 id="cw-webhook-token-title">Webhook 토큰</h2>
+            <h2 id="cw-webhook-token-title">{t('webhook_dialog.title')}</h2>
           </div>
           <p className="cw-dialog-warn">
-            이 토큰은 지금 한 번만 표시됩니다. 닫으면 다시 볼 수 없으니 안전한 곳에 보관하세요.
+            {t('webhook_dialog.warn')}
           </p>
         </header>
 
@@ -77,10 +79,10 @@ export function WebhookTokenDialog({
             type="button"
             className="cw-token-copy"
             onClick={copy}
-            aria-label="토큰 복사"
+            aria-label={t('webhook_dialog.copy_token_aria')}
           >
             <Icon name={copied ? 'check' : 'copy'} size={14} />
-            {copied ? '복사됨' : 'Copy'}
+            {copied ? t('webhook_dialog.copied') : t('webhook_dialog.copy')}
           </button>
         </div>
 
@@ -88,7 +90,7 @@ export function WebhookTokenDialog({
           <details className="cw-token-curl">
             <summary>
               <Icon name="chevron-right" size={14} />
-              호출 예시 (curl)
+              {t('webhook_dialog.curl_summary')}
             </summary>
             <div className="cw-token-curl-body">
               <pre>{curlSample}</pre>
@@ -96,10 +98,10 @@ export function WebhookTokenDialog({
                 type="button"
                 className="cw-token-curl-copy"
                 onClick={copyCurl}
-                aria-label="curl 명령 복사"
+                aria-label={t('webhook_dialog.copy_curl_aria')}
               >
                 <Icon name={curlCopied ? 'check' : 'copy'} size={12} />
-                {curlCopied ? '복사됨' : 'Copy'}
+                {curlCopied ? t('webhook_dialog.copied') : t('webhook_dialog.copy')}
               </button>
             </div>
           </details>
@@ -111,7 +113,7 @@ export function WebhookTokenDialog({
             checked={acknowledged}
             onChange={(e) => setAcknowledged(e.target.checked)}
           />
-          <span>토큰을 안전한 곳에 보관했습니다.</span>
+          <span>{t('webhook_dialog.ack')}</span>
         </label>
 
         <footer className="cw-webhook-actions">
@@ -121,7 +123,7 @@ export function WebhookTokenDialog({
               className={`cw-btn-secondary cw-btn-destructive${discardArmed ? ' is-armed' : ''}`}
               onClick={onDiscard}
             >
-              {discardLabel}
+              {discardLabel ?? t('webhook_dialog.discard_default')}
             </button>
           )}
           <button
@@ -131,7 +133,7 @@ export function WebhookTokenDialog({
             onClick={onClose}
             disabled={!acknowledged}
           >
-            완료
+            {t('webhook_dialog.done')}
           </button>
         </footer>
       </div>

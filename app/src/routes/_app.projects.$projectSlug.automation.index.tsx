@@ -38,8 +38,8 @@ const STATUS_KEY: Record<RunStatus, string> = {
   queued: 'status.queued', running: 'status.running', succeeded: 'status.succeeded', failed: 'status.failed', cancelled: 'status.cancelled',
 };
 
-const TRIGGER_LABEL: Record<TriggerKind, string> = {
-  cron: 'schedule', webhook: 'webhook', manual: 'manual',
+const TRIGGER_KIND_KEY: Record<TriggerKind, string> = {
+  cron: 'trigger_kind.schedule', webhook: 'trigger_kind.webhook', manual: 'trigger_kind.manual',
 };
 
 function formatRunWhen(run: Run, t: TFunction<'automation'>): string {
@@ -117,12 +117,12 @@ function formatEventPayload(payload: unknown): string | undefined {
   }
 }
 
-function triggerSummaryText(t: Trigger): string {
-  if (t.spec.kind === 'cron') {
-    const cron = summarizeCron(t.spec.expr);
-    return t.spec.tz ? `${cron}\n${t.spec.tz}` : `${cron}\nUTC`;
+function triggerSummaryText(trig: Trigger, t: TFunction<'automation'>): string {
+  if (trig.spec.kind === 'cron') {
+    const cron = summarizeCron(trig.spec.expr, t);
+    return trig.spec.tz ? `${cron}\n${trig.spec.tz}` : `${cron}\nUTC`;
   }
-  return `whk_${t.id.slice(0, 6)}`;
+  return `whk_${trig.id.slice(0, 6)}`;
 }
 
 function AutomationsPage() {
@@ -585,10 +585,10 @@ function AutomationsPage() {
                         <span className="cw-trigger-badge cw-trigger-manual">{t('list.manual_only')}</span>
                         <span className="cw-rail-trigger-meta">{t('list.no_triggers')}</span>
                       </li>
-                    ) : triggersByAutomation[automation.id].map((t) => (
-                      <li key={t.id}>
-                        <span className={`cw-trigger-badge cw-trigger-${t.kind}`}>{t.kind === 'cron' ? 'schedule' : t.kind}</span>
-                        <span className="cw-rail-trigger-meta">{triggerSummaryText(t)}</span>
+                    ) : triggersByAutomation[automation.id].map((trig) => (
+                      <li key={trig.id}>
+                        <span className={`cw-trigger-badge cw-trigger-${trig.kind}`}>{t(TRIGGER_KIND_KEY[trig.kind as TriggerKind])}</span>
+                        <span className="cw-rail-trigger-meta">{triggerSummaryText(trig, t)}</span>
                       </li>
                     ))}
                   </ul>
@@ -626,9 +626,9 @@ function AutomationsPage() {
               onChange={setTriggerFilter}
               options={[
                 { value: 'all',     label: t('list.trigger_all') },
-                { value: 'cron',    label: 'schedule' },
-                { value: 'webhook', label: 'webhook' },
-                { value: 'manual',  label: 'manual' },
+                { value: 'cron',    label: t('trigger_kind.schedule') },
+                { value: 'webhook', label: t('trigger_kind.webhook') },
+                { value: 'manual',  label: t('trigger_kind.manual') },
               ]}
             />
             {(statusFilter !== 'all' || triggerFilter !== 'all') && (
@@ -794,7 +794,7 @@ function TriggerBadge({
   }, [open, recompute]);
 
   const kind: TriggerKind = trigger?.kind ?? 'manual';
-  const label = TRIGGER_LABEL[kind];
+  const label = t(TRIGGER_KIND_KEY[kind]);
 
   if (!trigger) {
     return <span className={`cw-trigger-badge cw-trigger-${kind}`}>{label}</span>;
@@ -822,7 +822,7 @@ function TriggerBadge({
           <span className="cw-trigger-popover-row"><b>{label}</b></span>
           {trigger.spec.kind === 'cron' && (
             <>
-              <span className="cw-trigger-popover-row"><span>{t('trigger_badge.when')}</span><code>{summarizeCron(trigger.spec.expr)}</code></span>
+              <span className="cw-trigger-popover-row"><span>{t('trigger_badge.when')}</span><code>{summarizeCron(trigger.spec.expr, t)}</code></span>
               {trigger.spec.tz && (
                 <span className="cw-trigger-popover-row"><span>{t('trigger_badge.tz')}</span><code>{trigger.spec.tz}</code></span>
               )}

@@ -14,7 +14,6 @@ import {
   type ModelTier,
   modelLabel,
   recommendationFor,
-  tierLabel,
 } from '@/api/models';
 
 const TIER_ORDER: ModelTier[] = ['light', 'standard', 'max'];
@@ -58,7 +57,7 @@ export function ComposerModelPicker({
           const models = (catalog?.models ?? []).filter((m) => m.tier === tier);
           if (models.length === 0) return null;
           return (
-            <optgroup key={tier} label={tierLabel(tier)}>
+            <optgroup key={tier} label={t(`tier.${tier}`)}>
               {models.map((model) => {
                 const suffix = !model.available
                   ? t('model_picker.unavailable_suffix')

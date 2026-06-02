@@ -47,6 +47,54 @@
     "failed": "Failed",
     "cancelled": "Cancelled"
   },
+  "tier": {
+    "light": "Light",
+    "standard": "Standard",
+    "max": "Max"
+  },
+  "trigger_kind": {
+    "schedule": "Schedule",
+    "webhook": "Webhook",
+    "manual": "Manual"
+  },
+  "agent": {
+    "coworker": {
+      "placeholder": "Describe a task to run…",
+      "greeting": "Coworker helps you get it done",
+      "prompts": [
+        { "label": "This week's progress summary", "seedText": "Summarize this week's progress and draft a report" },
+        { "label": "Tidy up meeting notes", "seedText": "Organize today's meeting notes around action items" },
+        { "label": "Email draft", "seedText": "Write a draft email to share this decision with the team" }
+      ]
+    },
+    "speedwagon": {
+      "placeholder": "What are you curious about?",
+      "greeting": "Speedwagon finds answers in your files",
+      "prompts": [
+        { "label": "Summarize project files", "seedText": "Summarize the key contents of the project files" },
+        { "label": "Find a specific fact", "seedText": "Find all the revenue-related figures across the documents" },
+        { "label": "Compare documents", "seedText": "Compare the differences between the two most recent reports" }
+      ]
+    },
+    "deep-research": {
+      "placeholder": "What should I research?",
+      "greeting": "Deep Research digs in deep",
+      "prompts": [
+        { "label": "Market trend research", "seedText": "Research recent trends in the market where KlientCo operates" },
+        { "label": "Competitor analysis", "seedText": "Compare and analyze the strategies of three major competitors" },
+        { "label": "Prior research review", "seedText": "Summarize prior research in the relevant field" }
+      ]
+    },
+    "buddy": {
+      "placeholder": "Talk to me freely…",
+      "greeting": "Chat freely with Buddy",
+      "prompts": [
+        { "label": "Brainstorm ideas", "seedText": "Throw out 10 quick ideas for the Q3 campaign" },
+        { "label": "Explain terms", "seedText": "Explain these domain terms in simple language" },
+        { "label": "Translate", "seedText": "Translate this sentence into natural Korean" }
+      ]
+    }
+  },
   "relative": {
     "just_now": "just now",
     "minutes_ago": "{{count}}m ago",
@@ -186,20 +234,49 @@
     "agent_model_save_failed": "Failed to save: {{message}}",
     "trigger_save_failed": "Failed to update trigger: {{message}}"
   },
-  "chains_editor": {
-    "section_label": "Model recommendations",
-    "loading": "Loading model list…",
-    "saved": "Saved the recommended model chains",
-    "save_failed": "Failed to save the recommended model chains",
-    "default": "(default)",
-    "reset_to_default": "Reset to default",
-    "no_provider": "No provider",
-    "no_provider_inline": " — No provider",
-    "add_model": "+ Add model…",
-    "save": "Save recommended models",
-    "saving": "Saving…",
-    "move_up": "Move up",
-    "move_down": "Move down",
-    "remove": "Remove"
+  "sched": {
+    "weekdays": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    "nth": ["1st", "2nd", "3rd", "4th", "5th"],
+    "repeat_every": "Repeat every",
+    "repeat_mode": "Repeats",
+    "day_of_month": "Day",
+    "day_suffix": "",
+    "detail": "Detail",
+    "weekday_label": "Days",
+    "run_time": "Time",
+    "timezone": "Timezone",
+    "interval_hint": "cron only supports N>1 for the hourly unit.",
+    "cron_preview_title": "Generated cron expression",
+    "opt": {
+      "hourly": "Hourly",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "custom": "Custom cron"
+    },
+    "monthly_day_opt": "Day {{day}} of month",
+    "monthly_weekday_opt": "The {{nth}} {{weekday}}",
+    "weekday_option": "{{day}}",
+    "summary": {
+      "every_hour": "Every hour",
+      "every_n_hours": "Every {{n}} hours",
+      "daily": "Daily at {{time}}",
+      "weekly_all": "Weekly at {{time}}",
+      "weekly": "Weekly on {{days}} at {{time}}",
+      "monthly_day": "Monthly on day {{day}} at {{time}}",
+      "monthly_weekday": "Monthly on the {{nth}} {{weekday}} at {{time}}"
+    }
+  },
+  "webhook_dialog": {
+    "title": "Webhook token",
+    "warn": "This token is shown only once. After you close this you won't be able to see it again, so store it somewhere safe.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copy_token_aria": "Copy token",
+    "curl_summary": "Example call (curl)",
+    "copy_curl_aria": "Copy curl command",
+    "ack": "I've stored the token somewhere safe.",
+    "done": "Done",
+    "discard_default": "Cancel creation"
   }
 }
