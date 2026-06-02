@@ -1,9 +1,13 @@
 import { useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@/components/Icon';
 import { SchedulePicker, type SchedulePickerValue } from '@/components/SchedulePicker';
 import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
+import { ComposerAgentPicker } from '@/components/chat/ComposerAgentPicker';
+import { ComposerModelPicker } from '@/components/chat/ComposerModelPicker';
+import { DEFAULT_AGENT_ID, type AgentId } from '@/domain/agentSurfaces';
+import { getModelCatalog } from '@/api/models';
 import { createAutomation, createTrigger, deleteAutomation } from '@/api/automations';
 import { ApiError } from '@/api/client';
 
@@ -20,8 +24,16 @@ function NewAutomationPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [prompts, setPrompts] = useState<string[]>(['']);
+  const [agentId, setAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
+  const [model, setModel] = useState<string | null>(null);
   const [triggerKind, setTriggerKind] = useState<InitialTriggerKind>('cron');
   const [schedule, setSchedule] = useState<SchedulePickerValue>({ expr: '0 9 * * 1,2,3,4,5', tz: 'Asia/Seoul' });
+
+  const catalog = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
 
   const goBack = () => {
     navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug } });
@@ -61,6 +73,8 @@ function NewAutomationPage() {
         name: name.trim(),
         description: description.trim() ? description.trim() : null,
         prompts: prompts.filter((p) => p.trim().length > 0),
+        agentType: agentId,
+        model,
       });
       if (triggerKind === 'cron') {
         await createTrigger(automation.id, {
@@ -180,6 +194,26 @@ function NewAutomationPage() {
                 </li>
               ))}
             </ol>
+          </section>
+
+          <section className="cw-settings-card">
+            <h2>실행 에이전트 · 모델</h2>
+            <p className="cw-settings-hint">
+              트리거가 발화될 때 생성되는 세션에서 사용할 에이전트와 모델입니다. 모델을 "권장"으로 두면 실행 시점의 추천 체인으로 결정됩니다.
+            </p>
+            <div
+              className="cw-agent-pickwrap"
+              data-agent={agentId}
+              style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'flex-start' }}
+            >
+              <ComposerAgentPicker value={agentId} onChange={setAgentId} standalone />
+              <ComposerModelPicker
+                catalog={catalog.data}
+                agentType={agentId}
+                value={model}
+                onChange={setModel}
+              />
+            </div>
           </section>
 
           <section className="cw-settings-card">

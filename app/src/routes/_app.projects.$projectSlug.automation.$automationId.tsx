@@ -6,6 +6,10 @@ import { SchedulePicker, summarizeCron, type SchedulePickerValue } from '@/compo
 import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useToastStore } from '@/components/Toast';
+import { ComposerAgentPicker } from '@/components/chat/ComposerAgentPicker';
+import { ComposerModelPicker } from '@/components/chat/ComposerModelPicker';
+import { DEFAULT_AGENT_ID, type AgentId } from '@/domain/agentSurfaces';
+import { getModelCatalog } from '@/api/models';
 import {
   createTrigger as createTriggerApi,
   deleteAutomation as deleteAutomationApi,
@@ -42,9 +46,18 @@ function AutomationSettingsPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [prompts, setPrompts] = useState<string[]>(['']);
+  const [agentId, setAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
+  const [model, setModel] = useState<string | null>(null);
   const [nameEditMode, setNameEditMode] = useState(false);
   const [descEditMode, setDescEditMode] = useState(false);
   const [promptsEditMode, setPromptsEditMode] = useState(false);
+
+  const catalog = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
+
   // Populate form state when the automation first loads (or when navigating
   // to a different one). Subsequent refetches don't re-fire — drafts in
   // progress stay intact.
@@ -53,6 +66,8 @@ function AutomationSettingsPage() {
     setName(automation.name);
     setDescription(automation.description ?? '');
     setPrompts(automation.prompts.length > 0 ? automation.prompts : ['']);
+    setAgentId((automation.agentType as AgentId | null) ?? DEFAULT_AGENT_ID);
+    setModel(automation.model);
   }, [automation?.id]);
 
   const goBack = () => {
@@ -106,6 +121,20 @@ function AutomationSettingsPage() {
     onError: (err) => {
       const msg = err instanceof Error ? err.message : String(err);
       showToast(`프롬프트 변경 실패: ${msg}`);
+    },
+  });
+
+  const agentModelMutation = useMutation({
+    mutationFn: () => updateAutomationApi(automationId, { agentType: agentId, model }),
+    onSuccess: (updated) => {
+      invalidateAutomation();
+      setAgentId((updated.agentType as AgentId | null) ?? DEFAULT_AGENT_ID);
+      setModel(updated.model);
+      showToast('실행 에이전트·모델을 저장했습니다');
+    },
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`저장 실패: ${msg}`);
     },
   });
 
@@ -253,6 +282,8 @@ function AutomationSettingsPage() {
     cleanedPrompts.length !== automation.prompts.length ||
     cleanedPrompts.some((p, i) => p !== automation.prompts[i]);
   const promptsSaveDisabled = !promptsDirty || cleanedPrompts.length === 0 || promptsMutation.isPending;
+  const currentAgentId = (automation.agentType as AgentId | null) ?? DEFAULT_AGENT_ID;
+  const agentModelDirty = agentId !== currentAgentId || model !== automation.model;
 
   return (
     <section className="cw-page cw-automation-settings cw-page-enter">
@@ -566,6 +597,49 @@ function AutomationSettingsPage() {
               ))}
             </ol>
           )}
+        </section>
+
+        <section className="cw-settings-card">
+          <h2>실행 에이전트 · 모델</h2>
+          <p className="cw-settings-hint">
+            앞으로 트리거가 발화될 때 생성되는 세션에서 사용할 에이전트와 모델입니다. 진행 중이거나 이미 끝난 실행에는 영향을 주지 않습니다. 모델을 "권장"으로 두면 실행 시점의 추천 체인으로 결정됩니다.
+          </p>
+          <div
+            className="cw-agent-pickwrap"
+            data-agent={agentId}
+            style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'flex-start' }}
+          >
+            <ComposerAgentPicker value={agentId} onChange={setAgentId} standalone />
+            <ComposerModelPicker
+              catalog={catalog.data}
+              agentType={agentId}
+              value={model}
+              onChange={setModel}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 12 }}>
+            {agentModelDirty && (
+              <button
+                type="button"
+                className="cw-btn-secondary"
+                onClick={() => {
+                  setAgentId(currentAgentId);
+                  setModel(automation.model);
+                }}
+                disabled={agentModelMutation.isPending}
+              >
+                되돌리기
+              </button>
+            )}
+            <button
+              type="button"
+              className="cw-btn-primary"
+              onClick={() => agentModelMutation.mutate()}
+              disabled={!agentModelDirty || agentModelMutation.isPending}
+            >
+              {agentModelMutation.isPending ? '저장 중…' : '저장'}
+            </button>
+          </div>
         </section>
 
         <section className="cw-settings-card">
