@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { downloadFileByGlobalPath, parseGlobalPath, type DirentScope } from '@/api/dirents';
 import { Icon } from './Icon';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
+  const { t } = useTranslation('session');
   const filename = globalPath.split('/').pop() ?? globalPath;
   const [menuOpen, setMenuOpen] = useState(false);
   const chipRef = useRef<HTMLDivElement>(null);
@@ -57,13 +59,13 @@ export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
         >
           <li>
             <button type="button" onClick={handleDownload}>
-              <Icon name="download" size={13} /> 다운로드
+              <Icon name="download" size={13} /> {t('artifact.download')}
             </button>
           </li>
           {canCopy && (
             <li>
               <button type="button" onClick={handleCopyToShared}>
-                <Icon name="file" size={13} /> 공유 디렉토리로 복사
+                <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
               </button>
             </li>
           )}
