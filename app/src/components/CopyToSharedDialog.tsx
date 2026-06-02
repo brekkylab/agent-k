@@ -15,8 +15,8 @@ import { useToastStore } from './Toast';
 interface Props {
   open: boolean;
   projectId: string;
-  sessionId: string;
-  sourcePaths: string[];      // scope-relative paths under artifacts/
+  sourceScope: DirentScope;
+  sourcePaths: string[];      // scope-relative paths under sourceScope
   onClose: () => void;
   onDone: () => void;
 }
@@ -93,13 +93,12 @@ function PickerNode({
   );
 }
 
-export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, onClose, onDone }: Props) {
+export function CopyToSharedDialog({ open, projectId, sourceScope, sourcePaths, onClose, onDone }: Props) {
   const { t, i18n } = useTranslation('dialogs');
   const { t: tCommon } = useTranslation('common');
   const showToast = useToastStore((s) => s.show);
 
   const sharedScope: DirentScope = { kind: 'shared', projectId };
-  const artifactsScope: DirentScope = { kind: 'artifacts', projectId, sessionId };
 
   const entries = useQuery({
     queryKey: ['dirents', 'shared', projectId],
@@ -119,7 +118,7 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
   const [selected, setSelected] = useState<string>('');
 
   const copyMutation = useMutation({
-    mutationFn: (dest: string) => copyDirents(artifactsScope, sharedScope, sourcePaths, dest),
+    mutationFn: (dest: string) => copyDirents(sourceScope, sharedScope, sourcePaths, dest),
     onSuccess: () => {
       showToast(t('copy_to_shared.success'));
       onDone();
