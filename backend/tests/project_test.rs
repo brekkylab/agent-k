@@ -252,11 +252,25 @@ async fn project_delete_cleans_up_agents_in_state() {
     let project = common::get_personal_project(&app, &token).await;
     let project_id = project["id"].as_str().unwrap();
 
-    // Create session via HTTP — this registers an agent in AppState.
+    // Create session via HTTP (only creates a DB record; agents are lazy).
     let session_id = common::post_session_authed(&app, &token, project_id).await;
+
+    // Simulate what happens when the first message is sent: build a local-runenv
+    // agent (no Docker) and register it in state. Skip when no LLM provider is
+    // configured (e.g. CI without API keys).
+    let spec = ailoy::agent::AgentSpec::new("openai/gpt-4o-mini");
+    let agent = {
+        let provider = ailoy::agent::default_provider();
+        match ailoy::agent::Agent::try_with_provider(spec, &provider) {
+            Ok(a) => a,
+            Err(_) => return, // no LLM provider available — skip
+        }
+    };
+    state.insert_agent(session_id, agent);
+
     assert!(
         state.get_agent(&session_id).is_some(),
-        "agent must be in state after session creation"
+        "agent must be in state after manual registration"
     );
 
     // Delete the project — should also clean up the agent.
