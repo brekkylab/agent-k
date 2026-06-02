@@ -16,20 +16,44 @@ Two non-negotiable rules:
    side by side show a different stroke weight or type size, the
    deck has failed.
 
+**Hard rules — if any of these slip, the deck fails:**
+
+- Write `outline.md` **before** any python-pptx code (Process §1)
+- Verify gate: `verify()` returns empty AND every PNG read with
+  the `read` tool — both required (Process §3)
+- Charts: native `add_chart()` (editable in PowerPoint). Set EA
+  typeface on every axis / legend / data label AND explicit fill
+  color on every series (Rendering notes — Charts)
+- No `MSO_AUTO_SIZE` on titles / KPI / tags / captions (Anti-patterns)
+- Only `.pptx` surfaces to `artifacts/` (Anti-patterns)
+
 ---
 
 ## Process — outline first, then transcribe to pptx
 
-Two phases. **Separate content from layout.** Write everything that
-will appear on the slides as markdown first; then build the deck by
-transcribing that markdown into python-pptx.
+Two phases. **Separate content from layout** — write everything as
+markdown first, then transcribe into python-pptx.
 
 ### 1. Outline (`outline.md`) — verbatim slide content
 
+**Do not skip this step** — Step 2's verbatim transcribe rule needs
+an outline file to copy *from*; without it, content drifts back to
+free-improvisation.
+
 The outline contains the *actual content* that will appear on each
 slide. It's not a plan or summary — it's the source of truth. One
-section per slide:
+section per slide, **including both bookends** — a "10 slides"
+request means 1 title + 8 content + 1 closing, *not* 10 content
+slides. Even when the prompt doesn't mention them, generate them.
+Slide format:
 
+**Slide 1 — title slide (always)**:
+- `## Slide 1: <deck title>` — e.g. `## Slide 1: Q1 2026 Business Review`
+- `**Eyebrow**` sub-line (caption-tier label, e.g. `**Pixellife Inc.**`)
+- `**Subtitle**` sub-line (one-line framing, e.g. `**For the exec meeting**`)
+- No bullets / tables / charts.
+
+**Slides 2 to N−1 — content slides**:
 - `## Slide N: <takeaway-headline>` — headline is a *takeaway
   sentence* (e.g. "Revenue grew 31.7%, margin improved in step"),
   not the topic (e.g. "Q1 results"). Becomes the slide title.
@@ -41,10 +65,16 @@ section per slide:
   bullet markers.
 - Explicit chart / visual hints inline
   (e.g. `**Donut chart: revenue share by title**`) — rendered as
-  matplotlib PNG and inserted.
+  a native python-pptx chart (editable in PowerPoint).
+
+**Slide N — closing slide (always)**:
+- `## Slide N: <closing message>` — e.g.
+  `## Slide 10: Thank you. — Questions?`
+- No bullets / tables / charts (Action-plan variant exception aside).
 
 A 10-slide outline runs ~200–400 lines. Save as `outline.md` in the
-working directory before any python-pptx work.
+working directory (not under `artifacts/` — see Anti-patterns).
+Delete when done if turns share state.
 
 ### 2. Transcribe outline → pptx
 
@@ -52,14 +82,18 @@ Read each `outline.md` section and emit one slide. **Transcribe text
 verbatim — don't rewrite, paraphrase, or shorten.** Pick the layout
 grammar from the section's content shape (KPI showcase for KPI
 tables, card grid for parallel items, asymmetric split for chart +
-sidebar) and vary across the deck. Render chart PNGs in matplotlib
-with the deck's palette, then `add_picture()`. Apply the locked
-palette, type scale, margins, and footer to every slide — consistency
-lives here, not in the content.
+sidebar) and vary across the deck. Insert charts as native
+python-pptx chart objects (`add_chart`) with explicit CJK fonts and
+series colors (Rendering notes — Charts). Apply the locked palette,
+type scale, margins, and footer to every slide — consistency lives
+here, not in the content.
 
 ### 3. Verify the output renders correctly
 
-**Two layers** — a fast automated check and a visual confirmation.
+**Gate: do not surface the `.pptx` until BOTH (A) `verify()` returns
+all empty lists AND (B) you have rendered to PNG and read every
+slide. Step B is mandatory regardless of whether Step A flagged
+anything — they catch different failures.**
 
 **A. Run `verify_pptx.py`** — the skill ships a compliance checker:
 
@@ -85,44 +119,106 @@ and behaviour above are the full contract — reading the source file
 just burns context.
 
 **B. Visual confirmation** — `verify_pptx` is heuristic. After fixing
-its flagged issues, render to PDF + PNG and look:
+its flagged issues, render to PDF + PNG and look. **The image is
+pre-baked with `soffice` + LibreOffice but NOT with `pdftoppm`** —
+install `poppler-utils` first, every time, before the PNG step:
 
 ```
+apt-get install -y poppler-utils       # provides pdftoppm — not in image
 soffice --headless --convert-to pdf out.pptx
 pdftoppm -r 100 -png out.pdf slide
 ```
 
-Then read the PNGs and inspect the rendered content — confirming the
-files exist isn't the check; looking at each image is. Catches CJK
-tofu (`□□□`), accidental PowerPoint-default chart colors, and the
-overlap cases that the verify heuristic only *suspects*.
+**Open each PNG with the `read` tool — this loads the image into
+your multimodal vision so you actually *see* the rendered slide.**
+`ls`, `file`, `cat`, or any text-mode operation on a PNG is NOT
+inspection — confirming the file exists is not the check. Make one
+`read` call per slide PNG (`slide-1.png`, `slide-2.png`, …) and
+check every slide for **correctness**:
 
-If the sandbox lacks tooling: `apt-get install -y libreoffice-impress
-libreoffice-core poppler-utils`. If anything is off, fix and re-run
-from step 2.
+- CJK tofu (`□□□`) in body, chart axes, legend, and data labels
+  (most common cause: missing EA typeface on chart elements)
+- Default PowerPoint chart colors (blue / orange / gray) leaking
+  through because a series was created without explicit fill
+- **Chart bbox overruns into narrative / insight / bullet text below
+  or beside it** (compute `insight_y` from `chart_y + chart_h + GUTTER`)
+- Overlap cases that the verify heuristic only *suspects*
+- Shape position drift / misalignment against the grid
+- Text boxes pushed out of place (clipping, shifted off-canvas)
+- Alignment imbalance across the deck (same role element sitting
+  at different x/y across consecutive slides)
+
+…and for **design quality** (`verify_pptx` cannot catch these):
+
+- Slide 1 IS a title slide pattern (anchor + three-tier text +
+  signature mark), not a content slide labeled "Title"
+- The last slide IS a closing slide pattern (mirrors the title)
+- Layouts vary across the deck — not every content slide using the
+  same division (e.g. 8 card-grids in a row = failure)
+- Palette fits the deck's subject / mood — not Corporate Slate by
+  default whenever the brief sounds "business"
+- Slide titles are takeaway sentences, not topic labels
+  ("Revenue grew 31.7%" ✓ / "Q1 Results" ✗)
+
+**Fix strategy depends on issue type**:
+
+- **Correctness** (tofu, overlap, drift, clipping, page numbers on
+  bookends) — apply slide-level surgery directly to the `.pptx`:
+
+  ```python
+  from pptx import Presentation
+  from pptx.util import Inches, Pt
+  prs = Presentation("out.pptx")
+  slide = prs.slides[4]                          # slide index = N − 1
+  shape = slide.shapes[7]
+
+  # move (left, top) + resize (width, height)
+  shape.left,  shape.top    = Inches(0.8), Inches(1.8)
+  shape.width, shape.height = Inches(5.2), Inches(0.8)
+
+  # patch a text run (shorten / retype / fix font)
+  run = shape.text_frame.paragraphs[0].runs[0]
+  run.text      = "..."
+  run.font.size = Pt(14)
+
+  # remove a shape (e.g. stray page number on a bookend slide)
+  bad = slide.shapes[9]._element
+  bad.getparent().remove(bad)
+
+  prs.save("out.pptx")
+  ```
+
+  Then re-render PNG and re-verify — no full re-transcribe.
+
+- **Design quality** (bookend missing, layout monotony, palette
+  mismatch, topic-not-takeaway titles) — return to Step 1 (outline)
+  or Step 2 (transcribe), fix at the source, re-emit the deck.
+
+Loop until both `verify()` and PNG inspection pass — partial pass is
+failure.
 
 ---
 
-## Palette — color roles in three tiers
+## Palette — color roles
 
 The *role structure* is fixed. The *hex values* are chosen per deck
 (matched to subject and mood) and frozen for that deck's lifetime.
 
-| Tier | Role | Job |
-|---|---|---|
-| Colored fills | **Primary** | Anchor color. Slide titles, section header backgrounds, deepest text. |
-| | **Secondary** | Principal accent. Left edge strip, KPI top strips, first chart series, category tags. |
-| | **Accent** | Warm pop. Eyebrow tags, corner blocks, quote strip, "current" timeline marker. Use sparingly. |
-| Surface tiers | **Background** | Page background. Near-white (light) or near-black / navy (dark). |
-| | **Surface** | Card / tile fill. Subtly lifts off Background. |
-| | **Tinted Panel** | Surface mixed ~5–10% toward Accent. For callout / insight bands — a different layer from regular Surface. |
-| Structural | **Muted** | Supporting text — subtitles, captions, footers, axis labels, attribution. |
-| | **Hairline** | Structural lines only — dividers, footer lines, card borders, timeline tracks. |
+**Colored fills** — Primary (anchor; slide titles, deepest text),
+Secondary (principal accent; left edge strip, KPI top strips, 1st
+chart series, category tags), Accent (warm pop; eyebrows, corner
+blocks, quote strip, "current" timeline marker — use sparingly).
 
-**Status colors** (deltas only, never a fill):
+**Surfaces** — Background (page; near-white or near-black/navy),
+Surface (card / tile fill; subtly lifts off Background), Tinted
+Panel (Surface ~5–10% toward Accent; for callout / insight bands).
 
-- **Positive** — green, for upward changes (`+18%`)
-- **Negative** — red, for downward changes (`-3d`)
+**Structural** — Muted (supporting text: subtitles, captions,
+footers, axis labels), Hairline (structural lines only: dividers,
+footer line, card borders, timeline tracks).
+
+**Status colors** — Positive (green, `+18%`), Negative (red, `-3d`).
+Deltas only, never a fill.
 
 **Rule of three.** Per slide, ≤ 3 colored fills from
 {Primary, Secondary, Accent}. A fourth turns it into a paint chart.
@@ -219,10 +315,13 @@ with a third. Pick faces that render identically on every machine the
 deck might open on:
 
 - **Latin-only decks** — Calibri, Arial, or Helvetica
-- **CJK / mixed-script decks** — default to `Noto Sans CJK KR` / `JP`
-  / `SC` (one font across container and pptx — see Rendering notes
-  for setup). `Pretendard` only for brand-critical Korean decks where
-  the opener has it installed.
+- **CJK / mixed-script decks** — use `Noto Sans KR` (Korean) /
+  `JP` (Japanese) / `SC` (Simplified Chinese) / `TC` (Traditional
+  Chinese). These are the Google Fonts family names; Google Slides
+  resolves them natively, the sandbox's `fonts-noto-cjk` package
+  registers them via fontconfig aliases, and PowerPoint / Keynote
+  fall back to the host's system Korean / Japanese font when the
+  exact name isn't present. See Rendering notes for setup.
 
 | Size | Pt | Weight | Use |
 |---|---|---|---|
@@ -264,7 +363,9 @@ are just calibrated for the most common case.
 - **Title band** — top 1.1" of every content slide. Eyebrows above,
   title inside. Body content starts at y ≈ 1.6"
 - **Footer** at y ≈ 7.1" — hairline divider + page number `n / N`
-  right (caption muted). Optional short deck title left
+  right (caption muted). Optional short deck title left. **Content
+  slides only** — title, section dividers, and closing slide carry
+  no footer / page number.
 - **Content area** — 12.13" × 5.0"
 
 Title slide, section dividers, quote slide, and closing slide
@@ -278,69 +379,151 @@ Don't randomize per slide.
 
 ---
 
-## Shape vocabulary — six primitive shapes
-
-Higher-level constructs (KPI cards, insight bands, action pills) are
-compositions of these primitives — not new vocabulary. If a slide
-needs a shape outside this list, you are inventing.
-
-| # | Shape | Use |
-|---|---|---|
-| 1 | **Anchor block** — solid rectangle ~4.5" × 2.5", Secondary | Title & closing slides only — deck signature |
-| 2 | **Left edge strip** — 0.15" wide, full height, Secondary | Content slides only — pattern identifier |
-| 3 | **Hairline** — 0.04" line, Hairline color | Footer, column divider, timeline track, card border. Structural only. |
-| 4 | **Bullet marker** — 0.18" filled square in Accent (circle in Primary on Mono) | Replaces default `●` everywhere |
-| 5 | **Category tag** — rounded rect 1.4" × 0.4", Secondary or Accent fill, white caption text | Two-column headers |
-| 6 | **Event marker** — 0.35" filled circle (Secondary, or Accent for "current") with 0.55" Surface ring | Timeline markers |
-
-Banned effects and other refusals live in **Anti-patterns** below.
-
----
-
 ## Rendering notes — correctness, not style
 
 These aren't design choices; they're things python-pptx leaves to you
 that quietly ruin a deck if missed.
 
-### CJK text — install Noto CJK, then use it everywhere
+### CJK text — set Latin + EA typeface on every run
 
 `font.name` only sets the Latin typeface; the East-Asian face
-(`<a:ea>` in the run XML) stays unset and PowerPoint falls back to
-whatever the opener's machine defaults to. For every CJK-containing
-run, set both Latin and East-Asian typefaces in a helper.
+(`<a:ea>` in the run XML) stays unset and the viewer falls back to
+whatever it has. For every CJK-containing run, set both Latin and
+EA typefaces in a helper. The same applies to *chart text
+elements* — see Charts section below.
 
-**One font, everywhere** — eliminates mismatch between the matplotlib
-chart renderer and the pptx text runs:
+`fonts-noto-cjk` ships in the sandbox image. For the pptx typeface
+string, use the Google Fonts family name (NOT the TTC family name
+with the "CJK" infix): `'Noto Sans KR'`, `'Noto Sans JP'`,
+`'Noto Sans SC'`, or `'Noto Sans TC'`.
 
-1. `apt-get install -y fonts-noto-cjk` — covers Korean / Japanese /
-   Simplified Chinese in one package.
-2. For pptx EA typeface, use `'Noto Sans CJK KR'` (or `JP` / `SC`).
-3. For matplotlib `rcParams['font.family']`, use the same name.
+### Charts — native python-pptx for editability
 
-Without it, matplotlib chart labels render as tofu (`□□□`) and the
-verify-step PDF inherits the same.
+Charts are rendered as **native python-pptx chart objects**
+(`slide.shapes.add_chart(...)`) so the user can edit chart data,
+labels, and colors directly in PowerPoint (right-click → Edit Data).
+The trade-off: python-pptx leaves two critical things unhandled that
+you MUST set yourself, every time.
 
-Most modern openers (Windows 10+, Mac, Linux) ship with the Noto CJK
-family or fall back cleanly. For brand-critical decks where the opener
-has Pretendard installed, install Pretendard in the container too
-(`wget` from `orioncactus/pretendard` GitHub releases) and swap both
-references to `'Pretendard'`.
+**1. CJK font on every chart text element**
 
-### Charts — pre-render in matplotlib, insert as PNG
-python-pptx's native chart engine has weak CJK axis-font control,
-leaks default chart colors despite recoloring, and renders differently
-across PowerPoint versions. Render in matplotlib using the deck's
-palette, save as PNG, and `add_picture()` it onto the slide.
+`font.name` only sets Latin. Without explicit East-Asian typeface,
+PowerPoint falls back to whatever the opener has — typically tofu
+on Korean / Japanese / Chinese axes and labels. Apply EA typeface
+to every text element on the chart: category axis, value axis,
+data labels, legend, chart title.
 
-### Text-box sizing — measure before placing
+```python
+from pptx.oxml.ns import qn
+from pptx.oxml.xmlchemy import OxmlElement
+from pptx.util import Pt
+from pptx.dml.color import RGBColor
+
+def set_chart_text_font(font, typeface='Noto Sans KR', size_pt=11):
+    """Set Latin + EA + CS typefaces on a chart font, with size."""
+    font.name = typeface
+    font.size = Pt(size_pt)
+    rPr = font._element.get_or_add_rPr()
+    for tag in ('latin', 'ea', 'cs'):
+        el = rPr.find(qn(f'a:{tag}'))
+        if el is None:
+            el = OxmlElement(f'a:{tag}')
+            rPr.append(el)
+        el.set('typeface', typeface)
+
+for axis in (chart.category_axis, chart.value_axis):
+    set_chart_text_font(axis.tick_labels.font, size_pt=11)
+if chart.has_legend:
+    set_chart_text_font(chart.legend.font, size_pt=11)
+if chart.has_title:
+    set_chart_text_font(
+        chart.chart_title.text_frame.paragraphs[0].runs[0].font, size_pt=14)
+for ser in chart.series:
+    if ser.data_labels:
+        set_chart_text_font(ser.data_labels.font, size_pt=11)
+```
+
+**2. Series colors must be explicit — every series, every time**
+
+Without explicit fill, python-pptx falls back to PowerPoint theme
+colors (default blue / orange / gray) — leaks regardless of the
+deck's chosen palette. Set every series:
+
+```python
+PALETTE_ORDER = ['Secondary', 'Accent', 'Primary']  # max 3 series
+for ser, role in zip(chart.series, PALETTE_ORDER):
+    hex_ = palette[role]
+    ser.format.fill.solid()
+    ser.format.fill.fore_color.rgb = RGBColor.from_string(hex_)
+    ser.format.line.color.rgb = RGBColor.from_string(hex_)
+```
+
+**Bbox + adjacency math — chart bbox and narrative bbox computed**
+
+```python
+from pptx.enum.chart import XL_CHART_TYPE
+from pptx.chart.data import CategoryChartData
+
+chart_x, chart_y, chart_w, chart_h = 0.6, 1.7, 7.5, 3.0
+GUTTER = 0.3
+insight_y = chart_y + chart_h + GUTTER   # adjacency math, computed not eyeballed
+
+data = CategoryChartData()
+data.categories = ['Q1', 'Q2', 'Q3', 'Q4']
+data.add_series('2025', (142, 158, 165, 175))
+data.add_series('2026', (187, 0, 0, 0))
+
+chart = slide.shapes.add_chart(
+    XL_CHART_TYPE.COLUMN_CLUSTERED,
+    Inches(chart_x), Inches(chart_y),
+    Inches(chart_w), Inches(chart_h),
+    data,
+).chart
+# … then apply CJK font helper + series colors above …
+```
+
+**Supported chart types** — Bar (clustered / stacked), Line, Pie,
+Doughnut, Area, Scatter, Combo (bar + line). For data that doesn't
+fit one of these (Treemap, Waterfall, Sunburst patterns) — convert
+to a styled table or decompose into a simpler chart type. Don't
+mix matplotlib PNGs in: it breaks the editability promise.
+
+**Data label format** — use PowerPoint number-format masks:
+```python
+ser.data_labels.show_value = True
+ser.data_labels.number_format = '#,##0"억 원"'    # → 187억 원
+# Or '0.0%' for percentages, '+#,##0;-#,##0' for signed deltas.
+```
+
+### Text-box sizing — fixed-height boxes, no autosize for short elements
+
 python-pptx doesn't render text; an undersized box silently clips
-when PowerPoint opens. Korean / CJK glyphs visually occupy ~2× ASCII
-width, so a 2.5" box holds ~14 Korean chars per line at 14 pt body,
-*not* 30. Before placing bullet / card / table-cell text, estimate
-the required height — use `box_height_in()` and `line_count()` from
-`verify_pptx.py` (same CJK-aware formula the Step-3 overflow check
-runs). Skip for hero text (title / Number Cover / quote glyph) where
-text drives the box rather than the reverse.
+when PowerPoint opens. **Design boxes generously up front; do not
+lean on autosize.** `MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT` is a trap on
+short fixed-shape elements — autogrowth overlaps neighbors and
+breaks the grid.
+
+Korean / CJK glyphs occupy ~2× ASCII width: a 2.5" box holds ~14
+Korean chars per line at 14 pt body, *not* 30. And CJK wraps where
+the estimator predicts one line. **For CJK decks, assume every
+content-slide title is 2 lines** — size title bands accordingly, or
+step title size 32 → 26–28 pt to fit one line reliably.
+
+Rules by element:
+- **Titles, KPI values, tags, chips, captions** — fixed height, no
+  autosize. Tag chips ≥ 0.45" tall; KPI cards ≥ 1.5". When the box
+  is taller than the text inside (KPI cards especially), set
+  `text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE` — the default
+  (TOP) glues text to the top edge and leaves dead whitespace below.
+- **Bullets / body paragraphs** — size to `(line_count + 1) *
+  line_height` minimum (use `box_height_in()` / `line_count()` from
+  `verify_pptx.py`). Autosize allowed *only here*, only with
+  verified neighbor clearance.
+- **Hero text** (Display, Number Cover, quote glyph) — text drives
+  the box; size the box to the text.
+
+Both `verify_pptx` overflow checks (estimated and autosize-grow)
+must return empty before delivery.
 
 ### Other pitfalls
 Every shape inherits a default shadow on creation — set
@@ -351,170 +534,52 @@ under shapes drawn after it.
 
 ---
 
-## Layout grammar — vary the division of the content area
-
-A deck where every slide divides its content area the same way reads
-monotonously. **Vary the layout slide-to-slide.** The categories
-below are *principles for thinking about division*, not templates to
-trace. Within each category, compose freshly each time — the sizes,
-gutters, and emphasis points should differ per slide.
-
-- **Card grid** — 2–4 equal-size cards in a row (or 2×2). Best for
-  parallel concepts: KPIs side-by-side, region snapshots, options
-  comparison. Vary *how many* cards (2 vs 3 vs 4) across the deck so
-  consecutive grid slides don't feel identical.
-- **Asymmetric split** — one side takes ~60–70%, the other ~30–40%.
-  Best for: a visualization + supporting facts; a main story + a
-  sidebar of callouts. Avoid 50/50 unless the two halves are
-  genuinely equal in weight. Flip the heavy side left-vs-right across
-  the deck so consecutive split slides don't all face the same way.
-- **Stacked rows** — one full-width concept above, another below
-  (e.g. top: chart, bottom: takeaway cards). Best for: a fact + its
-  implication; two unrelated facts on one topic.
-- **Hero + small** — one oversized element (chart, big number, quote
-  glyph) + small supporting elements around it. Best for: the deck's
-  anchor slides — pivot points the audience should pause on.
-- **Two-column comparison** — equal columns separated by a hairline.
-  Best for: build vs buy, before vs after, wins vs concerns. Keep the
-  left/right meaning consistent across all comparison slides in the
-  deck.
-- **Timeline** — horizontal track with evenly-spaced markers. Best
-  for: sequences, roadmaps, milestone progressions.
-
-**Insight band — optional.** A Tinted Panel strip at the bottom of a
-content slide, carrying a one-line takeaway (caption-Accent label +
-body-Primary sentence). Use when the slide *makes a claim* ("growth
-slowed in Q2"); skip when the slide is just exposition or when the
-slide's title already states the claim. Don't put one on every slide
-— it stops landing.
-
-**Variation budget.** If three consecutive slides use the same
-division (e.g. card grid → card grid → card grid), switch the next
-one to a different category. Repetition is fine when intentional
-(four region cards across four region slides), but accidental
-repetition reads as monotony. A 10-slide content section should
-touch at least three different division categories.
-
----
-
 ## Slide patterns
 
-Nine base patterns (each with one or two variants). Pick by the
-slide's *job*, not by what looks pretty.
+Pick by the slide's *job*, not by what looks pretty. Each pattern is
+a starting point — compose freshly within it, don't trace the same
+layout every deck.
 
-### Title slide — opens the deck
-
-The title slide is the deck's visual signature. **Compose freshly
-each time** — there is no canonical layout. Two decks from this
-skill, viewed side-by-side, should read as "from the same system"
-*only* in palette / typography / footer — never in title-slide
-layout. If the safest-feeling choice is Corner Anchor, deliberately
-reach for something else; that default is the AI tell.
-
-**Required principles** (these must hold; everything else is open):
-
-1. **One visual anchor** — a single dominant element that establishes
-   the deck's identity. Pick a type from the sketch library below.
-   Required — without it the slide drifts.
-2. **Three-tier text hierarchy** — eyebrow (caption, Accent) → title
-   (Display, Primary) → subtitle (Body, Muted). Order is fixed;
-   spatial arrangement is open. Eyebrow or subtitle may be omitted on
-   Quote / Number / Photo Cover variants where the anchor *is* the
-   headline.
-3. **One signature mark** — a small Accent shape balancing the visual
-   anchor (often in the opposite corner). The closing slide mirrors
-   this mark.
-4. **No page number.**
-
-#### Sketch library — starting ideas, not templates
-
-Use these as *seeds*. Mix elements freely; invent variations.
-
-- **Corner Anchor** — filled rectangle in one corner + diagonal Accent square + left-aligned text stack.
-- **Dark Cover** — Primary BG + off-canvas soft circles + light text. Works on any palette by recoloring.
-- **Side Panel** — vertical ~1/3 Primary panel, text inside; remaining ~2/3 mostly empty.
-- **Centered Hero** — no shape anchor; the title's typography *is* the anchor. Wide Accent strip beneath.
-- **Full-Bleed Type** — title at 80–96 pt fills 70–80% of slide width; eyebrow / subtitle tucked into a corner.
-- **Number Cover** — single huge stat / numeral (180–250 pt) as the anchor; title becomes a smaller caption. Best for executive summaries.
-- **Photo Cover** — full-bleed image or Primary-toned gradient; overlay text on a thin Tinted Panel for legibility.
-- **Quote Cover** — open with a pulled quote (Title size) + attribution; defer the "this is X deck" framing to slide 2.
-- **Diagram Cover** — single iconic mark / logo / shape dominates; title is a small annotation. Best when the deck has a natural visual hook.
-
-### Section divider — chapter break
-Full-bleed Primary background. Huge numeral ("01") at left — *much
-larger than Display*, roughly 3–4× the title size, in a lightened
-Secondary tone (scenography, not text the reader processes). Section
-title at right, Display, white. ≈0.8" × 0.08" Accent strip beneath.
-Optional kicker (caption, Accent) above title. No page number.
-
-### Content slide — a list of points
-Left edge strip (shape 2). Optional kicker (caption, Secondary) just
-above the title; Title at the top of the title band (Title size,
-Primary). **4–6 bullets max**, each with bullet marker (shape 4) at
-left, generous line gap (~0.35"). Seven bullets means two are
-duplicates — merge or split.
-
-### Two-column comparison
-Left edge strip + title band as content. Vertical hairline (shape 3)
-splits content area. Category tag (shape 5) atop each column —
-Secondary fill left, Accent fill right. 3–5 bullets per column with
-markers. Keep left/right color mapping consistent across all
-comparison slides in the deck.
-
-**Wins / concerns variant.** For qualitative comparisons (worked vs
-needs attention), drop the category tag, use a caption-sized section
-heading per column (Secondary left, Negative/Accent right), and swap
-bullet markers for ✓ / ✕ glyphs.
-
-### KPI showcase — headline numbers
-Title band. **2–4 cards** across content area, 0.3" gutters. Each
-card: Surface fill, no shadow, 0.5pt Hairline border, 0.12" Secondary
-top strip. Inside: Display value (44 pt if 4 cards), Primary;
-caption-uppercase label, Muted, below; optional delta (caption) —
-Positive for leading `+`, Negative for `-`.
-
-**Card-strip orientation** — pick one per deck. *Top strip*
-(default; Bloomberg/newsroom feel) = square corners + 0.12" Secondary
-strip top edge. *Left strip* (startup/IR feel) = rounded corners
-(radius ≈ 0.09") + 0.10" Secondary strip left edge + Tinted Panel
-fill. Mixing reads as inconsistency.
-
-### Quote slide — a single thought
-Background fill. Oversized `"` glyph top-left (≈4× Display size),
-Accent mixed toward Background (decoration, not character). Quote at
-Title size, Primary, line-height 1.2, ≤ 4 lines (more → it's an
-essay, cut it). ≈0.5" × 0.06" Accent strip below. Attribution (Body,
-Muted) right-aligned to strip's right edge.
-
-### Chart slide — data
-Title band. **Title = takeaway** ("Paid users overtook free in Q2"),
-not subject ("MAU by tier"). Optional Body-Muted narrative below.
-Chart fills content area. **Series palette = Secondary, Accent,
-Primary in that order; max three series** (fourth → should be a
-table). Axis text caption-Muted. Gridlines off unless precision
-matters — prefer data labels.
-
-### Timeline — events in sequence
-Title band. Horizontal hairline across vertically-centered content
-area = the track. **3–6 event markers** (shape 6) evenly spaced.
-Above: period label (caption, Accent, e.g. "Q1"). Below: milestone
-label (Body bold, Primary) + optional caption-Muted detail. One
-marker may swap to Accent for "current."
-
-### Closing slide — ends the deck
-
-Mirrors whichever title composition the deck opened with — same
-palette, same shapes, position flipped (opposite corner / opposite
-quadrant / opposite panel side / accent strip above instead of
-below). Display message ("Thank you.", "Questions?", "Let's build
-it.") in the title's position-equivalent. No page number.
-
-**Action-plan variant.** When the deck demands explicit next steps,
-swap the soft closing for a dark Primary background: title band at
-top (Display, white); left column of 4–6 numbered action cards
-(horizontal pills, Accent-numbered circle, darker-Primary fill);
-right column of 4–6 risk bullets (light-gray); bottom Accent-tinted
-"Decisions needed" strip with 3–5 inline items separated by `·`.
+- **Title slide (slide 1)** — deck's visual signature. Anchor shape +
+  three-tier text (eyebrow caption-Accent → Display-Primary title →
+  Body-Muted subtitle) + a small Accent signature mark. **Compose
+  freshly each time**; defaulting to "filled rectangle in one corner"
+  is the AI tell. No page number.
+- **Section divider** — full-bleed Primary BG, huge numeral ("01") at
+  3–4× Title size in lightened Secondary at left, section title at
+  right (Display, white), Accent strip beneath. No page number.
+- **Content slide** — left edge strip + title band + bulleted body.
+  **4–6 bullets max** (cap at 3–4 for CJK / Korean). Title = takeaway
+  sentence, not topic.
+- **Two-column comparison** — vertical hairline split, Category tag
+  atop each column (Secondary left, Accent right), 3–5 bullets each.
+  Keep left/right meaning consistent across all comparison slides.
+  *Wins / concerns variant:* drop tags, swap markers for ✓ / ✕.
+- **KPI showcase** — 2–4 cards, 0.3" gutters. Each: Surface fill, no
+  shadow, 0.5pt Hairline border, 0.12" Secondary top strip, Display
+  value (44 pt if 4 cards) + caption-uppercase label (Muted) +
+  optional delta. Pick top-strip or left-strip orientation per deck.
+- **Quote slide** — oversized `"` glyph (≈4× Display, Accent toward
+  Background), quote at Title size ≤ 4 lines, attribution (Body,
+  Muted) right-aligned below a short Accent strip.
+- **Chart slide** — title = takeaway ("Paid users overtook free in
+  Q2"), not subject ("MAU by tier"). Native `add_chart` (see
+  Rendering notes — Charts); series palette = Secondary, Accent,
+  Primary in that order; **max 3 series** (4th → use a table). Set
+  EA typeface on every chart text element AND explicit fill on every
+  series — otherwise CJK tofu / default theme color leak. Reserve
+  the chart bbox and compute `insight_y` from `chart_y + chart_h +
+  GUTTER` to avoid overrun.
+- **Timeline** — horizontal hairline track + 3–6 evenly-spaced event
+  markers. Period label (caption, Accent) above, milestone label
+  (Body bold, Primary) + optional caption-Muted detail below. One
+  marker may swap to Accent for "current."
+- **Closing slide (slide N)** — mirrors the title composition (same
+  palette, same shapes, position flipped — opposite corner / panel /
+  quadrant). Display message ("Thank you.", "Questions?") in the
+  title's position-equivalent. No page number. *Action-plan variant:*
+  dark Primary BG, numbered action cards left + risk bullets right +
+  bottom Accent-tinted "Decisions needed" strip.
 
 ---
 
@@ -532,6 +597,17 @@ right column of 4–6 risk bullets (light-gray); bottom Accent-tinted
 - Page number on title / divider / closing slides
 - Two patterns merged into one slide
 - New hex color introduced mid-deck
+- Relying on `MSO_AUTO_SIZE` for titles, KPI values, tags, captions,
+  or any short fixed-shape element (autogrowth overlaps neighbors)
+- Native `add_chart()` without explicit EA typeface on every chart
+  text element (axes / legend / data labels / title) — silent CJK
+  tofu in PowerPoint
+- Native `add_chart()` without explicit `fill.fore_color.rgb` on
+  every series — PowerPoint theme defaults (blue / orange / gray)
+  leak through and break the deck palette
+- Multiple files in `artifacts/` — only the final `.pptx` belongs
+  there. Chart PNGs, verify PDFs/PNGs, helper scripts, and
+  `outline.md` all stay in the working directory.
 
 ---
 

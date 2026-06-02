@@ -331,6 +331,68 @@ def check_page_numbers(prs) -> list[tuple[int, str]]:
     return issues
 
 
+def check_picture_overrun(prs) -> list[tuple[int, str, str, float]]:
+    """Flag Picture shapes whose bbox overlaps a non-container TextBox.
+
+    Returns (slide_idx, picture_name, textbox_preview, overlap_sq_in)
+    for every (Picture, TextBox) pair whose bbox intersection exceeds
+    0.1 sq inches. Container-content overlaps (a Picture entirely
+    *containing* the TextBox, or vice-versa) are NOT flagged — those
+    are intentional layering (e.g. caption inside a card).
+    """
+    THRESH_SQ_IN = 0.1
+    PICTURE_TYPE = 13  # MSO_SHAPE_TYPE.PICTURE
+
+    def bbox(sh):
+        if sh.left is None or sh.top is None or sh.width is None or sh.height is None:
+            return None
+        return (
+            sh.left / 914400, sh.top / 914400,
+            sh.width / 914400, sh.height / 914400,
+        )
+
+    def overlap_area(a, b):
+        al, at, aw, ah = a
+        bl, bt, bw, bh = b
+        ix = min(al + aw, bl + bw) - max(al, bl)
+        iy = min(at + ah, bt + bh) - max(at, bt)
+        if ix <= 0 or iy <= 0:
+            return 0.0
+        return ix * iy
+
+    def fully_contains(outer, inner):
+        ol, ot, ow, oh = outer
+        il, it, iw, ih = inner
+        return (
+            ol <= il and ot <= it
+            and ol + ow >= il + iw and ot + oh >= it + ih
+        )
+
+    issues: list[tuple[int, str, str, float]] = []
+    for idx, slide in enumerate(prs.slides, start=1):
+        pics = []
+        texts = []
+        for sh in slide.shapes:
+            b = bbox(sh)
+            if b is None:
+                continue
+            if sh.shape_type == PICTURE_TYPE:
+                pics.append((sh, b))
+            elif sh.has_text_frame and sh.text_frame.text.strip():
+                texts.append((sh, b))
+        for pic, pb in pics:
+            for tb, tbb in texts:
+                area = overlap_area(pb, tbb)
+                if area < THRESH_SQ_IN:
+                    continue
+                # skip intentional containment (caption-on-picture etc.)
+                if fully_contains(pb, tbb) or fully_contains(tbb, pb):
+                    continue
+                preview = tb.text_frame.text[:40].replace("\n", " ")
+                issues.append((idx, pic.name, preview, round(area, 2)))
+    return issues
+
+
 # --- top-level ----------------------------------------------------------------
 
 def verify(pptx_path: str | Path) -> dict[str, Any]:
@@ -348,6 +410,7 @@ def verify(pptx_path: str | Path) -> dict[str, Any]:
         "sizes": check_size_discipline(prs),
         "overflow": check_overflow(prs),
         "page_numbers": check_page_numbers(prs),
+        "picture_overrun": check_picture_overrun(prs),
     }
 
 
@@ -366,6 +429,8 @@ def summarize(issues: dict[str, Any]) -> str:
         flags.append(f"{len(issues['overflow'])} text boxes overflow")
     if issues["page_numbers"]:
         flags.append(f"{len(issues['page_numbers'])} page-number violations")
+    if issues.get("picture_overrun"):
+        flags.append(f"{len(issues['picture_overrun'])} picture-text overlaps")
     if not flags:
         return f"{n} slides — all checks passed ({p['matched']})."
     return f"{n} slides — issues: {' · '.join(flags)}"
