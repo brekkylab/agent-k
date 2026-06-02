@@ -50,7 +50,7 @@ export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
       title={filename}
     >
       <FileTypeIcon filename={filename} size={16} />
-      <span>{filename}</span>
+      <span className="cw-attach-name">{filename}</span>
       {menuOpen && (
         <ul
           className="cw-file-dropdown"
