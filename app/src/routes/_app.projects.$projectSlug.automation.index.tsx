@@ -9,6 +9,8 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { summarizeCron } from '@/components/SchedulePicker';
 import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, listRuns, listTriggers } from '@/api/automations';
 import { listMessages } from '@/api/messages';
+import { getModelCatalog, modelLabel } from '@/api/models';
+import { getAgentSurface } from '@/domain/agentSurfaces';
 import { formatMessageTime } from '@/lib/formatMessageTime';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
@@ -127,6 +129,12 @@ function AutomationsPage() {
   const [statusFilter, setStatusFilter] = useState<RunStatus | 'all'>('all');
   const [triggerFilter, setTriggerFilter] = useState<TriggerKind | 'all'>('all');
   const [page, setPage] = useState(0);
+
+  const catalogQuery = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
 
   const automationsQuery = useQuery({
     queryKey: ['automations', projectSlug],
@@ -346,6 +354,8 @@ function AutomationsPage() {
     const cancellable = status === 'queued' || status === 'running';
     const forkable = !cancellable;
     const trigger = run.triggerId ? triggerById[run.triggerId] ?? null : null;
+    const agentSurface = run.agentType ? getAgentSurface(run.agentType) : null;
+    const runModelLabel = run.model ? modelLabel(catalogQuery.data, run.model) : '권장 모델';
     return (
     <>
       <header className="cw-run-drawer-head">
@@ -405,6 +415,22 @@ function AutomationsPage() {
           ) : (
             <span>duration {formatRunDuration(run)}</span>
           )}
+          {/* force the session info (agent + model) onto its own line */}
+          <span className="cw-run-meta-break" aria-hidden />
+          {agentSurface && (
+            <>
+              <span
+                className="cw-session-agent-chip"
+                data-agent={agentSurface.id}
+                title="이 run의 세션 에이전트"
+              >
+                <Icon name={agentSurface.icon} size={11} />
+                <span>{agentSurface.label}</span>
+              </span>
+              <span>·</span>
+            </>
+          )}
+          <span title="이 run에서 사용한 모델">{runModelLabel}</span>
         </div>
       </header>
 
