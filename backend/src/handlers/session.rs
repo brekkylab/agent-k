@@ -19,7 +19,9 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
-    handlers::dirent::{DirentScope, enforce_scope_access, parse_dirent_path, scope_root},
+    handlers::dirent::{
+        DirentScope, copy_dir_recursive, enforce_scope_access, parse_dirent_path, scope_root,
+    },
     model::{
         CreateSessionRequest, MessageSender, SendMessageRequest, SendMessageResponse,
         SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
@@ -571,10 +573,24 @@ pub async fn fork_session(
         .mark_session_read(new_id, auth_user.id)
         .await;
 
-    // Pre-create host dirs for the forked session.
+    // Mirror the source session's host files into the fork so the snapshot matches
+    // the VM upper.ext4 clone. shared/ is project-level and intentionally excluded.
+    let (src_inputs, _, src_artifacts) = session_dirs(&state, source.project_id, source_session_id);
     let (new_inputs, _, new_artifacts) = session_dirs(&state, source.project_id, new_id);
-    for d in [&new_inputs, &new_artifacts] {
-        let _ = tokio::fs::create_dir_all(d).await;
+    for (src, dst) in [(&src_inputs, &new_inputs), (&src_artifacts, &new_artifacts)] {
+        let res = if tokio::fs::try_exists(src).await.unwrap_or(false) {
+            copy_dir_recursive(src, dst).await
+        } else {
+            tokio::fs::create_dir_all(dst).await
+        };
+        if let Err(e) = res {
+            tracing::warn!(
+                source = %source_session_id,
+                fork = %new_id,
+                dir = ?dst,
+                "failed to copy session dir on fork: {e}",
+            );
+        }
     }
 
     let source_cfg = SandboxConfig {

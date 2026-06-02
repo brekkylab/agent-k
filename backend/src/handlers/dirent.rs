@@ -808,7 +808,7 @@ async fn find_available_name(parent: &Path, base_name: &str) -> PathBuf {
 /// untrusted input), and any symlink encountered is skipped, so a malicious
 /// symlink planted inside the source tree cannot escape `dst`'s subtree.
 // nosemgrep: rust.actix.path-traversal.tainted-path
-async fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+pub(crate) async fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     tokio::fs::create_dir_all(dst).await?;
     let mut rd = tokio::fs::read_dir(src).await?;
     while let Some(entry) = rd.next_entry().await? {
