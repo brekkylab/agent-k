@@ -204,7 +204,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 /* Section collapsed (toggle off): hide normal rows, but keep .is-active everywhere
    and .is-unread for sessions visible. */
 .cw-projects-list[data-expanded="false"] .cw-nav-row:not(.is-active),
-.cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread) { display: none; }
+.cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread):not(.is-streaming) { display: none; }
 
 /* Quiet scrollbar — transparent by default. Pointer hover snaps to a faint tone
    instantly. Focus is intentionally NOT a trigger so clicking a row and leaving
