@@ -278,7 +278,11 @@ export function Sidebar() {
           next.delete(event.session_id);
           return next;
         });
-        if (event.type === 'agent_run_done' || event.type === 'agent_run_idle' || event.type === 'agent_error') {
+        // Only invalidate on agent_run_done: that's when unread count and
+        // session ordering actually change. agent_run_idle fires on every
+        // subscribe (idle sessions) and would cause a subscribe→invalidate→
+        // resubscribe→idle loop. agent_error doesn't update session metadata.
+        if (event.type === 'agent_run_done') {
           const slug = activeProjectSlugRef.current;
           if (slug) void queryClient.invalidateQueries({ queryKey: ['sessions', slug] });
         }

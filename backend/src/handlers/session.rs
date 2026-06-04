@@ -28,7 +28,8 @@ use crate::{
     state::AppState,
 };
 
-const DEFAULT_MODEL: &str = "openai/gpt-5.4";
+// const DEFAULT_MODEL: &str = "openai/gpt-5.4";
+const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
 
@@ -913,11 +914,12 @@ pub async fn send_message(
         }
         drop(agent); // Release OwnedMutexGuard only after successful persist
 
-        // Auto-mark sender as having read
-        let _ = state2
-            .repository
-            .mark_session_read(session_id, sender_id)
-            .await;
+        // Intentionally NOT calling mark_session_read here: the sender should
+        // only be considered to have read the agent's reply when they actually
+        // fetch the messages (GET /sessions/{id}/messages). Auto-marking here
+        // sets last_read_seq to MAX(seq) which includes the agent's own
+        // messages, so unread_count is always 0 — breaking cross-session
+        // unread badges for users who navigated away before the agent finished.
 
         state2.end_run(&session_id);
         let _ = state2.ws_tx.send(WsEvent::AgentRunDone {
