@@ -355,8 +355,13 @@ function SessionPage() {
 
       if (event.type === 'agent_message') {
         const { run_id, seq, output } = event;
-        // [B] Ignore messages from a different run (stale live broadcast vs. newer run).
-        if (currentRunIdRef.current !== null && run_id !== currentRunIdRef.current) return;
+        // [B] Claim the run on first message (Seq2: live message arrives before replay Started),
+        // or ignore messages from a different run (stale broadcast vs. newer run).
+        if (currentRunIdRef.current === null) {
+          currentRunIdRef.current = run_id;
+        } else if (run_id !== currentRunIdRef.current) {
+          return;
+        }
         wsOutputsRef.current.set(seq, output);
 
         // Fast path: if seq is strictly greater than maxSeqRef (the common
@@ -405,6 +410,9 @@ function SessionPage() {
       }
 
       if (event.type === 'agent_error') {
+        const { run_id } = event;
+        // [R2-3] Ignore stale errors from a previous run — same guard as agent_run_done.
+        if (currentRunIdRef.current !== null && run_id !== currentRunIdRef.current) return;
         // [G] Clear the run_started timeout — error is a terminal state.
         if (runStartedTimeoutRef.current) {
           clearTimeout(runStartedTimeoutRef.current);
@@ -466,6 +474,7 @@ function SessionPage() {
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
           optimisticUserIdRef.current = null;
+          currentRunIdRef.current = null;
           setStreaming(false);
           streamingRef.current = false;
         }

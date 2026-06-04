@@ -34,6 +34,7 @@ export interface AgentMessageEvent {
 export interface AgentErrorEvent {
   type: 'agent_error';
   session_id: string;
+  run_id: string;
   message: string;
 }
 

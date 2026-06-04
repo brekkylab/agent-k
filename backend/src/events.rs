@@ -29,6 +29,7 @@ pub enum WsEvent {
     },
     AgentError {
         session_id: String,
+        run_id: String,
         message: String,
     },
     AgentRunDone {

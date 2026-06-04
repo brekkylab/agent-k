@@ -23,7 +23,7 @@ use crate::{
         CreateSessionRequest, MessageSender, RunAck, SendMessageRequest, SessionListResponse,
         SessionMessageListResponse, SessionMessageResponse, SessionResponse, UpdateSessionRequest,
     },
-    repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess},
+    repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, ShareMode},
     services::session_title::generate_session_title,
     state::AppState,
 };
@@ -477,6 +477,22 @@ pub async fn update_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
+    // [R2-4] share_mode downgrade to private: evict non-creator subscribers immediately
+    // instead of waiting for Task D's 60-second poll.
+    if payload.share_mode == ShareMode::Private && session.share_mode != ShareMode::Private {
+        if let Ok(members) = state.repository.list_project_members(session.project_id).await {
+            for (member, _) in members {
+                if member.id == session.creator_id {
+                    continue;
+                }
+                let _ = state.ws_tx.send(WsEvent::AccessRevoked {
+                    session_id: session_id.to_string(),
+                    user_id: member.id.to_string(),
+                });
+            }
+        }
+    }
+
     let unread = state
         .repository
         .count_session_unread(session_id, auth_user.id)
@@ -862,6 +878,7 @@ pub async fn send_message(
             state2.end_run(&session_id);
             let _ = state2.ws_tx.send(WsEvent::AgentError {
                 session_id: session_id.to_string(),
+                run_id: run_id.to_string(),
                 message: err,
             });
             return;
@@ -908,6 +925,7 @@ pub async fn send_message(
             state2.end_run(&session_id);
             let _ = state2.ws_tx.send(WsEvent::AgentError {
                 session_id: session_id.to_string(),
+                run_id: run_id.to_string(),
                 message: "응답 저장에 실패했습니다. 다시 시도해주세요.".to_string(),
             });
             return;
@@ -941,6 +959,7 @@ pub async fn send_message(
             state_mon.end_run(&session_id);
             let _ = state_mon.ws_tx.send(WsEvent::AgentError {
                 session_id: session_id.to_string(),
+                run_id: run_id.to_string(),
                 message: "에이전트가 예기치 않게 종료되었습니다.".to_string(),
             });
         }
