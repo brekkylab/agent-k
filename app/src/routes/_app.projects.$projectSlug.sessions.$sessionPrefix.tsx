@@ -121,6 +121,8 @@ function SessionPage() {
   const [composerText, setComposerText] = useState('');
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  // "New message arrived while scrolled up" pill above the composer.
+  const [showNewMsgPill, setShowNewMsgPill] = useState(false);
   const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
 
   type PendingAttachment = {
@@ -143,6 +145,7 @@ function SessionPage() {
     setStreaming(false);
     streamingRef.current = false;
     setPendingAttachments([]);
+    setShowNewMsgPill(false);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
     optimisticUserIdRef.current = null;
@@ -174,6 +177,7 @@ function SessionPage() {
     if (forceScrollRef.current) {
       forceScrollRef.current = false;
       messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      setShowNewMsgPill(false);
       return;
     }
 
@@ -186,8 +190,29 @@ function SessionPage() {
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distanceFromBottom <= 700) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    } else if (allMessages.length > prevCount) {
+      // Scrolled too far up to auto-follow — surface a "new message" pill instead.
+      setShowNewMsgPill(true);
     }
   }, [allMessages.length, streaming]);
+
+  // Dismiss the pill once the user scrolls back near the bottom themselves.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (el.scrollHeight - el.scrollTop - el.clientHeight <= 40) {
+        setShowNewMsgPill(false);
+      }
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    setShowNewMsgPill(false);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+  }, []);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -609,6 +634,15 @@ function SessionPage() {
           )}
           <div ref={messagesEndRef} />
         </div>
+
+        {showNewMsgPill && (
+          <div className="cw-new-msg-anchor">
+            <button type="button" className="cw-new-msg-pill" onClick={scrollToBottom}>
+              <Icon name="chevron" size={12} />
+              {t('ui.new_message')}
+            </button>
+          </div>
+        )}
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           {pendingAttachments.length > 0 && (

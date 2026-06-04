@@ -1110,6 +1110,43 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   color: var(--cw-fg-4);
   font-size: 11px;
 }
+/* "New message" pill — floats just above the composer when a message arrives
+   while the user is scrolled up past the auto-follow threshold. */
+.cw-new-msg-anchor {
+  position: relative;
+  height: 0;
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+}
+.cw-new-msg-pill {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--cw-primary);
+  color: var(--cw-fg-on-primary, white);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  transition: background 120ms, transform 120ms;
+  animation: cw-pill-in 160ms ease-out;
+}
+.cw-new-msg-pill:hover { background: var(--cw-primary-hover, var(--cw-primary)); }
+@keyframes cw-pill-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
 .cw-home-composer small {
   text-align: center;
   color: var(--cw-fg-4);

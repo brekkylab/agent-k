@@ -16,6 +16,7 @@
     "send_aria": "Send",
     "composer_placeholder": "Message Cowork and the team…",
     "composer_hint": "Enter to send · Reference files with @filename",
+    "new_message": "New message",
     "title_fallback": "…"
   },
   "chat": {

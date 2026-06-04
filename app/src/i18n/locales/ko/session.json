@@ -16,6 +16,7 @@
     "send_aria": "전송",
     "composer_placeholder": "Cowork와 팀에 메시지 보내기…",
     "composer_hint": "Enter로 전송 · @파일명으로 파일 참조",
+    "new_message": "새 메시지",
     "title_fallback": "…"
   },
   "chat": {
