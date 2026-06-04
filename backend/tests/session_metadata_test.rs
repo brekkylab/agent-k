@@ -345,6 +345,7 @@ async fn fork_inherits_title_and_has_zero_unread() {
 /// After the first message stream, a `session_title_updated` WebSocket event must be
 /// broadcast on `AppState::ws_tx` with the correct session_id, project_id, and a non-empty title.
 #[tokio::test]
+#[ignore = "requires ANTHROPIC_API_KEY"]
 async fn first_message_stream_broadcasts_title_via_websocket() {
     dotenvy::dotenv().ok();
     common::setup_provider().await;
