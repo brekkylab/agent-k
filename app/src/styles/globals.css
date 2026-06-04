@@ -1147,6 +1147,33 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   from { opacity: 0; transform: translateX(-50%) translateY(6px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
+/* Ghost scroll-to-bottom button — right end above the composer, shown whenever
+   the user is scrolled past the auto-follow threshold. */
+.cw-scroll-down-btn {
+  position: absolute;
+  right: 58px;
+  bottom: 12px;
+  z-index: 5;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--cw-border);
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--cw-paper), transparent 30%);
+  backdrop-filter: blur(4px);
+  color: var(--cw-fg-3);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: background 120ms, color 120ms;
+  animation: cw-fade-up 160ms ease-out;
+}
+.cw-scroll-down-btn:hover { background: var(--cw-paper); color: var(--cw-fg-1); }
+@keyframes cw-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 .cw-home-composer small {
   text-align: center;
   color: var(--cw-fg-4);

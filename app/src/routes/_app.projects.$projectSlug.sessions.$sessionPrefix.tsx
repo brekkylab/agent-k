@@ -123,6 +123,9 @@ function SessionPage() {
   const [streaming, setStreaming] = useState(false);
   // "New message arrived while scrolled up" pill above the composer.
   const [showNewMsgPill, setShowNewMsgPill] = useState(false);
+  // Ghost scroll-to-bottom button — visible whenever scrolled past the
+  // auto-follow threshold, regardless of new messages.
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
 
   type PendingAttachment = {
@@ -146,6 +149,7 @@ function SessionPage() {
     streamingRef.current = false;
     setPendingAttachments([]);
     setShowNewMsgPill(false);
+    setShowScrollDown(false);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
     optimisticUserIdRef.current = null;
@@ -196,14 +200,17 @@ function SessionPage() {
     }
   }, [allMessages.length, streaming]);
 
-  // Dismiss the pill once the user scrolls back near the bottom themselves.
+  // Track scroll position: dismiss the pill once the user is back near the
+  // bottom, and toggle the ghost scroll-down button past the follow threshold.
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
     const onScroll = () => {
-      if (el.scrollHeight - el.scrollTop - el.clientHeight <= 40) {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom <= 40) {
         setShowNewMsgPill(false);
       }
+      setShowScrollDown(distanceFromBottom > 700);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
@@ -635,12 +642,25 @@ function SessionPage() {
           <div ref={messagesEndRef} />
         </div>
 
-        {showNewMsgPill && (
+        {(showNewMsgPill || showScrollDown) && (
           <div className="cw-new-msg-anchor">
-            <button type="button" className="cw-new-msg-pill" onClick={scrollToBottom}>
-              <Icon name="chevron" size={12} />
-              {t('ui.new_message')}
-            </button>
+            {showNewMsgPill && (
+              <button type="button" className="cw-new-msg-pill" onClick={scrollToBottom}>
+                <Icon name="chevron" size={12} />
+                {t('ui.new_message')}
+              </button>
+            )}
+            {showScrollDown && (
+              <button
+                type="button"
+                className="cw-scroll-down-btn"
+                aria-label={t('ui.scroll_to_bottom')}
+                title={t('ui.scroll_to_bottom')}
+                onClick={scrollToBottom}
+              >
+                <Icon name="chevron" size={14} />
+              </button>
+            )}
           </div>
         )}
 

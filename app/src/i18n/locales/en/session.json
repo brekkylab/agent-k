@@ -17,6 +17,7 @@
     "composer_placeholder": "Message Cowork and the team…",
     "composer_hint": "Enter to send · Reference files with @filename",
     "new_message": "New message",
+    "scroll_to_bottom": "Scroll to bottom",
     "title_fallback": "…"
   },
   "chat": {
