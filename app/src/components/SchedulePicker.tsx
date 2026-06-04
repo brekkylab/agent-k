@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '@/components/Icon';
+import { Select } from '@/components/Select';
 
 export type SchedulePickerValue = { expr: string; tz: string };
 
@@ -185,28 +186,29 @@ export function SchedulePicker({
           onChange={(e) => update({ interval: Math.max(1, Math.min(24, parseInt(e.target.value, 10) || 1)) })}
           title={intervalDisabled ? 'cron으로는 매시간 단위에서만 N>1을 지원합니다.' : ''}
         />
-        <select
-          className="cw-sched-unit"
+        <Select<Unit>
           value={state.unit}
-          onChange={(e) => update({ unit: e.target.value as Unit })}
-        >
-          <option value="hour">{unitLabel.hour}마다 (Hourly)</option>
-          <option value="day">{unitLabel.day} (Daily)</option>
-          <option value="week">{unitLabel.week} (Weekly)</option>
-          <option value="month">{unitLabel.month} (Monthly)</option>
-          <option value="custom">{unitLabel.custom} (Custom cron)</option>
-        </select>
+          onChange={(unit) => update({ unit })}
+          options={[
+            { value: 'hour', label: `${unitLabel.hour}마다 (Hourly)` },
+            { value: 'day', label: `${unitLabel.day} (Daily)` },
+            { value: 'week', label: `${unitLabel.week} (Weekly)` },
+            { value: 'month', label: `${unitLabel.month} (Monthly)` },
+            { value: 'custom', label: `${unitLabel.custom} (Custom cron)` },
+          ]}
+          className="cw-sched-unit"
+          triggerClassName="cw-sched-select"
+          ariaLabel="반복 주기 단위"
+        />
       </div>
 
       {/* Row 2: Monthly mode dropdown */}
       {state.unit === 'month' && (
         <div className="cw-sched-row">
           <span className="cw-sched-label">반복 방식</span>
-          <select
-            className="cw-sched-unit"
+          <Select
             value={state.monthlyMode === 'day' ? `day-${state.dayOfMonth}` : `wk-${state.nth}-${state.nthWeekday}`}
-            onChange={(e) => {
-              const v = e.target.value;
+            onChange={(v) => {
               if (v.startsWith('day-')) {
                 update({ monthlyMode: 'day', dayOfMonth: parseInt(v.slice(4), 10) });
               } else if (v.startsWith('wk-')) {
@@ -214,12 +216,17 @@ export function SchedulePicker({
                 update({ monthlyMode: 'weekday', nth: parseInt(nthStr, 10), nthWeekday: parseInt(wdStr, 10) });
               }
             }}
-          >
-            <option value={`day-${state.dayOfMonth}`}>매월 {state.dayOfMonth}일</option>
-            <option value={`wk-${state.nth}-${state.nthWeekday}`}>
-              매월 {NTH_NAMES[state.nth - 1] ?? `${state.nth}번째`} {WEEKDAY_NAMES[state.nthWeekday]}요일
-            </option>
-          </select>
+            options={[
+              { value: `day-${state.dayOfMonth}`, label: `매월 ${state.dayOfMonth}일` },
+              {
+                value: `wk-${state.nth}-${state.nthWeekday}`,
+                label: `매월 ${NTH_NAMES[state.nth - 1] ?? `${state.nth}번째`} ${WEEKDAY_NAMES[state.nthWeekday]}요일`,
+              },
+            ]}
+            className="cw-sched-unit"
+            triggerClassName="cw-sched-select"
+            ariaLabel="반복 방식"
+          />
         </div>
       )}
 
@@ -241,20 +248,22 @@ export function SchedulePicker({
       {state.unit === 'month' && state.monthlyMode === 'weekday' && (
         <div className="cw-sched-row">
           <span className="cw-sched-label">상세</span>
-          <select
-            className="cw-sched-unit cw-sched-unit-narrow"
+          <Select<number>
             value={state.nth}
-            onChange={(e) => update({ nth: parseInt(e.target.value, 10) })}
-          >
-            {NTH_NAMES.map((n, i) => <option key={i} value={i + 1}>{n}</option>)}
-          </select>
-          <select
+            onChange={(nth) => update({ nth })}
+            options={NTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))}
             className="cw-sched-unit cw-sched-unit-narrow"
+            triggerClassName="cw-sched-select"
+            ariaLabel="몇째 주"
+          />
+          <Select<number>
             value={state.nthWeekday}
-            onChange={(e) => update({ nthWeekday: parseInt(e.target.value, 10) })}
-          >
-            {WEEKDAY_NAMES.map((d, i) => <option key={i} value={i}>{d}요일</option>)}
-          </select>
+            onChange={(nthWeekday) => update({ nthWeekday })}
+            options={WEEKDAY_NAMES.map((d, i) => ({ value: i, label: `${d}요일` }))}
+            className="cw-sched-unit cw-sched-unit-narrow"
+            triggerClassName="cw-sched-select"
+            ariaLabel="요일"
+          />
         </div>
       )}
 
