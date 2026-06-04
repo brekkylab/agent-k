@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
@@ -32,6 +32,8 @@ import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import type { Session } from '@/domain/types';
+import { appWs } from '@/api/ws';
+import type { AppWsEvent } from '@/api/ws';
 
 function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => void }) {
   const setSidebarMode = useLayoutStore((s) => s.setSidebarMode);
@@ -241,6 +243,42 @@ export function Sidebar() {
     enabled: Boolean(activeProjectSlug),
   });
 
+  const queryClient = useQueryClient();
+  const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set());
+  const activeProjectSlugRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeProjectSlugRef.current = activeProjectSlug;
+  }, [activeProjectSlug]);
+
+  useEffect(() => {
+    const sessions = sessionsQuery.data ?? [];
+    sessions.forEach((s) => appWs.subscribeSession(s.id));
+    return () => sessions.forEach((s) => appWs.unsubscribeSession(s.id));
+  }, [sessionsQuery.data]);
+
+  useEffect(() => {
+    return appWs.subscribe((event: AppWsEvent) => {
+      if (event.type === 'agent_run_started') {
+        setStreamingIds((prev) => {
+          const next = new Set(prev);
+          next.add(event.session_id);
+          return next;
+        });
+      } else if (event.type === 'agent_run_done' || event.type === 'agent_run_idle') {
+        setStreamingIds((prev) => {
+          if (!prev.has(event.session_id)) return prev;
+          const next = new Set(prev);
+          next.delete(event.session_id);
+          return next;
+        });
+        if (event.type === 'agent_run_done') {
+          const slug = activeProjectSlugRef.current;
+          if (slug) void queryClient.invalidateQueries({ queryKey: ['sessions', slug] });
+        }
+      }
+    });
+  }, [queryClient]);
+
   const activeSessionId = useActiveSessionId();
   const activeRoute = useActiveRouteKey();
 
@@ -429,7 +467,11 @@ export function Sidebar() {
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
                   >
-                    {session.unreadCount > 0 ? (
+                    {streamingIds.has(session.id) ? (
+                      <span className="cw-typing-dots" aria-label="agent responding">
+                        <span /><span /><span />
+                      </span>
+                    ) : session.unreadCount > 0 ? (
                       <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>
                         <span className="n">{session.unreadCount}</span>
                       </span>
