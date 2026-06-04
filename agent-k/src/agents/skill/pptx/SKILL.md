@@ -18,6 +18,8 @@ Two non-negotiable rules:
 
 **Hard rules — if any of these slip, the deck fails:**
 
+- Install `python-pptx` before any deck-building code — the sandbox
+  doesn't ship it (`pip install python-pptx`).
 - Write `outline.md` **before** any python-pptx code (Process §1)
 - Verify gate: `verify()` returns empty AND every PNG read with
   the `read` tool — both required (Process §3)
@@ -91,9 +93,12 @@ here, not in the content.
 ### 3. Verify the output renders correctly
 
 **Gate: do not surface the `.pptx` until BOTH (A) `verify()` returns
-all empty lists AND (B) you have rendered to PNG and read every
-slide. Step B is mandatory regardless of whether Step A flagged
-anything — they catch different failures.**
+all empty lists AND (B) you have rendered to PNG, read every slide,
+AND fixed every issue found in the checklist below. Reading alone
+is not enough — any flagged correctness or design-quality issue
+MUST be fixed (surgery or rework) before re-checking and surfacing.
+Step B is mandatory regardless of whether Step A flagged anything —
+they catch different failures.**
 
 **A. Run `verify_pptx.py`** — the skill ships a compliance checker:
 
@@ -126,7 +131,7 @@ install `poppler-utils` first, every time, before the PNG step:
 ```
 apt-get install -y poppler-utils       # provides pdftoppm — not in image
 soffice --headless --convert-to pdf out.pptx
-pdftoppm -r 100 -png out.pdf slide
+pdftoppm -r 75 -png out.pdf slide
 ```
 
 **Open each PNG with the `read` tool — this loads the image into
@@ -426,10 +431,15 @@ from pptx.util import Pt
 from pptx.dml.color import RGBColor
 
 def set_chart_text_font(font, typeface='Noto Sans KR', size_pt=11):
-    """Set Latin + EA + CS typefaces on a chart font, with size."""
+    """Set Latin + EA + CS typefaces on a chart font, with size.
+
+    `font._element` is already the `<a:rPr>` / `<a:defRPr>` element —
+    do NOT call `.get_or_add_rPr()` on it (chart fonts wrap
+    `CT_TextCharacterProperties` directly and have no child rPr).
+    """
     font.name = typeface
     font.size = Pt(size_pt)
-    rPr = font._element.get_or_add_rPr()
+    rPr = font._element
     for tag in ('latin', 'ea', 'cs'):
         el = rPr.find(qn(f'a:{tag}'))
         if el is None:
