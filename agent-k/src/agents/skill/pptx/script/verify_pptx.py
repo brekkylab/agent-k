@@ -80,14 +80,21 @@ def _has_cjk(text: str) -> bool:
 
 
 def _ea_typeface(run) -> str | None:
-    """Return the East-Asian typeface from a run's rPr, or None."""
     rPr = run._r.find(qn("a:rPr"))
-    if rPr is None:
-        return None
-    ea = rPr.find(qn("a:ea"))
-    if ea is None:
-        return None
-    return ea.get("typeface")
+    if rPr is not None:
+        ea = rPr.find(qn("a:ea"))
+        if ea is not None and ea.get("typeface"):
+            return ea.get("typeface")
+    para = run._r.getparent()
+    if para is not None:
+        pPr = para.find(qn("a:pPr"))
+        if pPr is not None:
+            defRPr = pPr.find(qn("a:defRPr"))
+            if defRPr is not None:
+                ea = defRPr.find(qn("a:ea"))
+                if ea is not None and ea.get("typeface"):
+                    return ea.get("typeface")
+    return None
 
 
 def _iter_runs(slide):
