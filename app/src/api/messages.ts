@@ -13,16 +13,25 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
   return collapseToolMessages(raw.items, sessionId);
 }
 
+export interface RunAck {
+  status: string;
+  run_id: string;
+}
+
 export async function sendMessage(
   sessionId: string,
   content: string,
   attachments?: string[],
-): Promise<void> {
-  await request<unknown>(`/sessions/${sessionId}/messages`, {
+): Promise<RunAck> {
+  return request<RunAck>(`/sessions/${sessionId}/messages`, {
     method: 'POST',
     body: { content, attachments: attachments && attachments.length > 0 ? attachments : undefined },
   });
   // 423/403 are thrown as ApiError by request() — caller should catch
+}
+
+export async function stopRun(sessionId: string, runId: string): Promise<void> {
+  await request<unknown>(`/sessions/${sessionId}/runs/${runId}/stop`, { method: 'POST' });
 }
 
 export interface StreamToolCall {

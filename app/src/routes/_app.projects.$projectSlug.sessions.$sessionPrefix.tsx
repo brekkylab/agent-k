@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
-import { listMessages, sendMessage, deriveStreamState } from '@/api/messages';
+import { listMessages, sendMessage, stopRun, deriveStreamState } from '@/api/messages';
 import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
@@ -127,6 +127,8 @@ function SessionPage() {
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [ownedRunId, setOwnedRunId] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
 
   type PendingAttachment = {
@@ -148,6 +150,8 @@ function SessionPage() {
     setComposerText('');
     setStreaming(false);
     streamingRef.current = false;
+    setOwnedRunId(null);
+    setStopping(false);
     setPendingAttachments([]);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
@@ -271,7 +275,10 @@ function SessionPage() {
     streamingRef.current = true;
 
     try {
-      await sendMessage(sessionId, text, attachmentPaths.length > 0 ? attachmentPaths : undefined);
+      const ack = await sendMessage(sessionId, text, attachmentPaths.length > 0 ? attachmentPaths : undefined);
+      if (!doneRunIdsRef.current.has(ack.run_id)) {
+        setOwnedRunId(ack.run_id);
+      }
       // agent_run_started가 10초 내에 도착하지 않으면 자동 복구
       if (runStartedTimeoutRef.current) clearTimeout(runStartedTimeoutRef.current);
       runStartedTimeoutRef.current = setTimeout(() => {
@@ -295,6 +302,7 @@ function SessionPage() {
       showToast(`전송 실패: ${msg}`);
       setStreaming(false);
       streamingRef.current = false;
+      setOwnedRunId(null);
       setLiveMessages([]);
       wsOutputsRef.current.clear();
       optimisticUserIdRef.current = null;
@@ -310,6 +318,18 @@ function SessionPage() {
       void send();
     }
   }, [send]);
+
+  const stopGeneration = useCallback(async () => {
+    if (!ownedRunId || !sessionId || stopping) return;
+    setStopping(true);
+    try {
+      await stopRun(sessionId, ownedRunId);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'stop failed';
+      showToast(`중지 실패: ${msg}`);
+      setStopping(false);
+    }
+  }, [ownedRunId, sessionId, stopping, showToast]);
 
   const duplicateMutation = useDuplicateSession(projectSlug);
 
@@ -481,6 +501,8 @@ function SessionPage() {
         showToast(`에이전트 오류: ${event.message}`);
         setStreaming(false);
         streamingRef.current = false;
+        setOwnedRunId(null);
+        setStopping(false);
         setLiveMessages([]);
         wsOutputsRef.current.clear();
         maxSeqRef.current = -1;
@@ -501,6 +523,10 @@ function SessionPage() {
           runStartedTimeoutRef.current = null;
         }
 
+        if (event.stopped) {
+          showToast('응답 생성이 중지되었습니다');
+        }
+
         // 완료: history refetch → liveMessages clear → streaming stop → invalidate
         void (async () => {
           if (sessionId) {
@@ -513,6 +539,8 @@ function SessionPage() {
           optimisticUserIdRef.current = null;
           setStreaming(false);
           streamingRef.current = false;
+          setOwnedRunId(null);
+          setStopping(false);
           void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
           void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
           void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
@@ -537,6 +565,8 @@ function SessionPage() {
           currentRunIdRef.current = null;
           setStreaming(false);
           streamingRef.current = false;
+          setOwnedRunId(null);
+          setStopping(false);
         }
       }
     });
@@ -676,9 +706,22 @@ function SessionPage() {
               >
                 <Icon name="paperclip" size={13} />
               </button>
-              <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
-                <Icon name="send" size={12} />
-              </button>
+              {streaming && ownedRunId ? (
+                <button
+                  type="button"
+                  className="cw-send-button"
+                  aria-label="응답 생성 중지"
+                  title={stopping ? '중지 중...' : '응답 생성 중지'}
+                  onClick={() => void stopGeneration()}
+                  disabled={stopping}
+                >
+                  <Icon name="stop" size={12} />
+                </button>
+              ) : (
+                <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
+                  <Icon name="send" size={12} />
+                </button>
+              )}
             </div>
           </div>
           <input

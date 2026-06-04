@@ -42,6 +42,7 @@ export interface AgentRunDoneEvent {
   type: 'agent_run_done';
   session_id: string;
   run_id: string;
+  stopped: boolean;
 }
 
 export interface AgentRunIdleEvent {

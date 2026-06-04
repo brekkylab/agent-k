@@ -210,6 +210,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                             let done = WsEvent::AgentRunDone {
                                 session_id: session_id.to_string(),
                                 run_id: run_id.to_string(),
+                                stopped: false,
                             };
                             if let Ok(json) = serde_json::to_string(&done) {
                                 let _ = inbound_tx.send(Message::Text(json.into())).await;

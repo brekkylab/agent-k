@@ -1,24 +1,26 @@
 import type { SVGProps } from 'react';
 
 export type IconName =
-  | 'home' | 'folder' | 'folder-open' | 'users' | 'settings' | 'lock' | 'eye' | 'eye-off'
-  | 'message-square' | 'file-text' | 'file' | 'sheet' | 'image' | 'search' | 'plus'
-  | 'send' | 'sparkles' | 'check' | 'chevron' | 'zap' | 'calendar' | 'circle-play' | 'rocket' | 'artifact'
-  | 'shield' | 'x' | 'arrow-left' | 'analysis' | 'brainstorm' | 'writing' | 'recap'
-  | 'more' | 'upload' | 'trash' | 'download' | 'copy'
-  | 'list' | 'grid' | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left' | 'paperclip'
-  | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio'
-  | 'pause' | 'play' | 'sticky-notes';
+  | 'home' | 'folder' | 'folder-open' | 'users' | 'settings' | 'lock'
+  | 'eye' | 'eye-off' | 'message-square' | 'file-text' | 'file' | 'sheet'
+  | 'image' | 'search' | 'plus' | 'send' | 'sparkles' | 'check'
+  | 'chevron' | 'zap' | 'calendar' | 'circle-play' | 'rocket' | 'artifact'
+  | 'shield' | 'x' | 'arrow-left' | 'analysis' | 'brainstorm' | 'writing'
+  | 'recap' | 'more' | 'upload' | 'trash' | 'download' | 'copy'
+  | 'list' | 'grid' | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left'
+  | 'paperclip' | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio'
+  | 'pause' | 'play' | 'sticky-notes' | 'stop';
 
 type PreviewIconName =
-  | 'lock' | 'eye' | 'eye-off' | 'pause' | 'play' | 'message-square' | 'messages-square' | 'clipboard-list' | 'lightbulb'
-  | 'pencil' | 'home' | 'folder' | 'folder-open' | 'users'
-  | 'settings' | 'plus' | 'chevron-down' | 'chevron-right' | 'chevron-left' | 'more-horizontal' | 'check'
-  | 'x' | 'arrow-left' | 'send' | 'search' | 'file-text' | 'file-spreadsheet'
-  | 'file' | 'image' | 'sparkles' | 'shield-check' | 'zap' | 'calendar' | 'circle-play' | 'rocket'
-  | 'trash-2' | 'download' | 'copy' | 'list' | 'grid-3x3' | 'rotate-ccw' | 'corner-down-left' | 'paperclip'
-  | 'file-code' | 'file-archive' | 'file-video' | 'file-audio'
-  | 'sticky-notes';
+  | 'home' | 'folder' | 'folder-open' | 'users' | 'settings' | 'lock'
+  | 'eye' | 'eye-off' | 'message-square' | 'file-text' | 'file' | 'file-spreadsheet'
+  | 'image' | 'search' | 'plus' | 'send' | 'sparkles' | 'check'
+  | 'chevron-down' | 'zap' | 'calendar' | 'circle-play' | 'rocket' | 'shield-check'
+  | 'x' | 'arrow-left' | 'clipboard-list' | 'lightbulb' | 'pencil' | 'messages-square'
+  | 'more-horizontal' | 'trash-2' | 'download' | 'copy' | 'list' | 'grid-3x3'
+  | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left' | 'paperclip' | 'file-code'
+  | 'file-archive' | 'file-video' | 'file-audio' | 'pause' | 'play' | 'sticky-notes'
+  | 'square';
 
 const previewIconPath: Record<PreviewIconName, string> = {
   lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -70,6 +72,7 @@ const previewIconPath: Record<PreviewIconName, string> = {
   'file-audio': '<path d="M17.5 22h.5a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M2 17v-3a4 4 0 0 1 8 0v3"/><circle cx="9" cy="17" r="1"/><circle cx="3" cy="17" r="1"/>',
   paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
   'sticky-notes': '<path d="M10 8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 16 14v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z"/><path d="M10 8v5a1 1 0 0 0 1 1h5"/><path d="M8 4a2 2 0 0 1 2-2h6a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 22 8v6a2 2 0 0 1-2 2"/><path d="M16 2v5a1 1 0 0 0 1 1h5"/>',
+  square: '<rect width="16" height="16" x="4" y="4" rx="2.5" fill="currentColor"/>',
 };
 
 const iconAlias: Record<IconName, PreviewIconName> = {
@@ -126,6 +129,7 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   'file-video': 'file-video',
   'file-audio': 'file-audio',
   'sticky-notes': 'sticky-notes',
+  stop: 'square',
 };
 
 export function Icon({ name, size = 16, className = '', strokeWidth = 2, style, ...props }: SVGProps<SVGSVGElement> & { name: IconName; size?: number }) {

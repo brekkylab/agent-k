@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use ailoy::{
     agent::Agent,
-    message::{Message, MessageOutput, Part, Role},
+    message::{FinishReason, Message, MessageOutput, Part, Role},
     runenv::{Sandbox, SandboxConfig},
 };
 use axum::{
@@ -34,6 +34,7 @@ use crate::{
 const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
+const STOP_RUN_GRACE_SECS: u64 = 10;
 
 pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
@@ -829,7 +830,7 @@ pub async fn send_message(
         attachments: attachments.clone(),
         created_at: now,
     };
-    let run_id = state.start_run(session_id, user_message.clone());
+    let (run_id, cancel) = state.start_run(session_id, user_message.clone());
     let _ = state.ws_tx.send(WsEvent::AgentRunStarted {
         session_id: session_id.to_string(),
         run_id: run_id.to_string(),
@@ -866,11 +867,45 @@ pub async fn send_message(
         let mut run = agent.run(msg);
 
         let mut run_error: Option<String> = None;
+        let mut stopped = false;
         let mut depth0_outputs: Vec<MessageOutput> = Vec::new();
-        while let Some(item) = run.next().await {
+        let mut pending_tool_results: usize = 0;
+        loop {
+            let item = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    stopped = true;
+                    if pending_tool_results == 0 {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(STOP_RUN_GRACE_SECS),
+                            run.next(),
+                        )
+                        .await
+                        {
+                            Ok(item) => item,
+                            Err(_) => {
+                                tracing::warn!(
+                                    %session_id,
+                                    "stop: in-flight model call exceeded {STOP_RUN_GRACE_SECS}s grace period; discarding"
+                                );
+                                break;
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                item = run.next() => item,
+            };
             match item {
-                Ok(output) => {
+                Some(Ok(output)) => {
                     if matches!(output.depth, None | Some(0)) {
+                        if output.message.role == Role::Tool {
+                            pending_tool_results = pending_tool_results.saturating_sub(1);
+                        } else if matches!(output.finish_reason, FinishReason::ToolCall {}) {
+                            pending_tool_results =
+                                output.message.tool_calls.as_ref().map_or(0, |tc| tc.len());
+                        }
                         depth0_outputs.push(output.clone());
                     }
                     if let Some(seq) = state2.push_output(&session_id, output.clone()).await {
@@ -881,11 +916,15 @@ pub async fn send_message(
                             output,
                         });
                     }
+                    if stopped {
+                        break;
+                    }
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     run_error = Some(e.to_string());
                     break; // Must break before accessing `agent` — `run` borrows it
                 }
+                None => break,
             }
         }
         drop(run);
@@ -905,6 +944,34 @@ pub async fn send_message(
         }
 
         let mut new_msgs = agent.get_history()[prev_len..].to_vec();
+
+        let mut synthetic_tool_msgs: Vec<Message> = Vec::new();
+        if stopped {
+            let answered: HashSet<&str> = new_msgs
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .filter_map(|m| m.id.as_deref())
+                .collect();
+            for m in new_msgs.iter().filter(|m| m.role == Role::Assistant) {
+                for tc in m.tool_calls.iter().flatten() {
+                    if let Some((call_id, _, _)) = tc.as_function() {
+                        if !answered.contains(call_id) {
+                            synthetic_tool_msgs.push(
+                                Message::new(Role::Tool).with_id(call_id).with_contents([
+                                    Part::text(
+                                        "[사용자가 응답 생성을 중지하여 이 작업이 중단되었습니다]",
+                                    ),
+                                ]),
+                            );
+                        }
+                    }
+                }
+            }
+            agent
+                .state
+                .history
+                .extend(synthetic_tool_msgs.iter().cloned());
+        }
 
         // Strip the attachment note before persisting — clean content is stored in DB and the
         // note is reconstructed from the `attachments` column when history is replayed.
@@ -931,6 +998,19 @@ pub async fn send_message(
                 last_agent.artifacts = new_artifacts;
             }
         }
+
+        to_persist.extend(
+            synthetic_tool_msgs
+                .into_iter()
+                .map(|message| NewSessionMessage {
+                    message,
+                    sender_kind: crate::repository::DbSenderKind::Agent,
+                    sender_name: Some(TOP_LEVEL_AGENT_NAME.to_string()),
+                    sender_user_id: None,
+                    attachments: vec![],
+                    artifacts: vec![],
+                }),
+        );
 
         // [A] Persist before releasing the agent lock. On failure: roll back in-memory history,
         // send AgentError (not AgentRunDone), and return — the DB remains consistent.
@@ -963,6 +1043,7 @@ pub async fn send_message(
         let _ = state2.ws_tx.send(WsEvent::AgentRunDone {
             session_id: session_id.to_string(),
             run_id: run_id.to_string(),
+            stopped,
         });
     });
 
@@ -985,5 +1066,45 @@ pub async fn send_message(
         }
     });
 
-    Ok((StatusCode::ACCEPTED, Json(RunAck { status: "started" })))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RunAck {
+            status: "started",
+            run_id: run_id.to_string(),
+        }),
+    ))
+}
+
+/// POST /sessions/{session_id}/runs/{run_id}/stop
+pub async fn stop_run(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path((session_ref, run_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    let run_id = Uuid::parse_str(&run_id).map_err(|_| AppError::not_found("no such run"))?;
+
+    let Some((active_run_id, sender_user_id, cancel)) = state.run_cancel_info(&session_id).await
+    else {
+        return Err(AppError::not_found("no active run for this session"));
+    };
+    if active_run_id != run_id {
+        return Err(AppError::not_found("run is not active"));
+    }
+    if sender_user_id != auth_user.id.to_string() {
+        return Err(AppError::forbidden(
+            "only the user who started the run can stop it",
+        ));
+    }
+
+    cancel.cancel();
+    tracing::info!(%session_id, %run_id, user = %auth_user.id, "run cancellation requested");
+    Ok(StatusCode::ACCEPTED)
 }
