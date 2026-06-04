@@ -251,6 +251,10 @@ export function Sidebar() {
   }, [activeProjectSlug]);
 
   useEffect(() => {
+    setStreamingIds(new Set());
+  }, [activeProjectSlug]);
+
+  useEffect(() => {
     const sessions = sessionsQuery.data ?? [];
     sessions.forEach((s) => appWs.subscribeSession(s.id));
     return () => sessions.forEach((s) => appWs.unsubscribeSession(s.id));
@@ -264,7 +268,11 @@ export function Sidebar() {
           next.add(event.session_id);
           return next;
         });
-      } else if (event.type === 'agent_run_done' || event.type === 'agent_run_idle') {
+      } else if (
+        event.type === 'agent_run_done' ||
+        event.type === 'agent_run_idle' ||
+        event.type === 'agent_error'
+      ) {
         setStreamingIds((prev) => {
           if (!prev.has(event.session_id)) return prev;
           const next = new Set(prev);
