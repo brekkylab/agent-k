@@ -153,17 +153,18 @@ class AppWebSocketManager {
     const count = (this.sessionRefCounts.get(sessionId) ?? 0) + 1;
     this.sessionRefCounts.set(sessionId, count);
     if (count === 1) {
-      // 첫 구독 시에만 서버에 전송 및 Set에 추가
+      // 첫 구독 시에만 서버에 전송; 소켓이 닫혀 있으면 reconnect 후 onopen에서 재전송됨
       this.subscribedSessions.add(sessionId);
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));
       }
     }
-    // 소켓이 닫혀 있으면 reconnect 후 onopen에서 재전송됨
   }
 
   unsubscribeSession(sessionId: string): void {
-    const count = Math.max(0, (this.sessionRefCounts.get(sessionId) ?? 0) - 1);
+    const current = this.sessionRefCounts.get(sessionId);
+    if (current === undefined) return;
+    const count = current - 1;
     if (count === 0) {
       this.sessionRefCounts.delete(sessionId);
       this.subscribedSessions.delete(sessionId);
