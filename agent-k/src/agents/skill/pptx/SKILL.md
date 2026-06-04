@@ -320,13 +320,13 @@ with a third. Pick faces that render identically on every machine the
 deck might open on:
 
 - **Latin-only decks** — Calibri, Arial, or Helvetica
-- **CJK / mixed-script decks** — use `Noto Sans KR` (Korean) /
+- **CJK / mixed-script decks** — use `Noto Sans CJK KR` (Korean) /
   `JP` (Japanese) / `SC` (Simplified Chinese) / `TC` (Traditional
-  Chinese). These are the Google Fonts family names; Google Slides
-  resolves them natively, the sandbox's `fonts-noto-cjk` package
-  registers them via fontconfig aliases, and PowerPoint / Keynote
-  fall back to the host's system Korean / Japanese font when the
-  exact name isn't present. See Rendering notes for setup.
+  Chinese). These are the family names registered by the sandbox's
+  `fonts-noto-cjk` package, so soffice-rendered PNGs match the deck
+  exactly. PowerPoint / Keynote / Google Slides fall back to the
+  host's system Korean / Japanese font when the exact name isn't
+  present. See Rendering notes for setup.
 
 | Size | Pt | Weight | Use |
 |---|---|---|---|
@@ -403,10 +403,11 @@ theme `fontScheme` will be reported as missing. Walk every run and
 set both `<a:latin>` and `<a:ea>` typefaces explicitly — no
 paragraph- or theme-level shortcuts.
 
-`fonts-noto-cjk` ships in the sandbox image. For the pptx typeface
-string, use the Google Fonts family name (NOT the TTC family name
-with the "CJK" infix): `'Noto Sans KR'`, `'Noto Sans JP'`,
-`'Noto Sans SC'`, or `'Noto Sans TC'`.
+`fonts-noto-cjk` ships in the sandbox image. Use the exact family
+name fontconfig registers (with the `CJK` infix): `'Noto Sans CJK
+KR'`, `'Noto Sans CJK JP'`, `'Noto Sans CJK SC'`, or `'Noto Sans
+CJK TC'`. Other names (e.g. `'Noto Sans KR'`) will not match and
+soffice falls back to DejaVu → CJK tofu in the rendered PNGs.
 
 ### Charts — native python-pptx for editability
 
@@ -430,7 +431,7 @@ from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Pt
 from pptx.dml.color import RGBColor
 
-def set_chart_text_font(font, typeface='Noto Sans KR', size_pt=11):
+def set_chart_text_font(font, typeface='Noto Sans CJK KR', size_pt=11):
     """Set Latin + EA + CS typefaces on a chart font, with size.
 
     `font._element` is already the `<a:rPr>` / `<a:defRPr>` element —
