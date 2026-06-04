@@ -338,5 +338,35 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )],
             shared_files: Vec::new(),
         },
+        // Case 20 — pptx create (English mirror of case 17, same market_research.txt source)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "Take a look at artifacts/market_research.txt and put \
+                 together a team-meeting PPT.\n\n\
+                 Keep it tight — summarise without rambling and lead with \
+                 the key points. Drop in a chart or comparison table where \
+                 it helps, and keep the overall feel clean and startup-ish.\n\n\
+                 Save it as market_review.pptx",
+            )]),
+            files: vec![(
+                include_bytes!("market_research.txt").to_vec(),
+                PathBuf::from("market_research.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 21 — pptx create (English mirror of case 18, same 2026_1분기_실적보고서.txt source)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "Take a look at the attached txt and put together a PPT — \
+                 it's for next week's exec meeting.\n\
+                 About 10 slides, clean. Charts or tables welcome, nothing \
+                 too flashy. The company is a gaming startup.",
+            )]),
+            files: vec![(
+                include_bytes!("2026_1분기_실적보고서.txt").to_vec(),
+                PathBuf::from("2026_1분기_실적보고서.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
     ]
 }
