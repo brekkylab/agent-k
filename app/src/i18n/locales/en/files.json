@@ -2,6 +2,8 @@
   "toast": {
     "upload_success_one": "File uploaded",
     "upload_success_other": "{{count}} files uploaded",
+    "upload_renamed_one": "File uploaded and renamed to avoid overwriting",
+    "upload_renamed_other": "{{count}} files uploaded ({{renamed}} renamed to avoid overwriting)",
     "upload_partial": "{{ok}} uploaded, {{ko}} failed",
     "upload_failed": "Upload failed: {{message}}",
     "folder_created": "Folder created",

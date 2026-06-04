@@ -152,17 +152,29 @@ function FilesPage() {
       const items = files.map((file) => ({ file, targetPath: targetPathFor(file) }));
       return uploadFiles(scope, items);
     },
-    onSuccess: async (result) => {
+    onSuccess: async (result, files) => {
       await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = result.succeeded.length;
       const ko = result.failed.length;
-      if (ko === 0) {
-        showToast(t('files:toast.upload_success', { count: ok }));
-      } else {
+
+      // Detect auto-renames: the backend resolves collisions by appending
+      // " copy", " copy 2", etc.  If any returned basename differs from the
+      // requested name the upload was silently saved under a different name.
+      const requestedNames = new Set(files.map((f) => f.name));
+      const renamedCount = result.succeeded.filter((d) => {
+        const basename = d.path.split('/').at(-1) ?? '';
+        return basename !== '' && !requestedNames.has(basename);
+      }).length;
+
+      if (ko > 0) {
         showToast(
           t('files:toast.upload_partial', { ok, ko }),
           result.failed.map((f) => t('files:toast.failed_entry', { path: f.path || t('files:toast.unnamed'), error: f.error })),
         );
+      } else if (renamedCount > 0) {
+        showToast(t('files:toast.upload_renamed', { count: ok, renamed: renamedCount }));
+      } else {
+        showToast(t('files:toast.upload_success', { count: ok }));
       }
     },
     onError: (err) => {
