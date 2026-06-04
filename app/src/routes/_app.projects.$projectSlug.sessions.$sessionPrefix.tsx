@@ -160,7 +160,7 @@ function SessionPage() {
     const el = scrollContainerRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom <= 150) {
+    if (distanceFromBottom <= 700) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [allMessages.length, streaming]);
