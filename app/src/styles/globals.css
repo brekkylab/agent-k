@@ -1333,7 +1333,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   padding: 0 10px;
   font-size: 12px;
 }
-.cw-model-picker select { border: 0; outline: 0; background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
+.cw-model-picker-trigger { border: 0; background: transparent; color: inherit; font-size: 12px; }
 
 /* Project home — "new conversation" surface */
 .cw-project-hero.is-slim { align-items: center; padding-bottom: var(--cw-space-4); margin-bottom: var(--cw-space-5); }
@@ -3270,7 +3270,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-size: 12px;
   color: var(--cw-ink-3);
 }
-.cw-runs-filter select {
+.cw-runs-filter-trigger {
   border: 1px solid var(--cw-line);
   background: var(--cw-paper-2);
   border-radius: var(--cw-radius-sm);
@@ -4014,8 +4014,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 
 /* SchedulePicker — Google Calendar-style recurrence builder. */
 .cw-schedule-picker { display: flex; flex-direction: column; gap: 10px; }
-.cw-schedule-picker input,
-.cw-schedule-picker select {
+.cw-schedule-picker input {
   border: 1px solid var(--cw-line);
   border-radius: var(--cw-radius-sm);
   background: var(--cw-paper-2);
@@ -4024,12 +4023,23 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   color: var(--cw-ink);
   font-family: inherit;
 }
-.cw-schedule-picker input:focus,
-.cw-schedule-picker select:focus {
+.cw-schedule-picker input:focus {
   outline: none;
   border-color: var(--cw-accent);
   box-shadow: 0 0 0 3px var(--cw-selected-ring);
 }
+/* Schedule selects use <Select>; style its trigger like the inputs and let it
+   fill the row, with the caret pushed to the right edge. */
+.cw-sched-select {
+  width: 100%;
+  border: 1px solid var(--cw-line);
+  border-radius: var(--cw-radius-sm);
+  background: var(--cw-paper-2);
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--cw-ink);
+}
+.cw-sched-select .cw-select-caret { margin-left: auto; }
 .cw-schedule-picker input:disabled {
   background: var(--cw-paper-3);
   color: var(--cw-ink-3);

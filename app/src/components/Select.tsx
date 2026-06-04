@@ -41,6 +41,9 @@ type SelectProps<T> = {
   ) => ReactNode;
   // Extra class on the trigger button (state-dependent styling).
   triggerClassName?: string;
+  // Extra class on the wrapper — use to size the select as a flex/grid item
+  // (the trigger sizing/look goes on triggerClassName).
+  className?: string;
   // Transition the trigger to the *current* label's intrinsic width via a
   // hidden measurement clone. Off by default; opt in for value-dependent
   // widths (ShareSelect). Utility selects usually leave this off.
@@ -69,6 +72,7 @@ export function Select<T>({
   renderTrigger,
   renderOption,
   triggerClassName = '',
+  className = '',
   adaptiveWidth = false,
   ariaLabel,
   disabled = false,
@@ -300,7 +304,7 @@ export function Select<T>({
     return (
       <div
         ref={wrapRef}
-        className="cw-select-wrap cw-select-wrap--native"
+        className={`cw-select-wrap cw-select-wrap--native ${className}`.trim()}
         style={adaptiveWidth && width != null ? { width } : undefined}
       >
         <button
@@ -354,7 +358,7 @@ export function Select<T>({
   let flatIdx = -1;
 
   return (
-    <div ref={wrapRef} className="cw-select-wrap">
+    <div ref={wrapRef} className={`cw-select-wrap ${className}`.trim()}>
       <button
         ref={triggerRef}
         type="button"

@@ -4,6 +4,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Icon } from '@/components/Icon';
 import { IconButton } from '@/components/uiPrimitives';
+import { Select } from '@/components/Select';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { summarizeCron } from '@/components/SchedulePicker';
@@ -841,9 +842,7 @@ function FilterSelect<T extends string>({
   return (
     <label className="cw-runs-filter">
       <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value as T)}>
-        {options.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-      </select>
+      <Select value={value} onChange={onChange} options={options} triggerClassName="cw-runs-filter-trigger" ariaLabel={label} />
     </label>
   );
 }
