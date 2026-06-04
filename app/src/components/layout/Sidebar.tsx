@@ -32,8 +32,7 @@ import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import type { Session } from '@/domain/types';
-import { appWs } from '@/api/ws';
-import type { AppWsEvent } from '@/api/ws';
+import { appWs, type AppWsEvent } from '@/api/ws';
 
 function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => void }) {
   const setSidebarMode = useLayoutStore((s) => s.setSidebarMode);
@@ -279,7 +278,7 @@ export function Sidebar() {
           next.delete(event.session_id);
           return next;
         });
-        if (event.type === 'agent_run_done') {
+        if (event.type === 'agent_run_done' || event.type === 'agent_run_idle' || event.type === 'agent_error') {
           const slug = activeProjectSlugRef.current;
           if (slug) void queryClient.invalidateQueries({ queryKey: ['sessions', slug] });
         }
@@ -469,6 +468,7 @@ export function Sidebar() {
                       'cw-session-row',
                       shortSessionId(session.id) === activeSessionId ? 'is-active' : '',
                       session.unreadCount > 0 ? 'is-unread' : '',
+                      streamingIds.has(session.id) ? 'is-streaming' : '',
                     ].filter(Boolean).join(' ')}
                     onClick={() => openSession(activeProject.slug, shortSessionId(session.id))}
                     role="button"
