@@ -90,6 +90,7 @@ function SessionPage() {
   const consumedInitialMessageRef = useRef(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // WS 구동: seq 순서로 정렬된 outputs 맵 (catch-up + live 멱등 병합용)
@@ -156,7 +157,12 @@ function SessionPage() {
   ], [history.data, liveMessages]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom <= 150) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [allMessages.length, streaming]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -557,7 +563,7 @@ function SessionPage() {
           </div>
         </div>
 
-        <div className="cw-messages">
+        <div className="cw-messages" ref={scrollContainerRef}>
           {allMessages.map((msg) => (
             <MessageBubble
               key={msg.id}
