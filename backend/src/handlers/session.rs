@@ -482,7 +482,11 @@ pub async fn update_session(
     // [R2-4] share_mode downgrade to private: evict non-creator subscribers immediately
     // instead of waiting for Task D's 60-second poll.
     if payload.share_mode == ShareMode::Private && session.share_mode != ShareMode::Private {
-        if let Ok(members) = state.repository.list_project_members(session.project_id).await {
+        if let Ok(members) = state
+            .repository
+            .list_project_members(session.project_id)
+            .await
+        {
             for (member, _) in members {
                 if member.id == session.creator_id {
                     continue;
