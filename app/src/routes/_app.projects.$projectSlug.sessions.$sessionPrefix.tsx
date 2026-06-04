@@ -92,6 +92,9 @@ function SessionPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Set when the local user sends a message — the next scroll effect jumps to
+  // the bottom instantly, regardless of how far up the user has scrolled.
+  const forceScrollRef = useRef(false);
 
   // WS 구동: seq 순서로 정렬된 outputs 맵 (catch-up + live 멱등 병합용)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
@@ -142,6 +145,7 @@ function SessionPage() {
     optimisticUserIdRef.current = null;
     currentRunIdRef.current = null;
     doneRunIdsRef.current.clear();
+    forceScrollRef.current = false;
   }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
@@ -159,6 +163,14 @@ function SessionPage() {
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+
+    // Own send — jump to the bottom immediately, even if scrolled far up.
+    if (forceScrollRef.current) {
+      forceScrollRef.current = false;
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      return;
+    }
+
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distanceFromBottom <= 700) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -221,6 +233,7 @@ function SessionPage() {
       status: 'done',
       attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
     };
+    forceScrollRef.current = true;
     setLiveMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
     streamingRef.current = true;
