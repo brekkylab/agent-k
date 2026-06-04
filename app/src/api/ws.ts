@@ -72,6 +72,7 @@ class AppWebSocketManager {
   private rapidCloseCount = 0;
   private connectionStartTime = 0;  // replaces lastCloseTime: records when the socket was created
   private subscribedSessions = new Set<string>();
+  private sessionRefCounts = new Map<string, number>();
 
   connect(token: string): void {
     this.active = true;
@@ -149,18 +150,28 @@ class AppWebSocketManager {
   }
 
   subscribeSession(sessionId: string): void {
-    this.subscribedSessions.add(sessionId);
-    // 소켓이 열려 있으면 즉시 제어 프레임 전송
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));
+    const count = (this.sessionRefCounts.get(sessionId) ?? 0) + 1;
+    this.sessionRefCounts.set(sessionId, count);
+    if (count === 1) {
+      // 첫 구독 시에만 서버에 전송 및 Set에 추가
+      this.subscribedSessions.add(sessionId);
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));
+      }
     }
     // 소켓이 닫혀 있으면 reconnect 후 onopen에서 재전송됨
   }
 
   unsubscribeSession(sessionId: string): void {
-    this.subscribedSessions.delete(sessionId);
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: 'unsubscribe', session_id: sessionId }));
+    const count = Math.max(0, (this.sessionRefCounts.get(sessionId) ?? 0) - 1);
+    if (count === 0) {
+      this.sessionRefCounts.delete(sessionId);
+      this.subscribedSessions.delete(sessionId);
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ action: 'unsubscribe', session_id: sessionId }));
+      }
+    } else {
+      this.sessionRefCounts.set(sessionId, count);
     }
   }
 
@@ -168,6 +179,7 @@ class AppWebSocketManager {
     this.active = false;
     this.rapidCloseCount = 0;
     this.subscribedSessions.clear();
+    this.sessionRefCounts.clear();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

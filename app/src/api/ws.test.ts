@@ -244,4 +244,55 @@ describe('AppWebSocketManager session subscription', () => {
     // No subscriptions should be replayed
     expect(wsInstances[1].send).not.toHaveBeenCalled();
   });
+
+  it('does not send unsubscribe when a second subscriber still holds the session', () => {
+    const mgr = new AppWebSocketManager();
+    mgr.connect('token');
+    wsInstances[0].readyState = MockWebSocket.OPEN;
+    wsInstances[0].onopen?.();
+
+    mgr.subscribeSession('session-1'); // count = 1
+    mgr.subscribeSession('session-1'); // count = 2
+    wsInstances[0].send.mockClear();
+
+    mgr.unsubscribeSession('session-1'); // count = 1, no unsubscribe sent
+
+    const unsubCalls = wsInstances[0].send.mock.calls.filter((c: unknown[]) =>
+      (c[0] as string).includes('unsubscribe'),
+    );
+    expect(unsubCalls).toHaveLength(0);
+  });
+
+  it('sends unsubscribe only when the last subscriber releases', () => {
+    const mgr = new AppWebSocketManager();
+    mgr.connect('token');
+    wsInstances[0].readyState = MockWebSocket.OPEN;
+    wsInstances[0].onopen?.();
+
+    mgr.subscribeSession('session-1'); // count = 1
+    mgr.subscribeSession('session-1'); // count = 2
+    wsInstances[0].send.mockClear();
+
+    mgr.unsubscribeSession('session-1'); // count = 1
+    mgr.unsubscribeSession('session-1'); // count = 0 → send unsubscribe
+
+    expect(wsInstances[0].send).toHaveBeenCalledWith(
+      JSON.stringify({ action: 'unsubscribe', session_id: 'session-1' }),
+    );
+  });
+
+  it('disconnect clears ref counts so reconnect sends nothing', () => {
+    const mgr = new AppWebSocketManager();
+    mgr.subscribeSession('session-1');
+    mgr.subscribeSession('session-1'); // count = 2
+
+    mgr.connect('token');
+    mgr.disconnect(); // clears both subscribedSessions and sessionRefCounts
+
+    mgr.connect('token');
+    wsInstances[1].readyState = MockWebSocket.OPEN;
+    wsInstances[1].onopen?.();
+
+    expect(wsInstances[1].send).not.toHaveBeenCalled();
+  });
 });
