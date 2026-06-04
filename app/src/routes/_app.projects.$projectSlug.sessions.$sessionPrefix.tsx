@@ -95,6 +95,9 @@ function SessionPage() {
   // Set when the local user sends a message — the next scroll effect jumps to
   // the bottom instantly, regardless of how far up the user has scrolled.
   const forceScrollRef = useRef(false);
+  // Previous message count, to distinguish "new message arrived" from the
+  // initial history load / refetch (no pill on first render of a session).
+  const prevMsgCountRef = useRef(0);
 
   // WS 구동: seq 순서로 정렬된 outputs 맵 (catch-up + live 멱등 병합용)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
@@ -146,6 +149,7 @@ function SessionPage() {
     currentRunIdRef.current = null;
     doneRunIdsRef.current.clear();
     forceScrollRef.current = false;
+    prevMsgCountRef.current = 0;
   }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
@@ -163,10 +167,18 @@ function SessionPage() {
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    const prevCount = prevMsgCountRef.current;
+    prevMsgCountRef.current = allMessages.length;
 
     // Own send — jump to the bottom immediately, even if scrolled far up.
     if (forceScrollRef.current) {
       forceScrollRef.current = false;
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      return;
+    }
+
+    // Initial history load (refresh / session entry) — start at the bottom.
+    if (prevCount === 0) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
       return;
     }
