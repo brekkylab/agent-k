@@ -90,6 +90,9 @@ export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mo
       options={options}
       triggerClassName="cw-share-trigger"
       adaptiveWidth
+      // The share dropdown belongs to the session — keep its panel inside the
+      // chat surface so it doesn't drift over the adjacent members column.
+      boundary=".cw-chat-surface"
     />
   );
 }

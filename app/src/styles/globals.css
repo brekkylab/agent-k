@@ -835,9 +835,12 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 }
 
 .cw-select-panel {
-  position: absolute;
-  left: 0;
-  min-width: 100%;
+  /* Portaled to <body> and pinned to the trigger in viewport coords (top/left/
+     min-width/max-height set inline by Select.tsx). Fixed positioning frees it
+     from any overflow:hidden / transformed ancestor that used to clip or shove
+     the surrounding layout. */
+  position: fixed;
+  max-width: calc(100vw - 16px);
   max-height: 280px;
   overflow-y: auto;
   list-style: none;
@@ -849,7 +852,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   border: 1px solid var(--cw-border);
   border-radius: 8px;
   box-shadow: 0 8px 20px rgba(40, 30, 20, 0.08);
-  z-index: 50;
+  /* Above the dialog backdrop (70) so a Select used inside a dialog still
+     overlays it; below toast/tooltip-tier layers. */
+  z-index: 90;
   /* A dropdown is a control, not document text — don't let rows be drag-selected.
      The -webkit- prefix is required for Safari < 16.4. */
   -webkit-user-select: none;
@@ -858,14 +863,13 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
      including group headers — never show the I-beam. */
   cursor: default;
 }
-/* Placement: below the trigger by default, flipped above when there isn't
-   room below (computed in JS, mirrors what a native <select> does). */
+/* Placement direction (below by default, flipped above when there's no room) is
+   computed in JS and applied via top/left inline; the class only selects the
+   matching open animation. */
 .cw-select-panel.is-below {
-  top: calc(100% + 6px);
   animation: cw-select-pop-down 90ms ease-out;
 }
 .cw-select-panel.is-above {
-  bottom: calc(100% + 6px);
   animation: cw-select-pop-up 90ms ease-out;
 }
 @keyframes cw-select-pop-down {

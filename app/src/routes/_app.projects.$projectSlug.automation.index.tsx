@@ -839,11 +839,15 @@ function FilterSelect<T extends string>({
   onChange: (v: T) => void;
   options: FilterOption<T>[];
 }) {
+  // Not a <label>: a <label> wrapping the Select's trigger <button> re-dispatches
+  // real (trusted) clicks to that button, so picking an option (which closes the
+  // panel) re-fires the trigger and reopens it. The accessible name comes from
+  // the Select's ariaLabel instead.
   return (
-    <label className="cw-runs-filter">
+    <span className="cw-runs-filter">
       <span>{label}</span>
       <Select value={value} onChange={onChange} options={options} triggerClassName="cw-runs-filter-trigger" ariaLabel={label} />
-    </label>
+    </span>
   );
 }
 

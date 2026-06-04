@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon, type IconName } from './Icon';
 
 // A single selectable value. `label` is always a plain string so the
@@ -57,6 +58,13 @@ type SelectProps<T> = {
   // dropdown instead of our custom panel — via a transparent real <select>
   // overlaid on the trigger. Gives native mobile pickers / OS list behavior.
   nativeDropdown?: boolean;
+  // CSS selector for the ancestor the panel is kept *inside* (in addition to
+  // the viewport). The panel is portaled to <body> so it's never clipped, but
+  // by default it's only collision-corrected against the viewport — which lets
+  // it spill across a pane boundary (e.g. a session dropdown drifting over the
+  // members column). Pass a selector (matched via trigger.closest) to confine
+  // it to that container instead. Omitted → viewport only.
+  boundary?: string;
 };
 
 function isGrouped<T>(
@@ -78,6 +86,7 @@ export function Select<T>({
   disabled = false,
   placeholder,
   nativeDropdown = false,
+  boundary,
 }: SelectProps<T>) {
   const groups: SelectGroup<T>[] = isGrouped(options) ? options : [{ options }];
   const flat = groups.flatMap((group) => group.options);
@@ -101,12 +110,17 @@ export function Select<T>({
   const measureRef = useRef<HTMLSpanElement>(null);
   const panelRef = useRef<HTMLUListElement>(null);
   const [width, setWidth] = useState<number | null>(null);
-  // Collision-aware placement: flip above the trigger when there isn't room
-  // below, and cap the panel height to the available space on the chosen side.
-  const [placement, setPlacement] = useState<{ side: 'top' | 'bottom'; maxHeight: number }>({
-    side: 'bottom',
-    maxHeight: 280,
-  });
+  // Collision-aware placement for the body-portaled panel. The panel is
+  // position:fixed, so we compute its viewport coordinates here: flip above
+  // when there's no room below, shift left when it would overrun the right
+  // edge, and cap the height to the available space on the chosen side.
+  const [placement, setPlacement] = useState<{
+    side: 'top' | 'bottom';
+    top: number;
+    left: number;
+    minWidth: number;
+    maxHeight: number;
+  }>({ side: 'bottom', top: -9999, left: -9999, minWidth: 0, maxHeight: 280 });
 
   // Stable ids so the trigger can point at the active option via
   // aria-activedescendant (announced by screen readers without moving focus).
@@ -138,15 +152,19 @@ export function Select<T>({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      // The panel is portaled to <body>, so it's outside wrapRef — check both.
+      if (!wrapRef.current?.contains(target) && !panelRef.current?.contains(target)) {
+        setOpen(false);
+      }
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
   }, [open]);
 
-  // Decide below vs above and clamp the panel height to the available space.
-  // Recomputed on open and while scrolling/resizing; keeps the same object
-  // reference when nothing changes so dependent effects don't churn.
+  // Position the body-portaled panel in the viewport. Recomputed on open and
+  // while scrolling/resizing so it stays glued to the trigger; keeps the same
+  // object reference when nothing changes so dependent effects don't churn.
   useLayoutEffect(() => {
     if (!open) return;
     const compute = () => {
@@ -154,9 +172,29 @@ export function Select<T>({
       const panel = panelRef.current;
       if (!trigger || !panel) return;
       const rect = trigger.getBoundingClientRect();
-      const margin = 8;
-      const below = window.innerHeight - rect.bottom - margin;
-      const above = rect.top - margin;
+      const margin = 8; // keep this far from the box edges
+      const gap = 6; // space between trigger and panel
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      // Collision box = viewport, intersected with the boundary container (if
+      // any) so the panel stays inside its pane instead of drifting across it.
+      // Each edge is inset by `margin` for breathing room.
+      let boxLeft = margin;
+      let boxRight = vw - margin;
+      let boxTop = margin;
+      let boxBottom = vh - margin;
+      if (boundary) {
+        const container = trigger.closest(boundary);
+        if (container) {
+          const b = container.getBoundingClientRect();
+          boxLeft = Math.max(boxLeft, b.left + margin);
+          boxRight = Math.min(boxRight, b.right - margin);
+          boxTop = Math.max(boxTop, b.top + margin);
+          boxBottom = Math.min(boxBottom, b.bottom - margin);
+        }
+      }
+      const below = boxBottom - rect.bottom;
+      const above = rect.top - boxTop;
       // Cap the height to ~N.5 rows so the last visible row is half-cut — a
       // "there's more, scroll" hint (the MUI pattern). Row height is measured
       // so it stays correct across font/density changes.
@@ -167,12 +205,28 @@ export function Select<T>({
       const cap = Math.round((VISIBLE_ROWS + 0.5) * rowH + vPad);
       // The height the panel actually wants (its content, capped).
       const desired = Math.min(cap, panel.scrollHeight);
-      // Flip up only when it won't fit below — independent of how much room is
-      // above (mirrors a native <select>'s "open downward unless it can't").
+      // Vertical: flip up only when it won't fit below — independent of how much
+      // room is above (mirrors a native <select>'s "open down unless it can't").
       const side: 'top' | 'bottom' = below < desired ? 'top' : 'bottom';
       const maxHeight = Math.max(120, Math.min(cap, side === 'top' ? above : below));
+      const panelH = Math.min(panel.scrollHeight, maxHeight);
+      const top = side === 'bottom'
+        ? Math.round(rect.bottom + gap)
+        : Math.round(rect.top - gap - panelH);
+      // Horizontal: align the panel's left to the trigger, but pull it back in
+      // when it would overrun the right edge (mirrors the vertical flip). The
+      // panel is ≥ the trigger width (minWidth) and may be wider for long labels.
+      const minWidth = Math.round(rect.width);
+      const panelW = Math.max(panel.getBoundingClientRect().width, rect.width);
+      let left = rect.left;
+      if (left + panelW > boxRight) left = boxRight - panelW;
+      if (left < boxLeft) left = boxLeft;
+      left = Math.round(left);
       setPlacement((prev) =>
-        prev.side === side && prev.maxHeight === maxHeight ? prev : { side, maxHeight },
+        prev.side === side && prev.top === top && prev.left === left
+        && prev.minWidth === minWidth && prev.maxHeight === maxHeight
+          ? prev
+          : { side, top, left, minWidth, maxHeight },
       );
     };
     compute();
@@ -182,7 +236,7 @@ export function Select<T>({
       window.removeEventListener('resize', compute);
       window.removeEventListener('scroll', compute, true);
     };
-  }, [open]);
+  }, [open, boundary]);
 
   // Keep the focused option in view as roving focus moves (and on open, so the
   // current selection is visible even far down a long/grouped list).
@@ -384,13 +438,18 @@ export function Select<T>({
         </span>
       )}
 
-      {open && (
+      {open && createPortal(
         <ul
           ref={panelRef}
           id={listboxId}
           role="listbox"
           className={`cw-select-panel ${placement.side === 'top' ? 'is-above' : 'is-below'}${grouped ? ' is-grouped' : ''}`}
-          style={{ maxHeight: placement.maxHeight }}
+          style={{
+            top: placement.top,
+            left: placement.left,
+            minWidth: placement.minWidth,
+            maxHeight: placement.maxHeight,
+          }}
           aria-label={ariaLabel}
         >
           {groups.map((group, groupIdx) => (
@@ -439,7 +498,8 @@ export function Select<T>({
               })}
             </Fragment>
           ))}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );
