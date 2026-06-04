@@ -301,12 +301,37 @@ pub async fn delete_session(app: &axum::Router, id: uuid::Uuid, token: &str) {
         .unwrap_or_else(|e| panic!("{e}"));
 }
 
+/// Trigger an agent run and wait for it to complete, returning the newly
+/// produced messages shaped like the legacy `Vec<MessageOutput>` response
+/// (each item has a `message` field, consumed by `extract_text`).
+///
+/// New protocol: `POST /messages` is fire-and-forget and returns `202`. We
+/// snapshot the history length before triggering, then poll
+/// `GET /sessions/{id}/messages` until the count grows past the snapshot (the
+/// run persists the user message plus one or more agent messages on
+/// completion). Panics on timeout.
 pub async fn send_message(
     app: &axum::Router,
     id: uuid::Uuid,
     content: &str,
     token: &str,
 ) -> serde_json::Value {
+    send_message_and_wait(app, id, content, token, 30).await
+}
+
+pub async fn send_message_and_wait(
+    app: &axum::Router,
+    id: uuid::Uuid,
+    content: &str,
+    token: &str,
+    timeout_secs: u64,
+) -> serde_json::Value {
+    // Snapshot history length before triggering the run.
+    let before = get_message_history(app, id, token).await["items"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or(0);
+
     let body = serde_json::json!({ "content": content });
     let (status, value) = authed(
         app,
@@ -318,10 +343,27 @@ pub async fn send_message(
     .await;
     assert_eq!(
         status,
-        axum::http::StatusCode::OK,
-        "send_message returned non-200 for session {id}"
+        axum::http::StatusCode::ACCEPTED,
+        "send_message returned non-202 for session {id}: {value}"
     );
-    value
+
+    // Poll history until the run completes (count grows past the snapshot,
+    // including the persisted user message + agent reply).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        let history = get_message_history(app, id, token).await;
+        let items = history["items"].as_array().cloned().unwrap_or_default();
+        if items.len() > before {
+            // Wait for at least one new item — user message is persisted atomically
+            // with agent messages on run completion. Return only the newly produced
+            // items (drop the prior history), shaped like the legacy outputs for `extract_text`.
+            return serde_json::Value::Array(items.into_iter().skip(before).collect());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("send_message_and_wait timed out after {timeout_secs}s for session {id}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 pub async fn send_message_status(
@@ -342,42 +384,40 @@ pub async fn send_message_status(
     status
 }
 
+/// Legacy streaming helper. The `/messages/stream` endpoint was removed in
+/// favour of the fire-and-forget trigger + WebSocket protocol. This now simply
+/// triggers a run and waits for completion, returning the produced messages so
+/// existing call sites that feed `extract_text_from_slice` keep working.
 pub async fn send_message_stream(
     app: &axum::Router,
     id: uuid::Uuid,
     content: &str,
     token: &str,
 ) -> Vec<serde_json::Value> {
-    let bytes = send_message_stream_raw(app, id, content, token).await;
-    parse_sse_message_events(&bytes)
+    send_message(app, id, content, token)
+        .await
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
 }
 
-/// Like `send_message_stream` but returns the raw SSE bytes for custom event parsing.
+/// Legacy raw-stream helper. Triggers an agent run (now returns `202`) and
+/// returns immediately. Callers that previously consumed SSE bytes only relied
+/// on the trigger side effect (e.g. WebSocket broadcasts), so no body is
+/// returned.
 pub async fn send_message_stream_raw(
     app: &axum::Router,
     id: uuid::Uuid,
     content: &str,
     token: &str,
 ) -> bytes::Bytes {
-    let body = serde_json::json!({ "content": content }).to_string();
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("/sessions/{id}/messages/stream"))
-        .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {token}"))
-        .body(Body::from(body))
-        .unwrap();
-
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let status = send_message_status(app, id, content, token).await;
     assert_eq!(
         status,
-        axum::http::StatusCode::OK,
-        "POST /sessions/{id}/messages/stream failed: {}",
-        String::from_utf8_lossy(&bytes)
+        axum::http::StatusCode::ACCEPTED,
+        "POST /sessions/{id}/messages trigger failed with status {status}"
     );
-    bytes
+    bytes::Bytes::new()
 }
 
 pub fn parse_sse_message_events(body: &[u8]) -> Vec<serde_json::Value> {

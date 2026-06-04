@@ -102,10 +102,6 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
                 .delete(handlers::clear_message_history),
         )
         .api_route("/sessions/{session_id}/fork", post(handlers::fork_session))
-        .api_route(
-            "/sessions/{session_id}/messages/stream",
-            post(handlers::send_message_stream),
-        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,

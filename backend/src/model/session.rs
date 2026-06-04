@@ -1,4 +1,4 @@
-use ailoy::message::{Message, MessageOutput};
+use ailoy::message::Message;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,10 @@ pub struct SendMessageRequest {
     pub attachments: Option<Vec<String>>,
 }
 
-pub type SendMessageResponse = Vec<MessageOutput>;
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RunAck {
+    pub status: &'static str,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
