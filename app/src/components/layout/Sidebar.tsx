@@ -259,6 +259,10 @@ export function Sidebar() {
     return () => sessions.forEach((s) => appWs.unsubscribeSession(s.id));
   }, [sessionsQuery.data]);
 
+  // Track active session's full ID so the WS handler can skip cache-clearing
+  // for the session the user is currently viewing (the session page handles its own refetch).
+  const activeSessionIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     return appWs.subscribe((event: AppWsEvent) => {
       if (event.type === 'agent_run_started') {
@@ -285,6 +289,13 @@ export function Sidebar() {
         if (event.type === 'agent_run_done') {
           const slug = activeProjectSlugRef.current;
           if (slug) void queryClient.invalidateQueries({ queryKey: ['sessions', slug] });
+          // When the completed session is not the one the user is currently viewing,
+          // remove its stale messages cache (which may be an empty [] from before the
+          // agent ran). This forces a loading state on next visit instead of showing
+          // empty history while the background refetch completes.
+          if (event.session_id !== activeSessionIdRef.current) {
+            queryClient.removeQueries({ queryKey: ['messages', event.session_id] });
+          }
         }
       }
     });
@@ -292,6 +303,14 @@ export function Sidebar() {
 
   const activeSessionId = useActiveSessionId();
   const activeRoute = useActiveRouteKey();
+
+  // Keep activeSessionIdRef in sync with the full session UUID for use in the WS handler.
+  // activeSessionId is a 12-char prefix; match it against sessionsQuery.data to get the full id.
+  useEffect(() => {
+    if (!activeSessionId) { activeSessionIdRef.current = null; return; }
+    const match = (sessionsQuery.data ?? []).find(s => shortSessionId(s.id) === activeSessionId);
+    activeSessionIdRef.current = match?.id ?? null;
+  }, [activeSessionId, sessionsQuery.data]);
 
   // Close on navigation for mobile drawers, but keep desktop hidden/reveal open
   // so sidebar clicks don't immediately tuck it away.
