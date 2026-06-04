@@ -68,7 +68,15 @@ NEUTRAL_TOLERATED: set[str] = {"FFFFFF", "000000"}
 # --- helpers ------------------------------------------------------------------
 
 def _has_cjk(text: str) -> bool:
-    return any(ord(ch) > 0x7F for ch in text)
+    for ch in text:
+        cp = ord(ch)
+        if (0xAC00 <= cp <= 0xD7AF        # Hangul Syllables
+            or 0x3040 <= cp <= 0x30FF     # Hiragana / Katakana
+            or 0x4E00 <= cp <= 0x9FFF     # CJK Unified
+            or 0x3400 <= cp <= 0x4DBF     # CJK Ext A
+            or 0xFF00 <= cp <= 0xFFEF):   # Halfwidth / Fullwidth
+            return True
+    return False
 
 
 def _ea_typeface(run) -> str | None:
