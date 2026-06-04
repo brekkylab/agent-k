@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from './Icon';
+import { Select } from './Select';
 import { shareMeta } from '../domain/metadata';
 import type { ShareMode, User } from '../domain/types';
 
@@ -73,131 +74,23 @@ export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?
 
 export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mode: ShareMode) => void }) {
   const { t } = useTranslation('common');
-  const [open, setOpen] = useState(false);
-  const [focusIdx, setFocusIdx] = useState(() => SHARE_MODES.indexOf(mode));
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const measureRef = useRef<HTMLSpanElement>(null);
-  const [width, setWidth] = useState<number | null>(null);
-
-  // Re-measure when the visible label or its language changes. The hidden
-  // .cw-share-select-measure clone shares the trigger's box styling, so its
-  // intrinsic width is the value the real trigger should transition to.
-  useLayoutEffect(() => {
-    if (measureRef.current) {
-      setWidth(Math.ceil(measureRef.current.getBoundingClientRect().width));
-    }
-  }, [mode, t]);
-
-  // Outside-click dismissal, only mounted while open. Keyboard is handled on
-  // the trigger's onKeyDown (see below) — the trigger keeps DOM focus while
-  // the panel is open, so a document keydown listener isn't needed and would
-  // re-read the very keypress that opened the panel (it's attached by this
-  // effect mid-event), closing it again on Enter.
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [open]);
-
-  function commit(next: ShareMode) {
-    onChange(next);
-    setOpen(false);
-    triggerRef.current?.focus();
-  }
-
-  function toggle() {
-    setOpen((wasOpen) => {
-      if (!wasOpen) setFocusIdx(SHARE_MODES.indexOf(mode));
-      return !wasOpen;
-    });
-  }
-
-  function onTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    if (!open) {
-      // Closed: open on Enter / Space / ArrowDown, focusing the current mode.
-      if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        setFocusIdx(SHARE_MODES.indexOf(mode));
-        setOpen(true);
-      }
-      return;
-    }
-    // Open: navigate / commit / dismiss. Handled here rather than on a
-    // document listener so the keydown that opened the panel can't be
-    // re-read and immediately close it.
-    switch (event.key) {
-      case 'ArrowDown':
-        event.preventDefault();
-        setFocusIdx((i) => (i + 1) % SHARE_MODES.length);
-        break;
-      case 'ArrowUp':
-        event.preventDefault();
-        setFocusIdx((i) => (i - 1 + SHARE_MODES.length) % SHARE_MODES.length);
-        break;
-      case 'Enter':
-      case ' ':
-        event.preventDefault();
-        commit(SHARE_MODES[focusIdx]);
-        break;
-      case 'Escape':
-        event.preventDefault();
-        setOpen(false);
-        break;
-      case 'Tab':
-        // Let focus move naturally, but don't leave an orphaned open panel.
-        setOpen(false);
-        break;
-    }
-  }
-
+  // Domain config only — all dropdown behavior lives in <Select>. The per-mode
+  // `className` drives the trigger's share-mode color (see .cw-share-trigger.*),
+  // and `cw-share-trigger` gives it the pill-chip shape.
+  const options = SHARE_MODES.map((m) => ({
+    value: m,
+    label: t(`share.${m}.label`),
+    icon: shareMeta[m].icon,
+    className: shareMeta[m].className,
+  }));
   return (
-    <div ref={wrapRef} className="cw-share-select-wrap">
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`cw-share-select ${shareMeta[mode].className}`}
-        style={width != null ? { width } : undefined}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={toggle}
-        onKeyDown={onTriggerKeyDown}
-      >
-        <Icon name={shareMeta[mode].icon} />
-        <span>{t(`share.${mode}.label`)}</span>
-        <span className="cw-share-select-caret" aria-hidden="true" />
-      </button>
-      <span ref={measureRef} className="cw-share-select cw-share-select-measure" aria-hidden="true">
-        <Icon name={shareMeta[mode].icon} />
-        <span>{t(`share.${mode}.label`)}</span>
-        <span className="cw-share-select-caret" aria-hidden="true" />
-      </span>
-      {open && (
-        <ul role="listbox" className="cw-share-select-panel">
-          {SHARE_MODES.map((key, idx) => (
-            <li
-              key={key}
-              role="option"
-              aria-selected={key === mode}
-              className={
-                'cw-share-select-option' +
-                (key === mode ? ' is-selected' : '') +
-                (idx === focusIdx ? ' is-focused' : '')
-              }
-              onMouseEnter={() => setFocusIdx(idx)}
-              onClick={() => commit(key)}
-            >
-              <Icon name={shareMeta[key].icon} />
-              <span>{t(`share.${key}.label`)}</span>
-              {key === mode && <span className="cw-share-select-check" aria-hidden="true">✓</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <Select
+      value={mode}
+      onChange={onChange}
+      options={options}
+      triggerClassName="cw-share-trigger"
+      adaptiveWidth
+    />
   );
 }
 
