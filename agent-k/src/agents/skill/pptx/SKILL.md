@@ -392,6 +392,12 @@ whatever it has. For every CJK-containing run, set both Latin and
 EA typefaces in a helper. The same applies to *chart text
 elements* — see Charts section below.
 
+**`verify_pptx`'s `fonts` check accepts only the run-level
+`<a:rPr><a:ea typeface=...>` form.** `paragraph.font.name` or the
+theme `fontScheme` will be reported as missing. Walk every run and
+set both `<a:latin>` and `<a:ea>` typefaces explicitly — no
+paragraph- or theme-level shortcuts.
+
 `fonts-noto-cjk` ships in the sandbox image. For the pptx typeface
 string, use the Google Fonts family name (NOT the TTC family name
 with the "CJK" infix): `'Noto Sans KR'`, `'Noto Sans JP'`,
@@ -516,9 +522,10 @@ Rules by element:
   `text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE` — the default
   (TOP) glues text to the top edge and leaves dead whitespace below.
 - **Bullets / body paragraphs** — size to `(line_count + 1) *
-  line_height` minimum (use `box_height_in()` / `line_count()` from
-  `verify_pptx.py`). Autosize allowed *only here*, only with
-  verified neighbor clearance.
+  line_height` minimum. Estimate `line_count` inline from the
+  CJK-aware width formula above (Korean ≈ 14 chars / 2.5" at 14 pt
+  body; scale by box width and font size). Autosize allowed *only
+  here*, only with verified neighbor clearance.
 - **Hero text** (Display, Number Cover, quote glyph) — text drives
   the box; size the box to the text.
 
