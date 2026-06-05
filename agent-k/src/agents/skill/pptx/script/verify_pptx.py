@@ -568,6 +568,31 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
     return issues
 
 
+def check_chart_lang(prs) -> list[tuple[int, str]]:
+    """Flag chart XML with `<a:endParaRPr>` missing the `lang` attribute.
+
+    python-pptx's chart templates are inconsistent: bar/line/scatter
+    emit `<a:endParaRPr lang="en-US"/>`, but doughnut/pie emit
+    `<a:endParaRPr/>` (no `lang`). Strict-mode PowerPoint rejects the
+    latter — the recovery dialog fires and the chart is stripped,
+    leaving an apparently-blank slide. Patch chart XML with
+    `patch_chart_lang()` (see SKILL.md Charts section) before saving.
+
+    Returns (slide_idx, chart_name).
+    """
+    issues: list[tuple[int, str]] = []
+    for idx, slide in enumerate(prs.slides, start=1):
+        for sh in slide.shapes:
+            if not getattr(sh, "has_chart", False):
+                continue
+            chart_xml = sh.chart._chartSpace
+            for ep in chart_xml.iter(qn("a:endParaRPr")):
+                if ep.get("lang") is None:
+                    issues.append((idx, sh.name))
+                    break
+    return issues
+
+
 # --- top-level ----------------------------------------------------------------
 
 def verify(pptx_path: str | Path) -> dict[str, Any]:
@@ -586,6 +611,7 @@ def verify(pptx_path: str | Path) -> dict[str, Any]:
         "overflow": check_overflow(prs),
         "page_numbers": check_page_numbers(prs),
         "overlap": check_overlap(prs),
+        "chart_lang": check_chart_lang(prs),
     }
 
 
@@ -606,6 +632,11 @@ def summarize(issues: dict[str, Any]) -> str:
         flags.append(f"{len(issues['page_numbers'])} page-number violations")
     if issues.get("overlap"):
         flags.append(f"{len(issues['overlap'])} shape overlaps")
+    if issues.get("chart_lang"):
+        flags.append(
+            f"{len(issues['chart_lang'])} charts missing endParaRPr lang "
+            "(strict PowerPoint strips them)"
+        )
     if not flags:
         return f"{n} slides — all checks passed ({p['matched']})."
     return f"{n} slides — issues: {' · '.join(flags)}"

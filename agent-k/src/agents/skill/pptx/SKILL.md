@@ -460,7 +460,29 @@ for ser in chart.series:
         set_chart_text_font(ser.data_labels.font, size_pt=11)
 ```
 
-**2. Series colors must be explicit — every series, every time**
+**2. Patch `endParaRPr lang` on every chart**
+
+python-pptx's chart templates are inconsistent: bar/line/scatter emit
+`<a:endParaRPr lang="en-US"/>`, but **doughnut/pie emit
+`<a:endParaRPr/>` with no `lang`**. Strict-mode PowerPoint rejects
+the latter, fires the recovery dialog, and strips the entire chart —
+the slide opens blank. Patch every chart you create:
+
+```python
+def patch_chart_lang(chart, lang='en-US'):
+    """python-pptx omits `lang` on `<a:endParaRPr>` for doughnut/pie
+    charts, which strict PowerPoint treats as corruption. Walk the
+    chart XML and set `lang` on any endParaRPr missing it."""
+    for ep in chart._chartSpace.iter(qn('a:endParaRPr')):
+        if ep.get('lang') is None:
+            ep.set('lang', lang)
+
+patch_chart_lang(chart)
+```
+
+Call once per chart, right after `add_chart()`. Cheap and idempotent.
+
+**3. Series colors must be explicit — every series, every time**
 
 Without explicit fill, python-pptx falls back to PowerPoint theme
 colors (default blue / orange / gray) — leaks regardless of the
