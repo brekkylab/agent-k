@@ -171,6 +171,23 @@ function SessionPage() {
     ...liveMessages,
   ], [history.data, liveMessages]);
 
+  // Total rendered-content size. Streaming updates grow a live bubble in place
+  // (body text, tool calls, tool results) without changing the message count,
+  // so the auto-follow effect below also keys off this to keep re-checking
+  // while content grows. `+ 1` per tool call counts its appearance; results
+  // count by length so their arrival is visible even on short outputs.
+  const contentVersion = useMemo(
+    () =>
+      allMessages.reduce(
+        (n, m) =>
+          n +
+          m.body.length +
+          (m.toolCalls?.reduce((a, tc) => a + 1 + (tc.result?.length ?? 0), 0) ?? 0),
+        0,
+      ),
+    [allMessages],
+  );
+
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -198,7 +215,7 @@ function SessionPage() {
       // Scrolled too far up to auto-follow — surface a "new message" pill instead.
       setShowNewMsgPill(true);
     }
-  }, [allMessages.length, streaming]);
+  }, [allMessages.length, streaming, contentVersion]);
 
   // Track scroll position: dismiss the pill once the user is back near the
   // bottom, and toggle the ghost scroll-down button past the follow threshold.
