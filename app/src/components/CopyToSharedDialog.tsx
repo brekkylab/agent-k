@@ -11,6 +11,7 @@ import { buildFolderTree, type FolderNode } from '@/domain/files';
 import { localizedNoun } from '@/i18n';
 import { Icon } from './Icon';
 import { useToastStore } from './Toast';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface Props {
   open: boolean;
@@ -130,18 +131,19 @@ export function CopyToSharedDialog({ open, projectId, sourceScope, sourcePaths, 
 
   const pending = copyMutation.isPending;
 
+  // ESC routes through the modal stack; the dialog only registers while open
+  // so closed instances don't sit on the stack swallowing events.
+  useDialogEscape(onClose, { disabled: pending || !open });
   useEffect(() => {
+    if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !pending) onClose();
       if (e.key === 'Enter' && !pending) {
         e.preventDefault();
         copyMutate(selected);
       }
     }
-    if (open) {
-      window.addEventListener('keydown', onKey);
-      return () => window.removeEventListener('keydown', onKey);
-    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose, copyMutate, pending, selected]);
 
   const downOnBackdropRef = useRef(false);

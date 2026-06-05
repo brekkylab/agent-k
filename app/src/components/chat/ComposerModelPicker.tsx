@@ -3,8 +3,8 @@
 // mock for now — the selection is not yet wired to the router/dispatcher — but the
 // labels are the real provider model names, grouped by provider.
 
-import { useId } from 'react';
 import { Icon } from '@/components/Icon';
+import { Select, type SelectGroup } from '@/components/Select';
 
 export type ModelId = string;
 
@@ -46,22 +46,20 @@ export function ComposerModelPicker({
   value: ModelId;
   onChange: (id: ModelId) => void;
 }) {
-  const selectId = useId();
+  const options: SelectGroup<ModelId>[] = PROVIDER_MODELS.map((group) => ({
+    label: group.provider,
+    options: group.models.map((model) => ({ value: model.id, label: model.label })),
+  }));
   return (
     <span className="cw-model-picker" title="모델 선택 (미리보기)">
       <Icon name="sparkles" size={12} />
-      <label htmlFor={selectId} className="sr-only">모델 선택 (미리보기)</label>
-      <select id={selectId} value={value} onChange={(event) => onChange(event.target.value)}>
-        {PROVIDER_MODELS.map((group) => (
-          <optgroup key={group.provider} label={group.provider}>
-            {group.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+      <Select
+        value={value}
+        onChange={onChange}
+        options={options}
+        triggerClassName="cw-model-picker-trigger"
+        ariaLabel="모델 선택 (미리보기)"
+      />
     </span>
   );
 }

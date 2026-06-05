@@ -16,6 +16,7 @@ import { useAuthStore } from '@/stores/auth';
 import { canAdministerSession } from '@/lib/permissions';
 import { shortSessionId } from '@/lib/sessionId';
 import { useSessionDelete } from '@/lib/useSessionDelete';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 import type { Session } from '@/domain/types';
 
 export function SessionsOverlay({ projectSlug, onClose }: { projectSlug: string; onClose: () => void }) {
@@ -31,12 +32,7 @@ export function SessionsOverlay({ projectSlug, onClose }: { projectSlug: string;
     closeButtonRef.current?.focus();
   }, []);
 
-  // Close on Escape.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  useDialogEscape(onClose);
 
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
   const deleteMutation = useSessionDelete(projectSlug, { onDeleted: () => setPendingDelete(null) });

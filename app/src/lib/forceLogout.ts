@@ -15,7 +15,20 @@ export function setLogoutRouter(navigate: (to: string) => void): void {
   _routerNavigate = navigate;
 }
 
+// Module-level guard so simultaneous 401s (e.g. SSE + REST both racing through
+// `notifyUnauthorized` at the moment of token expiry) only trigger one logout.
+// Without this, the second caller can overwrite the REASON_KEY ('expired' →
+// 'invalid'), surfacing the wrong banner to the user on the login page.
+let logoutInProgress = false;
+
+export function resetLogoutGuard(): void {
+  logoutInProgress = false;
+}
+
 export function forceLogout(opts: { reason?: LogoutReason; redirectTo?: string }): void {
+  if (logoutInProgress) return;
+  logoutInProgress = true;
+
   appWs.disconnect();
   useAuthStore.getState().reset();
 
