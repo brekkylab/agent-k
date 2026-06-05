@@ -403,7 +403,7 @@ impl SqliteRepository {
     /// Pin the resolved model onto a "recommended" (NULL) session so it doesn't
     /// drift when the chain/availability later changes.
     pub async fn set_session_model(&self, session_id: Uuid, model: &str) -> RepositoryResult<()> {
-        sqlx::query("UPDATE sessions SET model = ? WHERE id = ?")
+        sqlx::query("UPDATE sessions SET model = ? WHERE id = ? AND model IS NULL")
             .bind(model)
             .bind(session_id.to_string())
             .execute(&self.pool)
