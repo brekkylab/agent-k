@@ -26,13 +26,13 @@ Two non-negotiable rules:
 - Charts: native `add_chart()` (editable in PowerPoint). Set EA
   typeface on every axis / legend / data label AND explicit fill
   color on every series AND call `patch_chart_xml(chart)` after
-  every `add_chart()` — patches the bits PowerPoint Mac strict-mode
+  every `add_chart()` — patches the bits strict-mode PowerPoint
   rejects (doughnut/pie `endParaRPr lang`, per-slice-color `c:dPt`
   `bubble3D`) and that other parsers silently ignore (Rendering
   notes — Charts)
 - No `MSO_AUTO_SIZE` on titles / KPI / tags / captions (Anti-patterns)
 - `text_frame.word_wrap = True` on every text box — `False` lets the
-  shape grow horizontally past the design in PowerPoint Mac (Rendering
+  shape grow horizontally past the design in strict-mode PowerPoint (Rendering
   notes — Text-box sizing)
 - Only `.pptx` surfaces to `artifacts/` (Anti-patterns)
 
@@ -131,13 +131,13 @@ It returns a dict with eight checks:
   table×table, picture×picture) are skipped as intentional side-by-
   side layout, and layered-design pairs (text-on-card, vertically
   stacked) are filtered out
-- `chart_strict` — chart XML that PowerPoint Mac strict-mode rejects
+- `chart_strict` — chart XML that strict-mode PowerPoint rejects
   (`<a:endParaRPr>` missing `lang` on doughnut/pie, or `<c:dPt>`
   missing `<c:bubble3D>` for per-slice colors). Other parsers ignore
   both, so the failure is invisible until PowerPoint opens the deck
   and strips the chart → apparently-blank slide.
 - `word_wrap` — text frames with `word_wrap = False` whose single-line
-  text estimate exceeds the box width. In PowerPoint Mac the shape
+  text estimate exceeds the box width. In strict-mode PowerPoint the shape
   grows horizontally past the design; soffice / Google Slides
   force-wrap so the failure is invisible until PowerPoint opens it.
 
@@ -488,7 +488,7 @@ for ser in chart.series:
 
 **2. Patch chart XML for strict-mode PowerPoint**
 
-python-pptx leaves two things out that PowerPoint Mac strict-mode
+python-pptx leaves two things out that strict-mode PowerPoint
 rejects (Google Slides / LibreOffice / soffice ignore them, so the
 deck looks fine until you actually open it in PowerPoint and the
 recovery dialog strips the chart, leaving an apparently-blank slide):
@@ -499,14 +499,14 @@ recovery dialog strips the chart, leaving an apparently-blank slide):
 2. **`<c:dPt>` missing `<c:bubble3D>`** — when per-slice colors are
    set via `c:dPt` (the recommended pattern for doughnut/pie), each
    `<c:dPt>` needs `<c:bubble3D val="0"/>` between `<c:idx>` and
-   `<c:spPr>`. The ECMA schema marks it optional; PowerPoint Mac
+   `<c:spPr>`. The ECMA schema marks it optional; strict-mode PowerPoint
    does not.
 
 One helper handles both, idempotently:
 
 ```python
 def patch_chart_xml(chart, lang='en-US'):
-    """Add the bits PowerPoint Mac strict-mode requires but
+    """Add the bits strict-mode PowerPoint requires but
     python-pptx (and per-slice-color code) leaves out. Idempotent —
     call once per chart, right after `add_chart()`."""
     cs = chart._chartSpace
@@ -589,12 +589,12 @@ short fixed-shape elements — autogrowth overlaps neighbors and
 breaks the grid.
 
 **Set `text_frame.word_wrap = True` explicitly** on every text box.
-Explicit `False` is the failure mode: PowerPoint Mac respects it
+Explicit `False` is the failure mode: strict-mode PowerPoint respects it
 literally and grows the shape *horizontally* to fit text on one
 line, silently pushing a multi-line body or KPI description past
 the designed card edge onto neighbors. soffice / Google Slides
 force-wrap regardless so the failure is invisible until the deck
-opens in PowerPoint Mac. (Unset / `None` defaults to wrap-on per
+opens in strict-mode PowerPoint. (Unset / `None` defaults to wrap-on per
 OOXML and is safe, but setting `True` makes the intent explicit and
 survives copy-paste through code that flips defaults.)
 
@@ -706,11 +706,11 @@ layout every deck.
   leak through and break the deck palette
 - Any `add_chart()` without `patch_chart_xml(chart)` — doughnut/pie
   `endParaRPr` ships without `lang`, and per-slice-color `c:dPt`
-  ships without `c:bubble3D`; PowerPoint Mac strict-mode rejects
+  ships without `c:bubble3D`; strict-mode PowerPoint rejects
   either, fires the recovery dialog, and strips the chart →
   apparently-blank slide. Other parsers ignore both, so the failure
   is invisible until the deck opens in PowerPoint.
-- Text boxes with `word_wrap = False` — PowerPoint Mac grows the
+- Text boxes with `word_wrap = False` — strict-mode PowerPoint grows the
   shape horizontally past the designed width to fit text on one
   line, pushing the text over neighboring elements. soffice / Google
   Slides force-wrap so this is invisible in the sandbox PNG.

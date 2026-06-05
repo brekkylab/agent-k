@@ -555,7 +555,7 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
 
 
 def check_chart_strict(prs) -> list[tuple[int, str, str]]:
-    """Flag chart XML that PowerPoint Mac strict-mode will reject.
+    """Flag chart XML that strict-mode PowerPoint will reject.
 
     Two known bits python-pptx (and per-slice-color helper code) leaves
     out — Google Slides / LibreOffice / soffice ignore them, but
@@ -590,7 +590,7 @@ def check_chart_strict(prs) -> list[tuple[int, str, str]]:
 def check_word_wrap(prs) -> list[tuple[int, str]]:
     """Flag text frames with `word_wrap = False` whose text won't fit on one line.
 
-    PowerPoint Mac respects `word_wrap = False` literally and grows the
+    strict-mode PowerPoint respects `word_wrap = False` literally and grows the
     shape *horizontally* to fit text on a single line — pushing text
     past the designed box width onto neighboring elements. soffice and
     Google Slides force-wrap regardless, so the failure is invisible
@@ -691,7 +691,7 @@ def summarize(issues: dict[str, Any]) -> str:
     if issues.get("word_wrap"):
         flags.append(
             f"{len(issues['word_wrap'])} text boxes with word_wrap=False "
-            "overflow horizontally in PowerPoint Mac"
+            "overflow horizontally in strict-mode PowerPoint"
         )
     if not flags:
         return f"{n} slides — all checks passed ({p['matched']})."
