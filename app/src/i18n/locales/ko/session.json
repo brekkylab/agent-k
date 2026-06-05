@@ -3,6 +3,7 @@
     "stream_failed": "스트리밍 실패: {{error}}",
     "send_failed": "전송 실패: {{message}}",
     "stop_failed": "중지 실패: {{message}}",
+    "agent_error": "에이전트 오류: {{message}}",
     "run_stopped": "응답 생성이 중지되었습니다",
     "share_mode_changed": "공유 모드가 변경되었습니다",
     "share_change_failed": "공유 변경 실패: {{message}}",

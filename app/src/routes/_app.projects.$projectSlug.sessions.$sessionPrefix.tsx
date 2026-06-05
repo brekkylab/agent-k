@@ -99,11 +99,11 @@ function SessionPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
-  // WS 구동: seq 순서로 정렬된 outputs 맵 (catch-up + live 멱등 병합용)
+  // WS-driven: outputs map keyed by seq (for idempotent catch-up + live merging)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
-  // 낙관적 유저 버블 ID (agent_run_started 도착 시 교체 여부 결정)
+  // Optimistic user bubble ID (decides replacement when agent_run_started arrives)
   const optimisticUserIdRef = useRef<string | null>(null);
-  // agent_run_started 미도착 시 자동 복구용 타임아웃 ref
+  // Timeout ref for auto-recovery when agent_run_started never arrives
   const runStartedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Mirror of the `streaming` state, accessible from WS event handler closures
   // without adding `streaming` to the effect dependency array (which would
@@ -257,7 +257,7 @@ function SessionPage() {
     setComposerText('');
     setPendingAttachments([]);
 
-    // 낙관적 유저 버블 (WS agent_run_started 도착 전까지 즉각적 피드백)
+    // Optimistic user bubble (instant feedback until WS agent_run_started arrives)
     const nowIso = new Date().toISOString();
     const optimisticUserId = `live-user-${Date.now()}`;
     optimisticUserIdRef.current = optimisticUserId;
@@ -279,7 +279,7 @@ function SessionPage() {
       if (!doneRunIdsRef.current.has(ack.run_id)) {
         setOwnedRunId(ack.run_id);
       }
-      // agent_run_started가 10초 내에 도착하지 않으면 자동 복구
+      // Auto-recover if agent_run_started does not arrive within 10 seconds
       if (runStartedTimeoutRef.current) clearTimeout(runStartedTimeoutRef.current);
       runStartedTimeoutRef.current = setTimeout(() => {
         if (optimisticUserIdRef.current === optimisticUserId) {
@@ -293,13 +293,13 @@ function SessionPage() {
         }
       }, 10_000);
     } catch (err) {
-      // 전송 실패 (네트워크, 403, 423 등) — 즉시 복구
+      // Send failed (network, 403, 423, etc.) — recover immediately
       if (runStartedTimeoutRef.current) {
         clearTimeout(runStartedTimeoutRef.current);
         runStartedTimeoutRef.current = null;
       }
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'send failed';
-      showToast(`전송 실패: ${msg}`);
+      showToast(t('toast.send_failed', { message: msg }));
       setStreaming(false);
       streamingRef.current = false;
       setOwnedRunId(null);
@@ -307,8 +307,8 @@ function SessionPage() {
       wsOutputsRef.current.clear();
       optimisticUserIdRef.current = null;
     }
-    // 성공 시: WS 이벤트(agent_run_done)가 completion을 처리함. finally 블록 없음.
-  }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments]);
+    // On success: the WS event (agent_run_done) handles completion. No finally block.
+  }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments, t]);
 
   // Enter sends; Shift+Enter inserts a newline. isComposing guards Korean/IME
   // composition so confirming a character with Enter doesn't fire a send.
@@ -349,7 +349,7 @@ function SessionPage() {
     void send(msg);
   }, [session.data, send, navigate]);
 
-  // WS 세션 구독 — sessionId 변경 시 구독/해제.
+  // WS session subscription — subscribe/unsubscribe when sessionId changes.
   useEffect(() => {
     if (!sessionId) return;
     appWs.subscribeSession(sessionId);
@@ -358,12 +358,12 @@ function SessionPage() {
     };
   }, [sessionId]);
 
-  // WS 이벤트 핸들러 — agent 응답을 WS 이벤트로 구동.
+  // WS event handler — drives agent responses from WS events.
   useEffect(() => {
     if (!sessionId) return;
 
     const unsubscribe = appWs.subscribe((event: AppWsEvent) => {
-      // 이 세션과 관련 없는 이벤트는 무시
+      // Ignore events unrelated to this session
       if (!('session_id' in event) || event.session_id !== sessionId) return;
 
       if (event.type === 'agent_run_started') {
@@ -372,7 +372,7 @@ function SessionPage() {
         // [B] Sequence 1: if Done for this run already arrived, ignore the late Started.
         if (doneRunIdsRef.current.has(run_id)) return;
 
-        // agent_run_started 도착 — 복구 타임아웃 취소
+        // agent_run_started arrived — cancel the recovery timeout
         if (runStartedTimeoutRef.current) {
           clearTimeout(runStartedTimeoutRef.current);
           runStartedTimeoutRef.current = null;
@@ -391,12 +391,12 @@ function SessionPage() {
         setStreaming(true);
         streamingRef.current = true;
 
-        // 낙관적 유저 버블이 있으면 유지, 없으면(다른 탭/유저) event에서 추가
+        // Keep the optimistic user bubble if present; otherwise (another tab/user) add it from the event
         setLiveMessages((prev) => {
           const hasOptimistic = optimisticUserIdRef.current &&
             prev.some((m) => m.id === optimisticUserIdRef.current);
           if (hasOptimistic) {
-            // 이미 낙관적 버블 있음 — AI 버블만 추가
+            // Optimistic bubble already present — add only the AI bubble
             const nowIso = new Date().toISOString();
             return [...prev, {
               id: `live-ai-${sessionId}`,
@@ -407,7 +407,7 @@ function SessionPage() {
               status: 'streaming' as const,
             }];
           } else {
-            // 다른 탭/유저: event.user_message에서 유저 버블 추가
+            // Another tab/user: add the user bubble from event.user_message
             const { user_message } = event;
             const nowIso = new Date().toISOString();
             return [...prev,
@@ -465,7 +465,7 @@ function SessionPage() {
               : m.toolCalls;
             return { ...m, body: update.text, status: 'streaming' as const, toolCalls: updatedToolCalls };
           });
-          // 서브에이전트 버블 upsert
+          // Upsert subagent bubbles
           for (const sub of update.subagentUpdates) {
             const subId = `live-sub-${sub.sourceAgent}`;
             const exists = next.some((m) => m.id === subId);
@@ -498,7 +498,7 @@ function SessionPage() {
           clearTimeout(runStartedTimeoutRef.current);
           runStartedTimeoutRef.current = null;
         }
-        showToast(`에이전트 오류: ${event.message}`);
+        showToast(t('toast.agent_error', { message: event.message }));
         setStreaming(false);
         streamingRef.current = false;
         setOwnedRunId(null);
@@ -527,7 +527,7 @@ function SessionPage() {
           showToast(t('toast.run_stopped'));
         }
 
-        // 완료: history refetch → liveMessages clear → streaming stop → invalidate
+        // Done: refetch history → clear liveMessages → stop streaming → invalidate
         void (async () => {
           if (sessionId) {
             await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
@@ -572,7 +572,7 @@ function SessionPage() {
     });
 
     return unsubscribe;
-  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast]);
+  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
