@@ -330,9 +330,14 @@ function SessionPage() {
   }, [session.data, send, navigate]);
 
   // WS 세션 구독 — sessionId 변경 시 구독/해제.
+  // subscribeSession is ref-counted, so a session the sidebar already subscribes to
+  // won't send a fresh `subscribe` to the server (no catch-up). resyncSession forces
+  // that re-request on every entry, so we receive either the in-progress run
+  // (started + messages) or an idle sync.
   useEffect(() => {
     if (!sessionId) return;
     appWs.subscribeSession(sessionId);
+    appWs.resyncSession(sessionId);
     return () => {
       appWs.unsubscribeSession(sessionId);
     };
@@ -521,23 +526,21 @@ function SessionPage() {
 
       if (event.type === 'agent_run_idle') {
         // The server has no active run for this session (completed before we
-        // subscribed, or server restarted). If the client is currently in
-        // streaming mode, reset cleanly — refetch history once to surface any
-        // persisted messages.
-        if (streamingRef.current) {
-          if (runStartedTimeoutRef.current) {
-            clearTimeout(runStartedTimeoutRef.current);
-            runStartedTimeoutRef.current = null;
-          }
-          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
-          setLiveMessages([]);
-          wsOutputsRef.current.clear();
-          maxSeqRef.current = -1;
-          optimisticUserIdRef.current = null;
-          currentRunIdRef.current = null;
-          setStreaming(false);
-          streamingRef.current = false;
+        // subscribed, or server restarted). resyncSession re-requests this on every
+        // entry, so refetch history once to surface any persisted messages and reset
+        // streaming state — covers navigating away mid-run and returning after done.
+        if (runStartedTimeoutRef.current) {
+          clearTimeout(runStartedTimeoutRef.current);
+          runStartedTimeoutRef.current = null;
         }
+        void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+        setLiveMessages([]);
+        wsOutputsRef.current.clear();
+        maxSeqRef.current = -1;
+        optimisticUserIdRef.current = null;
+        currentRunIdRef.current = null;
+        setStreaming(false);
+        streamingRef.current = false;
       }
     });
 

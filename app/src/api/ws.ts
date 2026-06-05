@@ -162,6 +162,15 @@ class AppWebSocketManager {
     }
   }
 
+  // Re-request the server's catch-up replay, bypassing the subscribeSession ref
+  // count (which would skip the `subscribe` when the sidebar already holds one).
+  // The server replays on every `subscribe`, so this resyncs run state on entry.
+  resyncSession(sessionId: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));
+    }
+  }
+
   unsubscribeSession(sessionId: string): void {
     const current = this.sessionRefCounts.get(sessionId);
     if (current === undefined) return;
