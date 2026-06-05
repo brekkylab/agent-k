@@ -1,0 +1,102 @@
+{
+  "toast": {
+    "session_created": "New session created",
+    "session_create_failed": "Failed to create session: {{message}}",
+    "session_deleted": "Session deleted",
+    "session_delete_failed": "Failed to delete session: {{message}}",
+    "no_delete_permission": "You don't have permission to delete (creator or project owner only)"
+  },
+  "subtitle_fallback": "Start a session to chat with the agent.",
+  "creating": "Creating…",
+  "new_session": "New session",
+  "schedule_auto": "Schedule auto-trigger",
+  "info": {
+    "files_title": "{{count}} files",
+    "files_meta": "ground truth",
+    "files_body": "Project Files can be selected, pinned, and cited in sessions.",
+    "members_title": "{{count}} members",
+    "members_meta": "access",
+    "members_body": "Shared sessions show who can talk with Cowork."
+  },
+  "sessions_section_label": "Sessions · {{count}} visible to you",
+  "empty": {
+    "title": "No sessions yet",
+    "body": "Start a session to make this project self-serve.",
+    "action": "New session"
+  },
+  "activity": {
+    "section_label": "Activity",
+    "sync_title": "Project synced",
+    "sync_when": "just now",
+    "sync_body": "Sessions and files sync in real time."
+  },
+  "delete_session": {
+    "title": "Delete this session?",
+    "body": "All messages and sandbox resources in \"{{title}}\" will be cleaned up. This cannot be undone.",
+    "confirm": "Delete"
+  },
+  "card": {
+    "session_count_one": "{{count}} session · {{latest}}",
+    "session_count_other": "{{count}} sessions · {{latest}}",
+    "latest_new": "new"
+  },
+  "list_page": {
+    "title": "Your projects",
+    "description": "Each project is a workspace. Sessions, files, members, skills, schedule — all live inside.",
+    "new_project": "New project",
+    "section_label": "Projects · {{count}} projects"
+  },
+  "skills_page_meta": {
+    "section_label": "Reusable prompts & tools",
+    "title": "Skills"
+  },
+  "schedule_page_meta": {
+    "section_label": "Recurring runs",
+    "title": "Schedule"
+  },
+  "skills_page": {
+    "subtitle": "Manage reusable prompt templates and tool bindings in one place.",
+    "empty_title": "Skills coming soon",
+    "empty_body": "The Skills feature is on the way."
+  },
+  "schedule_page": {
+    "subtitle": "Manage recurring runs and notification delivery in one place.",
+    "empty_title": "Schedule coming soon",
+    "empty_body": "The schedule feature is on the way."
+  },
+  "home": {
+    "preview_pill_aria": "Preview — not yet sent to the server",
+    "attach_coming_soon": "File attachment is coming soon.",
+    "suggested_prompts_aria": "Suggested prompts (preview)"
+  },
+  "settings_page": {
+    "section_label": "Project settings",
+    "owned_by": "Owned by",
+    "edit_name_aria": "Edit project name",
+    "edit_title": "Edit",
+    "edit_desc_aria": "Edit description",
+    "description_label": "Description",
+    "description_placeholder": "What is this project about?",
+    "description_empty": "No description.",
+    "danger_zone": "Danger zone",
+    "delete_project_heading": "Delete project",
+    "delete_project_help": "Sessions, messages, uploaded files, and sandbox resources will all be removed. This cannot be undone.",
+    "delete_project_button": "Delete project",
+    "delete_dialog_title": "Delete this project?",
+    "delete_dialog_body": "All sessions, messages, and uploads in \"{{name}}\" will be cleaned up. This cannot be undone.",
+    "errors": {
+      "login_expired": "Your session has expired. Please sign in again.",
+      "no_permission": "Permission denied (owner only).",
+      "not_found": "Project not found.",
+      "name_conflict": "A project with the same name already exists.",
+      "validation_failed": "Please check your input.",
+      "request_failed": "Request failed.",
+      "delete_failed": "Delete failed: {{message}}"
+    },
+    "toasts": {
+      "rename_success": "Project name updated",
+      "description_success": "Description updated",
+      "delete_success": "Project deleted"
+    }
+  }
+}

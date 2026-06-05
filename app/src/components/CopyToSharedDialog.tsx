@@ -5,8 +5,10 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { copyDirents, listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
 import { buildFolderTree, type FolderNode } from '@/domain/files';
+import { localizedNoun } from '@/i18n';
 import { Icon } from './Icon';
 import { useToastStore } from './Toast';
 import { useDialogEscape } from '@/lib/useDialogEscape';
@@ -14,8 +16,8 @@ import { useDialogEscape } from '@/lib/useDialogEscape';
 interface Props {
   open: boolean;
   projectId: string;
-  sessionId: string;
-  sourcePaths: string[];      // scope-relative paths under artifacts/
+  sourceScope: DirentScope;
+  sourcePaths: string[];      // scope-relative paths under sourceScope
   onClose: () => void;
   onDone: () => void;
 }
@@ -37,6 +39,7 @@ function PickerNode({
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
 }) {
+  const { t } = useTranslation('dialogs');
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
   const isSelected = selected === node.path;
@@ -59,7 +62,7 @@ function PickerNode({
           <button
             type="button"
             className="cw-tree-chevron"
-            aria-label={isOpen ? '접기' : '펼치기'}
+            aria-label={isOpen ? t('copy_to_shared.collapse') : t('copy_to_shared.expand')}
             onClick={(e) => { e.stopPropagation(); onToggle(node.path); }}
           >
             <Icon name={isOpen ? 'chevron' : 'chevron-right'} size={12} />
@@ -91,11 +94,12 @@ function PickerNode({
   );
 }
 
-export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, onClose, onDone }: Props) {
+export function CopyToSharedDialog({ open, projectId, sourceScope, sourcePaths, onClose, onDone }: Props) {
+  const { t, i18n } = useTranslation('dialogs');
+  const { t: tCommon } = useTranslation('common');
   const showToast = useToastStore((s) => s.show);
 
   const sharedScope: DirentScope = { kind: 'shared', projectId };
-  const artifactsScope: DirentScope = { kind: 'artifacts', projectId, sessionId };
 
   const entries = useQuery({
     queryKey: ['dirents', 'shared', projectId],
@@ -115,14 +119,15 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
   const [selected, setSelected] = useState<string>('');
 
   const copyMutation = useMutation({
-    mutationFn: (dest: string) => copyDirents(artifactsScope, sharedScope, sourcePaths, dest),
+    mutationFn: (dest: string) => copyDirents(sourceScope, sharedScope, sourcePaths, dest),
     onSuccess: () => {
-      showToast('공유 폴더로 복사되었습니다');
+      showToast(t('copy_to_shared.success'));
       onDone();
       onClose();
     },
-    onError: () => showToast('복사 실패'),
+    onError: () => showToast(t('copy_to_shared.failure')),
   });
+  const { mutate: copyMutate } = copyMutation;
 
   const pending = copyMutation.isPending;
 
@@ -134,12 +139,12 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Enter' && !pending) {
         e.preventDefault();
-        copyMutation.mutate(selected);
+        copyMutate(selected);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, copyMutation, pending, selected]);
+  }, [open, onClose, copyMutate, pending, selected]);
 
   const downOnBackdropRef = useRef(false);
 
@@ -153,8 +158,12 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
   }
 
   const subtitle = sourcePaths.length === 1
-    ? `"${sourcePaths[0]!.split('/').pop()}"을(를) 공유 폴더로 복사합니다.`
-    : `${sourcePaths.length}개 파일을 공유 폴더로 복사합니다.`;
+    ? (() => {
+        const raw = sourcePaths[0]!.split('/').pop() ?? '';
+        const decorated = localizedNoun(raw, '을/를', i18n.language);
+        return t('copy_to_shared.body_single', { name: `"${decorated}"` });
+      })()
+    : t('copy_to_shared.body_multi', { count: sourcePaths.length });
 
   if (!open) return null;
 
@@ -171,10 +180,10 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
       }}
     >
       <div className="cw-dialog">
-        <button type="button" className="cw-close" onClick={onClose} disabled={pending} aria-label="close">
+        <button type="button" className="cw-close" onClick={onClose} disabled={pending} aria-label={tCommon('actions.close')}>
           <Icon name="x" />
         </button>
-        <h2 style={{ margin: '0 0 6px', fontSize: 18, letterSpacing: '-0.015em' }}>공유 폴더로 복사</h2>
+        <h2 style={{ margin: '0 0 6px', fontSize: 18, letterSpacing: '-0.015em' }}>{t('copy_to_shared.title')}</h2>
         <p style={{ color: 'var(--cw-ink-3)', margin: '0 0 12px', fontSize: 13, lineHeight: 1.55 }}>
           {subtitle}
         </p>
@@ -209,7 +218,7 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
         </div>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
           <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>
-            취소
+            {tCommon('actions.cancel')}
           </button>
           <button
             type="button"
@@ -217,7 +226,7 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
             disabled={pending}
             onClick={() => copyMutation.mutate(selected)}
           >
-            {pending ? '복사 중…' : '복사'}
+            {pending ? t('copy_to_shared.submitting') : t('copy_to_shared.submit')}
           </button>
         </div>
       </div>

@@ -3,6 +3,7 @@
 
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { useDialogEscape } from '@/lib/useDialogEscape';
 
@@ -22,13 +23,14 @@ export function ConfirmDialog({
   title,
   body,
   confirmLabel,
-  cancelLabel = '취소',
+  cancelLabel,
   destructive,
   pending,
   onConfirm,
   onClose,
   confirmOnEnter = false,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation('common');
   // ESC routes through the modal stack so dialogs win over background page
   // handlers (e.g. file selection clear). Enter stays on a separate listener
   // since it isn't part of the modal-stack contract.
@@ -61,14 +63,14 @@ export function ConfirmDialog({
       }}
     >
       <div className="cw-dialog">
-        <button className="cw-close" onClick={onClose} aria-label="close" disabled={pending}>
+        <button className="cw-close" onClick={onClose} aria-label={t('actions.close')} disabled={pending}>
           <Icon name="x" />
         </button>
         <h2 style={{ margin: '0 0 8px', fontSize: 18, letterSpacing: '-0.015em' }}>{title}</h2>
         <p style={{ color: 'var(--cw-ink-3)', margin: '0 0 18px', fontSize: 13, lineHeight: 1.6 }}>{body}</p>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>
-            {cancelLabel}
+            {cancelLabel ?? t('actions.cancel')}
             {confirmOnEnter && <span style={{ opacity: 0.6, fontSize: 11 }}>Esc</span>}
           </button>
           <button
@@ -81,7 +83,7 @@ export function ConfirmDialog({
               borderColor: 'var(--cw-destructive)',
             } : undefined}
           >
-            {pending ? '처리 중…' : (
+            {pending ? t('state.processing') : (
               <>
                 {confirmLabel}
                 {confirmOnEnter && <Icon name="corner-down-left" size={12} style={{ opacity: 0.7 }} />}

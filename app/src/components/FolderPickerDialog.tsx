@@ -5,8 +5,10 @@
 // destination convention: "" (empty string) = project root.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { buildFolderTree, nameOf, type FolderNode } from '@/domain/files';
+import { localizedNoun } from '@/i18n';
 import type { BackendDirent } from '@/api/backend-types';
 import { useDialogEscape } from '@/lib/useDialogEscape';
 
@@ -37,6 +39,7 @@ function PickerNode({
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
 }) {
+  const { t } = useTranslation('dialogs');
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.path);
   const isSelected = selected === node.path;
@@ -59,7 +62,7 @@ function PickerNode({
         <button
           type="button"
           className="cw-tree-chevron"
-          aria-label={isOpen ? '접기' : '펼치기'}
+          aria-label={isOpen ? t('folder_picker.collapse') : t('folder_picker.expand')}
           onClick={(e) => { e.stopPropagation(); onToggle(node.path); }}
           style={{ visibility: hasChildren ? 'visible' : 'hidden' }}
         >
@@ -94,6 +97,8 @@ function PickerNode({
 export function FolderPickerDialog({
   title, confirmLabel, entries, sources, pending, onConfirm, onClose,
 }: FolderPickerDialogProps) {
+  const { t, i18n } = useTranslation('dialogs');
+  const { t: tCommon } = useTranslation('common');
   const tree = useMemo(() => buildFolderTree(entries), [entries]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState<string | null>('');
@@ -133,8 +138,12 @@ export function FolderPickerDialog({
   }
 
   const subtitle = sources.length === 1
-    ? `"${nameOf(sources[0]!)}"을(를) 이동할 폴더를 선택하세요.`
-    : `${sources.length}개 항목을 이동할 폴더를 선택하세요.`;
+    ? (() => {
+        const raw = nameOf(sources[0]!);
+        const decorated = localizedNoun(raw, '을/를', i18n.language);
+        return t('folder_picker.body_single', { name: `"${decorated}"` });
+      })()
+    : t('folder_picker.body_multi', { count: sources.length });
 
   return (
     <div
@@ -149,7 +158,7 @@ export function FolderPickerDialog({
       }}
     >
       <div className="cw-dialog">
-        <button type="button" className="cw-close" onClick={onClose} disabled={pending} aria-label="close">
+        <button type="button" className="cw-close" onClick={onClose} disabled={pending} aria-label={tCommon('actions.close')}>
           <Icon name="x" />
         </button>
         <h2 style={{ margin: '0 0 6px', fontSize: 18, letterSpacing: '-0.015em' }}>{title}</h2>
@@ -166,7 +175,7 @@ export function FolderPickerDialog({
             </span>
             <button type="button" className="cw-tree-label" onClick={() => setSelected('')}>
               <Icon name="folder" size={14} />
-              <span>프로젝트 루트</span>
+              <span>{t('folder_picker.root')}</span>
             </button>
           </div>
           {tree.map((node) => (
@@ -184,7 +193,7 @@ export function FolderPickerDialog({
         </div>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
           <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>
-            취소
+            {tCommon('actions.cancel')}
           </button>
           <button
             type="button"
@@ -192,7 +201,7 @@ export function FolderPickerDialog({
             disabled={pending || selected === null}
             onClick={() => { if (selected !== null) onConfirm(selected); }}
           >
-            {pending ? '진행 중…' : confirmLabel}
+            {pending ? t('folder_picker.submitting') : confirmLabel}
           </button>
         </div>
       </div>

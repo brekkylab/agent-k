@@ -3,11 +3,12 @@ import { Outlet, createFileRoute, redirect } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, getToken } from '@/api/client';
 import { getMe } from '@/api/auth';
+import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 import { useLayoutStore } from '@/stores/layout';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { appWs } from '@/api/ws';
-import type { Project, Session } from '@/domain/types';
+import type { Session } from '@/domain/types';
 
 export const Route = createFileRoute('/_app')({
   beforeLoad: async ({ context }) => {
@@ -27,6 +28,12 @@ export const Route = createFileRoute('/_app')({
       // Network error or 5xx: fall through and let the page handle it.
     }
   },
+  // Sidebar mounts SessionCardMenu (`session`) and triggers NewProjectDialog
+  // (`dialogs`) in addition to its own `common`/`project` ns. These must all
+  // be guaranteed at the shell level — any route that doesn't independently
+  // load them would otherwise unmount the entire shell when the user opens
+  // a sidebar menu, re-introducing the blank-flash.
+  loader: () => loadNs('common', 'project', 'session', 'dialogs'),
   component: AppShell,
 });
 
@@ -56,13 +63,11 @@ function AppShell() {
           ['session', event.session_id],
           (old) => (old ? { ...old, title: event.title } : old),
         );
-        // Session lists are keyed by project slug; event carries only the UUID.
-        // Resolve via the projects cache; no-op if it isn't loaded yet.
-        const projects = queryClient.getQueryData<Project[]>(['projects']) ?? [];
-        const slug = projects.find((p) => p.id === event.project_id)?.slug;
-        if (slug) {
-          void queryClient.invalidateQueries({ queryKey: ['sessions', slug] });
-        }
+        // Session lists are keyed by ['sessions', slug]. We don't know the slug
+        // from the event (only UUID is carried), and the projects cache may not
+        // be warm yet on cold load. Invalidate all session list queries with the
+        // ['sessions'] prefix — safe because title updates are rare.
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       }
     });
     return () => {

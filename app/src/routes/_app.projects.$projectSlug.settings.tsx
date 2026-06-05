@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { deleteProject, getProject, listMembers, listProjects, updateProject } from '@/api/projects';
 import { Avatar, SectionLabel } from '@/components/uiPrimitives';
 import { Icon } from '@/components/Icon';
@@ -10,13 +12,32 @@ import { useToastStore } from '@/components/Toast';
 import { useAuthStore } from '@/stores/auth';
 import { canEditProject } from '@/lib/permissions';
 import { ApiError } from '@/api/client';
+import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/settings')({
+  loader: () => loadNs('project'),
   component: SettingsPage,
 });
 
+type ProjectT = TFunction<'project'>;
+
+function messageOf(err: unknown, t: ProjectT): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return t('settings_page.errors.login_expired');
+    if (err.status === 403) return t('settings_page.errors.no_permission');
+    if (err.status === 404) return t('settings_page.errors.not_found');
+    if (err.status === 409) return t('settings_page.errors.name_conflict');
+    if (err.status === 422 || err.status === 400) return t('settings_page.errors.validation_failed');
+    return `${err.status} — ${err.message}`;
+  }
+  if (err instanceof Error) return err.message;
+  return t('settings_page.errors.request_failed');
+}
+
 function SettingsPage() {
   const { projectSlug } = Route.useParams();
+  const { t } = useTranslation('project');
+  const { t: tCommon } = useTranslation('common');
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
@@ -42,8 +63,8 @@ function SettingsPage() {
   const [editMode, setEditMode] = useState(false);
   const [descEditMode, setDescEditMode] = useState(false);
 
-  // 서버 데이터가 도착하면 input 초깃값을 채운다. 사용자가 편집하는 동안
-  // 외부 refetch가 와도 입력을 덮어쓰지 않도록 project id 기반 dependency.
+  // Seed inputs once the server data arrives, keyed by project id so an
+  // external refetch during edit doesn't clobber what the user typed.
   useEffect(() => {
     if (project.data) {
       setName(project.data.name);
@@ -61,9 +82,9 @@ function SettingsPage() {
       setName(updated.name);
       setSubmitError(null);
       setEditMode(false);
-      showToast('프로젝트 이름을 변경했습니다');
+      showToast(t('settings_page.toasts.rename_success'));
     },
-    onError: (err) => setSubmitError(messageOf(err)),
+    onError: (err) => setSubmitError(messageOf(err, t)),
   });
 
   const descMutation = useMutation({
@@ -75,9 +96,9 @@ function SettingsPage() {
       setDescription(updated.description ?? '');
       setSubmitError(null);
       setDescEditMode(false);
-      showToast('설명을 변경했습니다');
+      showToast(t('settings_page.toasts.description_success'));
     },
-    onError: (err) => setSubmitError(messageOf(err)),
+    onError: (err) => setSubmitError(messageOf(err, t)),
   });
 
   const deleteMutation = useMutation({
@@ -86,7 +107,7 @@ function SettingsPage() {
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
       queryClient.removeQueries({ queryKey: ['project', projectSlug] });
       const remaining = (await queryClient.fetchQuery({ queryKey: ['projects'], queryFn: listProjects })) ?? [];
-      showToast('프로젝트가 삭제되었습니다');
+      showToast(t('settings_page.toasts.delete_success'));
       setDeleteOpen(false);
       if (remaining[0]) {
         navigate({ to: '/projects/$projectSlug', params: { projectSlug: remaining[0].slug } });
@@ -95,7 +116,7 @@ function SettingsPage() {
       }
     },
     onError: (err) => {
-      showToast(`삭제 실패: ${messageOf(err)}`);
+      showToast(t('settings_page.errors.delete_failed', { message: messageOf(err, t) }));
     },
   });
 
@@ -110,7 +131,7 @@ function SettingsPage() {
 
   return (
     <section className="cw-page cw-page-enter">
-      <SectionLabel>Project settings</SectionLabel>
+      <SectionLabel>{t('settings_page.section_label')}</SectionLabel>
       <div
         style={{
           display: 'flex',
@@ -140,7 +161,7 @@ function SettingsPage() {
                 }}
                 disabled={updateMutation.isPending}
                 maxLength={100}
-                aria-label="프로젝트 이름"
+                aria-label={t('settings_page.edit_name_aria')}
                 style={{
                   margin: 0,
                   padding: '4px 10px',
@@ -162,7 +183,7 @@ function SettingsPage() {
                 onClick={() => updateMutation.mutate()}
                 disabled={saveDisabled}
               >
-                {updateMutation.isPending ? '저장 중…' : '저장'}
+                {updateMutation.isPending ? tCommon('state.saving') : tCommon('actions.save')}
               </button>
               <button
                 type="button"
@@ -174,7 +195,7 @@ function SettingsPage() {
                 }}
                 disabled={updateMutation.isPending}
               >
-                취소
+                {tCommon('actions.cancel')}
               </button>
             </>
           ) : (
@@ -187,8 +208,8 @@ function SettingsPage() {
                     setSubmitError(null);
                     setEditMode(true);
                   }}
-                  aria-label="프로젝트 이름 편집"
-                  title="편집"
+                  aria-label={t('settings_page.edit_name_aria')}
+                  title={t('settings_page.edit_title')}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -219,7 +240,7 @@ function SettingsPage() {
               color: 'var(--cw-ink-3)',
             }}
           >
-            <span>Owned by</span>
+            <span>{t('settings_page.owned_by')}</span>
             <Avatar user={ownerUser} small />
             <b style={{ color: 'var(--cw-ink-2)', fontWeight: 600 }}>{ownerUser.name}</b>
           </span>
@@ -240,7 +261,7 @@ function SettingsPage() {
       {project.data && (
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <SectionLabel>Description</SectionLabel>
+            <SectionLabel>{t('settings_page.description_label')}</SectionLabel>
             {editable && !descEditMode && (
               <button
                 type="button"
@@ -248,8 +269,8 @@ function SettingsPage() {
                   setSubmitError(null);
                   setDescEditMode(true);
                 }}
-                aria-label="설명 편집"
-                title="편집"
+                aria-label={t('settings_page.edit_desc_aria')}
+                title={t('settings_page.edit_title')}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -283,7 +304,7 @@ function SettingsPage() {
                     setDescEditMode(false);
                   }
                 }}
-                placeholder="이 프로젝트는 어떤 작업인가요?"
+                placeholder={t('settings_page.description_placeholder')}
                 disabled={descMutation.isPending}
                 rows={3}
                 style={{
@@ -310,7 +331,7 @@ function SettingsPage() {
                   }}
                   disabled={descMutation.isPending}
                 >
-                  취소
+                  {tCommon('actions.cancel')}
                 </button>
                 <button
                   type="button"
@@ -318,7 +339,7 @@ function SettingsPage() {
                   onClick={() => descMutation.mutate()}
                   disabled={descSaveDisabled}
                 >
-                  {descMutation.isPending ? '저장 중…' : '저장'}
+                  {descMutation.isPending ? tCommon('state.saving') : tCommon('actions.save')}
                 </button>
               </div>
             </div>
@@ -331,7 +352,7 @@ function SettingsPage() {
                 lineHeight: 1.6,
               }}
             >
-              {project.data.description || '설명이 없습니다.'}
+              {project.data.description || t('settings_page.description_empty')}
             </p>
           )}
         </div>
@@ -351,12 +372,12 @@ function SettingsPage() {
             padding: 20,
           }}
         >
-          <SectionLabel>Danger zone</SectionLabel>
+          <SectionLabel>{t('settings_page.danger_zone')}</SectionLabel>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginTop: 8 }}>
             <div style={{ minWidth: 0 }}>
-              <h2 style={{ margin: 0, fontSize: 14, color: 'var(--cw-ink)' }}>프로젝트 삭제</h2>
+              <h2 style={{ margin: 0, fontSize: 14, color: 'var(--cw-ink)' }}>{t('settings_page.delete_project_heading')}</h2>
               <p style={{ margin: '4px 0 0', color: 'var(--cw-ink-3)', fontSize: 12, lineHeight: 1.55 }}>
-                세션·메시지·업로드 파일·sandbox 자원이 모두 함께 삭제됩니다. 이 작업은 되돌릴 수 없어요.
+                {t('settings_page.delete_project_help')}
               </p>
             </div>
             <button
@@ -365,7 +386,7 @@ function SettingsPage() {
               style={{ background: 'var(--cw-destructive)', borderColor: 'var(--cw-destructive)' }}
               onClick={() => setDeleteOpen(true)}
             >
-              프로젝트 삭제
+              {t('settings_page.delete_project_button')}
             </button>
           </div>
         </div>
@@ -373,9 +394,9 @@ function SettingsPage() {
 
       {deleteOpen && project.data && (
         <ConfirmDialog
-          title="프로젝트를 삭제하시겠어요?"
-          body={`"${project.data.name}"의 모든 세션·메시지·업로드가 함께 정리됩니다. 이 작업은 되돌릴 수 없습니다.`}
-          confirmLabel="삭제"
+          title={t('settings_page.delete_dialog_title')}
+          body={t('settings_page.delete_dialog_body', { name: project.data.name })}
+          confirmLabel={tCommon('actions.delete')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate()}
@@ -384,17 +405,4 @@ function SettingsPage() {
       )}
     </section>
   );
-}
-
-function messageOf(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 401) return '로그인이 만료되었습니다. 다시 로그인해 주세요.';
-    if (err.status === 403) return '권한이 없습니다 (소유자만 가능)';
-    if (err.status === 404) return '프로젝트를 찾을 수 없습니다.';
-    if (err.status === 409) return '같은 이름의 프로젝트가 이미 있어요.';
-    if (err.status === 422 || err.status === 400) return '입력값을 확인해 주세요.';
-    return `${err.status} — ${err.message}`;
-  }
-  if (err instanceof Error) return err.message;
-  return '요청에 실패했습니다.';
 }

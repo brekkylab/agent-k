@@ -1,5 +1,6 @@
-import { ApiError, getBaseUrl, getToken, notifyUnauthorized } from './client';
+import { ApiError, BASE_URL, getToken, notifyUnauthorized } from './client';
 import { getMe } from './auth';
+import type { MessageOutput } from './backend-types';
 
 export interface SessionTitleUpdatedEvent {
   type: 'session_title_updated';
@@ -8,7 +9,47 @@ export interface SessionTitleUpdatedEvent {
   title: string;
 }
 
-export type AppWsEvent = SessionTitleUpdatedEvent;
+export interface RunUserMessage {
+  sender_user_id: string;
+  content: string;
+  attachments: string[];
+  created_at: string;
+}
+
+export interface AgentRunStartedEvent {
+  type: 'agent_run_started';
+  session_id: string;
+  run_id: string;
+  user_message: RunUserMessage;
+}
+
+export interface AgentMessageEvent {
+  type: 'agent_message';
+  session_id: string;
+  run_id: string;
+  seq: number;
+  output: MessageOutput;
+}
+
+export interface AgentErrorEvent {
+  type: 'agent_error';
+  session_id: string;
+  run_id: string;
+  message: string;
+}
+
+export interface AgentRunDoneEvent {
+  type: 'agent_run_done';
+  session_id: string;
+  run_id: string;
+}
+
+export interface AgentRunIdleEvent {
+  type: 'agent_run_idle';
+  session_id: string;
+}
+
+export type AppWsEvent = SessionTitleUpdatedEvent | AgentRunStartedEvent | AgentMessageEvent | AgentErrorEvent | AgentRunDoneEvent | AgentRunIdleEvent;
 
 type Handler = (event: AppWsEvent) => void;
 
@@ -31,14 +72,23 @@ class AppWebSocketManager {
   private active = false;
   private rapidCloseCount = 0;
   private connectionStartTime = 0;  // replaces lastCloseTime: records when the socket was created
+  private subscribedSessions = new Set<string>();
+  private sessionRefCounts = new Map<string, number>();
 
   connect(token: string): void {
     this.active = true;
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
-    const url = `${toWsUrl(getBaseUrl())}/ws?token=${encodeURIComponent(token)}`;
+    const url = `${toWsUrl(BASE_URL)}/ws?token=${encodeURIComponent(token)}`;
     this.connectionStartTime = Date.now();
     const ws = new WebSocket(url);
     this.ws = ws;
+
+    ws.onopen = () => {
+      // Replay all active session subscriptions on (re)connect
+      for (const sessionId of this.subscribedSessions) {
+        ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));
+      }
+    };
 
     ws.onmessage = (evt) => {
       try {
@@ -100,9 +150,38 @@ class AppWebSocketManager {
     ws.onerror = () => { ws.close(); };
   }
 
+  subscribeSession(sessionId: string): void {
+    const count = (this.sessionRefCounts.get(sessionId) ?? 0) + 1;
+    this.sessionRefCounts.set(sessionId, count);
+    if (count === 1) {
+      // 첫 구독 시에만 서버에 전송; 소켓이 닫혀 있으면 reconnect 후 onopen에서 재전송됨
+      this.subscribedSessions.add(sessionId);
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));
+      }
+    }
+  }
+
+  unsubscribeSession(sessionId: string): void {
+    const current = this.sessionRefCounts.get(sessionId);
+    if (current === undefined) return;
+    const count = current - 1;
+    if (count === 0) {
+      this.sessionRefCounts.delete(sessionId);
+      this.subscribedSessions.delete(sessionId);
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ action: 'unsubscribe', session_id: sessionId }));
+      }
+    } else {
+      this.sessionRefCounts.set(sessionId, count);
+    }
+  }
+
   disconnect(): void {
     this.active = false;
     this.rapidCloseCount = 0;
+    this.subscribedSessions.clear();
+    this.sessionRefCounts.clear();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

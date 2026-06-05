@@ -4,8 +4,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { localizedNoun } from '@/i18n';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
-import { listMessages, streamMessage } from '@/api/messages';
+import { listMessages, sendMessage, deriveStreamState } from '@/api/messages';
+import { appWs } from '@/api/ws';
+import type { AppWsEvent } from '@/api/ws';
+import type { MessageOutput } from '@/api/backend-types';
 import { getProject, listMembers } from '@/api/projects';
 import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
@@ -13,7 +18,6 @@ import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimi
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
-import { shareMeta } from '@/domain/metadata';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { AI_USER, SUBAGENT_PREFIX } from '@/api/transformers';
 import { formatMessageTime, formatMessageTimeFull } from '@/lib/formatMessageTime';
@@ -26,10 +30,13 @@ import { AttachmentChip } from '@/components/AttachmentChip';
 import { AttachmentPreview } from '@/components/AttachmentPreview';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { loadNs } from '@/i18n/loader';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
+  // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
+  loader: () => loadNs('session', 'dialogs'),
   component: SessionPage,
 });
 
@@ -39,6 +46,7 @@ function stripSubagentPrefix(name: string): string {
 
 function SessionPage() {
   const { projectSlug, sessionPrefix } = Route.useParams();
+  const { t } = useTranslation(['session', 'common']);
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -87,8 +95,28 @@ function SessionPage() {
   const consumedInitialMessageRef = useRef(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  // WS 구동: seq 순서로 정렬된 outputs 맵 (catch-up + live 멱등 병합용)
+  const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
+  // 낙관적 유저 버블 ID (agent_run_started 도착 시 교체 여부 결정)
+  const optimisticUserIdRef = useRef<string | null>(null);
+  // agent_run_started 미도착 시 자동 복구용 타임아웃 ref
+  const runStartedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror of the `streaming` state, accessible from WS event handler closures
+  // without adding `streaming` to the effect dependency array (which would
+  // re-register the handler on every state transition).
+  const streamingRef = useRef(false);
+  // Tracks the highest seq seen; when a new seq exceeds this, outputs are
+  // already in insertion order and the sort can be skipped.
+  const maxSeqRef = useRef<number>(-1);
+  // [B] run_id tracking for race-condition guards.
+  // currentRunIdRef: run_id of the active run being tracked on this client.
+  // doneRunIdsRef: set of run_ids we've already processed a Done for.
+  const currentRunIdRef = useRef<string | null>(null);
+  const doneRunIdsRef = useRef<Set<string>>(new Set());
 
   const [composerText, setComposerText] = useState('');
   // Composer layout — false = compact pill (textarea + buttons inline),
@@ -99,7 +127,7 @@ function SessionPage() {
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
-  const [copyToSharedPaths, setCopyToSharedPaths] = useState<string[] | null>(null);
+  const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
 
   type PendingAttachment = {
     tempId: string;
@@ -119,7 +147,13 @@ function SessionPage() {
     setLiveMessages([]);
     setComposerText('');
     setStreaming(false);
+    streamingRef.current = false;
     setPendingAttachments([]);
+    wsOutputsRef.current.clear();
+    maxSeqRef.current = -1;
+    optimisticUserIdRef.current = null;
+    currentRunIdRef.current = null;
+    doneRunIdsRef.current.clear();
   }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
@@ -135,7 +169,12 @@ function SessionPage() {
   ], [history.data, liveMessages]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom <= 150) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [allMessages.length, streaming]);
 
   // Auto-grow the composer textarea + drive the compact↔expanded layout flip.
@@ -204,7 +243,8 @@ function SessionPage() {
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? composerText).trim();
-    if (!text || streaming || hasUploadingAttachments) return;
+    const uploading = pendingAttachments.some((a) => a.status === 'uploading');
+    if (!text || !sessionId || streaming || uploading) return;
 
     const attachmentPaths = pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
@@ -213,9 +253,12 @@ function SessionPage() {
     setComposerText('');
     setPendingAttachments([]);
 
+    // 낙관적 유저 버블 (WS agent_run_started 도착 전까지 즉각적 피드백)
     const nowIso = new Date().toISOString();
+    const optimisticUserId = `live-user-${Date.now()}`;
+    optimisticUserIdRef.current = optimisticUserId;
     const userMsg: Message = {
-      id: `live-user-${Date.now()}`,
+      id: optimisticUserId,
       sessionId: sessionPrefix,
       sender: { kind: 'user', userId: currentUser?.id ?? 'user' },
       createdAt: nowIso,
@@ -223,86 +266,41 @@ function SessionPage() {
       status: 'done',
       attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
     };
-    const aiId = `live-ai-${Date.now()}`;
-    setLiveMessages((prev) => [...prev, userMsg, {
-      id: aiId,
-      sessionId: sessionPrefix,
-      sender: { kind: 'agent' as const, name: 'agent-k' },
-      createdAt: nowIso,
-      body: '',
-      status: 'streaming' as const,
-    }]);
+    setLiveMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
-
-    const ctrl = new AbortController();
+    streamingRef.current = true;
 
     try {
-      for await (const update of streamMessage(sessionPrefix, text, ctrl.signal, attachmentPaths.length > 0 ? attachmentPaths : undefined)) {
-        const isDone = update.status === 'done';
-        const doneOrStreaming = isDone ? 'done' as const : 'streaming' as const;
-
-        setLiveMessages((prev) => {
-          // Update main agent-k bubble
-          let next: Message[] = prev.map((m) => {
-            if (m.id !== aiId) return m;
-            const updatedToolCalls = update.toolCalls.length > 0
-              ? update.toolCalls.map((tc) => ({ ...tc }))
-              : m.toolCalls;
-            return { ...m, body: update.text, status: doneOrStreaming, toolCalls: updatedToolCalls };
-          });
-
-          // Apply subagent bubble updates — stable id derived from sender name
-          for (const sub of update.subagentUpdates) {
-            const subId = `live-sub-${sub.sourceAgent}`;
-            const exists = next.some((m) => m.id === subId);
-            if (exists) {
-              next = next.map((m) =>
-                m.id === subId ? { ...m, body: sub.text, status: doneOrStreaming } : m,
-              );
-            } else {
-              next = [...next, {
-                id: subId,
-                sessionId: sessionPrefix,
-                sender: { kind: 'agent' as const, name: sub.sourceAgent },
-                createdAt: nowIso,
-                body: sub.text,
-                status: 'streaming' as const,
-              }];
-            }
-          }
-
-          return next;
-        });
-
-        if (update.status === 'error') {
-          showToast(`스트리밍 실패: ${update.errorText ?? 'unknown'}`);
-          break;
+      await sendMessage(sessionId, text, attachmentPaths.length > 0 ? attachmentPaths : undefined);
+      // agent_run_started가 10초 내에 도착하지 않으면 자동 복구
+      if (runStartedTimeoutRef.current) clearTimeout(runStartedTimeoutRef.current);
+      runStartedTimeoutRef.current = setTimeout(() => {
+        if (optimisticUserIdRef.current === optimisticUserId) {
+          // [G] agent_run_started never arrived — but the run may still be executing.
+          // Preserve the user bubble (liveMessages) so it doesn't disappear mid-run.
+          // Just stop the spinner and refetch once; if a late started arrives it resumes.
+          streamingRef.current = false;
+          setStreaming(false);
+          runStartedTimeoutRef.current = null;
+          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
         }
-      }
+      }, 10_000);
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'stream failed';
-      showToast(`전송 실패: ${msg}`);
-    } finally {
-      setStreaming(false);
-      // On the success path we wait for the refetched history before clearing
-      // liveMessages so the optimistic bubbles cross-fade into the persisted
-      // ones without a flash. On the failure path (or empty sessionId race)
-      // the refetch can throw — wrap it so we always clear liveMessages and
-      // don't leave the empty streaming AI bubble parked on screen.
-      try {
-        if (sessionId) {
-          await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
-        }
-      } catch {
-        // toast already shown in the outer catch
-      } finally {
-        setLiveMessages([]);
+      // 전송 실패 (네트워크, 403, 423 등) — 즉시 복구
+      if (runStartedTimeoutRef.current) {
+        clearTimeout(runStartedTimeoutRef.current);
+        runStartedTimeoutRef.current = null;
       }
-      void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
-      void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
-      void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'send failed';
+      showToast(`전송 실패: ${msg}`);
+      setStreaming(false);
+      streamingRef.current = false;
+      setLiveMessages([]);
+      wsOutputsRef.current.clear();
+      optimisticUserIdRef.current = null;
     }
-  }, [composerText, streaming, sessionPrefix, projectSlug, projectId, sessionId, currentUser, queryClient, showToast, pendingAttachments]);
+    // 성공 시: WS 이벤트(agent_run_done)가 completion을 처리함. finally 블록 없음.
+  }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments]);
 
   // Enter sends; Shift+Enter inserts a newline. isComposing guards Korean/IME
   // composition so confirming a character with Enter doesn't fire a send.
@@ -331,16 +329,231 @@ function SessionPage() {
     void send(msg);
   }, [session.data, send, navigate]);
 
+  // WS 세션 구독 — sessionId 변경 시 구독/해제.
+  useEffect(() => {
+    if (!sessionId) return;
+    appWs.subscribeSession(sessionId);
+    return () => {
+      appWs.unsubscribeSession(sessionId);
+    };
+  }, [sessionId]);
+
+  // WS 이벤트 핸들러 — agent 응답을 WS 이벤트로 구동.
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const unsubscribe = appWs.subscribe((event: AppWsEvent) => {
+      // 이 세션과 관련 없는 이벤트는 무시
+      if (!('session_id' in event) || event.session_id !== sessionId) return;
+
+      if (event.type === 'agent_run_started') {
+        const { run_id } = event;
+
+        // [B] Sequence 1: if Done for this run already arrived, ignore the late Started.
+        if (doneRunIdsRef.current.has(run_id)) return;
+
+        // agent_run_started 도착 — 복구 타임아웃 취소
+        if (runStartedTimeoutRef.current) {
+          clearTimeout(runStartedTimeoutRef.current);
+          runStartedTimeoutRef.current = null;
+        }
+
+        // [B] Sequence 2: only clear accumulated outputs when this is a genuinely new run.
+        // If currentRunId already equals run_id, pre-start messages are already in
+        // wsOutputsRef and should not be wiped (live arrived before replay started).
+        const isNewRun = currentRunIdRef.current !== run_id;
+        if (isNewRun) {
+          wsOutputsRef.current.clear();
+          maxSeqRef.current = -1;
+        }
+        currentRunIdRef.current = run_id;
+
+        setStreaming(true);
+        streamingRef.current = true;
+
+        // 낙관적 유저 버블이 있으면 유지, 없으면(다른 탭/유저) event에서 추가
+        setLiveMessages((prev) => {
+          const hasOptimistic = optimisticUserIdRef.current &&
+            prev.some((m) => m.id === optimisticUserIdRef.current);
+          if (hasOptimistic) {
+            // 이미 낙관적 버블 있음 — AI 버블만 추가
+            const nowIso = new Date().toISOString();
+            return [...prev, {
+              id: `live-ai-${sessionId}`,
+              sessionId: sessionPrefix,
+              sender: { kind: 'agent' as const, name: 'agent-k' },
+              createdAt: nowIso,
+              body: '',
+              status: 'streaming' as const,
+            }];
+          } else {
+            // 다른 탭/유저: event.user_message에서 유저 버블 추가
+            const { user_message } = event;
+            const nowIso = new Date().toISOString();
+            return [...prev,
+              {
+                id: `live-user-ws-${sessionId}`,
+                sessionId: sessionPrefix,
+                sender: { kind: 'user', userId: user_message.sender_user_id },
+                createdAt: user_message.created_at ?? nowIso,
+                body: user_message.content,
+                status: 'done' as const,
+                attachments: user_message.attachments.length > 0 ? user_message.attachments : undefined,
+              },
+              {
+                id: `live-ai-${sessionId}`,
+                sessionId: sessionPrefix,
+                sender: { kind: 'agent' as const, name: 'agent-k' },
+                createdAt: nowIso,
+                body: '',
+                status: 'streaming' as const,
+              }
+            ];
+          }
+        });
+      }
+
+      if (event.type === 'agent_message') {
+        const { run_id, seq, output } = event;
+        // [B] Claim the run on first message (Seq2: live message arrives before replay Started),
+        // or ignore messages from a different run (stale broadcast vs. newer run).
+        if (currentRunIdRef.current === null) {
+          currentRunIdRef.current = run_id;
+        } else if (run_id !== currentRunIdRef.current) {
+          return;
+        }
+        wsOutputsRef.current.set(seq, output);
+
+        // Fast path: if seq is strictly greater than maxSeqRef (the common
+        // in-order case), Map insertion order is already sorted — no sort needed.
+        // Slow path: out-of-order delivery (catch-up replay race) triggers a
+        // full sort. In both cases duplicates are idempotent via Map.set.
+        const outOfOrder = seq <= maxSeqRef.current;
+        if (seq > maxSeqRef.current) maxSeqRef.current = seq;
+
+        const outputs = outOfOrder
+          ? [...wsOutputsRef.current.entries()].sort(([a], [b]) => a - b).map(([, v]) => v)
+          : [...wsOutputsRef.current.values()];
+        const update = deriveStreamState(outputs, 'streaming');
+
+        const aiId = `live-ai-${sessionId}`;
+        setLiveMessages((prev) => {
+          let next = prev.map((m) => {
+            if (m.id !== aiId) return m;
+            const updatedToolCalls = update.toolCalls.length > 0
+              ? update.toolCalls.map((tc) => ({ ...tc }))
+              : m.toolCalls;
+            return { ...m, body: update.text, status: 'streaming' as const, toolCalls: updatedToolCalls };
+          });
+          // 서브에이전트 버블 upsert
+          for (const sub of update.subagentUpdates) {
+            const subId = `live-sub-${sub.sourceAgent}`;
+            const exists = next.some((m) => m.id === subId);
+            const nowIso = new Date().toISOString();
+            if (exists) {
+              next = next.map((m) =>
+                m.id === subId ? { ...m, body: sub.text, status: 'streaming' as const } : m,
+              );
+            } else {
+              next = [...next, {
+                id: subId,
+                sessionId: sessionPrefix,
+                sender: { kind: 'agent' as const, name: sub.sourceAgent },
+                createdAt: nowIso,
+                body: sub.text,
+                status: 'streaming' as const,
+              }];
+            }
+          }
+          return next;
+        });
+      }
+
+      if (event.type === 'agent_error') {
+        const { run_id } = event;
+        // [R2-3] Ignore stale errors from a previous run — same guard as agent_run_done.
+        if (currentRunIdRef.current !== null && run_id !== currentRunIdRef.current) return;
+        // [G] Clear the run_started timeout — error is a terminal state.
+        if (runStartedTimeoutRef.current) {
+          clearTimeout(runStartedTimeoutRef.current);
+          runStartedTimeoutRef.current = null;
+        }
+        showToast(`에이전트 오류: ${event.message}`);
+        setStreaming(false);
+        streamingRef.current = false;
+        setLiveMessages([]);
+        wsOutputsRef.current.clear();
+        maxSeqRef.current = -1;
+        currentRunIdRef.current = null;
+        optimisticUserIdRef.current = null;
+      }
+
+      if (event.type === 'agent_run_done') {
+        const { run_id } = event;
+        // [B] Track completed run_ids to guard against late agent_run_started (Sequence 1).
+        doneRunIdsRef.current.add(run_id);
+        // Ignore Done events for runs we're not currently tracking.
+        if (currentRunIdRef.current !== null && run_id !== currentRunIdRef.current) return;
+
+        // [G] Clear the run_started timeout — done is a terminal state.
+        if (runStartedTimeoutRef.current) {
+          clearTimeout(runStartedTimeoutRef.current);
+          runStartedTimeoutRef.current = null;
+        }
+
+        // 완료: history refetch → liveMessages clear → streaming stop → invalidate
+        void (async () => {
+          if (sessionId) {
+            await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+          }
+          setLiveMessages([]);
+          wsOutputsRef.current.clear();
+          maxSeqRef.current = -1;
+          currentRunIdRef.current = null;
+          optimisticUserIdRef.current = null;
+          setStreaming(false);
+          streamingRef.current = false;
+          void queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
+          void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
+          void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
+        })();
+      }
+
+      if (event.type === 'agent_run_idle') {
+        // The server has no active run for this session (completed before we
+        // subscribed, or server restarted). If the client is currently in
+        // streaming mode, reset cleanly — refetch history once to surface any
+        // persisted messages.
+        if (streamingRef.current) {
+          if (runStartedTimeoutRef.current) {
+            clearTimeout(runStartedTimeoutRef.current);
+            runStartedTimeoutRef.current = null;
+          }
+          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+          setLiveMessages([]);
+          wsOutputsRef.current.clear();
+          maxSeqRef.current = -1;
+          optimisticUserIdRef.current = null;
+          currentRunIdRef.current = null;
+          setStreaming(false);
+          streamingRef.current = false;
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast]);
+
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['session', sessionPrefix] });
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
-      showToast('공유 모드가 변경되었습니다');
+      showToast(t('toast.share_mode_changed'));
     },
     onError: (err) => {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'update failed';
-      showToast(`공유 변경 실패: ${msg}`);
+      showToast(t('toast.share_change_failed', { message: msg }));
     },
   });
 
@@ -358,9 +571,9 @@ function SessionPage() {
           <div>
             <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
             <p>
-              {creator && <>Started by <Avatar user={creator} small /> {creator.name} · </>}
-              {sess?.references.length ?? 0} files ·{' '}
-              <Avatar user={AI_USER} small /> Cowork Default
+              {creator && <>{t('chat.started_by')} <Avatar user={creator} small /> {creator.name} · </>}
+              {t('chat.files_count', { count: sess?.references.length ?? 0 })} ·{' '}
+              <Avatar user={AI_USER} small /> {t('chat.default_label')}
             </p>
           </div>
           <div className="cw-session-head-actions">
@@ -404,7 +617,7 @@ function SessionPage() {
           </div>
         </div>
 
-        <div className="cw-messages-scroll">
+        <div className="cw-messages-scroll" ref={scrollContainerRef}>
         <div className="cw-messages">
           {allMessages.map((msg) => (
             <MessageBubble
@@ -415,14 +628,14 @@ function SessionPage() {
               artifactPaths={msg.artifacts}
               projectId={projectId}
               sessionId={sessionId}
-              onCopyToShared={setCopyToSharedPaths}
+              onCopyToShared={(scope, paths) => setCopyToShared({ scope, paths })}
               onArtifactDeleted={() => {
                 void queryClient.invalidateQueries({ queryKey: ['messages', sessionId] });
               }}
             />
           ))}
           {streaming && (
-            <div className="cw-live"><span />AI 답변 중…</div>
+            <div className="cw-live"><span />{t('ui.ai_responding')}</div>
           )}
           <div ref={messagesEndRef} />
         </div>
@@ -448,7 +661,7 @@ function SessionPage() {
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="Message Cowork and the team…"
+              placeholder={t('ui.composer_placeholder')}
               disabled={streaming}
               rows={1}
             />
@@ -456,14 +669,14 @@ function SessionPage() {
               <button
                 type="button"
                 className="cw-attach-btn"
-                aria-label="파일 첨부"
+                aria-label={t('ui.attach_file')}
                 onClick={() => fileInputRef.current?.click()}
                 disabled={streaming}
                 style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
               >
                 <Icon name="paperclip" size={13} />
               </button>
-              <button type="submit" className="cw-send-button" aria-label="Send" disabled={!composerText.trim() || streaming || hasUploadingAttachments}>
+              <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
                 <Icon name="send" size={12} />
               </button>
             </div>
@@ -475,46 +688,46 @@ function SessionPage() {
             style={{ display: 'none' }}
             onChange={(e) => void handleFileSelect(e)}
           />
-          <small>Enter to send · Reference files with @filename</small>
+          <small>{t('ui.composer_hint')}</small>
         </form>
       </section>
 
       <aside className="cw-session-side">
-        <h3>Members</h3>
+        <h3>{t('side.members')}</h3>
         {userList.map((user) => (
           <div className="cw-side-row" key={user.id}>
             <Avatar user={user} small />
             {user.name}
           </div>
         ))}
-        <h3>Referenced files</h3>
+        <h3>{t('side.referenced_files')}</h3>
         {sess?.references.length
           ? <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 11 }}>{sess.references.join(', ')}</p>
-          : <p>No pinned files yet.</p>}
-        <h3>Access</h3>
+          : <p>{t('side.no_pinned_files')}</p>}
+        <h3>{t('side.access')}</h3>
         {sess && <SharePill mode={sess.shareMode} />}
-        {sess && <p>{shareMeta[sess.shareMode].desc}</p>}
-        <h3>Session</h3>
+        {sess && <p>{t(`common:share.${sess.shareMode}.desc`)}</p>}
+        <h3>{t('side.session')}</h3>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
         <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
-          project · {project.data?.name ?? '...'}
+          {t('side.project_label', { name: project.data?.name ?? '...' })}
         </p>
         <ArtifactsPanel
           projectId={projectId}
           sessionId={sessionId}
-          onCopyToShared={(paths) => setCopyToSharedPaths(paths)}
+          onCopyToShared={(scope, paths) => setCopyToShared({ scope, paths })}
         />
       </aside>
 
-      {copyToSharedPaths !== null && (
+      {copyToShared !== null && (
         <CopyToSharedDialog
-          open={copyToSharedPaths !== null}
+          open={copyToShared !== null}
           projectId={projectId}
-          sessionId={sessionId}
-          sourcePaths={copyToSharedPaths}
-          onClose={() => setCopyToSharedPaths(null)}
+          sourceScope={copyToShared.scope}
+          sourcePaths={copyToShared.paths}
+          onClose={() => setCopyToShared(null)}
           onDone={() => {
-            setCopyToSharedPaths(null);
+            setCopyToShared(null);
             void queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
           }}
         />
@@ -533,9 +746,10 @@ function ArtifactChip({
   path: string;
   projectId: string;
   sessionId: string;
-  onCopyToShared: (paths: string[]) => void;
+  onCopyToShared: (scope: DirentScope, paths: string[]) => void;
   onDeleted: (path: string) => void;
 }) {
+  const { t, i18n } = useTranslation('session');
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -560,10 +774,10 @@ function ArtifactChip({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, sessionId] });
       onDeleted(path);
-      showToast('삭제되었습니다');
+      showToast(t('toast.artifact_deleted'));
       setConfirmDelete(false);
     },
-    onError: () => showToast('삭제 실패'),
+    onError: () => showToast(t('toast.artifact_delete_failed')),
   });
 
   return (
@@ -584,12 +798,12 @@ function ArtifactChip({
           >
             <li>
               <button type="button" onClick={() => downloadFile(scope, path)}>
-                <Icon name="download" size={13} /> 다운로드
+                <Icon name="download" size={13} /> {t('artifact.download')}
               </button>
             </li>
             <li>
-              <button type="button" onClick={() => onCopyToShared([path])}>
-                <Icon name="file" size={13} /> 공유 디렉토리로 복사
+              <button type="button" onClick={() => onCopyToShared(scope, [path])}>
+                <Icon name="file" size={13} /> {t('artifact.copy_to_shared')}
               </button>
             </li>
             <li>
@@ -598,7 +812,7 @@ function ArtifactChip({
                 className="cw-file-dropdown-destructive"
                 onClick={() => setConfirmDelete(true)}
               >
-                <Icon name="trash" size={13} /> 삭제
+                <Icon name="trash" size={13} /> {t('artifact.delete')}
               </button>
             </li>
           </ul>
@@ -606,9 +820,9 @@ function ArtifactChip({
       </div>
       {confirmDelete && (
         <ConfirmDialog
-          title="삭제 확인"
-          body={`"${filename}"을(를) 삭제하시겠습니까?`}
-          confirmLabel="삭제"
+          title={t('delete_artifact.title')}
+          body={t('delete_artifact.body', { name: `"${localizedNoun(filename, '을/를', i18n.language)}"` })}
+          confirmLabel={t('delete_artifact.confirm')}
           destructive
           pending={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate()}
@@ -655,16 +869,17 @@ function MessageBubble({
   artifactPaths?: string[];
   projectId?: string;
   sessionId?: string;
-  onCopyToShared?: (paths: string[]) => void;
+  onCopyToShared?: (scope: DirentScope, paths: string[]) => void;
   onArtifactDeleted?: (path: string) => void;
 }) {
+  const { t } = useTranslation('session');
   const isAi = message.sender.kind === 'agent';
   const isSelf = message.sender.kind === 'user' && message.sender.userId === currentUserId;
 
   const displayUser: User = isAi
     ? (users.find((u) => u.id === 'ai') ?? AI_USER)
     : (users.find((u) => u.id === (message.sender as { userId: string }).userId)
-      ?? { id: 'unknown', name: 'Member', roleLabel: 'Member', avatar: 'M', color: 'var(--cw-ink-3)' });
+      ?? { id: 'unknown', name: 'Member', roleLabel: 'Member', avatar: 'M', color: 'var(--cw-ink-3)', preferredLanguage: 'en' });
 
   const isStreaming = message.status === 'streaming';
   const timeLabel = formatMessageTime(message.createdAt);
@@ -677,7 +892,7 @@ function MessageBubble({
       {isAi ? <span className="cw-ai-chip">AI</span> : <Avatar user={displayUser} />}
       <div className="cw-message-body">
         <div className="cw-message-meta">
-          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · 나` : isAi ? (agentLabel ?? 'AI') : displayUser.name.split(' ')[0]}</b>
+          <b>{isSelf ? `${displayUser.name.split(' ')[0]} · ${t('ui.self_label')}` : isAi ? (agentLabel ?? 'AI') : displayUser.name.split(' ')[0]}</b>
           <time dateTime={message.createdAt} data-tooltip={formatMessageTimeFull(message.createdAt)}>{timeLabel}</time>
         </div>
         <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
@@ -688,7 +903,7 @@ function MessageBubble({
         {message.attachments && message.attachments.length > 0 && (
           <div className="cw-msg-attachments" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
             {message.attachments.map((path) => (
-              <AttachmentPreview key={path} globalPath={path} />
+              <AttachmentPreview key={path} globalPath={path} onCopyToShared={onCopyToShared} />
             ))}
           </div>
         )}
@@ -700,7 +915,7 @@ function MessageBubble({
             </div>
           ) : (
             <details key={tc.id} className="cw-toolcall">
-              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ' · 실행 중…' : ''}</summary>
+              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ` · ${t('ui.tool_running')}` : ''}</summary>
               {tc.arguments !== undefined && (
                 <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
                   ? tc.arguments

@@ -11,11 +11,24 @@ use std::{path::Path, sync::Arc};
 
 use agent_k::agents::GUEST_SHARED_DIR;
 use agent_k_backend::state::AppState;
+use ailoy::{
+    agent::{AgentBuilder, default_provider_mut},
+    lang_model::LangModelProvider,
+};
+use axum::http::StatusCode;
 use common::{
     delete_session, extract_text, extract_text_from_slice, get_personal_project, login, make_repo,
     make_test_store, post_session_authed, send_message, send_message_stream, setup_provider,
     signup, test_jwt_config, upload_dirents,
 };
+
+fn ensure_test_provider() {
+    let mut provider = default_provider_mut();
+    provider.models.insert(
+        "openai/*".into(),
+        LangModelProvider::openai("fake-key-for-test".into()),
+    );
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -34,6 +47,8 @@ async fn make_state() -> Arc<AppState> {
 
 /// Two sessions must each get their own sandbox: a file written in session 1
 /// must not be readable in session 2.
+///
+/// Skips gracefully if the microsandbox (Docker) is unavailable.
 #[tokio::test]
 async fn two_sessions_get_isolated_sandboxes() {
     dotenvy::dotenv().ok();
@@ -46,10 +61,34 @@ async fn two_sessions_get_isolated_sandboxes() {
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
     let project_slug = project["slug"].as_str().unwrap();
+    let project_id = uuid::Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
 
     let id1 = post_session_authed(&app, &token, project_slug).await;
     let id2 = post_session_authed(&app, &token, project_slug).await;
     assert_ne!(id1, id2, "two sessions must have different ids");
+
+    // POST /sessions only writes a DB record; agents are built lazily on first
+    // message.  Build them explicitly here so we can access their sandboxed
+    // RunEnv without sending a real LLM message.
+    // Skip gracefully if the microsandbox (Docker) is unavailable.
+    let agent1 = match agent_k_backend::handlers::build_session_agent(&state, project_id, id1).await
+    {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("skipping: microsandbox unavailable: {e}");
+            return;
+        }
+    };
+    let agent2 = match agent_k_backend::handlers::build_session_agent(&state, project_id, id2).await
+    {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("skipping: microsandbox unavailable: {e}");
+            return;
+        }
+    };
+    state.insert_agent(id1, agent1);
+    state.insert_agent(id2, agent2);
 
     let (re1, re2) = {
         let a1 = state.get_agent(&id1).expect("session 1 not found");
@@ -151,11 +190,12 @@ async fn agent_can_read_shared_files_from_shared_data() {
     let token = login(&app, &username, "Password123!").await;
     let project = get_personal_project(&app, &token).await;
     let project_slug = project["slug"].as_str().unwrap();
+    let project_id = project["id"].as_str().unwrap();
 
     upload_dirents(
         &app,
         &token,
-        project_slug,
+        project_id,
         &[("context.txt", b"SENTINEL_UPLOAD_OK")],
     )
     .await;
@@ -291,4 +331,52 @@ async fn agent_writes_and_reads_file_via_bash_streaming() {
     drop(agent);
 
     delete_session(&app, id, &token).await;
+}
+
+// ── concurrency ───────────────────────────────────────────────────────────────
+
+/// While a session's agent is locked (simulating a run in progress), a second
+/// POST /sessions/{id}/messages request must return 423 Locked immediately.
+/// No LLM call is made — the test inserts a fake agent and holds its mutex.
+#[tokio::test]
+async fn concurrent_send_returns_423() {
+    dotenvy::dotenv().ok();
+    ensure_test_provider();
+
+    let (app, repo, state) = common::make_app_repo_state().await;
+
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    let user_info = signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = get_personal_project(&app, &token).await;
+    let project_id = uuid::Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+    let user_id = uuid::Uuid::parse_str(user_info["id"].as_str().unwrap()).unwrap();
+
+    let session = repo.create_session(project_id, user_id).await.unwrap();
+
+    let agent = AgentBuilder::new("openai/gpt-4o-mini")
+        .build()
+        .expect("AgentBuilder::build() must succeed with a registered provider");
+    state.insert_agent(session.id, agent);
+
+    // Hold the agent lock — simulates an in-progress run.
+    let _guard = state
+        .get_agent(&session.id)
+        .expect("agent must exist after insert")
+        .try_lock_owned()
+        .expect("freshly inserted agent must not be locked");
+
+    let (status, _) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{}/messages", session.id),
+        &token,
+        Some(serde_json::json!({ "content": "hello" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::LOCKED,
+        "POST /messages while agent is locked must return 423"
+    );
 }

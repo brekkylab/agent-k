@@ -8,6 +8,7 @@ import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 import { createProject, listProjects } from '@/api/projects';
 import { ApiError } from '@/api/client';
 import { Icon } from '@/components/Icon';
@@ -18,22 +19,36 @@ interface NewProjectDialogProps {
   onClose: () => void;
 }
 
-function validate(raw: string, existing: string[]): string | null {
-  const name = raw.trim();
-  if (name.length === 0) return null;
-  if (name.length > 100) return '프로젝트 이름은 100자 이하로 입력해 주세요.';
-  if (existing.some((e) => e.toLowerCase() === name.toLowerCase())) {
-    return `"${name}" 이름의 프로젝트가 이미 있어요.`;
-  }
-  return null;
-}
-
 export function NewProjectDialog({ existingNames, onClose }: NewProjectDialogProps) {
+  const { t } = useTranslation('dialogs');
+  const { t: tCommon } = useTranslation('common');
+
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  function validate(raw: string, existing: string[]): string | null {
+    const value = raw.trim();
+    if (value.length === 0) return null;
+    if (value.length > 100) return t('new_project.validation.too_long');
+    if (existing.some((e) => e.toLowerCase() === value.toLowerCase())) {
+      return t('new_project.validation.duplicate', { name: value });
+    }
+    return null;
+  }
+
+  function messageOf(err: unknown): string {
+    if (err instanceof ApiError) {
+      if (err.status === 401) return t('new_project.errors.session_expired');
+      if (err.status === 409) return t('new_project.errors.name_taken');
+      if (err.status === 422 || err.status === 400) return t('new_project.errors.invalid');
+      return `${err.status} — ${err.message}`;
+    }
+    if (err instanceof Error) return err.message;
+    return t('new_project.errors.generic');
+  }
 
   const mutation = useMutation({
     mutationFn: () => createProject({
@@ -86,20 +101,20 @@ export function NewProjectDialog({ existingNames, onClose }: NewProjectDialogPro
       }}
     >
       <form className="cw-dialog" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-        <button type="button" className="cw-close" onClick={onClose} disabled={pending} aria-label="close">
+        <button type="button" className="cw-close" onClick={onClose} disabled={pending} aria-label={tCommon('actions.close')}>
           <Icon name="x" />
         </button>
-        <h2 style={{ margin: '0 0 6px', fontSize: 18, letterSpacing: '-0.015em' }}>새 프로젝트</h2>
+        <h2 style={{ margin: '0 0 6px', fontSize: 18, letterSpacing: '-0.015em' }}>{t('new_project.title')}</h2>
         <p style={{ color: 'var(--cw-ink-3)', margin: '0 0 16px', fontSize: 13, lineHeight: 1.55 }}>
-          새 워크스페이스를 만듭니다. 생성 후 자동으로 이동합니다.
+          {t('new_project.description')}
         </p>
         <label className="cw-field">
-          <span>이름</span>
+          <span>{t('new_project.name_label')}</span>
           <input
             autoFocus
             value={name}
             onChange={(e) => { setName(e.target.value); if (submitError) setSubmitError(null); }}
-            placeholder="예: Quarterly Planning"
+            placeholder={t('new_project.name_placeholder')}
             disabled={pending}
             aria-invalid={submitError !== null}
             aria-describedby={submitError ? 'cw-new-project-error' : undefined}
@@ -107,11 +122,11 @@ export function NewProjectDialog({ existingNames, onClose }: NewProjectDialogPro
           />
         </label>
         <label className="cw-field">
-          <span>설명 <span style={{ color: 'var(--cw-ink-4)', fontWeight: 400 }}>(선택)</span></span>
+          <span>{t('new_project.description_label')} <span style={{ color: 'var(--cw-ink-4)', fontWeight: 400 }}>{t('new_project.optional')}</span></span>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="이 프로젝트는 어떤 작업인가요?"
+            placeholder={t('new_project.description_placeholder')}
             disabled={pending}
             rows={3}
             style={{ resize: 'vertical', minHeight: 72, fontFamily: 'inherit' }}
@@ -123,9 +138,9 @@ export function NewProjectDialog({ existingNames, onClose }: NewProjectDialogPro
           </div>
         )}
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
-          <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>취소</button>
+          <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>{tCommon('actions.cancel')}</button>
           <button type="submit" className="cw-btn-primary" disabled={submitDisabled}>
-            {pending ? '생성 중…' : '만들기'}
+            {pending ? t('new_project.submitting') : t('new_project.submit')}
           </button>
         </div>
       </form>
@@ -150,15 +165,4 @@ export function useNewProjectDialog(): { open: () => void; dialog: ReactNode } {
     />
   ) : null;
   return { open, dialog };
-}
-
-function messageOf(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 401) return '로그인이 만료되었습니다. 다시 로그인해 주세요.';
-    if (err.status === 409) return '같은 이름의 프로젝트가 이미 있어요.';
-    if (err.status === 422 || err.status === 400) return '입력값을 확인해 주세요.';
-    return `${err.status} — ${err.message}`;
-  }
-  if (err instanceof Error) return err.message;
-  return '프로젝트 생성에 실패했습니다.';
 }

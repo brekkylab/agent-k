@@ -1,4 +1,4 @@
-import { ApiError, getBaseUrl, getToken, notifyUnauthorized, request } from './client';
+import { ApiError, BASE_URL, getToken, notifyUnauthorized, request } from './client';
 import type { BackendDirent, BackendDirentBatchOp, BackendDirentBatchResult } from './backend-types';
 import { toFileAsset } from './transformers';
 import type { FileAsset } from '@/domain/types';
@@ -24,6 +24,30 @@ export function stripScopePrefix(s: DirentScope, path: string): string {
   if (path === root) return '';
   if (path.startsWith(root + '/')) return path.slice(root.length + 1);
   return path;
+}
+
+/** Parse a global dirent path into its scope and scope-relative path.
+ *  Returns null if the path does not match a known scope pattern. */
+export function parseGlobalPath(path: string): { scope: DirentScope; relativePath: string } | null {
+  // projects/{pid}/sessions/{sid}/inputs/{...}
+  const inputsMatch = path.match(/^projects\/([^/]+)\/sessions\/([^/]+)\/inputs\/(.+)$/);
+  if (inputsMatch) {
+    const [, projectId, sessionId, relativePath] = inputsMatch as [string, string, string, string];
+    return { scope: { kind: 'inputs', projectId, sessionId }, relativePath };
+  }
+  // projects/{pid}/sessions/{sid}/artifacts/{...}
+  const artifactsMatch = path.match(/^projects\/([^/]+)\/sessions\/([^/]+)\/artifacts\/(.+)$/);
+  if (artifactsMatch) {
+    const [, projectId, sessionId, relativePath] = artifactsMatch as [string, string, string, string];
+    return { scope: { kind: 'artifacts', projectId, sessionId }, relativePath };
+  }
+  // projects/{pid}/shared/{...}
+  const sharedMatch = path.match(/^projects\/([^/]+)\/shared\/(.+)$/);
+  if (sharedMatch) {
+    const [, projectId, relativePath] = sharedMatch as [string, string, string];
+    return { scope: { kind: 'shared', projectId }, relativePath };
+  }
+  return null;
 }
 
 function encodePath(path: string): string {
@@ -138,7 +162,7 @@ export async function downloadFileByGlobalPath(globalPath: string): Promise<void
 
 /** Fetch a file by its full global path and return the blob (for thumbnails etc.). */
 export async function fetchFileBlob(globalPath: string): Promise<Blob> {
-  const url = `${getBaseUrl()}/dirents/${encodePath(globalPath)}`;
+  const url = `${BASE_URL}/dirents/${encodePath(globalPath)}`;
   const headers = new Headers();
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);

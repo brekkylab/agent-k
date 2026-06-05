@@ -29,6 +29,7 @@ pub async fn signup(
             role: Role::User,
             display_name: payload.display_name,
             is_active: true,
+            preferred_language: "en".to_string(),
         })
         .await
         .map_err(|e| match e {
