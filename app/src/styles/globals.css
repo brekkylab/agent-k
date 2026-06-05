@@ -61,7 +61,11 @@ body.is-resizing-sidebar .cw-app-shell { transition: none; }
   height: 100vh; height: 100dvh;
   background: var(--cw-bg-subtle);
   border-right: 1px solid var(--cw-border);
-  padding: 14px 10px 10px;
+  /* asymmetric padding: the scrollbar gutter already provides visual breathing
+     room on the right, so we cut padding-right to 4px to tighten the gap
+     between session text and the sidebar's right edge. Left padding stays at
+     10px for balance with the brand mark and section labels. */
+  padding: 14px 4px 10px 10px;
   display: flex; flex-direction: column; gap: 2px;
   overflow: hidden;
   z-index: 10;
@@ -206,15 +210,35 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-projects-list[data-expanded="false"] .cw-nav-row:not(.is-active),
 .cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread):not(.is-streaming) { display: none; }
 
-/* Quiet scrollbar — transparent by default. Pointer hover snaps to a faint tone
-   instantly. Focus is intentionally NOT a trigger so clicking a row and leaving
-   the area hides the scrollbar even though keyboard focus remains. */
-.cw-scroll-quiet { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-.cw-scroll-quiet:hover { scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 40%, transparent) transparent; }
-.cw-scroll-quiet::-webkit-scrollbar { width: 8px; height: 8px; }
+/* Quiet scrollbar — ChatGPT-style. A faint thumb is always visible so the
+   scrollable signal never disappears, and brightens to a near-default tone
+   when the user hovers the scroll area.
+   `scrollbar-width: thin` is critical here: without it macOS Chrome reserves
+   an OS-default gutter (~15px) regardless of `::-webkit-scrollbar { width }`
+   when the system pref is "Show scroll bars: Always". `thin` cuts the gutter
+   in half to ~7-8px — the floor we can hit purely in CSS. Going narrower
+   requires either OS-level overlay scrollbars or a custom scroller. */
+.cw-scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 20%, transparent) transparent;
+  transition: scrollbar-color 160ms ease;
+}
+.cw-scroll-quiet:hover {
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 55%, transparent) transparent;
+}
+/* WebKit fallback for older Chromium (pre-121) and Safari, where the
+   pseudo-element controls width too. Same color steps as the standard
+   `scrollbar-color` above for visual parity. */
+.cw-scroll-quiet::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
 .cw-scroll-quiet::-webkit-scrollbar-track { background: transparent; }
-.cw-scroll-quiet::-webkit-scrollbar-thumb { background-color: transparent; border-radius: 4px; }
-.cw-scroll-quiet:hover::-webkit-scrollbar-thumb { background-color: color-mix(in oklch, var(--cw-fg-3) 40%, transparent); }
+.cw-scroll-quiet::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--cw-fg-3) 20%, transparent);
+  border-radius: 3px;
+  transition: background-color 160ms ease;
+}
+.cw-scroll-quiet:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--cw-fg-3) 55%, transparent);
+}
 
 .cw-brand-lockup { display: flex; align-items: center; gap: 9px; border: 0; background: transparent; padding: 6px 8px 18px; border-radius: var(--cw-radius-md); min-width: 0; }
 .cw-brand-lockup:hover { background: var(--cw-bg-muted); }
@@ -296,7 +320,15 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-chat-head { padding: 34px 28px 18px; border-bottom: 1px solid var(--cw-border); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cw-chat-head p { display: flex; align-items: center; gap: 7px; color: var(--cw-fg-3); margin: 14px 0 0; }
 .cw-session-head-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.cw-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
+/* Two-layer chat scroll: `.cw-messages-scroll` is the actual scroller and
+   spans the full chat-surface width, so the scrollbar lives at the chat
+   panel's rightmost edge (just before the side panel) regardless of how
+   the inner content is sized. `.cw-messages` keeps the 860px max-width and
+   auto-margin centering, but no longer owns the scrolling itself — so on
+   wide screens the bubble column can stay narrow without dragging the
+   scrollbar inward with it. */
+.cw-messages-scroll { flex: 1; min-height: 0; overflow-y: auto; width: 100%; }
+.cw-messages { padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
 .cw-message-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .cw-message-meta span { border: 1px solid var(--cw-border); color: var(--cw-fg-3); border-radius: var(--cw-radius-sm); padding: 1px 5px; font-size: 10px; }
 .cw-message-meta time { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
@@ -592,7 +624,19 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-nav-row .cw-pocket,
 .cw-session-row .cw-pocket { width: 18px; height: 18px; border-radius: 5px; border: 0; }
 .cw-session-row .cw-pocket { width: 16px; height: 16px; border-radius: 4px; }
-.cw-session-row .cw-unread-badge { min-width: 32px; padding: 0 10px; justify-content: center; }
+/* Sidebar-context unread badge: same 16px height as IconPocket so the session
+   row baseline doesn't shift. Width grows from a 16×16 circle (1 digit) to a
+   pill (2 digits, or "99+"). 100+ collapses to "99+" in JSX. */
+.cw-session-row .cw-unread-badge.cw-unread-badge-compact {
+  height: 16px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--cw-radius-full);
+  justify-content: center;
+  font-size: 9.5px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
 .cw-nav-home { background: color-mix(in oklch, var(--cw-cozy-clay) 16%, var(--cw-paper)); color: var(--cw-cozy-clay); }
 .cw-nav-files { background: color-mix(in oklch, var(--cw-cozy-honey) 22%, var(--cw-paper)); color: oklch(0.50 0.13 75); }
 .cw-nav-skills, .cw-nav-schedule { background: color-mix(in oklch, var(--cw-cozy-mustard) 24%, var(--cw-paper)); color: oklch(0.50 0.11 90); }
@@ -1178,7 +1222,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   border: 1px solid var(--cw-border);
   border-radius: 24px;
   background: var(--cw-paper);
-  transition: border-color 120ms, box-shadow 120ms;
+  transition: border-color 120ms, box-shadow 120ms, border-radius 200ms ease, padding 200ms ease;
   /* Shared name so navigating home <-> session morphs the box (see route viewTransition). */
   view-transition-name: cw-composer;
 }
@@ -1186,7 +1230,27 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   border-color: var(--cw-border-hover);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--cw-accent), transparent 86%);
 }
-.cw-composer input {
+.cw-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+/* Expanded — long-form layout. The textarea sits on its own row spanning the
+   full width; the action buttons drop below, right-aligned. Triggered the
+   moment text in compact mode would wrap to a second row, so users get the
+   home-composer-like writing surface before the buttons can crowd the line. */
+.cw-composer-box[data-expanded="true"] {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 10px 14px 8px;
+  border-radius: 18px;
+}
+.cw-composer-box[data-expanded="true"] .cw-composer-actions {
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+.cw-composer textarea {
   flex: 1;
   min-width: 0;
   min-height: 24px;
@@ -1201,6 +1265,14 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-size: 14px;
   line-height: 1.5;
   color: var(--cw-fg-1);
+}
+.cw-composer-box[data-expanded="true"] textarea {
+  width: 100%;
+  padding: 2px 0;
+  /* In column flex the container has no explicit height, so flex:1 collapses
+     the textarea to its min-height. Let the auto-grow effect's inline height
+     drive sizing instead. */
+  flex: 0 0 auto;
 }
 .cw-home-composer {
   position: static;
@@ -1274,7 +1346,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   ::view-transition-new(cw-composer) { animation: none; }
 }
 .cw-home-composer-input::placeholder,
-.cw-composer input::placeholder { color: var(--cw-fg-4); }
+.cw-composer textarea::placeholder { color: var(--cw-fg-4); }
 .cw-send-button {
   width: 34px;
   height: 34px;

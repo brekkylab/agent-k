@@ -69,6 +69,11 @@ function SessionPage() {
     queryKey: ['messages', sessionId],
     queryFn: () => listMessages(sessionId),
     enabled: Boolean(session.data && currentUser),
+    // Refetch on every entry so the backend's mark-read side effect runs, which
+    // clears the sidebar unread badge via the dataUpdatedAt effect below. Without
+    // this, the QueryClient's default 30s staleTime kept re-entries within that
+    // window from triggering mark-read and the badge stayed visible.
+    staleTime: 0,
   });
 
   // Agent chip — transient preview state from home. Persist it after router state
@@ -92,6 +97,7 @@ function SessionPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   // WS 구동: seq 순서로 정렬된 outputs 맵 (catch-up + live 멱등 병합용)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
@@ -113,6 +119,12 @@ function SessionPage() {
   const doneRunIdsRef = useRef<Set<string>>(new Set());
 
   const [composerText, setComposerText] = useState('');
+  // Composer layout — false = compact pill (textarea + buttons inline),
+  // true = stacked layout (textarea on top, actions row below). We flip to
+  // expanded the moment text would wrap to a second row in compact mode and
+  // collapse back only when the field empties, so partial edits don't
+  // oscillate between layouts.
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
@@ -164,6 +176,39 @@ function SessionPage() {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [allMessages.length, streaming]);
+
+  // Auto-grow the composer textarea + drive the compact↔expanded layout flip.
+  // Reset to auto first so deleting lines shrinks the box; overflow stays hidden
+  // until we hit the 200px cap to avoid a phantom scrollbar from sub-pixel
+  // rounding.
+  //
+  // Layout trigger:
+  //   - empty text  → compact (pill, inline actions)
+  //   - while compact, if scrollHeight indicates the text just wrapped to a
+  //     second row in the narrow inline-width context, flip to expanded.
+  //   - once expanded, stay until the field empties (don't toggle back while
+  //     the user is mid-edit; ChatGPT-style stability).
+  useEffect(() => {
+    const ta = composerRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const next = Math.min(ta.scrollHeight, 200);
+    ta.style.height = `${next}px`;
+    ta.style.overflowY = ta.scrollHeight > 200 ? 'auto' : 'hidden';
+
+    if (composerText.length === 0) {
+      setComposerExpanded(false);
+    } else if (!composerExpanded) {
+      const cs = getComputedStyle(ta);
+      const padTop = parseFloat(cs.paddingTop) || 0;
+      const padBot = parseFloat(cs.paddingBottom) || 0;
+      const lineHeight = parseFloat(cs.lineHeight) || 24;
+      // +4px slack so sub-pixel rounding doesn't flip on a single-line value.
+      if (ta.scrollHeight > lineHeight + padTop + padBot + 4) {
+        setComposerExpanded(true);
+      }
+    }
+  }, [composerText, composerExpanded]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -256,6 +301,15 @@ function SessionPage() {
     }
     // 성공 시: WS 이벤트(agent_run_done)가 completion을 처리함. finally 블록 없음.
   }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments]);
+
+  // Enter sends; Shift+Enter inserts a newline. isComposing guards Korean/IME
+  // composition so confirming a character with Enter doesn't fire a send.
+  const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void send();
+    }
+  }, [send]);
 
   const duplicateMutation = useDuplicateSession(projectSlug);
 
@@ -563,7 +617,8 @@ function SessionPage() {
           </div>
         </div>
 
-        <div className="cw-messages" ref={scrollContainerRef}>
+        <div className="cw-messages-scroll" ref={scrollContainerRef}>
+        <div className="cw-messages">
           {allMessages.map((msg) => (
             <MessageBubble
               key={msg.id}
@@ -584,6 +639,7 @@ function SessionPage() {
           )}
           <div ref={messagesEndRef} />
         </div>
+        </div>
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           {pendingAttachments.length > 0 && (
@@ -599,26 +655,31 @@ function SessionPage() {
               ))}
             </div>
           )}
-          <div className="cw-composer-box">
-            <input
+          <div className="cw-composer-box" data-expanded={composerExpanded ? 'true' : 'false'}>
+            <textarea
+              ref={composerRef}
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
+              onKeyDown={handleComposerKeyDown}
               placeholder={t('ui.composer_placeholder')}
               disabled={streaming}
+              rows={1}
             />
-            <button
-              type="button"
-              className="cw-attach-btn"
-              aria-label={t('ui.attach_file')}
-              onClick={() => fileInputRef.current?.click()}
-              disabled={streaming}
-              style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
-            >
-              <Icon name="paperclip" size={13} />
-            </button>
-            <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
-              <Icon name="send" size={12} />
-            </button>
+            <div className="cw-composer-actions">
+              <button
+                type="button"
+                className="cw-attach-btn"
+                aria-label={t('ui.attach_file')}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={streaming}
+                style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
+              >
+                <Icon name="paperclip" size={13} />
+              </button>
+              <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
+                <Icon name="send" size={12} />
+              </button>
+            </div>
           </div>
           <input
             ref={fileInputRef}

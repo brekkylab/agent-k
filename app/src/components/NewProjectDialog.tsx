@@ -4,7 +4,7 @@
 // On success we navigate straight into the created project so the user can
 // start working immediately (matches Slack/Notion/Linear post-create UX).
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { createProject, listProjects } from '@/api/projects';
 import { ApiError } from '@/api/client';
 import { Icon } from '@/components/Icon';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface NewProjectDialogProps {
   existingNames: string[];
@@ -68,11 +69,7 @@ export function NewProjectDialog({ existingNames, onClose }: NewProjectDialogPro
   const trimmed = name.trim();
   const submitDisabled = trimmed.length === 0 || pending;
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape' && !pending) onClose(); }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, pending]);
+  useDialogEscape(onClose, { disabled: pending });
 
   function submit() {
     if (submitDisabled) return;

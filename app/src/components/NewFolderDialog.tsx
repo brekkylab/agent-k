@@ -2,9 +2,10 @@
 // Replaces the previous window.prompt() with an in-design dialog that
 // surfaces duplicate-name and invalid-character validation inline.
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface NewFolderDialogProps {
   existingNames: string[];
@@ -24,6 +25,8 @@ export function NewFolderDialog({ existingNames, pending, onConfirm, onClose }: 
   const trimmed = name.trim();
   const submitDisabled = trimmed.length === 0 || pending;
 
+  useDialogEscape(onClose, { disabled: pending });
+
   function validate(raw: string, existing: string[]): string | null {
     const value = raw.trim();
     if (value.length === 0) return null;
@@ -35,12 +38,6 @@ export function NewFolderDialog({ existingNames, pending, onConfirm, onClose }: 
     }
     return null;
   }
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape' && !pending) onClose(); }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, pending]);
 
   function handleChange(value: string) {
     setName(value);

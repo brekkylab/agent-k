@@ -503,8 +503,12 @@ export function Sidebar() {
                         <span /><span /><span />
                       </span>
                     ) : session.unreadCount > 0 ? (
-                      <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>
-                        <span className="n">{session.unreadCount}</span>
+                      <span
+                        className="cw-unread-badge cw-unread-badge-compact"
+                        aria-label={`unread ${session.unreadCount}`}
+                        title={`${session.unreadCount} unread`}
+                      >
+                        <span className="n">{session.unreadCount > 99 ? '99+' : session.unreadCount}</span>
                       </span>
                     ) : (
                       <IconPocket tone="trust" icon="message-square" compact />

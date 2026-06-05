@@ -3,12 +3,13 @@
 // expose for regular owners — so we follow Slack/Discord's username-entry
 // pattern instead. Backend resolves username → user_id and 404s if unknown.
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { addMember } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { ApiError } from '@/api/client';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface InviteDialogProps {
   projectRef: string;
@@ -24,13 +25,6 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
   const [username, setUsername] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape' && !mutation.isPending) onClose(); }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose]);
-
   function messageOf(err: unknown): string {
     if (err instanceof ApiError) {
       if (err.status === 404) return t('invite.errors.not_found');
@@ -41,7 +35,6 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
     if (err instanceof Error) return err.message;
     return t('invite.errors.generic');
   }
-
   const mutation = useMutation({
     mutationFn: (name: string) => addMember(projectRef, name),
     onSuccess: async () => {
@@ -65,6 +58,7 @@ export function InviteDialog({ projectRef, onClose }: InviteDialogProps) {
   }
 
   const pending = mutation.isPending;
+  useDialogEscape(onClose, { disabled: pending });
 
   return (
     <div className="cw-dialog-backdrop" role="dialog" aria-modal="true" onClick={(e) => { if (e.target === e.currentTarget && !pending) onClose(); }}>
