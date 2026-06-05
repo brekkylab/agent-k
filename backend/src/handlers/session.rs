@@ -959,7 +959,7 @@ pub async fn send_message(
                             synthetic_tool_msgs.push(
                                 Message::new(Role::Tool).with_id(call_id).with_contents([
                                     Part::text(
-                                        "[사용자가 응답 생성을 중지하여 이 작업이 중단되었습니다]",
+                                        "[Interrupted: the user stopped response generation before this tool call completed]",
                                     ),
                                 ]),
                             );

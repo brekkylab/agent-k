@@ -326,10 +326,10 @@ function SessionPage() {
       await stopRun(sessionId, ownedRunId);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'stop failed';
-      showToast(`중지 실패: ${msg}`);
+      showToast(t('toast.stop_failed', { message: msg }));
       setStopping(false);
     }
-  }, [ownedRunId, sessionId, stopping, showToast]);
+  }, [ownedRunId, sessionId, stopping, showToast, t]);
 
   const duplicateMutation = useDuplicateSession(projectSlug);
 
@@ -524,7 +524,7 @@ function SessionPage() {
         }
 
         if (event.stopped) {
-          showToast('응답 생성이 중지되었습니다');
+          showToast(t('toast.run_stopped'));
         }
 
         // 완료: history refetch → liveMessages clear → streaming stop → invalidate
@@ -710,8 +710,8 @@ function SessionPage() {
                 <button
                   type="button"
                   className="cw-send-button"
-                  aria-label="응답 생성 중지"
-                  title={stopping ? '중지 중...' : '응답 생성 중지'}
+                  aria-label={t('ui.stop_generation')}
+                  title={stopping ? t('ui.stopping') : t('ui.stop_generation')}
                   onClick={() => void stopGeneration()}
                   disabled={stopping}
                 >
