@@ -3,16 +3,15 @@
 Usage (inside the sandbox):
     import sys
     sys.path.insert(0, "/workspace/skills/pptx/script")
-    from verify_pptx import verify
+    from verify_pptx import verify, summarize
 
     issues = verify("/workspace/artifacts/deck.pptx")
-    # issues is a dict with five keys (palette, fonts, sizes, overflow,
-    # page_numbers); each value is a list of problems or a summary.
-    # An empty list / "ok" value means the check passed.
+    print(summarize(issues))
 
-Run all checks after building and re-fix any non-empty result before
-shipping. The checks are heuristic — they catch the most-violated
-rules from SKILL.md, not every nuance.
+`verify()` returns a dict with seven check keys: `palette`, `fonts`,
+`sizes`, `overflow`, `page_numbers`, `overlap`, `chart_lang`. An empty
+list per key = passed. Heuristic: catches the most-violated SKILL.md
+rules, not every nuance.
 """
 
 from __future__ import annotations
@@ -135,15 +134,12 @@ def _collect_fills(prs) -> list[str]:
 def check_palette(prs) -> dict[str, Any]:
     """Detect which gallery palette is in use, and report off-gallery colors.
 
-    Coverage is *frequency-weighted* — each fill occurrence counts. A
-    30-slide deck with one stray hex on one slide stays near 1.0, instead
-    of crashing to a low fraction the way a set-based score would.
+    Coverage is *frequency-weighted* — each fill occurrence counts, so one
+    stray hex on one slide of a 30-slide deck stays near 1.0 (a set-based
+    score would crash). Compliant = coverage >= 0.85 against one palette.
 
     Returns {"matched": <name>|"custom"|"none", "coverage": float,
               "off_gallery": [hex, ...]}.
-    A deck is "compliant" if coverage >= 0.85 against one gallery palette.
-    Off-gallery colors are returned so the model can decide whether they're
-    intentional accents or accidental drift.
     """
     from collections import Counter
 
@@ -199,21 +195,13 @@ def check_fonts(prs) -> list[tuple[int, str]]:
 def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
     """Flag slides that mix too many tier / out-of-tier sizes.
 
-    The scale tiers (rounded bounds, roughly ±30% around the canonical pt):
-        Caption  ~11pt   (8-15)
-        Body     ~18pt   (16-24)
-        Title    ~32pt   (25-44)
-        Display  ~54pt   (45-90)
-    Multiple distinct point sizes inside the SAME tier (e.g. 18 and 22,
-    both Body) collapse to one — they're not the failure mode the rule
-    targets. Out-of-tier sizes (>90pt dramatic beat, or random sizes
-    like 17 / 23) each count individually.
+    Tier bounds (~±30% around canonical pt): caption 8-15, body 16-24,
+    title 25-44, display 45-90. Sizes in the same tier collapse to one;
+    out-of-tier sizes count individually. Flag at 5+ distinct classes
+    per slide — with only four tiers, that requires all four plus a
+    stray size.
 
-    Threshold: 5+ distinct (tier ∪ out-of-tier) classes per slide → flag.
-    With only four tiers, tripping the threshold requires all four tiers
-    plus at least one stray size — a clear discipline violation.
-
-    Returns list of (slide_idx, sizes_found_on_slide) where the count is 5+.
+    Returns list of (slide_idx, sizes_found_on_slide).
     """
 
     def tier(pt: int) -> str | None:
@@ -256,15 +244,11 @@ def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
 def check_overflow(prs) -> list[tuple[int, str, str]]:
     """Estimate text clipping in fixed-size text boxes.
 
-    A fixed-size text box overflows when the estimated rendered height
-    exceeds the box's drawable height (box minus internal margins).
-    Korean glyphs count as 2 ASCII widths.
-
-    **Autosize boxes are skipped.** Predicting whether their `SHAPE_TO_FIT_TEXT`
-    growth will overlap a neighbor requires geometric analysis we don't do
-    here, and the previous heuristic produced too many false positives
-    (most flagged grows had empty space below and never caused visible
-    overlap). Visual PNG inspection (Step 3.B) catches the real overlaps.
+    A box overflows when the estimated rendered height exceeds the
+    drawable height (box minus internal margins). Korean glyphs count
+    as 2 ASCII widths. Autosize boxes are skipped — whether the grow
+    overlaps a neighbor is a geometric question we leave to visual
+    PNG inspection (Step 3.B).
 
     Returns list of (slide_idx, snippet, reason).
     """
@@ -282,18 +266,15 @@ def check_overflow(prs) -> list[tuple[int, str, str]]:
                 continue
             tf = shape.text_frame
 
-            # Skip autosize boxes — they grow rather than clip; whether the
-            # grow actually overlaps a neighbor is a geometry question we
-            # leave to visual inspection.
+            # Autosize boxes grow rather than clip — skip (see docstring).
             try:
                 if tf.auto_size and "SHAPE_TO_FIT_TEXT" in str(tf.auto_size):
                     continue
             except AttributeError:
                 pass
 
-            # Subtract internal margins so chars-per-line / available height
-            # reflect the *drawable* area. python-pptx margins are EMU;
-            # default L/R is 0.1" each, T/B 0.05".
+            # Subtract internal margins so the estimate reflects drawable
+            # area. python-pptx default: L/R 0.1", T/B 0.05".
             try:
                 ml = (tf.margin_left or 0) / 914400
                 mr = (tf.margin_right or 0) / 914400
@@ -343,10 +324,10 @@ def check_overflow(prs) -> list[tuple[int, str, str]]:
 
 
 def check_page_numbers(prs) -> list[tuple[int, str]]:
-    """Title / divider / closing slides must not carry a page number.
+    """Title (slide 1) and closing (slide N) must not carry a page number.
 
-    Heuristic for divider: full-bleed Primary background (slide that's almost
-    entirely one dark colored shape). Title = slide 1. Closing = last slide.
+    Divider detection is deferred to the model — too easy to mis-classify
+    a content slide as a divider from XML alone.
 
     Returns list of (slide_idx, reason).
     """

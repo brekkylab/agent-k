@@ -25,7 +25,10 @@ Two non-negotiable rules:
   the `read` tool — both required (Process §3)
 - Charts: native `add_chart()` (editable in PowerPoint). Set EA
   typeface on every axis / legend / data label AND explicit fill
-  color on every series (Rendering notes — Charts)
+  color on every series AND call `patch_chart_lang(chart)` after
+  every `add_chart()` — python-pptx omits `<a:endParaRPr lang>` on
+  doughnut/pie, which strict PowerPoint strips (Rendering notes —
+  Charts)
 - No `MSO_AUTO_SIZE` on titles / KPI / tags / captions (Anti-patterns)
 - Only `.pptx` surfaces to `artifacts/` (Anti-patterns)
 
@@ -93,12 +96,9 @@ here, not in the content.
 ### 3. Verify the output renders correctly
 
 **Gate: do not surface the `.pptx` until BOTH (A) `verify()` returns
-all empty lists AND (B) you have rendered to PNG, read every slide,
-AND fixed every issue found in the checklist below. Reading alone
-is not enough — any flagged correctness or design-quality issue
-MUST be fixed (surgery or rework) before re-checking and surfacing.
-Step B is mandatory regardless of whether Step A flagged anything —
-they catch different failures.**
+all empty AND (B) every slide PNG has been `read`-inspected AND every
+flagged issue is fixed.** Step B is mandatory even if A is clean —
+the two catch different failures.
 
 **A. Run `verify_pptx.py`** — the skill ships a compliance checker:
 
@@ -110,18 +110,29 @@ issues = verify("/workspace/artifacts/deck.pptx")
 print(summarize(issues))
 ```
 
-It returns a dict with five checks: `palette` (gallery match + drift),
-`fonts` (missing East-Asian typeface), `sizes` (5+ scale sizes on a
-slide), `overflow` (boxes whose CJK-aware text estimate exceeds box
-height, including autosize-grow that may overlap neighbors), and
-`page_numbers` (title / closing carrying `n / N`). An empty list per
-key = passed. Use the *slide indices* in non-empty lists to target
-fixes.
+It returns a dict with seven checks:
 
-**Do not `read` or `cat` `verify_pptx.py`** unless you genuinely need
-to debug an unexpected exception from the helper. The function names
-and behaviour above are the full contract — reading the source file
-just burns context.
+- `palette` — gallery match + frequency-weighted drift
+- `fonts` — runs containing CJK with no East-Asian typeface set
+- `sizes` — 5+ distinct tier / out-of-tier sizes on one slide
+- `overflow` — *fixed-size* text boxes whose CJK-aware text estimate
+  exceeds the box's drawable height (autosize boxes are not checked
+  here — visual PNG inspection in Step 3.B catches their overlaps)
+- `page_numbers` — title slide (1) or closing slide (N) carrying an
+  `n / N`, `Page n`, or `n of N` string
+- `overlap` — shape-pair bboxes that collide visually (table / chart /
+  picture / large autoshape × text-box), with layered-design pairs
+  (text-on-card, vertically stacked) filtered out
+- `chart_lang` — chart XML missing `<a:endParaRPr lang>` (python-pptx
+  emits doughnut/pie without `lang`; strict PowerPoint strips the
+  chart and the slide opens blank)
+
+An empty list per key = passed. Use the *slide indices* in non-empty
+lists to target fixes.
+
+**Do not `read` or `cat` `verify_pptx.py`** — the seven checks above
+are the full contract. Only read the source if you hit an unexpected
+exception.
 
 **B. Visual confirmation** — `verify_pptx` is heuristic. After fixing
 its flagged issues, render to PDF + PNG and look. **The image is
@@ -397,11 +408,15 @@ whatever it has. For every CJK-containing run, set both Latin and
 EA typefaces in a helper. The same applies to *chart text
 elements* — see Charts section below.
 
-**`verify_pptx`'s `fonts` check accepts only the run-level
-`<a:rPr><a:ea typeface=...>` form.** `paragraph.font.name` or the
-theme `fontScheme` will be reported as missing. Walk every run and
-set both `<a:latin>` and `<a:ea>` typefaces explicitly — no
-paragraph- or theme-level shortcuts.
+**`verify_pptx`'s `fonts` check accepts either run-level
+`<a:rPr><a:ea typeface=...>` OR paragraph-level
+`<a:pPr><a:defRPr><a:ea typeface=...>` — but not the theme
+`fontScheme`, and not python-pptx's `paragraph.font.name` API
+(which only writes `<a:latin>`, never `<a:ea>`).** The simplest
+reliable approach is run-level: walk every run and set both
+`<a:latin>` and `<a:ea>` typefaces explicitly. Paragraph-defRPr is
+fine too, but you have to write the XML yourself; you can't just
+call `paragraph.font.name = 'Noto Sans CJK KR'`.
 
 `fonts-noto-cjk` ships in the sandbox image. Use the exact family
 name fontconfig registers (with the `CJK` infix): `'Noto Sans CJK
@@ -432,14 +447,10 @@ from pptx.util import Pt
 from pptx.dml.color import RGBColor
 
 def set_chart_text_font(font, typeface='Noto Sans CJK KR', size_pt=11):
-    """Set Latin + EA + CS typefaces on a chart font, with size.
-
-    `font._element` is already the `<a:rPr>` / `<a:defRPr>` element —
-    do NOT call `.get_or_add_rPr()` on it (chart fonts wrap
-    `CT_TextCharacterProperties` directly and have no child rPr).
-    """
+    """Set Latin + EA + CS typefaces on a chart font."""
     font.name = typeface
     font.size = Pt(size_pt)
+    # `font._element` IS the rPr/defRPr; don't call `.get_or_add_rPr()`.
     rPr = font._element
     for tag in ('latin', 'ea', 'cs'):
         el = rPr.find(qn(f'a:{tag}'))
@@ -562,8 +573,10 @@ Rules by element:
 - **Hero text** (Display, Number Cover, quote glyph) — text drives
   the box; size the box to the text.
 
-Both `verify_pptx` overflow checks (estimated and autosize-grow)
-must return empty before delivery.
+`verify_pptx`'s `overflow` check must return empty before delivery.
+Autosize-grow that overlaps a neighbor is left to visual PNG
+inspection (Step 3.B) — it's a geometric question `verify_pptx`
+deliberately doesn't try to answer.
 
 ### Other pitfalls
 Every shape inherits a default shadow on creation — set
@@ -645,6 +658,10 @@ layout every deck.
 - Native `add_chart()` without explicit `fill.fore_color.rgb` on
   every series — PowerPoint theme defaults (blue / orange / gray)
   leak through and break the deck palette
+- Doughnut / pie `add_chart()` without `patch_chart_lang(chart)` —
+  python-pptx emits `<a:endParaRPr/>` with no `lang`, strict
+  PowerPoint fires the recovery dialog and strips the chart, leaving
+  an apparently-blank slide
 - Multiple files in `artifacts/` — only the final `.pptx` belongs
   there. Chart PNGs, verify PDFs/PNGs, helper scripts, and
   `outline.md` all stay in the working directory.
