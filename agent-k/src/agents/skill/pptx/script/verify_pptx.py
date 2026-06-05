@@ -9,9 +9,9 @@ Usage (inside the sandbox):
     print(summarize(issues))
 
 `verify()` returns a dict with seven check keys: `palette`, `fonts`,
-`sizes`, `overflow`, `page_numbers`, `overlap`, `chart_lang`. An empty
-list per key = passed. Heuristic: catches the most-violated SKILL.md
-rules, not every nuance.
+`sizes`, `overflow`, `page_numbers`, `overlap`, `chart_strict`. An
+empty list per key = passed. Heuristic: catches the most-violated
+SKILL.md rules, not every nuance.
 """
 
 from __future__ import annotations
@@ -554,27 +554,35 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
     return issues
 
 
-def check_chart_lang(prs) -> list[tuple[int, str]]:
-    """Flag chart XML with `<a:endParaRPr>` missing the `lang` attribute.
+def check_chart_strict(prs) -> list[tuple[int, str, str]]:
+    """Flag chart XML that PowerPoint Mac strict-mode will reject.
 
-    python-pptx's chart templates are inconsistent: bar/line/scatter
-    emit `<a:endParaRPr lang="en-US"/>`, but doughnut/pie emit
-    `<a:endParaRPr/>` (no `lang`). Strict-mode PowerPoint rejects the
-    latter — the recovery dialog fires and the chart is stripped,
-    leaving an apparently-blank slide. Patch chart XML with
-    `patch_chart_lang()` (see SKILL.md Charts section) before saving.
+    Two known bits python-pptx (and per-slice-color helper code) leaves
+    out — Google Slides / LibreOffice / soffice ignore them, but
+    PowerPoint fires the recovery dialog and strips the chart,
+    leaving an apparently-blank slide:
 
-    Returns (slide_idx, chart_name).
+      1. `<a:endParaRPr>` missing `lang` (doughnut/pie templates).
+      2. `<c:dPt>` missing `<c:bubble3D>` (per-slice color setup).
+
+    Patch chart XML with `patch_chart_xml()` (see SKILL.md Charts
+    section) right after `add_chart()`.
+
+    Returns (slide_idx, chart_name, issue).
     """
-    issues: list[tuple[int, str]] = []
+    issues: list[tuple[int, str, str]] = []
     for idx, slide in enumerate(prs.slides, start=1):
         for sh in slide.shapes:
             if not getattr(sh, "has_chart", False):
                 continue
-            chart_xml = sh.chart._chartSpace
-            for ep in chart_xml.iter(qn("a:endParaRPr")):
+            cs = sh.chart._chartSpace
+            for ep in cs.iter(qn("a:endParaRPr")):
                 if ep.get("lang") is None:
-                    issues.append((idx, sh.name))
+                    issues.append((idx, sh.name, "endParaRPr missing lang"))
+                    break
+            for dPt in cs.iter(qn("c:dPt")):
+                if dPt.find(qn("c:bubble3D")) is None:
+                    issues.append((idx, sh.name, "dPt missing bubble3D"))
                     break
     return issues
 
@@ -597,7 +605,7 @@ def verify(pptx_path: str | Path) -> dict[str, Any]:
         "overflow": check_overflow(prs),
         "page_numbers": check_page_numbers(prs),
         "overlap": check_overlap(prs),
-        "chart_lang": check_chart_lang(prs),
+        "chart_strict": check_chart_strict(prs),
     }
 
 
@@ -618,9 +626,9 @@ def summarize(issues: dict[str, Any]) -> str:
         flags.append(f"{len(issues['page_numbers'])} page-number violations")
     if issues.get("overlap"):
         flags.append(f"{len(issues['overlap'])} shape overlaps")
-    if issues.get("chart_lang"):
+    if issues.get("chart_strict"):
         flags.append(
-            f"{len(issues['chart_lang'])} charts missing endParaRPr lang "
+            f"{len(issues['chart_strict'])} chart XML violations "
             "(strict PowerPoint strips them)"
         )
     if not flags:

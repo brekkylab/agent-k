@@ -25,10 +25,11 @@ Two non-negotiable rules:
   with the `read` tool — both required (Process §3)
 - Charts: native `add_chart()` (editable in PowerPoint). Set EA
   typeface on every axis / legend / data label AND explicit fill
-  color on every series AND call `patch_chart_lang(chart)` after
-  every `add_chart()` — python-pptx omits `<a:endParaRPr lang>` on
-  doughnut/pie, which strict PowerPoint strips (Rendering notes —
-  Charts)
+  color on every series AND call `patch_chart_xml(chart)` after
+  every `add_chart()` — patches the bits PowerPoint Mac strict-mode
+  rejects (doughnut/pie `endParaRPr lang`, per-slice-color `c:dPt`
+  `bubble3D`) and that other parsers silently ignore (Rendering
+  notes — Charts)
 - No `MSO_AUTO_SIZE` on titles / KPI / tags / captions (Anti-patterns)
 - Only `.pptx` surfaces to `artifacts/` (Anti-patterns)
 
@@ -127,9 +128,11 @@ It returns a dict with seven checks:
   table×table, picture×picture) are skipped as intentional side-by-
   side layout, and layered-design pairs (text-on-card, vertically
   stacked) are filtered out
-- `chart_lang` — chart XML missing `<a:endParaRPr lang>` (python-pptx
-  emits doughnut/pie without `lang`; strict PowerPoint strips the
-  chart and the slide opens blank)
+- `chart_strict` — chart XML that PowerPoint Mac strict-mode rejects
+  (`<a:endParaRPr>` missing `lang` on doughnut/pie, or `<c:dPt>`
+  missing `<c:bubble3D>` for per-slice colors). Other parsers ignore
+  both, so the failure is invisible until PowerPoint opens the deck
+  and strips the chart → apparently-blank slide.
 
 `palette` returns a dict (passed when `coverage >= 0.85` against a
 gallery match); the other six return lists (passed when empty). Use
@@ -476,24 +479,43 @@ for ser in chart.series:
         set_chart_text_font(ser.data_labels.font, size_pt=11)
 ```
 
-**2. Patch `endParaRPr lang` on every chart**
+**2. Patch chart XML for strict-mode PowerPoint**
 
-python-pptx's chart templates are inconsistent: bar/line/scatter emit
-`<a:endParaRPr lang="en-US"/>`, but **doughnut/pie emit
-`<a:endParaRPr/>` with no `lang`**. Strict-mode PowerPoint rejects
-the latter, fires the recovery dialog, and strips the entire chart —
-the slide opens blank. Patch every chart you create:
+python-pptx leaves two things out that PowerPoint Mac strict-mode
+rejects (Google Slides / LibreOffice / soffice ignore them, so the
+deck looks fine until you actually open it in PowerPoint and the
+recovery dialog strips the chart, leaving an apparently-blank slide):
+
+1. **`<a:endParaRPr>` missing `lang`** — bar/line/scatter templates
+   emit `<a:endParaRPr lang="en-US"/>`, but **doughnut/pie emit
+   `<a:endParaRPr/>` with no `lang`**.
+2. **`<c:dPt>` missing `<c:bubble3D>`** — when per-slice colors are
+   set via `c:dPt` (the recommended pattern for doughnut/pie), each
+   `<c:dPt>` needs `<c:bubble3D val="0"/>` between `<c:idx>` and
+   `<c:spPr>`. The ECMA schema marks it optional; PowerPoint Mac
+   does not.
+
+One helper handles both, idempotently:
 
 ```python
-def patch_chart_lang(chart, lang='en-US'):
-    """python-pptx omits `lang` on `<a:endParaRPr>` for doughnut/pie
-    charts, which strict PowerPoint treats as corruption. Walk the
-    chart XML and set `lang` on any endParaRPr missing it."""
-    for ep in chart._chartSpace.iter(qn('a:endParaRPr')):
+def patch_chart_xml(chart, lang='en-US'):
+    """Add the bits PowerPoint Mac strict-mode requires but
+    python-pptx (and per-slice-color code) leaves out. Idempotent —
+    call once per chart, right after `add_chart()`."""
+    cs = chart._chartSpace
+    for ep in cs.iter(qn('a:endParaRPr')):
         if ep.get('lang') is None:
             ep.set('lang', lang)
+    for dPt in cs.iter(qn('c:dPt')):
+        if dPt.find(qn('c:bubble3D')) is None:
+            b = OxmlElement('c:bubble3D'); b.set('val', '0')
+            idx_el = dPt.find(qn('c:idx'))
+            if idx_el is not None:
+                idx_el.addnext(b)
+            else:
+                dPt.insert(0, b)
 
-patch_chart_lang(chart)
+patch_chart_xml(chart)
 ```
 
 Call once per chart, right after `add_chart()`. Cheap and idempotent.
@@ -534,7 +556,7 @@ chart = slide.shapes.add_chart(
     Inches(chart_w), Inches(chart_h),
     data,
 ).chart
-# … then apply CJK font helper + patch_chart_lang + series colors above …
+# … then apply CJK font helper + patch_chart_xml + series colors above …
 ```
 
 **Supported chart types** — Column (vertical) and Bar (horizontal),
@@ -626,7 +648,7 @@ layout every deck.
   Rendering notes — Charts); series palette = Secondary, Accent,
   Primary in that order; **max 3 series** (4th → use a table). Set
   EA typeface on every chart text element AND explicit fill on every
-  series AND call `patch_chart_lang(chart)` — otherwise CJK tofu /
+  series AND call `patch_chart_xml(chart)` — otherwise CJK tofu /
   default theme color leak / doughnut-pie slides open blank. Reserve
   the chart bbox and compute `insight_y` from `chart_y + chart_h +
   GUTTER` to avoid overrun.
@@ -665,10 +687,12 @@ layout every deck.
 - Native `add_chart()` without explicit `fill.fore_color.rgb` on
   every series — PowerPoint theme defaults (blue / orange / gray)
   leak through and break the deck palette
-- Doughnut / pie `add_chart()` without `patch_chart_lang(chart)` —
-  python-pptx emits `<a:endParaRPr/>` with no `lang`, strict
-  PowerPoint fires the recovery dialog and strips the chart, leaving
-  an apparently-blank slide
+- Any `add_chart()` without `patch_chart_xml(chart)` — doughnut/pie
+  `endParaRPr` ships without `lang`, and per-slice-color `c:dPt`
+  ships without `c:bubble3D`; PowerPoint Mac strict-mode rejects
+  either, fires the recovery dialog, and strips the chart →
+  apparently-blank slide. Other parsers ignore both, so the failure
+  is invisible until the deck opens in PowerPoint.
 - Multiple files in `artifacts/` — only the final `.pptx` belongs
   there. Chart PNGs, verify PDFs/PNGs, helper scripts, and
   `outline.md` all stay in the working directory.
