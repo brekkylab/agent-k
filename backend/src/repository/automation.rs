@@ -1159,7 +1159,7 @@ impl SqliteRepository {
         let scheduled_s = Self::ts_string(scheduled_for);
 
         let row = sqlx::query(
-            "SELECT project_id, created_by, enabled, name FROM automations WHERE id = ?",
+            "SELECT project_id, created_by, enabled, name, agent_type, model FROM automations WHERE id = ?",
         )
         .bind(previous_run.automation_id.to_string())
         .fetch_one(&mut *tx)
@@ -1191,6 +1191,8 @@ impl SqliteRepository {
         let creator_id =
             Self::parse_uuid(row.get::<String, _>("created_by"), "automations.created_by")?;
         let automation_name: String = row.get("name");
+        let agent_type: Option<String> = row.get("agent_type");
+        let model: Option<String> = row.get("model");
         let trigger_kind_label: String = match previous_run.trigger_id {
             Some(tid) => {
                 sqlx::query_scalar("SELECT kind FROM automation_triggers WHERE id = ?")
@@ -1205,13 +1207,15 @@ impl SqliteRepository {
 
         let session_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?)",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, agent_type, model, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
         .bind(&session_title)
+        .bind(&agent_type)
+        .bind(&model)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
@@ -1272,8 +1276,8 @@ impl SqliteRepository {
             lease_until: None,
             previous_run_id: Some(previous_run.id),
             idempotency_key: None,
-            agent_type: None,
-            model: None,
+            agent_type,
+            model,
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         }))
