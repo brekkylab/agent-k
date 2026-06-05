@@ -75,6 +75,18 @@ function ProjectHome() {
     !!effectiveModel && !!catalog.data?.models.find((m) => m.id === effectiveModel)?.available;
   const sendBlocked = !!catalog.data && !effectiveAvailable;
 
+  // The model pref seeds new sessions, so drop a pin that's no longer in the
+  // catalog (saved before a catalog change): new sessions should fall back to
+  // "recommended" rather than be created with an un-curated model. Runs once
+  // the catalog has loaded; absent-from-catalog only — an in-catalog pin whose
+  // provider key is missing is a deliberate choice and is left alone.
+  useEffect(() => {
+    if (!catalog.data || !selectedModel) return;
+    if (!catalog.data.models.some((m) => m.id === selectedModel)) {
+      setSelectedModel(null);
+    }
+  }, [catalog.data, selectedModel, selectedAgentId, projectSlug]);
+
   // Sidebar '+' navigates here with focusComposer: bump the focus nonce (so the
   // composer focuses even on a repeat '+'), then consume the signal so a refresh
   // doesn't re-focus.
