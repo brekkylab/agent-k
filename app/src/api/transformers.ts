@@ -128,6 +128,7 @@ export function toSession(backend: BackendSession): Session {
     references: [],
     agentType: backend.agent_type ?? null,
     model: backend.model ?? null,
+    modelAvailable: backend.model_available,
   };
 }
 

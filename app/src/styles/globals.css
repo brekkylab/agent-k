@@ -1414,6 +1414,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 }
 .cw-model-picker-trigger { border: 0; background: transparent; color: inherit; font-size: 12px; }
 
+/* Session header model label when its provider is unavailable (a fallback runs). */
+.cw-session-model-unavailable { color: var(--cw-warn-fg); }
+
 /* Project home — "new conversation" surface */
 .cw-project-hero.is-slim { align-items: center; padding-bottom: var(--cw-space-4); margin-bottom: var(--cw-space-5); }
 .cw-project-hero.is-slim h1 { font-size: var(--cw-text-2xl); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

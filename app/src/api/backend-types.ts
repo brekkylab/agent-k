@@ -53,6 +53,7 @@ export interface BackendSession {
   last_message_snippet: string | null;
   agent_type: string | null;
   model: string | null;
+  model_available: boolean;
   unread_count: number;
   created_at: string;
   updated_at: string;

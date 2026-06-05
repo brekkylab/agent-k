@@ -582,6 +582,11 @@ function SessionPage() {
   // So just label it; catalog only maps the id → display name. (NULL only in the
   // brief pre-build window of an unsent session → falls back to the default text.)
   const sessionModelLabel = sess?.model ? modelLabel(catalog.data, sess.model) : undefined;
+  // A pinned model whose provider key is gone still shows here, but the backend
+  // silently runs a fallback at build time. The session carries `modelAvailable`
+  // (judged server-side for any id, catalogued or not) so we can flag that
+  // `model` isn't what actually runs. The catalog is still used only to label.
+  const sessionModelUnavailable = !!sess?.model && sess.modelAvailable === false;
 
   return (
     <div className="cw-session-layout cw-page-enter">
@@ -605,7 +610,13 @@ function SessionPage() {
               {creator && <>{t('chat.started_by')} <Avatar user={creator} small /> {creator.name} · </>}
               {t('chat.files_count', { count: sess?.references.length ?? 0 })} ·{' '}
               <Avatar user={AI_USER} small />{' '}
-              <span title={t('chat.model_in_use')}>{sessionModelLabel ?? t('chat.default_label')}</span>
+              <span
+                className={sessionModelUnavailable ? 'cw-session-model-unavailable' : undefined}
+                title={sessionModelUnavailable ? t('chat.model_unavailable') : t('chat.model_in_use')}
+              >
+                {sessionModelLabel ?? t('chat.default_label')}
+                {sessionModelUnavailable && t('chat.model_unavailable_suffix')}
+              </span>
             </p>
           </div>
           <div className="cw-session-head-actions">

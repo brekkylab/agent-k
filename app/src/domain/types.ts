@@ -43,6 +43,8 @@ export interface Session {
   isAutoAppend?: boolean;
   agentType: string | null;
   model: string | null;
+  /** False when `model` is pinned but its provider key is gone (a fallback runs). */
+  modelAvailable: boolean;
 }
 
 export type MessageSender =

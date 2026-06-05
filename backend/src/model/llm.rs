@@ -164,7 +164,8 @@ pub fn catalog_entry(id: &str) -> Option<&'static ModelInfo> {
 
 /// Whether the model's provider is registered (API key env var set).
 /// Synchronous, no network — the same lookup `Agent` construction performs.
-fn provider_available(model_id: &str) -> bool {
+/// Works for any id, catalogued or not, so callers can judge an arbitrary pin.
+pub fn provider_available(model_id: &str) -> bool {
     default_provider().models.get(model_id).is_some()
 }
 
