@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from pptx import Presentation
+from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.oxml.ns import qn
 
 
@@ -59,8 +60,7 @@ GALLERY: dict[str, set[str]] = {
     },
 }
 
-# Common neutrals that aren't a brand colour and shouldn't trip the
-# "off-gallery" alarm: pure white, pure black, very light grays.
+# Pure white / black aren't brand colours; exclude from off-gallery.
 NEUTRAL_TOLERATED: set[str] = {"FFFFFF", "000000"}
 
 
@@ -246,12 +246,14 @@ def check_overflow(prs) -> list[tuple[int, str, str]]:
 
     A box overflows when the estimated rendered height exceeds the
     drawable height (box minus internal margins). Korean glyphs count
-    as 2 ASCII widths. Autosize boxes are skipped — whether the grow
-    overlaps a neighbor is a geometric question we leave to visual
-    PNG inspection (Step 3.B).
+    as 2 ASCII widths. Autosize boxes are skipped — `SHAPE_TO_FIT_TEXT`
+    grows the box (geometric overlap is a visual-inspection question)
+    and `TEXT_TO_FIT_SHAPE` shrinks the text (our pt-based estimate
+    would always over-report clipping).
 
     Returns list of (slide_idx, snippet, reason).
     """
+    AUTOSIZE_SKIP = {MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT, MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE}
     issues: list[tuple[int, str, str]] = []
     for i, slide in enumerate(prs.slides, 1):
         for shape in slide.shapes:
@@ -266,9 +268,9 @@ def check_overflow(prs) -> list[tuple[int, str, str]]:
                 continue
             tf = shape.text_frame
 
-            # Autosize boxes grow rather than clip — skip (see docstring).
+            # Skip autosize boxes (see docstring for why).
             try:
-                if tf.auto_size and "SHAPE_TO_FIT_TEXT" in str(tf.auto_size):
+                if tf.auto_size in AUTOSIZE_SKIP:
                     continue
             except AttributeError:
                 pass
@@ -337,10 +339,10 @@ def check_page_numbers(prs) -> list[tuple[int, str]]:
     if n == 0:
         return []
 
-    # Page-number conventions on a bookend slide:
-    #   "3 / 10", "3/10", "3·10"    → n[/·]N (1-3 digits each)
-    #   "Page 3", "Page 03"          → "Page n" prefix (case-insensitive)
-    #   "3 of 10", "3 / 10 pages"   → "n of N" form
+    # Page-number conventions matched (fullmatch — whole text is the number):
+    #   "3 / 10", "3/10", "3·10"   → n[/·]N (1-3 digits each)
+    #   "Page 3", "Page 03"        → "Page n" (case-insensitive)
+    #   "3 of 10"                  → "n of N"
     # Plain single numbers ("3") are deliberately NOT matched — too many
     # data-driven slides have a stray number in a caption-sized box.
     _PAGE_NUM_PATTERNS = (
@@ -364,32 +366,35 @@ def check_page_numbers(prs) -> list[tuple[int, str]]:
         issues.append((1, "title slide carries a page number"))
     if n > 1 and has_page_num(prs.slides[-1]):
         issues.append((n, "closing slide carries a page number"))
-    # Section dividers: heuristic = slide has < 4 text runs and a large
-    # dark filled rect covering most of the slide. We skip the heuristic
-    # here and leave divider detection to the model.
     return issues
 
 
 def check_overlap(prs) -> list[tuple[int, str, str, float]]:
     """Flag visually colliding shape pairs on each slide.
 
-    Catches three failure modes the per-box `overflow` check can't see:
-      - a Picture sitting on top of bullet / narrative text (e.g. a
-        matplotlib chart inserted too tall, overrunning the insight box);
-      - a Table whose rows extend down into the bullet area below;
-      - two substantive textboxes whose bboxes overlap each other.
+    Considers pairs drawn from: text-box, table, chart, picture, and
+    large AutoShape (chevron / anchor block / card body — thin
+    decorative shapes are filtered out by edge/area thresholds). Skips
+    same-kind container pairs (picture+picture, chart+chart, table+
+    table) since those are usually intentional side-by-side layout.
 
-    Each (shape A, shape B) pair is reported once. A pair is skipped
-    when one shape *fully contains* the other (intentional layered
-    designs such as a caption on top of a card / image).
+    Layered-design pairs are filtered out: one shape fully containing
+    the other, one shape's center inside the other's bbox, a text box
+    whose top-edge sits inside its container, or two vertically
+    stacked text boxes (eyebrow + title, stacked card descriptions).
 
-    Returns (slide_idx, shape_A_label, shape_B_preview, overlap_sq_in).
+    Each (shape A, shape B) pair is reported once.
+
+    Returns (slide_idx, shape_A_label, shape_B_label, overlap_sq_in).
     """
     THRESH_SQ_IN = 0.2
     MIN_TEXT_LEN = 10
     PICTURE_TYPE = 13       # MSO_SHAPE_TYPE.PICTURE
-    GRAPHIC_FRAME = 19      # MSO_SHAPE_TYPE.GRAPHIC_FRAME (tables, charts)
     AUTO_SHAPE = 1          # MSO_SHAPE_TYPE.AUTO_SHAPE (chevrons, rounded rects, etc.)
+    # Tables and native charts are both `GraphicFrame` shapes but have
+    # different MSO_SHAPE_TYPE values (TABLE=19 vs CHART=3). Detect via
+    # the python-pptx `has_table` / `has_chart` attributes instead, which
+    # work regardless of shape_type.
     # An AutoShape is "decoration-only" — and skipped — when it's thin
     # in either dimension (signature marks, edge strips, hairlines,
     # corner blocks). Threshold: both edges ≥ 0.3" AND area ≥ 0.5 sq".
@@ -472,8 +477,8 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
     def classify(sh, b):
         """Return (kind, label) or (None, None) if not a candidate."""
         _, _, w, h = b
-        is_table = sh.shape_type == GRAPHIC_FRAME and getattr(sh, "has_table", False)
-        is_chart = sh.shape_type == GRAPHIC_FRAME and getattr(sh, "has_chart", False)
+        is_table = getattr(sh, "has_table", False)
+        is_chart = getattr(sh, "has_chart", False)
         is_picture = sh.shape_type == PICTURE_TYPE
         is_auto_shape = sh.shape_type == AUTO_SHAPE
         has_text = sh.has_text_frame and sh.text_frame.text.strip()

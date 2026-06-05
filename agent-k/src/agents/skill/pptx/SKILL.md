@@ -21,8 +21,8 @@ Two non-negotiable rules:
 - Install `python-pptx` before any deck-building code — the sandbox
   doesn't ship it (`pip install python-pptx`).
 - Write `outline.md` **before** any python-pptx code (Process §1)
-- Verify gate: `verify()` returns empty AND every PNG read with
-  the `read` tool — both required (Process §3)
+- Verify gate: `verify()` reports no issues AND every PNG `read`
+  with the `read` tool — both required (Process §3)
 - Charts: native `add_chart()` (editable in PowerPoint). Set EA
   typeface on every axis / legend / data label AND explicit fill
   color on every series AND call `patch_chart_lang(chart)` after
@@ -95,10 +95,11 @@ here, not in the content.
 
 ### 3. Verify the output renders correctly
 
-**Gate: do not surface the `.pptx` until BOTH (A) `verify()` returns
-all empty AND (B) every slide PNG has been `read`-inspected AND every
-flagged issue is fixed.** Step B is mandatory even if A is clean —
-the two catch different failures.
+**Gate: do not surface the `.pptx` until BOTH (A) every `verify()`
+check key is clean (lists empty, palette coverage ≥ 0.85) AND (B)
+every slide PNG has been `read`-inspected AND every flagged issue is
+fixed.** Step B is mandatory even if A is clean — the two catch
+different failures.
 
 **A. Run `verify_pptx.py`** — the skill ships a compliance checker:
 
@@ -120,15 +121,19 @@ It returns a dict with seven checks:
   here — visual PNG inspection in Step 3.B catches their overlaps)
 - `page_numbers` — title slide (1) or closing slide (N) carrying an
   `n / N`, `Page n`, or `n of N` string
-- `overlap` — shape-pair bboxes that collide visually (table / chart /
-  picture / large autoshape × text-box), with layered-design pairs
-  (text-on-card, vertically stacked) filtered out
+- `overlap` — shape pairs whose bboxes collide visually. Considers
+  every distinct-kind pair drawn from {text-box, table, chart,
+  picture, large autoshape}; same-kind container pairs (chart×chart,
+  table×table, picture×picture) are skipped as intentional side-by-
+  side layout, and layered-design pairs (text-on-card, vertically
+  stacked) are filtered out
 - `chart_lang` — chart XML missing `<a:endParaRPr lang>` (python-pptx
   emits doughnut/pie without `lang`; strict PowerPoint strips the
   chart and the slide opens blank)
 
-An empty list per key = passed. Use the *slide indices* in non-empty
-lists to target fixes.
+`palette` returns a dict (passed when `coverage >= 0.85` against a
+gallery match); the other six return lists (passed when empty). Use
+the *slide indices* in non-empty lists to target fixes.
 
 **Do not `read` or `cat` `verify_pptx.py`** — the seven checks above
 are the full contract. Only read the source if you hit an unexpected
@@ -429,8 +434,8 @@ soffice falls back to DejaVu → CJK tofu in the rendered PNGs.
 Charts are rendered as **native python-pptx chart objects**
 (`slide.shapes.add_chart(...)`) so the user can edit chart data,
 labels, and colors directly in PowerPoint (right-click → Edit Data).
-The trade-off: python-pptx leaves two critical things unhandled that
-you MUST set yourself, every time.
+The trade-off: python-pptx leaves three critical things unhandled
+that you MUST set yourself, every time.
 
 **1. CJK font on every chart text element**
 
@@ -529,14 +534,15 @@ chart = slide.shapes.add_chart(
     Inches(chart_w), Inches(chart_h),
     data,
 ).chart
-# … then apply CJK font helper + series colors above …
+# … then apply CJK font helper + patch_chart_lang + series colors above …
 ```
 
-**Supported chart types** — Bar (clustered / stacked), Line, Pie,
-Doughnut, Area, Scatter, Combo (bar + line). For data that doesn't
-fit one of these (Treemap, Waterfall, Sunburst patterns) — convert
-to a styled table or decompose into a simpler chart type. Don't
-mix matplotlib PNGs in: it breaks the editability promise.
+**Supported chart types** — Column (vertical) and Bar (horizontal),
+each clustered or stacked; Line, Pie, Doughnut, Area, Scatter, Combo
+(column + line). For data that doesn't fit one of these (Treemap,
+Waterfall, Sunburst patterns) — convert to a styled table or
+decompose into a simpler chart type. Don't mix matplotlib PNGs in:
+it breaks the editability promise.
 
 **Data label format** — use PowerPoint number-format masks:
 ```python
@@ -620,7 +626,8 @@ layout every deck.
   Rendering notes — Charts); series palette = Secondary, Accent,
   Primary in that order; **max 3 series** (4th → use a table). Set
   EA typeface on every chart text element AND explicit fill on every
-  series — otherwise CJK tofu / default theme color leak. Reserve
+  series AND call `patch_chart_lang(chart)` — otherwise CJK tofu /
+  default theme color leak / doughnut-pie slides open blank. Reserve
   the chart bbox and compute `insight_y` from `chart_y + chart_h +
   GUTTER` to avoid overrun.
 - **Timeline** — horizontal hairline track + 3–6 evenly-spaced event
