@@ -55,7 +55,6 @@ dependencies = [
  "aide",
  "ailoy",
  "argon2",
- "async-stream",
  "async-trait",
  "axum",
  "axum-extra",

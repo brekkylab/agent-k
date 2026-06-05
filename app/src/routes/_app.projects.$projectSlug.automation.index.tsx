@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Icon } from '@/components/Icon';
 import { IconButton } from '@/components/uiPrimitives';
+import { Select } from '@/components/Select';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { summarizeCron } from '@/components/SchedulePicker';
@@ -861,13 +862,15 @@ function FilterSelect<T extends string>({
   onChange: (v: T) => void;
   options: FilterOption<T>[];
 }) {
+  // Not a <label>: a <label> wrapping the Select's trigger <button> re-dispatches
+  // real (trusted) clicks to that button, so picking an option (which closes the
+  // panel) re-fires the trigger and reopens it. The accessible name comes from
+  // the Select's ariaLabel instead.
   return (
-    <label className="cw-runs-filter">
+    <span className="cw-runs-filter">
       <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value as T)}>
-        {options.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-      </select>
-    </label>
+      <Select value={value} onChange={onChange} options={options} triggerClassName="cw-runs-filter-trigger" ariaLabel={label} />
+    </span>
   );
 }
 

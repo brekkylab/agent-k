@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
+    events::WsEvent,
     handlers::session::cleanup_session_resources,
     model::{
         AddMemberRequest, CreateProjectRequest, ProjectListResponse, ProjectMemberListResponse,
@@ -423,6 +424,21 @@ pub async fn remove_member(
 
     if !removed {
         return Err(AppError::not_found("member not found"));
+    }
+
+    // [C] Broadcast AccessRevoked for every session in the project so open WS connections
+    // belonging to the removed user drop their subscriptions immediately.
+    if let Ok(sessions) = state
+        .repository
+        .list_all_sessions_in_project(project_id)
+        .await
+    {
+        for session in sessions {
+            let _ = state.ws_tx.send(WsEvent::AccessRevoked {
+                session_id: session.id.to_string(),
+                user_id: target_user_id.to_string(),
+            });
+        }
     }
 
     tracing::info!(project = %project_id, user = %target_user_id, "member removed");

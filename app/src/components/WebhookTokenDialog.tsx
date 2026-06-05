@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 export function WebhookTokenDialog({
   token,
@@ -24,14 +25,13 @@ export function WebhookTokenDialog({
   const [curlCopied, setCurlCopied] = useState(false);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
 
+  // ESC closes only after the user has acknowledged the one-time secret. The
+  // modal-stack hook treats `!acknowledged` as disabled so the press falls
+  // through to any underlying dialog rather than being silently swallowed.
+  useDialogEscape(onClose, { disabled: !acknowledged });
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && acknowledged) onClose();
-    };
-    window.addEventListener('keydown', onKey);
     closeBtnRef.current?.focus();
-    return () => window.removeEventListener('keydown', onKey);
-  }, [acknowledged, onClose]);
+  }, []);
 
   const copy = async () => {
     try {

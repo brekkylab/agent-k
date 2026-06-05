@@ -9,6 +9,7 @@ realistic state.
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import shutil
 import sqlite3
@@ -16,6 +17,13 @@ import subprocess
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 import json
+
+# A 64×64 solid cornflower-blue PNG, used as a sample image attachment.
+SAMPLE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgE"
+    "sAtrJWPawQi+hcEKLNXzWgQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+    "BAQEBAQEBAQEBAQELguSMmHDljezcgAAAABJRU5ErkJggg=="
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = ROOT / "app"
@@ -130,8 +138,9 @@ def write_files(data_root: Path) -> None:
             path.write_text(content, encoding="utf-8")
 
     # ── inputs: per-session attached files ───────────────────────────────────
-    inputs_files = {
-        # SESSION_ATTACHED: user attached a raw survey CSV before asking for analysis
+    # Values are either str (written as UTF-8 text) or bytes (written as binary).
+    inputs_files: dict[tuple[str, str], dict[str, str | bytes]] = {
+        # SESSION_ATTACHED: user attached a raw survey CSV + a chart image before asking for analysis
         (PROJECT_KLIENT, SESSION_ATTACHED): {
             "survey_raw.csv": (
                 "respondent_id,renewal_intent,pain_point\n"
@@ -141,6 +150,7 @@ def write_files(data_root: Path) -> None:
                 "R004,churn,missing integrations\n"
                 "R005,renew,easy to use\n"
             ),
+            "chart_sample.png": base64.b64decode(SAMPLE_PNG_B64),
         },
     }
     for (project_id, session_id), entries in inputs_files.items():
@@ -148,7 +158,10 @@ def write_files(data_root: Path) -> None:
         for rel, content in entries.items():
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            if isinstance(content, bytes):
+                path.write_bytes(content)
+            else:
+                path.write_text(content, encoding="utf-8")
 
     # ── artifacts: agent-generated output files ───────────────────────────────
     artifact_files = {
@@ -271,6 +284,7 @@ def seed_rows(db: Path) -> None:
 
     # Global paths for attached files (stored in session_messages.attachments as JSON array)
     attached_input_path = f"projects/{PROJECT_KLIENT}/sessions/{SESSION_ATTACHED}/inputs/survey_raw.csv"
+    attached_image_path = f"projects/{PROJECT_KLIENT}/sessions/{SESSION_ATTACHED}/inputs/chart_sample.png"
 
     # (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments_json)
     def user_msg(session_id: str, text: str, creator_id: str, t: str, attachments: list[str] | None = None):
@@ -292,7 +306,7 @@ def seed_rows(db: Path) -> None:
             "첨부한 설문 데이터에서 이탈 위험 응답자들의 공통 pain point를 찾아줘.",
             OLIVE_ID,
             ts(35),
-            attachments=[attached_input_path],
+            attachments=[attached_input_path, attached_image_path],
         ),
         agent_msg(SESSION_ATTACHED, "survey_raw.csv 기반으로 이탈 위험 응답자의 공통 pain point를 추출하면 'pricing unclear'와 'missing integrations'가 주요 원인입니다.", ts(36)),
         # SESSION_GTM

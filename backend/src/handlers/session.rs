@@ -1,7 +1,6 @@
-use std::{collections::HashSet, convert::Infallible, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
-use aide::NoApi;
 use ailoy::{
     agent::Agent,
     message::{Message, MessageOutput, Part, Role},
@@ -11,7 +10,6 @@ use axum::{
     Json,
     extract::{Extension, Path, State},
     http::StatusCode,
-    response::sse::{Event, KeepAlive, Sse},
 };
 use futures_util::StreamExt;
 use uuid::Uuid;
@@ -19,13 +17,15 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
-    handlers::dirent::{DirentScope, enforce_scope_access, parse_dirent_path, scope_root},
-    model::{
-        CreateSessionRequest, MessageSender, SendMessageRequest, SendMessageResponse,
-        SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
-        UpdateSessionRequest,
+    events::{RunUserMessage, WsEvent},
+    handlers::dirent::{
+        DirentScope, copy_dir_recursive, enforce_scope_access, parse_dirent_path, scope_root,
     },
-    repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess},
+    model::{
+        CreateSessionRequest, MessageSender, RunAck, SendMessageRequest, SessionListResponse,
+        SessionMessageListResponse, SessionMessageResponse, SessionResponse, UpdateSessionRequest,
+    },
+    repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, ShareMode},
     services::session_title::generate_session_title,
     state::AppState,
 };
@@ -312,7 +312,10 @@ async fn resolve_agent_for(
 
     let mut agent = build_session_agent(state, project_id, session_id)
         .await
-        .map_err(|e| AppError::internal(e))?;
+        .map_err(|e| {
+            tracing::error!(%session_id, %project_id, "build_session_agent failed: {e}");
+            AppError::internal(e)
+        })?;
 
     agent.state.history.extend(history);
     tracing::info!(%session_id, "agent lazy-created with history restored");
@@ -547,6 +550,26 @@ pub async fn update_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
+    // [R2-4] share_mode downgrade to private: evict non-creator subscribers immediately
+    // instead of waiting for Task D's 60-second poll.
+    if payload.share_mode == ShareMode::Private && session.share_mode != ShareMode::Private {
+        if let Ok(members) = state
+            .repository
+            .list_project_members(session.project_id)
+            .await
+        {
+            for (member, _) in members {
+                if member.id == session.creator_id {
+                    continue;
+                }
+                let _ = state.ws_tx.send(WsEvent::AccessRevoked {
+                    session_id: session_id.to_string(),
+                    user_id: member.id.to_string(),
+                });
+            }
+        }
+    }
+
     let unread = state
         .repository
         .count_session_unread(session_id, auth_user.id)
@@ -643,10 +666,24 @@ pub async fn fork_session(
         .mark_session_read(new_id, auth_user.id)
         .await;
 
-    // Pre-create host dirs for the forked session.
+    // Mirror the source session's host files into the fork so the snapshot matches
+    // the VM upper.ext4 clone. shared/ is project-level and intentionally excluded.
+    let (src_inputs, _, src_artifacts) = session_dirs(&state, source.project_id, source_session_id);
     let (new_inputs, _, new_artifacts) = session_dirs(&state, source.project_id, new_id);
-    for d in [&new_inputs, &new_artifacts] {
-        let _ = tokio::fs::create_dir_all(d).await;
+    for (src, dst) in [(&src_inputs, &new_inputs), (&src_artifacts, &new_artifacts)] {
+        let res = if tokio::fs::try_exists(src).await.unwrap_or(false) {
+            copy_dir_recursive(src, dst).await
+        } else {
+            tokio::fs::create_dir_all(dst).await
+        };
+        if let Err(e) = res {
+            tracing::warn!(
+                source = %source_session_id,
+                fork = %new_id,
+                dir = ?dst,
+                "failed to copy session dir on fork: {e}",
+            );
+        }
     }
 
     let source_cfg = SandboxConfig {
@@ -796,12 +833,18 @@ pub async fn clear_message_history(
 }
 
 /// POST /sessions/{session_id}/messages
+///
+/// Fire-and-forget trigger: validates the request synchronously, registers an
+/// active run, broadcasts `AgentRunStarted`, then spawns the agent run on a
+/// background task and returns `202`-style `RunAck` immediately. All subsequent
+/// progress is delivered over the WebSocket channel (`AgentMessage`,
+/// `AgentError`, `AgentRunDone`).
 pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Path(session_ref): Path<String>,
     Json(payload): Json<SendMessageRequest>,
-) -> ApiResult<Json<SendMessageResponse>> {
+) -> ApiResult<(StatusCode, Json<RunAck>)> {
     let session_id = resolve_session_id(&state, &session_ref).await?;
     let (session, access) = state
         .repository
@@ -835,6 +878,34 @@ pub async fn send_message(
         let note = build_attachment_note(&attachments);
         format!("{raw_content}\n\n{note}")
     };
+
+    let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
+
+    // Acquire OwnedMutexGuard — moved into the background task and held for the
+    // run's lifetime. Returns 423 immediately if another request holds the lock.
+    let guard = agent_arc
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| AppError::locked("session is currently in use"))?;
+
+    let prev_len = guard.get_history().len();
+    let sender_id = auth_user.id;
+    let (_, _, artifacts_dir) = session_dirs(&state, project_id, session_id);
+
+    // Register the active run and broadcast its start before the agent begins.
+    let now = chrono::Utc::now().to_rfc3339();
+    let user_message = RunUserMessage {
+        sender_user_id: sender_id.to_string(),
+        content: raw_content.clone(),
+        attachments: attachments.clone(),
+        created_at: now,
+    };
+    let run_id = state.start_run(session_id, user_message.clone());
+    let _ = state.ws_tx.send(WsEvent::AgentRunStarted {
+        session_id: session_id.to_string(),
+        run_id: run_id.to_string(),
+        user_message,
+    });
 
     // Spawn title generation immediately — runs concurrently with the agent run
     if need_title {
@@ -848,7 +919,7 @@ pub async fn send_message(
                 .await
                 .is_ok()
             {
-                let _ = ws_tx.send(crate::events::WsEvent::SessionTitleUpdated {
+                let _ = ws_tx.send(WsEvent::SessionTitleUpdated {
                     session_id: session_id.to_string(),
                     project_id: project_id.to_string(),
                     title,
@@ -857,148 +928,10 @@ pub async fn send_message(
         });
     }
 
-    let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
-
-    let mut agent = agent_arc
-        .try_lock()
-        .map_err(|_| AppError::locked("session is currently in use"))?;
-
-    let (_, _, artifacts_dir) = session_dirs(&state, project_id, session_id);
-    let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
-
-    let prev_len = agent.get_history().len();
-    let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
-    let mut run = agent.run(msg);
-    let mut outputs: Vec<MessageOutput> = Vec::new();
-    while let Some(item) = run.next().await {
-        outputs.push(item.map_err(|e| AppError::internal(e.to_string()))?);
-    }
-    drop(run);
-    // Strip the attachment note before persisting — it is stored clean and re-injected
-    // from the `attachments` column when history is replayed, so the note never appears
-    // in the raw message body returned to the frontend.
-    let mut new_messages = agent.get_history()[prev_len..].to_vec();
-    if !attachments.is_empty() {
-        if let Some(first) = new_messages.first_mut() {
-            first.contents = vec![Part::text(raw_content)];
-        }
-    }
-    drop(agent);
-
-    let current_artifacts = collect_artifact_paths(&artifacts_dir).await;
-    let new_artifacts: Vec<String> = current_artifacts
-        .difference(&prev_artifacts)
-        .cloned()
-        .collect();
-
-    let mut to_persist = attribute_messages(new_messages, &outputs, auth_user.id, attachments);
-
-    if !new_artifacts.is_empty() {
-        if let Some(last_agent) = to_persist
-            .iter_mut()
-            .rev()
-            .find(|m| matches!(m.sender_kind, crate::repository::DbSenderKind::Agent))
-        {
-            last_agent.artifacts = new_artifacts;
-        }
-    }
-
-    state
-        .repository
-        .append_messages(session_id, &to_persist)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-
-    let _ = state
-        .repository
-        .mark_session_read(session_id, auth_user.id)
-        .await;
-
-    Ok(Json(outputs))
-}
-
-/// POST /sessions/{session_id}/messages/stream
-pub async fn send_message_stream(
-    State(state): State<Arc<AppState>>,
-    Extension(auth_user): Extension<AuthUser>,
-    Path(session_ref): Path<String>,
-    Json(payload): Json<SendMessageRequest>,
-) -> ApiResult<
-    NoApi<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>> + Send + 'static>>,
-> {
-    let session_id = resolve_session_id(&state, &session_ref).await?;
-    let (session, access) = state
-        .repository
-        .get_session_with_authz(session_id, auth_user.id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?
-        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
-
-    if matches!(access, SessionAccess::ReadOnlyMember) {
-        return Err(AppError::forbidden("read-only access to this session"));
-    }
-
-    // Validate attachments
-    let attachments = payload.attachments.clone().unwrap_or_default();
-    validate_attachments(
-        &state,
-        &auth_user,
-        session_id,
-        session.project_id,
-        &attachments,
-    )
-    .await?;
-
-    let raw_content = payload.content.clone();
-    let content_with_note = if attachments.is_empty() {
-        raw_content.clone()
-    } else {
-        let note = build_attachment_note(&attachments);
-        format!("{raw_content}\n\n{note}")
-    };
-
-    let agent_arc = resolve_agent_for(&state, session.id, session.project_id).await?;
-
-    // Acquire OwnedMutexGuard — held for entire SSE stream lifetime.
-    // Returns 423 immediately if another request holds the lock.
-    let guard = agent_arc
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| AppError::locked("session is currently in use"))?;
-
-    let prev_len = guard.get_history().len();
-    let repo = state.repository.clone();
-    let need_title = session.title.is_none();
-    let sender_id = auth_user.id;
-    let project_id = session.project_id;
-    let (_, _, artifacts_dir) = session_dirs(&state, project_id, session_id);
-
-    // Spawn title generation immediately — runs concurrently with the agent stream
-    if need_title {
-        let repo_title = repo.clone();
-        let ws_tx = state.ws_tx.clone();
-        let first_msg = payload.content.clone();
-        tokio::spawn(async move {
-            tracing::info!("starting title generation");
-            let title = generate_session_title(&first_msg).await;
-            tracing::info!("title generation finished");
-            if repo_title
-                .set_session_title(session_id, &title)
-                .await
-                .is_ok()
-            {
-                tracing::info!("send title via websocket");
-                let _ = ws_tx.send(crate::events::WsEvent::SessionTitleUpdated {
-                    session_id: session_id.to_string(),
-                    project_id: project_id.to_string(),
-                    title,
-                });
-            }
-        });
-    }
-
-    let stream = async_stream::stream! {
-        let mut agent = guard;  // OwnedMutexGuard moved in — lock held for stream lifetime
+    // Run the agent on a background task — progress is streamed over the WebSocket.
+    let state2 = state.clone();
+    let run_handle = tokio::spawn(async move {
+        let mut agent = guard; // OwnedMutexGuard — held for the run's lifetime
         let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
         let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
         let mut run = agent.run(msg);
@@ -1011,30 +944,38 @@ pub async fn send_message_stream(
                     if matches!(output.depth, None | Some(0)) {
                         depth0_outputs.push(output.clone());
                     }
-                    let json = serde_json::to_string(&output)
-                        .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
-                    yield Ok::<Event, Infallible>(
-                        Event::default().event("message").data(json),
-                    );
+                    if let Some(seq) = state2.push_output(&session_id, output.clone()).await {
+                        let _ = state2.ws_tx.send(WsEvent::AgentMessage {
+                            session_id: session_id.to_string(),
+                            run_id: run_id.to_string(),
+                            seq,
+                            output,
+                        });
+                    }
                 }
                 Err(e) => {
                     run_error = Some(e.to_string());
-                    break;  // Must break before accessing `agent` — `run` borrows it
+                    break; // Must break before accessing `agent` — `run` borrows it
                 }
             }
         }
         drop(run);
 
         if let Some(err) = run_error {
+            tracing::error!(%session_id, "agent run failed: {err}");
             // Truncate in-memory history to match DB state so the agent stays consistent.
             agent.state.history.truncate(prev_len);
             drop(agent);
-            yield Ok(Event::default().event("error").data(err));
+            state2.end_run(&session_id);
+            let _ = state2.ws_tx.send(WsEvent::AgentError {
+                session_id: session_id.to_string(),
+                run_id: run_id.to_string(),
+                message: err,
+            });
             return;
         }
 
         let mut new_msgs = agent.get_history()[prev_len..].to_vec();
-        drop(agent);  // Release OwnedMutexGuard
 
         // Strip the attachment note before persisting — clean content is stored in DB and the
         // note is reconstructed from the `attachments` column when history is replayed.
@@ -1050,7 +991,8 @@ pub async fn send_message_stream(
             .cloned()
             .collect();
 
-        let mut to_persist = attribute_messages(new_msgs, &depth0_outputs, sender_id, attachments.clone());
+        let mut to_persist =
+            attribute_messages(new_msgs, &depth0_outputs, sender_id, attachments.clone());
         if !new_artifacts.is_empty() {
             if let Some(last_agent) = to_persist
                 .iter_mut()
@@ -1061,16 +1003,58 @@ pub async fn send_message_stream(
             }
         }
 
-        if let Err(e) = repo.append_messages(session_id, &to_persist).await {
+        // [A] Persist before releasing the agent lock. On failure: roll back in-memory history,
+        // send AgentError (not AgentRunDone), and return — the DB remains consistent.
+        if let Err(e) = state2
+            .repository
+            .append_messages(session_id, &to_persist)
+            .await
+        {
             tracing::error!(%session_id, "failed to persist messages: {e}");
+            agent.state.history.truncate(prev_len);
+            drop(agent);
+            state2.end_run(&session_id);
+            let _ = state2.ws_tx.send(WsEvent::AgentError {
+                session_id: session_id.to_string(),
+                run_id: run_id.to_string(),
+                message: "응답 저장에 실패했습니다. 다시 시도해주세요.".to_string(),
+            });
+            return;
         }
+        drop(agent); // Release OwnedMutexGuard only after successful persist
 
-        // Auto-mark sender as having read
-        let _ = repo.mark_session_read(session_id, sender_id).await;
+        // Intentionally NOT calling mark_session_read here: the sender should
+        // only be considered to have read the agent's reply when they actually
+        // fetch the messages (GET /sessions/{id}/messages). Auto-marking here
+        // sets last_read_seq to MAX(seq) which includes the agent's own
+        // messages, so unread_count is always 0 — breaking cross-session
+        // unread badges for users who navigated away before the agent finished.
 
-        tracing::info!("message stream finished");
-        yield Ok(Event::default().event("done").data("[DONE]"));
-    };
+        state2.end_run(&session_id);
+        let _ = state2.ws_tx.send(WsEvent::AgentRunDone {
+            session_id: session_id.to_string(),
+            run_id: run_id.to_string(),
+        });
+    });
 
-    Ok(NoApi(Sse::new(stream).keep_alive(KeepAlive::default())))
+    // Monitor for panics: if the run task panics, end_run is never called and the
+    // session stays stuck. This task catches JoinError and forces cleanup.
+    let state_mon = state.clone();
+    tokio::spawn(async move {
+        if let Err(join_err) = run_handle.await {
+            tracing::error!(
+                %session_id,
+                err = %join_err,
+                "agent background task panicked; forcing end_run and AgentError"
+            );
+            state_mon.end_run(&session_id);
+            let _ = state_mon.ws_tx.send(WsEvent::AgentError {
+                session_id: session_id.to_string(),
+                run_id: run_id.to_string(),
+                message: "에이전트가 예기치 않게 종료되었습니다.".to_string(),
+            });
+        }
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(RunAck { status: "started" })))
 }

@@ -1,4 +1,4 @@
-import { request, streamSse } from './client';
+import { request } from './client';
 import type { AiloyMessage, AiloyPart, AiloyToolCall, MessageOutput, SessionMessageList } from './backend-types';
 import { aiMessageText, collapseToolMessages } from './transformers';
 import type { Message } from '@/domain/types';
@@ -13,11 +13,16 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
   return collapseToolMessages(raw.items, sessionId);
 }
 
-export async function sendMessage(sessionId: string, content: string, attachments?: string[]): Promise<MessageOutput[]> {
-  return request<MessageOutput[]>(`/sessions/${sessionId}/messages`, {
+export async function sendMessage(
+  sessionId: string,
+  content: string,
+  attachments?: string[],
+): Promise<void> {
+  await request<unknown>(`/sessions/${sessionId}/messages`, {
     method: 'POST',
     body: { content, attachments: attachments && attachments.length > 0 ? attachments : undefined },
   });
+  // 423/403 are thrown as ApiError by request() — caller should catch
 }
 
 export interface StreamToolCall {
@@ -35,39 +40,24 @@ export interface StreamUpdate {
   subagentUpdates: SubagentUpdate[];
 }
 
-export async function* streamMessage(
-  sessionId: string,
-  content: string,
-  signal?: AbortSignal,
-  attachments?: string[],
-): AsyncGenerator<StreamUpdate, void, void> {
+/**
+ * Derives a StreamUpdate snapshot from an ordered list of MessageOutput items.
+ * Items must be sorted by seq (ascending). Pure — no side effects.
+ *
+ * NOTE: For assistant messages, `accumulated` is replaced (not appended) on each
+ * item. This is intentional: the backend sends complete text snapshots per message,
+ * not incremental deltas. Passing items where two sequential assistant messages
+ * represent separate text segments would silently drop the first.
+ */
+export function deriveStreamState(
+  outputs: MessageOutput[],
+  status: 'streaming' | 'done' | 'error' = 'streaming',
+): StreamUpdate {
   let accumulated = '';
   const toolCalls: StreamToolCall[] = [];
   const subagentTexts = new Map<string, string>();
 
-  const currentSubagentUpdates = (): SubagentUpdate[] =>
-    [...subagentTexts.entries()].map(([sourceAgent, text]) => ({ sourceAgent, text }));
-
-  const snapshot = (): StreamUpdate => ({
-    text: accumulated,
-    toolCalls: [...toolCalls],
-    status: 'streaming',
-    subagentUpdates: currentSubagentUpdates(),
-  });
-
-  for await (const evt of streamSse(`/sessions/${sessionId}/messages/stream`, { content, attachments: attachments && attachments.length > 0 ? attachments : undefined }, signal)) {
-    if (evt.event === 'error') {
-      yield { ...snapshot(), status: 'error', errorText: evt.data };
-      return;
-    }
-    if (evt.event === 'done') {
-      yield { ...snapshot(), status: 'done' };
-      return;
-    }
-    if (evt.event !== 'message') continue;
-
-    let output: MessageOutput | null = null;
-    try { output = JSON.parse(evt.data) as MessageOutput; } catch { continue; }
+  for (const output of outputs) {
     if (!output?.message) continue;
 
     const depth = output.depth ?? 0;
@@ -78,7 +68,6 @@ export async function* streamMessage(
       if (msg.role === 'assistant' && sourceAgent) {
         const text = aiMessageText(msg.contents as AiloyPart[] | undefined);
         subagentTexts.set(sourceAgent, (subagentTexts.get(sourceAgent) ?? '') + text);
-        yield snapshot();
       }
       continue;
     }
@@ -95,21 +84,25 @@ export async function* streamMessage(
           toolCalls.push({ id: call.id, name: call.function.name, arguments: call.function.arguments });
         }
       }
-      yield snapshot();
     } else if (msg.role === 'tool') {
-      if (!msg.id) {
-        console.warn('[streamMessage] tool message without id; cannot attach', msg);
-        continue;
-      }
+      if (!msg.id) continue;
       const resultText = aiMessageText(msg.contents as AiloyPart[] | undefined) || '[done]';
       let tc = toolCalls.find((t) => t.id === msg.id);
       if (!tc) {
-        console.warn(`[streamMessage] tool result id=${msg.id} arrived without matching tool_call; rendering as stub`);
+        console.warn(`[deriveStreamState] tool result id=${msg.id} arrived without matching tool_call; rendering as stub`);
         tc = { id: msg.id, name: '(pending)' };
         toolCalls.push(tc);
       }
       tc.result = resultText;
-      yield snapshot();
     }
   }
+
+  const subagentUpdates: SubagentUpdate[] = [...subagentTexts.entries()].map(([sourceAgent, text]) => ({ sourceAgent, text }));
+
+  return {
+    text: accumulated,
+    toolCalls: [...toolCalls],
+    status,
+    subagentUpdates,
+  };
 }

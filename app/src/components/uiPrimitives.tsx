@@ -1,8 +1,11 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon, type IconName } from './Icon';
+import { Select } from './Select';
 import { shareMeta } from '../domain/metadata';
 import type { ShareMode, User } from '../domain/types';
+
+const SHARE_MODES = Object.keys(shareMeta) as ShareMode[];
 
 export function EmptyState({
   title,
@@ -71,15 +74,26 @@ export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?
 
 export function ShareSelect({ mode, onChange }: { mode: ShareMode; onChange: (mode: ShareMode) => void }) {
   const { t } = useTranslation('common');
+  // Domain config only — all dropdown behavior lives in <Select>. The per-mode
+  // `className` drives the trigger's share-mode color (see .cw-share-trigger.*),
+  // and `cw-share-trigger` gives it the pill-chip shape.
+  const options = SHARE_MODES.map((m) => ({
+    value: m,
+    label: t(`share.${m}.label`),
+    icon: shareMeta[m].icon,
+    className: shareMeta[m].className,
+  }));
   return (
-    <label className={`cw-share-select ${shareMeta[mode].className}`}>
-      <Icon name={shareMeta[mode].icon} />
-      <select value={mode} onChange={(event) => onChange(event.target.value as ShareMode)}>
-        {(Object.keys(shareMeta) as ShareMode[]).map((key) => (
-          <option key={key} value={key}>{t(`share.${key}.label`)}</option>
-        ))}
-      </select>
-    </label>
+    <Select
+      value={mode}
+      onChange={onChange}
+      options={options}
+      triggerClassName="cw-share-trigger"
+      adaptiveWidth
+      // The share dropdown belongs to the session — keep its panel inside the
+      // chat surface so it doesn't drift over the adjacent members column.
+      boundary=".cw-chat-surface"
+    />
   );
 }
 

@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
@@ -32,6 +32,7 @@ import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import type { Session } from '@/domain/types';
+import { appWs, type AppWsEvent } from '@/api/ws';
 
 function SidebarResizer({ setRevealed }: { setRevealed: (revealed: boolean) => void }) {
   const setSidebarMode = useLayoutStore((s) => s.setSidebarMode);
@@ -241,8 +242,75 @@ export function Sidebar() {
     enabled: Boolean(activeProjectSlug),
   });
 
+  const queryClient = useQueryClient();
+  const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set());
+  const activeProjectSlugRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeProjectSlugRef.current = activeProjectSlug;
+  }, [activeProjectSlug]);
+
+  useEffect(() => {
+    setStreamingIds(new Set());
+  }, [activeProjectSlug]);
+
+  useEffect(() => {
+    const sessions = sessionsQuery.data ?? [];
+    sessions.forEach((s) => appWs.subscribeSession(s.id));
+    return () => sessions.forEach((s) => appWs.unsubscribeSession(s.id));
+  }, [sessionsQuery.data]);
+
+  // Track active session's full ID so the WS handler can skip cache-clearing
+  // for the session the user is currently viewing (the session page handles its own refetch).
+  const activeSessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return appWs.subscribe((event: AppWsEvent) => {
+      if (event.type === 'agent_run_started') {
+        setStreamingIds((prev) => {
+          const next = new Set(prev);
+          next.add(event.session_id);
+          return next;
+        });
+      } else if (
+        event.type === 'agent_run_done' ||
+        event.type === 'agent_run_idle' ||
+        event.type === 'agent_error'
+      ) {
+        setStreamingIds((prev) => {
+          if (!prev.has(event.session_id)) return prev;
+          const next = new Set(prev);
+          next.delete(event.session_id);
+          return next;
+        });
+        // Only invalidate on agent_run_done: that's when unread count and
+        // session ordering actually change. agent_run_idle fires on every
+        // subscribe (idle sessions) and would cause a subscribe→invalidate→
+        // resubscribe→idle loop. agent_error doesn't update session metadata.
+        if (event.type === 'agent_run_done') {
+          const slug = activeProjectSlugRef.current;
+          if (slug) void queryClient.invalidateQueries({ queryKey: ['sessions', slug] });
+          // When the completed session is not the one the user is currently viewing,
+          // remove its stale messages cache (which may be an empty [] from before the
+          // agent ran). This forces a loading state on next visit instead of showing
+          // empty history while the background refetch completes.
+          if (event.session_id !== activeSessionIdRef.current) {
+            queryClient.removeQueries({ queryKey: ['messages', event.session_id] });
+          }
+        }
+      }
+    });
+  }, [queryClient]);
+
   const activeSessionId = useActiveSessionId();
   const activeRoute = useActiveRouteKey();
+
+  // Keep activeSessionIdRef in sync with the full session UUID for use in the WS handler.
+  // activeSessionId is a 12-char prefix; match it against sessionsQuery.data to get the full id.
+  useEffect(() => {
+    if (!activeSessionId) { activeSessionIdRef.current = null; return; }
+    const match = (sessionsQuery.data ?? []).find(s => shortSessionId(s.id) === activeSessionId);
+    activeSessionIdRef.current = match?.id ?? null;
+  }, [activeSessionId, sessionsQuery.data]);
 
   // Close on navigation for mobile drawers, but keep desktop hidden/reveal open
   // so sidebar clicks don't immediately tuck it away.
@@ -417,15 +485,24 @@ export function Sidebar() {
                       'cw-session-row',
                       shortSessionId(session.id) === activeSessionId ? 'is-active' : '',
                       session.unreadCount > 0 ? 'is-unread' : '',
+                      streamingIds.has(session.id) ? 'is-streaming' : '',
                     ].filter(Boolean).join(' ')}
                     onClick={() => openSession(activeProject.slug, shortSessionId(session.id))}
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
                   >
-                    {session.unreadCount > 0 ? (
-                      <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>
-                        <span className="n">{session.unreadCount}</span>
+                    {streamingIds.has(session.id) ? (
+                      <span className="cw-typing-dots" aria-label="agent responding">
+                        <span /><span /><span />
+                      </span>
+                    ) : session.unreadCount > 0 ? (
+                      <span
+                        className="cw-unread-badge cw-unread-badge-compact"
+                        aria-label={`unread ${session.unreadCount}`}
+                        title={`${session.unreadCount} unread`}
+                      >
+                        <span className="n">{session.unreadCount > 99 ? '99+' : session.unreadCount}</span>
                       </span>
                     ) : (
                       <IconPocket tone="trust" icon="message-square" compact />

@@ -61,7 +61,11 @@ body.is-resizing-sidebar .cw-app-shell { transition: none; }
   height: 100vh; height: 100dvh;
   background: var(--cw-bg-subtle);
   border-right: 1px solid var(--cw-border);
-  padding: 14px 10px 10px;
+  /* asymmetric padding: the scrollbar gutter already provides visual breathing
+     room on the right, so we cut padding-right to 4px to tighten the gap
+     between session text and the sidebar's right edge. Left padding stays at
+     10px for balance with the brand mark and section labels. */
+  padding: 14px 4px 10px 10px;
   display: flex; flex-direction: column; gap: 2px;
   overflow: hidden;
   z-index: 10;
@@ -204,17 +208,37 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 /* Section collapsed (toggle off): hide normal rows, but keep .is-active everywhere
    and .is-unread for sessions visible. */
 .cw-projects-list[data-expanded="false"] .cw-nav-row:not(.is-active),
-.cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread) { display: none; }
+.cw-sessions-list[data-expanded="false"] .cw-session-row:not(.is-active):not(.is-unread):not(.is-streaming) { display: none; }
 
-/* Quiet scrollbar — transparent by default. Pointer hover snaps to a faint tone
-   instantly. Focus is intentionally NOT a trigger so clicking a row and leaving
-   the area hides the scrollbar even though keyboard focus remains. */
-.cw-scroll-quiet { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-.cw-scroll-quiet:hover { scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 40%, transparent) transparent; }
-.cw-scroll-quiet::-webkit-scrollbar { width: 8px; height: 8px; }
+/* Quiet scrollbar — ChatGPT-style. A faint thumb is always visible so the
+   scrollable signal never disappears, and brightens to a near-default tone
+   when the user hovers the scroll area.
+   `scrollbar-width: thin` is critical here: without it macOS Chrome reserves
+   an OS-default gutter (~15px) regardless of `::-webkit-scrollbar { width }`
+   when the system pref is "Show scroll bars: Always". `thin` cuts the gutter
+   in half to ~7-8px — the floor we can hit purely in CSS. Going narrower
+   requires either OS-level overlay scrollbars or a custom scroller. */
+.cw-scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 20%, transparent) transparent;
+  transition: scrollbar-color 160ms ease;
+}
+.cw-scroll-quiet:hover {
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-3) 55%, transparent) transparent;
+}
+/* WebKit fallback for older Chromium (pre-121) and Safari, where the
+   pseudo-element controls width too. Same color steps as the standard
+   `scrollbar-color` above for visual parity. */
+.cw-scroll-quiet::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
 .cw-scroll-quiet::-webkit-scrollbar-track { background: transparent; }
-.cw-scroll-quiet::-webkit-scrollbar-thumb { background-color: transparent; border-radius: 4px; }
-.cw-scroll-quiet:hover::-webkit-scrollbar-thumb { background-color: color-mix(in oklch, var(--cw-fg-3) 40%, transparent); }
+.cw-scroll-quiet::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--cw-fg-3) 20%, transparent);
+  border-radius: 3px;
+  transition: background-color 160ms ease;
+}
+.cw-scroll-quiet:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklch, var(--cw-fg-3) 55%, transparent);
+}
 
 .cw-brand-lockup { display: flex; align-items: center; gap: 9px; border: 0; background: transparent; padding: 6px 8px 18px; border-radius: var(--cw-radius-md); min-width: 0; }
 .cw-brand-lockup:hover { background: var(--cw-bg-muted); }
@@ -298,7 +322,15 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 /* Session title shares its row with the agent chip (mode lives at title level). */
 .cw-session-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .cw-session-head-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.cw-messages { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
+/* Two-layer chat scroll: `.cw-messages-scroll` is the actual scroller and
+   spans the full chat-surface width, so the scrollbar lives at the chat
+   panel's rightmost edge (just before the side panel) regardless of how
+   the inner content is sized. `.cw-messages` keeps the 860px max-width and
+   auto-margin centering, but no longer owns the scrolling itself — so on
+   wide screens the bubble column can stay narrow without dragging the
+   scrollbar inward with it. */
+.cw-messages-scroll { flex: 1; min-height: 0; overflow-y: auto; width: 100%; }
+.cw-messages { padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
 .cw-message-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .cw-message-meta span { border: 1px solid var(--cw-border); color: var(--cw-fg-3); border-radius: var(--cw-radius-sm); padding: 1px 5px; font-size: 10px; }
 .cw-message-meta time { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
@@ -519,11 +551,10 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-file-folder { background: oklch(0.96 0.018 150); color: var(--cw-icon-recap); }
 .cw-file-sheet { background: oklch(0.96 0.018 150); color: var(--cw-cozy-sage); }
 .cw-file-image { background: oklch(0.965 0.018 45); color: var(--cw-cozy-clay); }
-.cw-share-pill, .cw-share-select { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; border-radius: var(--cw-radius-full); border: 1px solid var(--cw-border); background: var(--cw-bg); color: var(--cw-fg-2); padding: 4px 9px; font-size: 12px; }
-.cw-share-select select { border: 0; outline: 0; background: transparent; color: inherit; }
-.cw-share-pill.private, .cw-share-select.private { background: var(--cw-share-private-bg); border-color: var(--cw-share-private-border); color: var(--cw-share-private-fg); }
-.cw-share-pill.readonly, .cw-share-select.readonly { background: var(--cw-share-readonly-bg); border-color: var(--cw-share-readonly-border); color: var(--cw-share-readonly-fg); }
-.cw-share-pill.chat, .cw-share-select.chat { background: var(--cw-share-chat-bg); border-color: var(--cw-share-chat-border); color: var(--cw-share-chat-fg); }
+.cw-share-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; border-radius: var(--cw-radius-full); border: 1px solid var(--cw-border); background: var(--cw-bg); color: var(--cw-fg-2); padding: 4px 9px; font-size: 12px; }
+.cw-share-pill.private { background: var(--cw-share-private-bg); border-color: var(--cw-share-private-border); color: var(--cw-share-private-fg); }
+.cw-share-pill.readonly { background: var(--cw-share-readonly-bg); border-color: var(--cw-share-readonly-border); color: var(--cw-share-readonly-fg); }
+.cw-share-pill.chat { background: var(--cw-share-chat-bg); border-color: var(--cw-share-chat-border); color: var(--cw-share-chat-fg); }
 .cw-avatar-app { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: var(--cw-radius-full); color: white; font-size: 10px; font-weight: 700; flex: 0 0 auto; }
 .cw-avatar-app.small { width: 22px; height: 22px; font-size: 9px; }
 .cw-avatar-stack { display: inline-flex; align-items: center; }
@@ -595,7 +626,19 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-nav-row .cw-pocket,
 .cw-session-row .cw-pocket { width: 18px; height: 18px; border-radius: 5px; border: 0; }
 .cw-session-row .cw-pocket { width: 16px; height: 16px; border-radius: 4px; }
-.cw-session-row .cw-unread-badge { min-width: 32px; padding: 0 10px; justify-content: center; }
+/* Sidebar-context unread badge: same 16px height as IconPocket so the session
+   row baseline doesn't shift. Width grows from a 16×16 circle (1 digit) to a
+   pill (2 digits, or "99+"). 100+ collapses to "99+" in JSX. */
+.cw-session-row .cw-unread-badge.cw-unread-badge-compact {
+  height: 16px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: var(--cw-radius-full);
+  justify-content: center;
+  font-size: 9.5px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
 .cw-nav-home { background: color-mix(in oklch, var(--cw-cozy-clay) 16%, var(--cw-paper)); color: var(--cw-cozy-clay); }
 .cw-nav-files { background: color-mix(in oklch, var(--cw-cozy-honey) 22%, var(--cw-paper)); color: oklch(0.50 0.13 75); }
 .cw-nav-schedule { background: color-mix(in oklch, var(--cw-cozy-mustard) 24%, var(--cw-paper)); color: oklch(0.50 0.11 90); }
@@ -732,8 +775,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   background: var(--cw-paper-3);
   color: var(--cw-ink-3);
 }
-.cw-share-pill,
-.cw-share-select {
+.cw-share-pill {
   min-height: 20px;
   padding: 2px 8px 2px 7px;
   gap: 5px;
@@ -741,6 +783,218 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-size: 10px;
   font-weight: 500;
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   Select — generic custom dropdown (button trigger + listbox panel).
+   Behavior/structure only; each consumer styles its own trigger via a
+   class passed to <Select triggerClassName>. No colors baked in here.
+   - adaptiveWidth transitions the trigger to the current label's
+     intrinsic width via a hidden measurement clone (.cw-select-measure)
+   - panel is positioned below; min-width: 100% keeps it ≥ the trigger
+   ───────────────────────────────────────────────────────────────── */
+.cw-select-wrap {
+  position: relative;
+  display: inline-block;
+  /* A select is a control, not document text — never drag-select it.
+     The -webkit- prefix is required for Safari < 16.4. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Native-dropdown mode: a transparent real <select> overlays our (visual-only)
+   trigger, so the OS draws the dropdown while our trigger keeps its look. */
+.cw-select-wrap--native > button { pointer-events: none; }
+.cw-select-native-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Stop the <select>'s intrinsic (longest-option) width from leaking into the
+     inline-block wrapper's auto size, which would defeat the adaptive trigger. */
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  font: inherit;
+  cursor: default;
+}
+.cw-select-wrap--native:focus-within > button {
+  outline: 2px solid var(--cw-accent);
+  outline-offset: 2px;
+}
+
+/* Layout shared by the trigger button AND the measurement clone <span>, so
+   their boxes match. Element-qualified rules below are button-only. */
+.cw-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+button.cw-select {
+  /* Default arrow cursor, like a native <select> trigger. */
+  cursor: default;
+  font-family: inherit;
+  /* Keep the label on one line while the width transition runs;
+     without this the text wraps to two lines for a few frames. */
+  white-space: nowrap;
+  overflow: hidden;
+  transition: width 150ms ease-out,
+              background-color 150ms ease-out,
+              color 150ms ease-out,
+              border-color 150ms ease-out;
+}
+button.cw-select:disabled { cursor: not-allowed; opacity: 0.55; }
+button.cw-select:focus-visible {
+  outline: 2px solid var(--cw-accent);
+  outline-offset: 2px;
+}
+.cw-select > span { display: inline-flex; align-items: center; }
+
+/* CSS border-triangle caret — font-independent, currentColor aware. */
+.cw-select-caret {
+  display: inline-block;
+  width: 0; height: 0;
+  margin-left: 4px;
+  border: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  border-bottom: 0;
+  opacity: 0.65;
+  transform: translateY(1px);
+}
+button.cw-select[aria-expanded="true"] .cw-select-caret {
+  border-top: 0;
+  border-bottom: 5px solid currentColor;
+  transform: translateY(-1px);
+}
+
+/* Measurement clone — same box as the trigger so its intrinsic width
+   is the value the real button should be set to. */
+.cw-select-measure {
+  position: absolute !important;
+  left: -9999px !important;
+  top: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none;
+  transition: none !important;
+  width: max-content !important;
+}
+
+.cw-select-panel {
+  /* Portaled to <body> and pinned to the trigger in viewport coords (top/left/
+     min-width/max-height set inline by Select.tsx). Fixed positioning frees it
+     from any overflow:hidden / transformed ancestor that used to clip or shove
+     the surrounding layout. */
+  position: fixed;
+  max-width: calc(100vw - 16px);
+  max-height: 280px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  /* Horizontal padding insets each row, so the hover/selection highlight is a
+     rounded bar with a margin from the panel edge (not full-bleed). */
+  padding: 4px 6px;
+  background: var(--cw-bg);
+  border: 1px solid var(--cw-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px rgba(40, 30, 20, 0.08);
+  /* Above the dialog backdrop (70) so a Select used inside a dialog still
+     overlays it; below toast/tooltip-tier layers. */
+  z-index: 90;
+  /* A dropdown is a control, not document text — don't let rows be drag-selected.
+     The -webkit- prefix is required for Safari < 16.4. */
+  -webkit-user-select: none;
+  user-select: none;
+  /* Default arrow cursor everywhere inside (cursor inherits), so text rows —
+     including group headers — never show the I-beam. */
+  cursor: default;
+}
+/* Placement direction (below by default, flipped above when there's no room) is
+   computed in JS and applied via top/left inline; the class only selects the
+   matching open animation. */
+.cw-select-panel.is-below {
+  animation: cw-select-pop-down 90ms ease-out;
+}
+.cw-select-panel.is-above {
+  animation: cw-select-pop-up 90ms ease-out;
+}
+@keyframes cw-select-pop-down {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes cw-select-pop-up {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Group header: a subtle, medium-grey label (matching a native macOS dropdown
+   <optgroup>), with its options indented beneath to convey the hierarchy.
+   Sticks to the top while its options scroll under it. */
+.cw-select-group-label {
+  position: sticky;
+  top: -4px;
+  padding: 6px 12px 2px;
+  background: var(--cw-bg);
+  /* Same size and weight as an option row; only the light grey sets it apart. */
+  font-size: 13px;
+  font-weight: 400;
+  /* Very light grey (same as a disabled option) — a quiet section label. */
+  color: oklch(0.72 0.006 60);
+}
+/* Indent options under a group header to show the hierarchy (native parity). */
+.cw-select-panel.is-grouped .cw-select-option { padding-left: 26px; }
+
+.cw-select-option {
+  display: flex; align-items: center; gap: 7px;
+  /* Tight rows; border-radius makes the inset hover/selection bar rounded. */
+  padding: 4px 10px;
+  border-radius: 7px;
+  /* Default arrow cursor throughout the dropdown (like a native list). */
+  cursor: default;
+  white-space: nowrap;
+  font-size: 13px;
+  /* Strong, near-ink text so a disabled (grey) row clearly stands apart. */
+  color: var(--cw-fg-1, var(--cw-ink));
+}
+/* Only the hovered / keyboard-navigated row gets a background — a solid accent
+   bar with white text. The selected value is marked by the check alone (no
+   background), so "what's selected" (state) and "what's under the cursor"
+   (interaction) stay visually separate. */
+.cw-select-option:hover,
+.cw-select-option.is-focused { background: var(--cw-accent); color: #fff; }
+/* Disabled: a very light grey so it plainly reads as unavailable — crisp (no
+   opacity wash, no strikethrough), not-allowed cursor, and no hover highlight.
+   Listed after :hover so a disabled row never picks up the accent bar/text. */
+.cw-select-option.is-disabled {
+  color: oklch(0.72 0.006 60);
+}
+.cw-select-option.is-disabled:hover,
+.cw-select-option.is-disabled.is-focused { background: transparent; }
+.cw-select-check {
+  margin-left: auto;
+  color: var(--cw-accent);
+  font-weight: 700;
+}
+/* On the highlighted row the check turns white to stay visible on the bar. */
+.cw-select-option:hover .cw-select-check,
+.cw-select-option.is-focused .cw-select-check { color: #fff; }
+
+/* ShareSelect trigger — pill chip + share-mode colors layered on the
+   generic <Select>. Domain styling lives here, not in .cw-select. */
+.cw-select.cw-share-trigger {
+  min-height: 20px;
+  padding: 2px 8px 2px 7px;
+  gap: 5px;
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-full);
+  background: var(--cw-bg);
+  color: var(--cw-fg-2);
+  font-size: 10px;
+  font-weight: 500;
+}
+.cw-select.cw-share-trigger.private { background: var(--cw-share-private-bg); border-color: var(--cw-share-private-border); color: var(--cw-share-private-fg); }
+.cw-select.cw-share-trigger.readonly { background: var(--cw-share-readonly-bg); border-color: var(--cw-share-readonly-border); color: var(--cw-share-readonly-fg); }
+.cw-select.cw-share-trigger.chat { background: var(--cw-share-chat-bg); border-color: var(--cw-share-chat-border); color: var(--cw-share-chat-fg); }
 
 .cw-file-browser {
   border-radius: 12px;
@@ -797,7 +1051,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-file-more { width: 24px; height: 24px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--cw-ink-4); cursor: pointer; transition: background 120ms, color 120ms; }
 .cw-file-row:hover .cw-file-more { color: var(--cw-ink); }
 .cw-file-more:hover, .cw-file-more[aria-expanded="true"] { background: var(--cw-paper-3); color: var(--cw-ink); }
-.cw-file-dropdown { position: absolute; top: calc(100% + 4px); right: 0; z-index: 120; min-width: 148px; padding: 4px; list-style: none; margin: 0; background: var(--cw-paper); border: 1px solid var(--cw-line); border-radius: 10px; box-shadow: 0 4px 16px color-mix(in oklch, var(--cw-ink) 10%, transparent); }
+.cw-file-dropdown { position: absolute; top: calc(100% + 4px); right: 0; z-index: 120; min-width: 160px; width: max-content; padding: 4px; list-style: none; margin: 0; background: var(--cw-paper); border: 1px solid var(--cw-line); border-radius: 10px; box-shadow: 0 4px 16px color-mix(in oklch, var(--cw-ink) 10%, transparent); }
 .cw-file-dropdown li button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--cw-ink-2); font-size: 12.5px; cursor: pointer; text-align: left; white-space: nowrap; }
 .cw-file-dropdown li button:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
 .cw-file-dropdown-sep { height: 1px; background: var(--cw-line); margin: 3px 4px; }
@@ -970,7 +1224,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   border: 1px solid var(--cw-border);
   border-radius: 24px;
   background: var(--cw-paper);
-  transition: border-color 120ms, box-shadow 120ms;
+  transition: border-color 120ms, box-shadow 120ms, border-radius 200ms ease, padding 200ms ease;
   /* Shared name so navigating home <-> session morphs the box (see route viewTransition). */
   view-transition-name: cw-composer;
 }
@@ -978,7 +1232,27 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   border-color: var(--cw-border-hover);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--cw-accent), transparent 86%);
 }
-.cw-composer input {
+.cw-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+/* Expanded — long-form layout. The textarea sits on its own row spanning the
+   full width; the action buttons drop below, right-aligned. Triggered the
+   moment text in compact mode would wrap to a second row, so users get the
+   home-composer-like writing surface before the buttons can crowd the line. */
+.cw-composer-box[data-expanded="true"] {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 10px 14px 8px;
+  border-radius: 18px;
+}
+.cw-composer-box[data-expanded="true"] .cw-composer-actions {
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+.cw-composer textarea {
   flex: 1;
   min-width: 0;
   min-height: 24px;
@@ -993,6 +1267,14 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-size: 14px;
   line-height: 1.5;
   color: var(--cw-fg-1);
+}
+.cw-composer-box[data-expanded="true"] textarea {
+  width: 100%;
+  padding: 2px 0;
+  /* In column flex the container has no explicit height, so flex:1 collapses
+     the textarea to its min-height. Let the auto-grow effect's inline height
+     drive sizing instead. */
+  flex: 0 0 auto;
 }
 .cw-home-composer {
   position: static;
@@ -1066,7 +1348,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   ::view-transition-new(cw-composer) { animation: none; }
 }
 .cw-home-composer-input::placeholder,
-.cw-composer input::placeholder { color: var(--cw-fg-4); }
+.cw-composer textarea::placeholder { color: var(--cw-fg-4); }
 .cw-send-button {
   width: 34px;
   height: 34px;
@@ -1130,7 +1412,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   padding: 0 10px;
   font-size: 12px;
 }
-.cw-model-picker select { border: 0; outline: 0; background: transparent; color: inherit; cursor: pointer; font-size: 12px; }
+.cw-model-picker-trigger { border: 0; background: transparent; color: inherit; font-size: 12px; }
 
 /* Project home — "new conversation" surface */
 .cw-project-hero.is-slim { align-items: center; padding-bottom: var(--cw-space-4); margin-bottom: var(--cw-space-5); }
@@ -3082,7 +3364,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   font-size: 12px;
   color: var(--cw-ink-3);
 }
-.cw-runs-filter select {
+.cw-runs-filter-trigger {
   border: 1px solid var(--cw-line);
   background: var(--cw-paper-2);
   border-radius: var(--cw-radius-sm);
@@ -3837,8 +4119,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 
 /* SchedulePicker — Google Calendar-style recurrence builder. */
 .cw-schedule-picker { display: flex; flex-direction: column; gap: 10px; }
-.cw-schedule-picker input,
-.cw-schedule-picker select {
+.cw-schedule-picker input {
   border: 1px solid var(--cw-line);
   border-radius: var(--cw-radius-sm);
   background: var(--cw-paper-2);
@@ -3847,12 +4128,23 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
   color: var(--cw-ink);
   font-family: inherit;
 }
-.cw-schedule-picker input:focus,
-.cw-schedule-picker select:focus {
+.cw-schedule-picker input:focus {
   outline: none;
   border-color: var(--cw-accent);
   box-shadow: 0 0 0 3px var(--cw-selected-ring);
 }
+/* Schedule selects use <Select>; style its trigger like the inputs and let it
+   fill the row, with the caret pushed to the right edge. */
+.cw-sched-select {
+  width: 100%;
+  border: 1px solid var(--cw-line);
+  border-radius: var(--cw-radius-sm);
+  background: var(--cw-paper-2);
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--cw-ink);
+}
+.cw-sched-select .cw-select-caret { margin-left: auto; }
 .cw-schedule-picker input:disabled {
   background: var(--cw-paper-3);
   color: var(--cw-ink-3);

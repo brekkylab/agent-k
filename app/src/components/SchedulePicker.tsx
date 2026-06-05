@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Icon } from '@/components/Icon';
+import { Select } from '@/components/Select';
 
 export type SchedulePickerValue = { expr: string; tz: string };
 
@@ -196,28 +197,29 @@ export function SchedulePicker({
           onChange={(e) => update({ interval: Math.max(1, Math.min(24, parseInt(e.target.value, 10) || 1)) })}
           title={intervalDisabled ? t('sched.interval_hint') : ''}
         />
-        <select
-          className="cw-sched-unit"
+        <Select<Unit>
           value={state.unit}
-          onChange={(e) => update({ unit: e.target.value as Unit })}
-        >
-          <option value="hour">{t('sched.opt.hourly')}</option>
-          <option value="day">{t('sched.opt.daily')}</option>
-          <option value="week">{t('sched.opt.weekly')}</option>
-          <option value="month">{t('sched.opt.monthly')}</option>
-          <option value="custom">{t('sched.opt.custom')}</option>
-        </select>
+          onChange={(unit) => update({ unit })}
+          options={[
+            { value: 'hour', label: t('sched.opt.hourly') },
+            { value: 'day', label: t('sched.opt.daily') },
+            { value: 'week', label: t('sched.opt.weekly') },
+            { value: 'month', label: t('sched.opt.monthly') },
+            { value: 'custom', label: t('sched.opt.custom') },
+          ]}
+          className="cw-sched-unit"
+          triggerClassName="cw-sched-select"
+          ariaLabel={t('sched.repeat_every')}
+        />
       </div>
 
       {/* Row 2: Monthly mode dropdown */}
       {state.unit === 'month' && (
         <div className="cw-sched-row">
           <span className="cw-sched-label">{t('sched.repeat_mode')}</span>
-          <select
-            className="cw-sched-unit"
+          <Select
             value={state.monthlyMode === 'day' ? `day-${state.dayOfMonth}` : `wk-${state.nth}-${state.nthWeekday}`}
-            onChange={(e) => {
-              const v = e.target.value;
+            onChange={(v) => {
               if (v.startsWith('day-')) {
                 update({ monthlyMode: 'day', dayOfMonth: parseInt(v.slice(4), 10) });
               } else if (v.startsWith('wk-')) {
@@ -225,15 +227,20 @@ export function SchedulePicker({
                 update({ monthlyMode: 'weekday', nth: parseInt(nthStr, 10), nthWeekday: parseInt(wdStr, 10) });
               }
             }}
-          >
-            <option value={`day-${state.dayOfMonth}`}>{t('sched.monthly_day_opt', { day: state.dayOfMonth })}</option>
-            <option value={`wk-${state.nth}-${state.nthWeekday}`}>
-              {t('sched.monthly_weekday_opt', {
-                nth: nthArr[state.nth - 1] ?? String(state.nth),
-                weekday: weekdayArr[state.nthWeekday],
-              })}
-            </option>
-          </select>
+            options={[
+              { value: `day-${state.dayOfMonth}`, label: t('sched.monthly_day_opt', { day: state.dayOfMonth }) },
+              {
+                value: `wk-${state.nth}-${state.nthWeekday}`,
+                label: t('sched.monthly_weekday_opt', {
+                  nth: nthArr[state.nth - 1] ?? String(state.nth),
+                  weekday: weekdayArr[state.nthWeekday],
+                }),
+              },
+            ]}
+            className="cw-sched-unit"
+            triggerClassName="cw-sched-select"
+            ariaLabel={t('sched.repeat_mode')}
+          />
         </div>
       )}
 
@@ -257,20 +264,22 @@ export function SchedulePicker({
       {state.unit === 'month' && state.monthlyMode === 'weekday' && (
         <div className="cw-sched-row">
           <span className="cw-sched-label">{t('sched.detail')}</span>
-          <select
-            className="cw-sched-unit cw-sched-unit-narrow"
+          <Select<number>
             value={state.nth}
-            onChange={(e) => update({ nth: parseInt(e.target.value, 10) })}
-          >
-            {nthArr.map((n, i) => <option key={i} value={i + 1}>{n}</option>)}
-          </select>
-          <select
+            onChange={(nth) => update({ nth })}
+            options={nthArr.map((n, i) => ({ value: i + 1, label: n }))}
             className="cw-sched-unit cw-sched-unit-narrow"
+            triggerClassName="cw-sched-select"
+            ariaLabel={t('sched.detail')}
+          />
+          <Select<number>
             value={state.nthWeekday}
-            onChange={(e) => update({ nthWeekday: parseInt(e.target.value, 10) })}
-          >
-            {weekdayArr.map((d, i) => <option key={i} value={i}>{t('sched.weekday_option', { day: d })}</option>)}
-          </select>
+            onChange={(nthWeekday) => update({ nthWeekday })}
+            options={weekdayArr.map((d, i) => ({ value: i, label: t('sched.weekday_option', { day: d }) }))}
+            className="cw-sched-unit cw-sched-unit-narrow"
+            triggerClassName="cw-sched-select"
+            ariaLabel={t('sched.weekday_label')}
+          />
         </div>
       )}
 

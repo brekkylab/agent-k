@@ -11,12 +11,13 @@ import { buildFolderTree, type FolderNode } from '@/domain/files';
 import { localizedNoun } from '@/i18n';
 import { Icon } from './Icon';
 import { useToastStore } from './Toast';
+import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface Props {
   open: boolean;
   projectId: string;
-  sessionId: string;
-  sourcePaths: string[];      // scope-relative paths under artifacts/
+  sourceScope: DirentScope;
+  sourcePaths: string[];      // scope-relative paths under sourceScope
   onClose: () => void;
   onDone: () => void;
 }
@@ -93,13 +94,12 @@ function PickerNode({
   );
 }
 
-export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, onClose, onDone }: Props) {
+export function CopyToSharedDialog({ open, projectId, sourceScope, sourcePaths, onClose, onDone }: Props) {
   const { t, i18n } = useTranslation('dialogs');
   const { t: tCommon } = useTranslation('common');
   const showToast = useToastStore((s) => s.show);
 
   const sharedScope: DirentScope = { kind: 'shared', projectId };
-  const artifactsScope: DirentScope = { kind: 'artifacts', projectId, sessionId };
 
   const entries = useQuery({
     queryKey: ['dirents', 'shared', projectId],
@@ -119,7 +119,7 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
   const [selected, setSelected] = useState<string>('');
 
   const copyMutation = useMutation({
-    mutationFn: (dest: string) => copyDirents(artifactsScope, sharedScope, sourcePaths, dest),
+    mutationFn: (dest: string) => copyDirents(sourceScope, sharedScope, sourcePaths, dest),
     onSuccess: () => {
       showToast(t('copy_to_shared.success'));
       onDone();
@@ -131,18 +131,19 @@ export function CopyToSharedDialog({ open, projectId, sessionId, sourcePaths, on
 
   const pending = copyMutation.isPending;
 
+  // ESC routes through the modal stack; the dialog only registers while open
+  // so closed instances don't sit on the stack swallowing events.
+  useDialogEscape(onClose, { disabled: pending || !open });
   useEffect(() => {
+    if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !pending) onClose();
       if (e.key === 'Enter' && !pending) {
         e.preventDefault();
         copyMutate(selected);
       }
     }
-    if (open) {
-      window.addEventListener('keydown', onKey);
-      return () => window.removeEventListener('keydown', onKey);
-    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose, copyMutate, pending, selected]);
 
   const downOnBackdropRef = useRef(false);
