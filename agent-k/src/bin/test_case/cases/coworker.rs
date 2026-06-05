@@ -363,8 +363,8 @@ pub fn get_coworker_cases() -> Vec<Case> {
                  too flashy. The company is a gaming startup.",
             )]),
             files: vec![(
-                include_bytes!("2026_1분기_실적보고서.txt").to_vec(),
-                PathBuf::from("2026_1분기_실적보고서.txt"),
+                include_bytes!("2026_Q1_Performance_Report.txt").to_vec(),
+                PathBuf::from("2026_Q1_Performance_Report.txt"),
             )],
             shared_files: Vec::new(),
         },
