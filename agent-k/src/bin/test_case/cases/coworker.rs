@@ -130,56 +130,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             ],
             shared_files: Vec::new(),
         },
-        // Case 10 — pptx create (source: comirnaty0.1mg.txt)
-        Case {
-            query: Message::new(Role::User).with_contents([Part::text(
-                    "Using artifacts/comirnaty0.1mg.txt as the source content, \
-                    produce a presentation and save it to \
-                    artifacts/result/comirnaty_brochure.pptx (create the \
-                    artifacts/result/ directory if it does not exist). Summarize \
-                    the brochure for a clinical audience. Preserve the original \
-                    Korean text. Include a title slide, an agenda slide, one \
-                    slide per major section (composition, dosing schedule, \
-                    booster, storage, etc.), and a closing slide. Use a \
-                    consistent theme, readable font sizes, and bullet points \
-                    rather than walls of text. \
-                    (Environment: any attached files are already at artifacts/; \
-                    put helper scripts in the working directory, not /tmp.)",
-            )]),
-            files: vec![(
-                include_bytes!("comirnaty0.1mg.txt").to_vec(),
-                PathBuf::from("comirnaty0.1mg.txt"),
-            )],
-            shared_files: Vec::new(),
-        },
-        // Case 11 — pptx edit (source: comirnaty_deck gpt5.5 skills.pptx)
-        Case {
-            query: Message::new(Role::User).with_contents([Part::text(
-                "Open artifacts/slides.pptx and make four edits: update the \
-                 title slide subtitle to today's date in ISO format; append a \
-                 new closing slide titled \"Thank You\" with a single centered \
-                 line \"Questions?\"; change every slide's footer to \
-                 \"Confidential — Internal Use Only\"; and on slide 3 remove \
-                 the two red-arrow + small-blue-rectangle pairs that sit just \
-                 below the red circles labeled \"1차\" and \"2차\". Each pair \
-                 consists of a small blue rectangle with a red arrow attached \
-                 to it — both shapes in each pair are visually out of place, \
-                 so remove all four shapes (two red arrows + two blue \
-                 rectangles) total. Apply the same removal to slide 4 if \
-                 similarly out-of-place arrow/rectangle pairs exist. Save the \
-                 result as \
-                 artifacts/slides_edited.pptx and leave the original \
-                 untouched. \
-                 (Environment: any attached files are already at artifacts/; \
-                 put helper scripts in the working directory, not /tmp.)",
-            )]),
-            files: vec![(
-                include_bytes!("comirnaty_deck gpt5.5 skills.pptx").to_vec(),
-                PathBuf::from("slides.pptx"),
-            )],
-            shared_files: Vec::new(),
-        },
-        // Case 12 — xlsx create: 학생 성적 (skill is provided by the coworker agent; toggle via `--no-skill`)
+        // Case 10 — xlsx create: 학생 성적 (skill is provided by the coworker agent; toggle via `--no-skill`)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "학생 성적 관리용 엑셀 파일 하나 만들어줘. 학생 12명 정도 \
@@ -196,7 +147,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             files: vec![],
             shared_files: Vec::new(),
         },
-        // Case 13 — xlsx create: sales_dashboard.xlsx multi-sheet (skill from coworker agent)
+        // Case 11 — xlsx create: sales_dashboard.xlsx multi-sheet (skill from coworker agent)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "sales_dashboard.xlsx 파일 하나 만들어줘.\n\n\
@@ -229,7 +180,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             files: vec![],
             shared_files: Vec::new(),
         },
-        // Case 14 — xlsx edit: sales_dashboard.xlsx with 수수료 column insert (skill from coworker agent)
+        // Case 12 — xlsx edit: sales_dashboard.xlsx with 수수료 column insert (skill from coworker agent)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "artifacts/sales_dashboard.xlsx 엑셀 파일을 수정해줘.\n\n\
@@ -248,7 +199,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )],
             shared_files: Vec::new(),
         },
-        // Case 15 — xlsx create: financial_report.xlsx (skill from coworker agent)
+        // Case 13 — xlsx create: financial_report.xlsx (skill from coworker agent)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "financial_report.xlsx 생성해줘.\n\n\
@@ -271,6 +222,150 @@ pub fn get_coworker_cases() -> Vec<Case> {
                  - 머리글/바닥글 설정",
             )]),
             files: vec![],
+            shared_files: Vec::new(),
+        },
+        // Case 14 — pptx create (source: comirnaty0.1mg.txt)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                    "Using artifacts/comirnaty0.1mg.txt as the source content, \
+                    produce a presentation and save it to \
+                    artifacts/result/comirnaty_brochure.pptx (create the \
+                    artifacts/result/ directory if it does not exist). Summarize \
+                    the brochure for a clinical audience. Preserve the original \
+                    Korean text. Include a title slide, an agenda slide, one \
+                    slide per major section (composition, dosing schedule, \
+                    booster, storage, etc.), and a closing slide. Use a \
+                    consistent theme, readable font sizes, and bullet points \
+                    rather than walls of text. \
+                    (Environment: any attached files are already at artifacts/; \
+                    put helper scripts in the working directory, not /tmp.)",
+            )]),
+            files: vec![(
+                include_bytes!("comirnaty0.1mg.txt").to_vec(),
+                PathBuf::from("comirnaty0.1mg.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 15 — pptx edit (source: comirnaty_deck gpt5.5 skills.pptx)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "Open artifacts/slides.pptx and make four edits: update the \
+                 title slide subtitle to today's date in ISO format; append a \
+                 new closing slide titled \"Thank You\" with a single centered \
+                 line \"Questions?\"; change every slide's footer to \
+                 \"Confidential — Internal Use Only\"; and on slide 3 remove \
+                 the two red-arrow + small-blue-rectangle pairs that sit just \
+                 below the red circles labeled \"1차\" and \"2차\". Each pair \
+                 consists of a small blue rectangle with a red arrow attached \
+                 to it — both shapes in each pair are visually out of place, \
+                 so remove all four shapes (two red arrows + two blue \
+                 rectangles) total. Apply the same removal to slide 4 if \
+                 similarly out-of-place arrow/rectangle pairs exist. Save the \
+                 result as \
+                 artifacts/slides_edited.pptx and leave the original \
+                 untouched. \
+                 (Environment: any attached files are already at artifacts/; \
+                 put helper scripts in the working directory, not /tmp.)",
+            )]),
+            files: vec![(
+                include_bytes!("comirnaty_deck gpt5.5 skills.pptx").to_vec(),
+                PathBuf::from("slides.pptx"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 16 — pptx create (Q2 business review for exec meeting)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "이번 분기 사업 정리 발표자료 하나 만들어줘.\n\n\
+                 임원회의 때 쓸 거고 너무 화려하지 않게.\n\
+                 10장 내외로 적당히 요약해줘.\n\n\
+                 내용은:\n\
+                 - 매출은 전년 대비 좀 늘었고\n\
+                 - 일본 쪽은 정체\n\
+                 - 동남아는 꽤 성장함\n\
+                 - 운영 비용이 좀 많이 늘어남\n\
+                 - 하반기에는 자동화랑 AI 쪽 투자 예정\n\n\
+                 그래프나 표도 적당히 넣어주고\n\
+                 마지막에는 액션아이템 정리 슬라이드 하나 넣어줘.\n\n\
+                 파일명은 artifacts/result/q2_review.pptx 로 저장해줘 \
+                 (artifacts/result/ 디렉토리가 없으면 만들어). \
+                 (Environment: 첨부파일은 artifacts/ 아래에 이미 있음; \
+                 헬퍼 스크립트는 /tmp 가 아니라 working directory에 둬.)",
+            )]),
+            files: Vec::new(),
+            shared_files: Vec::new(),
+        },
+        // Case 17 — pptx create (team-meeting market review, startup feel)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "artifacts/market_research.txt 참고해서\n\
+                 팀 회의용 ppt 만들어줘.\n\n\
+                 내용 너무 길지 않게 요약하고\n\
+                 중요한 포인트 위주로 정리해줘.\n\
+                 차트나 비교표 적당히 넣어주고\n\
+                 스타트업 느낌 나게 깔끔하게 만들어줘.\n\n\
+                 파일명은 market_review.pptx 로 저장해줘",
+            )]),
+            files: vec![(
+                include_bytes!("market_research.txt").to_vec(),
+                PathBuf::from("market_research.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 18 — pptx create (Q1 2026 실적보고서, gaming startup exec meeting)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "첨부한 txt 내용 보고 PPT 좀 만들어줘. 다음 주에 임원 회의 \
+                 발표용이야.\n\
+                 10장 내외로 깔끔하게, 차트나 표 들어가면 좋고. 너무 화려하지 \
+                 말고. 회사는 게임 스타트업이야",
+            )]),
+            files: vec![(
+                include_bytes!("2026_1분기_실적보고서.txt").to_vec(),
+                PathBuf::from("2026_1분기_실적보고서.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 19 — pptx create (NORTH AVENUE brand ops review, marketing/brand team internal)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "이거 정리해서 PPT 좀 만들어줘. 다음 주에 마케팅·브랜드팀 \
+                 같이 모여서 한 해 운영 돌아보는 자리야. 10장 정도면 될 듯.",
+            )]),
+            files: vec![(
+                include_bytes!("브랜드 운영 기록 정리본.txt").to_vec(),
+                PathBuf::from("브랜드 운영 기록 정리본.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 20 — pptx create (English mirror of case 17, same market_research.txt source)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "Take a look at artifacts/market_research.txt and put \
+                 together a team-meeting PPT.\n\n\
+                 Keep it tight — summarise without rambling and lead with \
+                 the key points. Drop in a chart or comparison table where \
+                 it helps, and keep the overall feel clean and startup-ish.\n\n\
+                 Save it as market_review.pptx",
+            )]),
+            files: vec![(
+                include_bytes!("market_research.txt").to_vec(),
+                PathBuf::from("market_research.txt"),
+            )],
+            shared_files: Vec::new(),
+        },
+        // Case 21 — pptx create (English mirror of case 18, same 2026_1분기_실적보고서.txt source)
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "Take a look at the attached txt and put together a PPT — \
+                 it's for next week's exec meeting.\n\
+                 About 10 slides, clean. Charts or tables welcome, nothing \
+                 too flashy. The company is a gaming startup.",
+            )]),
+            files: vec![(
+                include_bytes!("2026_Q1_Performance_Report.txt").to_vec(),
+                PathBuf::from("2026_Q1_Performance_Report.txt"),
+            )],
             shared_files: Vec::new(),
         },
     ]
