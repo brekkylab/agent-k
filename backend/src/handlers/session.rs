@@ -18,7 +18,9 @@ use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
     events::{RunUserMessage, WsEvent},
-    handlers::dirent::{DirentScope, enforce_scope_access, parse_dirent_path, scope_root},
+    handlers::dirent::{
+        DirentScope, copy_dir_recursive, enforce_scope_access, parse_dirent_path, scope_root,
+    },
     model::{
         CreateSessionRequest, MessageSender, RunAck, SendMessageRequest, SessionListResponse,
         SessionMessageListResponse, SessionMessageResponse, SessionResponse, UpdateSessionRequest,
@@ -480,7 +482,11 @@ pub async fn update_session(
     // [R2-4] share_mode downgrade to private: evict non-creator subscribers immediately
     // instead of waiting for Task D's 60-second poll.
     if payload.share_mode == ShareMode::Private && session.share_mode != ShareMode::Private {
-        if let Ok(members) = state.repository.list_project_members(session.project_id).await {
+        if let Ok(members) = state
+            .repository
+            .list_project_members(session.project_id)
+            .await
+        {
             for (member, _) in members {
                 if member.id == session.creator_id {
                     continue;
@@ -589,10 +595,24 @@ pub async fn fork_session(
         .mark_session_read(new_id, auth_user.id)
         .await;
 
-    // Pre-create host dirs for the forked session.
+    // Mirror the source session's host files into the fork so the snapshot matches
+    // the VM upper.ext4 clone. shared/ is project-level and intentionally excluded.
+    let (src_inputs, _, src_artifacts) = session_dirs(&state, source.project_id, source_session_id);
     let (new_inputs, _, new_artifacts) = session_dirs(&state, source.project_id, new_id);
-    for d in [&new_inputs, &new_artifacts] {
-        let _ = tokio::fs::create_dir_all(d).await;
+    for (src, dst) in [(&src_inputs, &new_inputs), (&src_artifacts, &new_artifacts)] {
+        let res = if tokio::fs::try_exists(src).await.unwrap_or(false) {
+            copy_dir_recursive(src, dst).await
+        } else {
+            tokio::fs::create_dir_all(dst).await
+        };
+        if let Err(e) = res {
+            tracing::warn!(
+                source = %source_session_id,
+                fork = %new_id,
+                dir = ?dst,
+                "failed to copy session dir on fork: {e}",
+            );
+        }
     }
 
     let source_cfg = SandboxConfig {

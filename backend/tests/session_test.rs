@@ -667,6 +667,160 @@ async fn fork_readonly_member_can_fork() {
     );
 }
 
+// ── fork: fork_copies_host_files ─────────────────────────────────────────────
+
+/// Forking a session with files in `artifacts/` and `inputs/` must produce a
+/// fork whose host directories contain the same files (snapshot semantics).
+/// Subsequent changes to the source must not appear in the fork.
+#[tokio::test]
+async fn fork_copies_host_files() {
+    dotenvy::dotenv().ok();
+    common::setup_provider().await;
+
+    let (app, repo, state) = common::make_app_repo_state().await;
+
+    let alice_info = common::signup(&app, "alice", "password123").await;
+    let alice_token = common::login(&app, "alice", "password123").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+
+    let source = repo.create_session(project_id, alice_id).await.unwrap();
+
+    // Pre-populate the source session's host dirs to simulate a session that
+    // produced files.
+    let session_root = state
+        .data_root
+        .join("projects")
+        .join(project_id.to_string())
+        .join("sessions")
+        .join(source.id.to_string());
+    let src_artifacts = session_root.join("artifacts");
+    let src_inputs = session_root.join("inputs");
+    tokio::fs::create_dir_all(&src_artifacts).await.unwrap();
+    tokio::fs::create_dir_all(&src_inputs).await.unwrap();
+    tokio::fs::write(src_artifacts.join("chart.png"), b"fake-png-data")
+        .await
+        .unwrap();
+    tokio::fs::write(src_artifacts.join("report.md"), b"# Report")
+        .await
+        .unwrap();
+    tokio::fs::write(src_inputs.join("data.csv"), b"a,b\n1,2")
+        .await
+        .unwrap();
+
+    let (status, body) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{}/fork", source.id),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "fork must return 201: {body}");
+
+    let fork_id = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
+    let fork_root = state
+        .data_root
+        .join("projects")
+        .join(project_id.to_string())
+        .join("sessions")
+        .join(fork_id.to_string());
+    let fork_artifacts = fork_root.join("artifacts");
+    let fork_inputs = fork_root.join("inputs");
+
+    // Both artifact files must be present in the fork.
+    assert!(
+        fork_artifacts.join("chart.png").exists(),
+        "chart.png must be copied to fork artifacts"
+    );
+    assert!(
+        fork_artifacts.join("report.md").exists(),
+        "report.md must be copied to fork artifacts"
+    );
+    assert_eq!(
+        tokio::fs::read(fork_artifacts.join("chart.png"))
+            .await
+            .unwrap(),
+        b"fake-png-data",
+        "artifact content must match source"
+    );
+
+    // Input file must be present in the fork.
+    assert!(
+        fork_inputs.join("data.csv").exists(),
+        "data.csv must be copied to fork inputs"
+    );
+    assert_eq!(
+        tokio::fs::read(fork_inputs.join("data.csv")).await.unwrap(),
+        b"a,b\n1,2",
+        "input content must match source"
+    );
+
+    // Snapshot independence: adding a file to the source after the fork must
+    // not appear in the fork's directory.
+    tokio::fs::write(src_artifacts.join("post_fork.txt"), b"new")
+        .await
+        .unwrap();
+    assert!(
+        !fork_artifacts.join("post_fork.txt").exists(),
+        "files added to source after fork must not appear in fork"
+    );
+}
+
+// ── fork: fork_empty_session_succeeds ────────────────────────────────────────
+
+/// Forking a session that never created any files must still succeed and must
+/// produce empty (but present) `artifacts/` and `inputs/` directories.
+#[tokio::test]
+async fn fork_empty_session_succeeds() {
+    dotenvy::dotenv().ok();
+    common::setup_provider().await;
+
+    let (app, repo, state) = common::make_app_repo_state().await;
+
+    let alice_info = common::signup(&app, "alice", "password123").await;
+    let alice_token = common::login(&app, "alice", "password123").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+
+    // Source session has no host dirs at all (never ran the agent).
+    let source = repo.create_session(project_id, alice_id).await.unwrap();
+
+    let (status, body) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{}/fork", source.id),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "fork of empty session must return 201: {body}"
+    );
+
+    let fork_id = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
+    let fork_root = state
+        .data_root
+        .join("projects")
+        .join(project_id.to_string())
+        .join("sessions")
+        .join(fork_id.to_string());
+
+    // Directories must exist (even if empty) so the agent can bind-mount them.
+    assert!(
+        fork_root.join("artifacts").is_dir(),
+        "fork artifacts dir must exist even when source had none"
+    );
+    assert!(
+        fork_root.join("inputs").is_dir(),
+        "fork inputs dir must exist even when source had none"
+    );
+}
+
 // ── session CRUD ──────────────────────────────────────────────────────────────
 
 /// DELETE /sessions/{id} returns 404 for an unknown session.
