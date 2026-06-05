@@ -8,10 +8,10 @@ Usage (inside the sandbox):
     issues = verify("/workspace/artifacts/deck.pptx")
     print(summarize(issues))
 
-`verify()` returns a dict with seven check keys: `palette`, `fonts`,
-`sizes`, `overflow`, `page_numbers`, `overlap`, `chart_strict`. An
-empty list per key = passed. Heuristic: catches the most-violated
-SKILL.md rules, not every nuance.
+`verify()` returns a dict with eight check keys: `palette`, `fonts`,
+`sizes`, `overflow`, `page_numbers`, `overlap`, `chart_strict`,
+`word_wrap`. An empty list per key = passed. Heuristic: catches the
+most-violated SKILL.md rules, not every nuance.
 """
 
 from __future__ import annotations
@@ -587,6 +587,62 @@ def check_chart_strict(prs) -> list[tuple[int, str, str]]:
     return issues
 
 
+def check_word_wrap(prs) -> list[tuple[int, str]]:
+    """Flag text frames with `word_wrap = False` whose text won't fit on one line.
+
+    PowerPoint Mac respects `word_wrap = False` literally and grows the
+    shape *horizontally* to fit text on a single line — pushing text
+    past the designed box width onto neighboring elements. soffice and
+    Google Slides force-wrap regardless, so the failure is invisible
+    in the sandbox PNG.
+
+    Short labels ("Q1", "3 / 10", "187억") fit on one line anyway and
+    pass; only multi-token bodies whose single-line estimate exceeds
+    box width are flagged.
+
+    Returns (slide_idx, snippet).
+    """
+    issues: list[tuple[int, str]] = []
+    for i, slide in enumerate(prs.slides, 1):
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            tf = shape.text_frame
+            if tf.word_wrap is not False:
+                continue
+            text = tf.text.strip()
+            if not text:
+                continue
+            try:
+                w_in = shape.width / 914400 if shape.width else 0
+            except (AttributeError, TypeError):
+                continue
+            if w_in <= 0:
+                continue
+            try:
+                ml = (tf.margin_left or 0) / 914400
+                mr = (tf.margin_right or 0) / 914400
+            except AttributeError:
+                ml = mr = 0.1
+            effective_w = max(0.1, w_in - ml - mr)
+            font_pt = 14
+            for para in tf.paragraphs:
+                for r in para.runs:
+                    try:
+                        if r.font.size:
+                            font_pt = max(font_pt, round(r.font.size.pt))
+                    except AttributeError:
+                        pass
+            # CJK glyphs count as 2 ASCII widths; ~12 ASCII units per inch at 14pt.
+            units = sum(2 if ord(ch) > 0x7F else 1 for ch in text)
+            chars_per_line = max(1, int(effective_w * 12 * 14 / font_pt))
+            # Flag only when the deficit is clear (>30% over). Borderline
+            # one-line labels (e.g. "32.4%" in a 0.45" box at 18pt) pass.
+            if units > chars_per_line * 1.3:
+                issues.append((i, text[:40].replace("\n", " ")))
+    return issues
+
+
 # --- top-level ----------------------------------------------------------------
 
 def verify(pptx_path: str | Path) -> dict[str, Any]:
@@ -606,6 +662,7 @@ def verify(pptx_path: str | Path) -> dict[str, Any]:
         "page_numbers": check_page_numbers(prs),
         "overlap": check_overlap(prs),
         "chart_strict": check_chart_strict(prs),
+        "word_wrap": check_word_wrap(prs),
     }
 
 
@@ -630,6 +687,11 @@ def summarize(issues: dict[str, Any]) -> str:
         flags.append(
             f"{len(issues['chart_strict'])} chart XML violations "
             "(strict PowerPoint strips them)"
+        )
+    if issues.get("word_wrap"):
+        flags.append(
+            f"{len(issues['word_wrap'])} text boxes with word_wrap=False "
+            "overflow horizontally in PowerPoint Mac"
         )
     if not flags:
         return f"{n} slides — all checks passed ({p['matched']})."

@@ -31,6 +31,9 @@ Two non-negotiable rules:
   `bubble3D`) and that other parsers silently ignore (Rendering
   notes — Charts)
 - No `MSO_AUTO_SIZE` on titles / KPI / tags / captions (Anti-patterns)
+- `text_frame.word_wrap = True` on every text box — `False` lets the
+  shape grow horizontally past the design in PowerPoint Mac (Rendering
+  notes — Text-box sizing)
 - Only `.pptx` surfaces to `artifacts/` (Anti-patterns)
 
 ---
@@ -112,7 +115,7 @@ issues = verify("/workspace/artifacts/deck.pptx")
 print(summarize(issues))
 ```
 
-It returns a dict with seven checks:
+It returns a dict with eight checks:
 
 - `palette` — gallery match + frequency-weighted drift
 - `fonts` — runs containing CJK with no East-Asian typeface set
@@ -133,12 +136,16 @@ It returns a dict with seven checks:
   missing `<c:bubble3D>` for per-slice colors). Other parsers ignore
   both, so the failure is invisible until PowerPoint opens the deck
   and strips the chart → apparently-blank slide.
+- `word_wrap` — text frames with `word_wrap = False` whose single-line
+  text estimate exceeds the box width. In PowerPoint Mac the shape
+  grows horizontally past the design; soffice / Google Slides
+  force-wrap so the failure is invisible until PowerPoint opens it.
 
 `palette` returns a dict (passed when `coverage >= 0.85` against a
-gallery match); the other six return lists (passed when empty). Use
+gallery match); the other seven return lists (passed when empty). Use
 the *slide indices* in non-empty lists to target fixes.
 
-**Do not `read` or `cat` `verify_pptx.py`** — the seven checks above
+**Do not `read` or `cat` `verify_pptx.py`** — the eight checks above
 are the full contract. Only read the source if you hit an unexpected
 exception.
 
@@ -581,6 +588,16 @@ lean on autosize.** `MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT` is a trap on
 short fixed-shape elements — autogrowth overlaps neighbors and
 breaks the grid.
 
+**Set `text_frame.word_wrap = True` explicitly** on every text box.
+Explicit `False` is the failure mode: PowerPoint Mac respects it
+literally and grows the shape *horizontally* to fit text on one
+line, silently pushing a multi-line body or KPI description past
+the designed card edge onto neighbors. soffice / Google Slides
+force-wrap regardless so the failure is invisible until the deck
+opens in PowerPoint Mac. (Unset / `None` defaults to wrap-on per
+OOXML and is safe, but setting `True` makes the intent explicit and
+survives copy-paste through code that flips defaults.)
+
 Korean / CJK glyphs occupy ~2× ASCII width: a 2.5" box holds ~14
 Korean chars per line at 14 pt body, *not* 30. And CJK wraps where
 the estimator predicts one line. **For CJK decks, assume every
@@ -693,6 +710,10 @@ layout every deck.
   either, fires the recovery dialog, and strips the chart →
   apparently-blank slide. Other parsers ignore both, so the failure
   is invisible until the deck opens in PowerPoint.
+- Text boxes with `word_wrap = False` — PowerPoint Mac grows the
+  shape horizontally past the designed width to fit text on one
+  line, pushing the text over neighboring elements. soffice / Google
+  Slides force-wrap so this is invisible in the sandbox PNG.
 - Multiple files in `artifacts/` — only the final `.pptx` belongs
   there. Chart PNGs, verify PDFs/PNGs, helper scripts, and
   `outline.md` all stay in the working directory.
