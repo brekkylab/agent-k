@@ -1,10 +1,12 @@
 import { request } from './client';
 import type { BackendSession } from './backend-types';
 import { toSession } from './transformers';
-import type { Session, ShareMode } from '@/domain/types';
+import type { Session, SessionOrigin, ShareMode } from '@/domain/types';
 
-export async function listSessions(projectRef: string): Promise<Session[]> {
-  const res = await request<{ items: BackendSession[] }>(`/sessions?project_ref=${encodeURIComponent(projectRef)}`);
+export async function listSessions(projectRef: string, origin?: SessionOrigin): Promise<Session[]> {
+  const params = new URLSearchParams({ project_ref: projectRef });
+  if (origin) params.set('origin', origin);
+  const res = await request<{ items: BackendSession[] }>(`/sessions?${params.toString()}`);
   return res.items.map(toSession);
 }
 

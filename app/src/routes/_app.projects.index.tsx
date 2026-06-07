@@ -66,9 +66,9 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
   const { t } = useTranslation(['project', 'common', 'members']);
   const currentUser = useAuthStore((s) => s.currentUser);
   const members = useQuery({ queryKey: ['members', project.slug], queryFn: () => listMembers(project.slug) });
-  const sessions = useQuery({ queryKey: ['sessions', project.slug], queryFn: () => listSessions(project.slug) });
+  const sessions = useQuery({ queryKey: ['sessions', project.slug, 'user'], queryFn: () => listSessions(project.slug, 'user') });
   const isOwner = currentUser?.id === project.ownerId;
-  const userSessions = (sessions.data ?? []).filter((s) => s.origin === 'user');
+  const userSessions = sessions.data ?? [];
   const latestRaw = latestUpdated(userSessions);
   const latest = latestRaw === 'new' ? t('card.latest_new') : latestRaw;
   const memberUsers: User[] = members.data ?? [];

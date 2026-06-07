@@ -237,8 +237,8 @@ export function Sidebar() {
   const activeProject = (projectsQuery.data ?? []).find((p) => p.slug === activeProjectSlug);
 
   const sessionsQuery = useQuery({
-    queryKey: ['sessions', activeProjectSlug],
-    queryFn: () => listSessions(activeProjectSlug!),
+    queryKey: ['sessions', activeProjectSlug, 'user'],
+    queryFn: () => listSessions(activeProjectSlug!, 'user'),
     enabled: Boolean(activeProjectSlug),
   });
 
@@ -476,7 +476,7 @@ export function Sidebar() {
               onViewAll={() => setSessionsOverlayOpen(true)}
             />
             <div className="cw-sessions-list" data-expanded={sessionsExpanded ? 'true' : 'false'}>
-              {(sessionsQuery.data ?? []).filter((s) => s.origin === 'user').map((session) => {
+              {(sessionsQuery.data ?? []).map((session) => {
                 const canDelete = canAdministerSession(session, activeProject, currentUser);
                 return (
                   <div

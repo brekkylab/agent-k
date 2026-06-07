@@ -26,7 +26,9 @@ use crate::{
         SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
         UpdateSessionRequest,
     },
-    repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, ShareMode},
+    repository::{
+        DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, SessionOrigin, ShareMode,
+    },
     services::session_title::generate_session_title,
     state::AppState,
 };
@@ -454,9 +456,11 @@ pub async fn create_session(
 pub struct ListSessionsQuery {
     /// Project UUID, active slug, or retired slug — backend resolves all three.
     pub project_ref: Option<String>,
+    /// Filter by session origin (`user` or `automation`). Omit to list all.
+    pub origin: Option<SessionOrigin>,
 }
 
-/// GET /sessions?project_ref=...
+/// GET /sessions?project_ref=...&origin=...
 /// `project_ref` is optional — omit to list all sessions across projects the user can access.
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
@@ -476,13 +480,13 @@ pub async fn list_sessions(
             }
             state
                 .repository
-                .list_sessions_in_project(project_id, auth_user.id)
+                .list_sessions_in_project(project_id, auth_user.id, q.origin)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?
         }
         None => state
             .repository
-            .list_sessions_for_user(auth_user.id)
+            .list_sessions_for_user(auth_user.id, q.origin)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?,
     };

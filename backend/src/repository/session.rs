@@ -320,6 +320,7 @@ impl SqliteRepository {
     pub async fn list_sessions_for_user(
         &self,
         requesting_user_id: Uuid,
+        origin: Option<SessionOrigin>,
     ) -> RepositoryResult<Vec<DbSession>> {
         let uid = requesting_user_id.to_string();
         let rows = sqlx::query(
@@ -327,15 +328,17 @@ impl SqliteRepository {
                     s.last_message_at, s.last_message_snippet, s.agent_type, s.model, s.created_at, s.updated_at
              FROM sessions s
              JOIN projects p ON p.id = s.project_id
-             WHERE p.owner_id = ?1
+             WHERE (p.owner_id = ?1
                 OR (
                     EXISTS (SELECT 1 FROM project_members pm
                             WHERE pm.project_id = s.project_id AND pm.user_id = ?1)
                     AND (s.creator_id = ?1 OR s.share_mode != 'private')
-                )
+                ))
+               AND (?2 IS NULL OR s.origin = ?2)
              ORDER BY s.created_at DESC",
         )
         .bind(&uid)
+        .bind(origin.map(|o| o.as_str()))
         .fetch_all(&self.pool)
         .await?;
 
@@ -346,6 +349,7 @@ impl SqliteRepository {
         &self,
         project_id: Uuid,
         requesting_user_id: Uuid,
+        origin: Option<SessionOrigin>,
     ) -> RepositoryResult<Vec<DbSession>> {
         let pid = project_id.to_string();
         let uid = requesting_user_id.to_string();
@@ -364,10 +368,12 @@ impl SqliteRepository {
                        AND (s.creator_id = ?2 OR s.share_mode != 'private')
                    )
                )
+               AND (?3 IS NULL OR s.origin = ?3)
              ORDER BY COALESCE(s.last_message_at, s.created_at) DESC",
         )
         .bind(&pid)
         .bind(&uid)
+        .bind(origin.map(|o| o.as_str()))
         .fetch_all(&self.pool)
         .await?;
 
