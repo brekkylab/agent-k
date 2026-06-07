@@ -1,13 +1,13 @@
 // Session — markup mirrors app-live SessionPage. Chat surface (head + messages
 // + composer) + right side (members, references, access, artifact).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
-import { listMessages, sendMessage, stopRun, getRunActive, deriveStreamState } from '@/api/messages';
+import { listMessageItems, sendMessage, stopRun, getRunActive, deriveStreamState } from '@/api/messages';
 import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
@@ -20,7 +20,7 @@ import { getModelCatalog, modelLabel } from '@/api/models';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
-import { AI_USER, SUBAGENT_PREFIX } from '@/api/transformers';
+import { AI_USER, SUBAGENT_PREFIX, collapseToolMessages } from '@/api/transformers';
 import { formatMessageTime, formatMessageTimeFull } from '@/lib/formatMessageTime';
 import type { Message, Session, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
@@ -46,6 +46,12 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sess
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
 }
+
+// History page size in TURNS (a user message + the agent responses after it).
+const MESSAGES_PAGE_TURNS = 10;
+
+// null = initial (latest window); older = before_seq page; newer = after_seq tail.
+type HistoryPageParam = { older: number } | { newer: number } | null;
 
 function SessionPage() {
   const { projectSlug, sessionPrefix } = Route.useParams();
@@ -74,9 +80,31 @@ function SessionPage() {
   const projectId = project.data?.id ?? '';
   const sessionId = session.data?.id ?? '';
 
-  const history = useQuery({
-    queryKey: ['messages', sessionId],
-    queryFn: () => listMessages(sessionId),
+  // Progressive history: latest turn window first, older pages via before_seq.
+  // Cursors anchor on immutable seqs, so runs only need a tail fetch — no full
+  // refetch. The 'window' suffix avoids clashing with other ['messages', id] caches.
+  const history = useInfiniteQuery({
+    queryKey: ['messages', sessionId, 'window'],
+    queryFn: ({ pageParam }) => {
+      const p = pageParam as HistoryPageParam;
+      return p && 'newer' in p
+        ? listMessageItems(sessionId, { afterSeq: p.newer })
+        : listMessageItems(sessionId, { limit: MESSAGES_PAGE_TURNS, beforeSeq: p?.older });
+    },
+    initialPageParam: null as HistoryPageParam,
+    // User-message count == turn count; a short page means we hit the start.
+    getNextPageParam: (lastPage): HistoryPageParam | undefined =>
+      lastPage.filter((i) => i.sender.kind === 'user').length < MESSAGES_PAGE_TURNS
+        ? undefined
+        : { older: lastPage[0].seq },
+    // Newer side (tail catch-up). Cursor from the first non-empty page —
+    // empty tail pages pile up at pages[0].
+    getPreviousPageParam: (_firstPage, allPages): HistoryPageParam => {
+      for (const page of allPages) {
+        if (page.length) return { newer: page[page.length - 1].seq };
+      }
+      return { newer: 0 };
+    },
     enabled: Boolean(session.data && currentUser),
     // Refetch on every entry so the backend's mark-read side effect runs, which
     // clears the sidebar unread badge via the dataUpdatedAt effect below. Without
@@ -84,6 +112,8 @@ function SessionPage() {
     // window from triggering mark-read and the badge stayed visible.
     staleTime: 0,
   });
+  // Stable reference for the WS handler effect deps (stable identity in v5).
+  const { fetchPreviousPage } = history;
 
   // Agent chip — transient preview state from home. Persist it after router state
   // is cleared, but reset it when this route instance moves to another session.
@@ -111,6 +141,10 @@ function SessionPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Scroll anchor for older-page prepends — restored so the view doesn't jump.
+  const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
+  // Whether the one-time scroll-to-bottom on session entry has run.
+  const didInitialScrollRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   // Set when the local user sends a message — the next scroll effect jumps to
@@ -197,6 +231,8 @@ function SessionPage() {
     doneRunIdsRef.current.clear();
     forceScrollRef.current = false;
     prevMsgCountRef.current = 0;
+    prependAnchorRef.current = null;
+    didInitialScrollRef.current = false;
   }
 
   // After messages load, mark-read side effect has run on the backend — zero this
@@ -216,10 +252,23 @@ function SessionPage() {
     }
   }, [history.isSuccess, history.dataUpdatedAt, projectSlug, sessionId, queryClient]);
 
+  // Merge pages oldest→newest, collapse once so tool_call/result pairs span
+  // window boundaries; seq dedupe absorbs overlap from stale after_seq refetches.
+  const historyMessages = useMemo<Message[]>(() => {
+    const pages = history.data?.pages ?? [];
+    const seen = new Set<number>();
+    const merged = [...pages].reverse().flat().filter((it) => {
+      if (seen.has(it.seq)) return false;
+      seen.add(it.seq);
+      return true;
+    });
+    return collapseToolMessages(merged, sessionId);
+  }, [history.data, sessionId]);
+
   const allMessages = useMemo<Message[]>(() => [
-    ...(history.data ?? []),
+    ...historyMessages,
     ...liveMessages,
-  ], [history.data, liveMessages]);
+  ], [historyMessages, liveMessages]);
 
   // Total rendered-content size. Streaming updates grow a live bubble in place
   // (body text, tool calls, tool results) without changing the message count,
@@ -287,6 +336,43 @@ function SessionPage() {
     setShowNewMsgPill(false);
     messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
   }, []);
+
+  // ── Progressive history scroll behavior ─────────────────────────────────
+  const loadOlderIfNeeded = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !didInitialScrollRef.current) return;
+    if (el.scrollTop > 120) return;
+    if (!history.hasNextPage || history.isFetchingNextPage) return;
+    prependAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    void history.fetchNextPage();
+  }, [history.hasNextPage, history.isFetchingNextPage, history.fetchNextPage]);
+
+  // Restore scroll position after a prepend (must run before paint).
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    const el = scrollContainerRef.current;
+    if (!anchor || !el) return;
+    prependAnchorRef.current = null;
+    el.scrollTop = anchor.top + (el.scrollHeight - anchor.height);
+  }, [historyMessages.length]);
+
+  // Start at the bottom (newest messages) on session entry.
+  useLayoutEffect(() => {
+    if (didInitialScrollRef.current || !history.isSuccess) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    didInitialScrollRef.current = true;
+    el.scrollTop = el.scrollHeight;
+  }, [history.isSuccess, historyMessages.length]);
+
+  // Keep fetching older pages until the list is scrollable (no scroll events otherwise).
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !didInitialScrollRef.current) return;
+    if (el.scrollHeight > el.clientHeight) return;
+    if (!history.hasNextPage || history.isFetchingNextPage) return;
+    void history.fetchNextPage();
+  }, [historyMessages.length, history.hasNextPage, history.isFetchingNextPage, history.fetchNextPage]);
 
   // Auto-grow the composer textarea + drive the compact↔expanded layout flip.
   // Reset to auto first so deleting lines shrinks the box; overflow stays hidden
@@ -720,10 +806,10 @@ function SessionPage() {
           showToast(t('toast.run_stopped'));
         }
 
-        // Done: refetch history → clear liveMessages → stop streaming → invalidate
+        // Done: tail catch-up → clear liveMessages → stop streaming → invalidate.
         void (async () => {
           if (sessionId) {
-            await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+            await fetchPreviousPage();
           }
           setLiveMessages([]);
           wsOutputsRef.current.clear();
@@ -742,24 +828,26 @@ function SessionPage() {
 
       if (event.type === 'agent_run_idle') {
         // The server has no active run for this session (completed before we
-        // subscribed, or server restarted). resyncSession re-requests this on every
-        // entry, so refetch history once to surface any persisted messages and reset
-        // streaming state — covers navigating away mid-run and returning after done.
+        // subscribed, or server restarted). Clear the inactivity watchdog
+        // unconditionally; only reset run state + tail catch-up when we were
+        // actually streaming, so a bare idle on entry doesn't force a refetch.
         if (wsInactivityTimerRef.current) {
           clearTimeout(wsInactivityTimerRef.current);
           wsInactivityTimerRef.current = null;
         }
         setRunDelayed(false);
-        void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
-        setLiveMessages([]);
-        wsOutputsRef.current.clear();
-        maxSeqRef.current = -1;
-        optimisticUserIdRef.current = null;
-        currentRunIdRef.current = null;
-        setStreaming(false);
-        streamingRef.current = false;
-        setOwnedRunId(null);
-        setStopping(false);
+        if (streamingRef.current) {
+          void fetchPreviousPage();
+          setLiveMessages([]);
+          wsOutputsRef.current.clear();
+          maxSeqRef.current = -1;
+          optimisticUserIdRef.current = null;
+          currentRunIdRef.current = null;
+          setStreaming(false);
+          streamingRef.current = false;
+          setOwnedRunId(null);
+          setStopping(false);
+        }
       }
     });
 
@@ -770,7 +858,7 @@ function SessionPage() {
         wsInactivityTimerRef.current = null;
       }
     };
-  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t, armWatchdog]);
+  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t, armWatchdog, fetchPreviousPage]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
@@ -864,8 +952,11 @@ function SessionPage() {
           </div>
         </div>
 
-        <div className="cw-messages-scroll" ref={scrollContainerRef}>
+        <div className="cw-messages-scroll" ref={scrollContainerRef} onScroll={loadOlderIfNeeded}>
         <div className="cw-messages">
+          {history.isFetchingNextPage && (
+            <div className="cw-history-loading" aria-live="polite">{t('ui.loading_history')}</div>
+          )}
           {allMessages.map((msg) => (
             <MessageBubble
               key={msg.id}

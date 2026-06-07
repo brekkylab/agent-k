@@ -102,6 +102,8 @@ pub enum MessageSender {
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct SessionMessageResponse {
+    /// Session-global insertion order — stable client identity across windows.
+    pub seq: i64,
     pub message: Message,
     pub sender: MessageSender,
     pub created_at: DateTime<Utc>,

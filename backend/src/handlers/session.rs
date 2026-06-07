@@ -743,12 +743,31 @@ pub async fn fork_session(
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 
-/// GET /sessions/{session_id}/messages
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct MessageHistoryQuery {
+    /// Max TURNS below the cursor. Omit for everything; ignored with `after_seq`.
+    pub limit: Option<u32>,
+    /// Keyset cursor for older pages: only messages with `seq < before_seq`.
+    pub before_seq: Option<i64>,
+    /// Tail catch-up: messages with `seq > after_seq`. Exclusive with `before_seq`.
+    pub after_seq: Option<i64>,
+}
+
+/// GET /sessions/{session_id}/messages?limit=...&before_seq=...|after_seq=...
+/// Items are returned in ascending (oldest→newest) order within the window.
 pub async fn get_message_history(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Path(session_ref): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<MessageHistoryQuery>,
 ) -> ApiResult<Json<SessionMessageListResponse>> {
+    if q.before_seq.is_some() && q.after_seq.is_some() {
+        return Err(AppError::bad_request(
+            "before_seq and after_seq are mutually exclusive",
+        ));
+    }
+
     let session_id = resolve_session_id(&state, &session_ref).await?;
     let (_session, _access) = state
         .repository
@@ -757,11 +776,18 @@ pub async fn get_message_history(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    let rows = state
-        .repository
-        .get_messages(session_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let rows = match q.after_seq {
+        Some(after_seq) => state
+            .repository
+            .get_messages_after(session_id, after_seq)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+        None => state
+            .repository
+            .get_messages_window(session_id, q.limit, q.before_seq)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    };
 
     let items = rows
         .into_iter()
@@ -779,6 +805,7 @@ pub async fn get_message_history(
                 },
             };
             Ok(SessionMessageResponse {
+                seq: r.seq,
                 message: r.message,
                 sender,
                 created_at: r.created_at,
@@ -788,11 +815,14 @@ pub async fn get_message_history(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Auto-mark all messages as read for this user
-    let _ = state
-        .repository
-        .mark_session_read(session_id, auth_user.id)
-        .await;
+    // Mark read only when the client is at the tail (no before_seq) —
+    // paging older history must not clear unread.
+    if q.before_seq.is_none() {
+        let _ = state
+            .repository
+            .mark_session_read(session_id, auth_user.id)
+            .await;
+    }
 
     Ok(Json(SessionMessageListResponse { items }))
 }
