@@ -324,15 +324,24 @@ function SessionPage() {
   }, [ownedRunId, sessionId, stopping, showToast, t]);
 
   const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const action = resolveComposerKeyAction(
-      { key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing },
-      { streaming, ownedRunId, stopping },
-    );
-    if (action === 'none') return;
-    e.preventDefault();
-    if (action === 'send') void send();
-    else void stopGeneration();
-  }, [send, stopGeneration, streaming, ownedRunId, stopping]);
+    if (resolveComposerKeyAction({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing }) === 'send') {
+      e.preventDefault();
+      void send();
+    }
+  }, [send]);
+
+  // Composer textarea is disabled while streaming, so listen on window for Esc.
+  useEffect(() => {
+    if (!streaming || !ownedRunId || stopping) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.isComposing) {
+        e.preventDefault();
+        void stopGeneration();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [streaming, ownedRunId, stopping, stopGeneration]);
 
   const duplicateMutation = useDuplicateSession(projectSlug);
 
