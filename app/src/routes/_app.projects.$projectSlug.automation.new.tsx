@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 import { SchedulePicker, type SchedulePickerValue } from '@/components/SchedulePicker';
 import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
+import { ComposerAgentPicker } from '@/components/chat/ComposerAgentPicker';
+import { ComposerModelPicker } from '@/components/chat/ComposerModelPicker';
+import { DEFAULT_AGENT_ID, type AgentId } from '@/domain/agentSurfaces';
+import { getModelCatalog } from '@/api/models';
 import { createAutomation, createTrigger, deleteAutomation } from '@/api/automations';
 import { ApiError } from '@/api/client';
+import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/automation/new')({
+  loader: () => loadNs('automation'),
   component: NewAutomationPage,
 });
 
@@ -16,12 +23,21 @@ type InitialTriggerKind = 'none' | 'cron' | 'webhook';
 function NewAutomationPage() {
   const { projectSlug } = Route.useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation('automation');
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [prompts, setPrompts] = useState<string[]>(['']);
+  const [agentId, setAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
+  const [model, setModel] = useState<string | null>(null);
   const [triggerKind, setTriggerKind] = useState<InitialTriggerKind>('cron');
   const [schedule, setSchedule] = useState<SchedulePickerValue>({ expr: '0 9 * * 1,2,3,4,5', tz: 'Asia/Seoul' });
+
+  const catalog = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
 
   const goBack = () => {
     navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug } });
@@ -61,6 +77,8 @@ function NewAutomationPage() {
         name: name.trim(),
         description: description.trim() ? description.trim() : null,
         prompts: prompts.filter((p) => p.trim().length > 0),
+        agentType: agentId,
+        model,
       });
       if (triggerKind === 'cron') {
         await createTrigger(automation.id, {
@@ -104,60 +122,60 @@ function NewAutomationPage() {
   return (
     <section className="cw-page cw-automation-settings cw-page-enter">
       <button className="cw-btn-secondary cw-back-link" type="button" onClick={goBack}>
-        <Icon name="arrow-left" size={14} /> Automations
+        <Icon name="arrow-left" size={14} /> {t('back')}
       </button>
 
       <form onSubmit={handleSubmit}>
         <header className="cw-page-head">
           <div>
-            <h1>새 Automation</h1>
-            <p>이름과 프롬프트를 정의하고, 필요하면 첫 트리거를 함께 설정합니다.</p>
+            <h1>{t('form.new_title')}</h1>
+            <p>{t('form.new_subtitle')}</p>
           </div>
           <div>
-            <button className="cw-btn-secondary" type="button" onClick={goBack}>Cancel</button>
+            <button className="cw-btn-secondary" type="button" onClick={goBack}>{t('form.cancel')}</button>
             <button
               className="cw-btn-primary"
               type="submit"
               disabled={!canSubmit || createMutation.isPending}
             >
-              <Icon name="check" size={14} /> {createMutation.isPending ? 'Creating…' : 'Create'}
+              <Icon name="check" size={14} /> {createMutation.isPending ? t('form.creating') : t('form.create')}
             </button>
           </div>
         </header>
 
         <div className="cw-settings-stack">
           <section className="cw-settings-card">
-            <h2>일반</h2>
+            <h2>{t('form.general')}</h2>
             <label className="cw-settings-field">
-              <span>이름</span>
+              <span>{t('form.name')}</span>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="예: Daily summary"
+                placeholder={t('form.name_placeholder')}
                 autoFocus
                 required
               />
             </label>
             <label className="cw-settings-field">
-              <span>설명</span>
+              <span>{t('form.description')}</span>
               <textarea
                 rows={3}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="이 automation이 무엇을 하는지 (선택)"
+                placeholder={t('form.description_placeholder')}
               />
             </label>
           </section>
 
           <section className="cw-settings-card">
             <header className="cw-settings-card-head">
-              <h2>Prompts</h2>
+              <h2>{t('form.prompts')}</h2>
               <button className="cw-btn-secondary" type="button" onClick={addPrompt}>
-                <Icon name="plus" size={14} /> Add prompt
+                <Icon name="plus" size={14} /> {t('form.add_prompt')}
               </button>
             </header>
-            <p className="cw-settings-hint">실행 시 순서대로 평가됩니다. 첫 프롬프트가 후속 단계의 컨텍스트가 됩니다.</p>
+            <p className="cw-settings-hint">{t('form.prompts_hint')}</p>
             <ol className="cw-prompt-list">
               {prompts.map((line, i) => (
                 <li key={i}>
@@ -166,12 +184,12 @@ function NewAutomationPage() {
                     rows={2}
                     value={line}
                     onChange={(e) => updatePrompt(i, e.target.value)}
-                    placeholder="프롬프트를 입력하세요"
+                    placeholder={t('form.prompt_placeholder')}
                   />
                   <button
                     className="cw-prompt-remove"
                     type="button"
-                    aria-label="Remove prompt"
+                    aria-label={t('form.remove_prompt')}
                     onClick={() => removePrompt(i)}
                     disabled={prompts.length <= 1}
                   >
@@ -183,18 +201,38 @@ function NewAutomationPage() {
           </section>
 
           <section className="cw-settings-card">
-            <h2>첫 트리거</h2>
-            <p className="cw-settings-hint">나중에 추가하거나 더 붙일 수도 있습니다.</p>
+            <h2>{t('form.agent_model')}</h2>
+            <p className="cw-settings-hint">
+              {t('form.agent_model_hint_new')}
+            </p>
+            <div
+              className="cw-agent-pickwrap"
+              data-agent={agentId}
+              style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'flex-start' }}
+            >
+              <ComposerAgentPicker value={agentId} onChange={setAgentId} standalone />
+              <ComposerModelPicker
+                catalog={catalog.data}
+                agentType={agentId}
+                value={model}
+                onChange={setModel}
+              />
+            </div>
+          </section>
 
-            <div className="cw-trigger-picker" role="radiogroup" aria-label="Initial trigger">
+          <section className="cw-settings-card">
+            <h2>{t('form.first_trigger')}</h2>
+            <p className="cw-settings-hint">{t('form.first_trigger_hint')}</p>
+
+            <div className="cw-trigger-picker" role="radiogroup" aria-label={t('form.trigger_kind_aria')}>
               {(['cron', 'webhook', 'none'] as InitialTriggerKind[]).map((kind) => {
                 const active = triggerKind === kind;
-                const label = kind === 'cron' ? 'Recurring'
-                  : kind === 'webhook' ? 'Webhook'
-                  : 'None (수동 전용)';
-                const sub = kind === 'cron' ? '일정에 따라 반복 실행'
-                  : kind === 'webhook' ? '외부 시스템에서 호출'
-                  : '트리거 없이 수동 실행만';
+                const label = kind === 'cron' ? t('form.schedule')
+                  : kind === 'webhook' ? t('form.webhook')
+                  : t('form.none');
+                const sub = kind === 'cron' ? t('form.schedule_sub')
+                  : kind === 'webhook' ? t('form.webhook_sub')
+                  : t('form.none_sub');
                 return (
                   <label
                     key={kind}
@@ -225,7 +263,7 @@ function NewAutomationPage() {
             {triggerKind === 'webhook' && (
               <div className="cw-trigger-detail">
                 <p className="cw-settings-hint">
-                  생성 직후 한 번만 토큰이 노출됩니다. 안전한 곳에 보관하세요.
+                  {t('form.webhook_token_hint')}
                 </p>
               </div>
             )}
@@ -233,7 +271,7 @@ function NewAutomationPage() {
             {triggerKind === 'none' && (
               <div className="cw-trigger-detail">
                 <p className="cw-settings-hint">
-                  트리거 없이 생성합니다. 목록에서 수동 실행 버튼으로 호출할 수 있습니다.
+                  {t('form.none_hint')}
                 </p>
               </div>
             )}
@@ -243,7 +281,7 @@ function NewAutomationPage() {
 
       {submitError && (
         <p className="cw-settings-hint" role="alert" style={{ color: 'var(--cw-destructive)', marginTop: 12 }}>
-          생성 실패: {submitError}
+          {t('form.create_error', { message: submitError })}
         </p>
       )}
 
@@ -253,7 +291,7 @@ function NewAutomationPage() {
           curlSample={`curl -X POST \\\n  -H 'Authorization: Bearer ${revealedToken}' \\\n  https://api.example.com/webhooks/automations`}
           onClose={() => { setRevealedToken(null); setCreatedAutomationId(null); goBack(); }}
           onDiscard={createdAutomationId ? handleDiscard : undefined}
-          discardLabel="취소"
+          discardLabel={t('form.webhook_discard')}
         />
       )}
     </section>

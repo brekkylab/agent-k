@@ -19,6 +19,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
 
     let me_routes = ApiRouter::new()
         .api_route("/me", get(handlers::get_me).patch(handlers::update_me))
+        .api_route("/models", get(handlers::list_models))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,
