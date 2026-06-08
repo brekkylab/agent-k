@@ -148,6 +148,9 @@ function SessionPage() {
   // Previous message count, to distinguish "new message arrived" from the
   // initial history load / refetch (no pill on first render of a session).
   const prevMsgCountRef = useRef(0);
+  // Id of the first rendered message. When it changes the list grew from the
+  // top (older-page prepend), not the tail — used to suppress auto-follow there.
+  const prevFirstIdRef = useRef<string | undefined>(undefined);
 
   // WS-driven: outputs map keyed by seq (for idempotent catch-up + live merging)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
@@ -226,6 +229,7 @@ function SessionPage() {
     doneRunIdsRef.current.clear();
     forceScrollRef.current = false;
     prevMsgCountRef.current = 0;
+    prevFirstIdRef.current = undefined;
     prependAnchorRef.current = null;
     didInitialScrollRef.current = false;
   }
@@ -290,6 +294,9 @@ function SessionPage() {
     if (!el) return;
     const prevCount = prevMsgCountRef.current;
     prevMsgCountRef.current = allMessages.length;
+    const prevFirstId = prevFirstIdRef.current;
+    const firstId = allMessages[0]?.id;
+    prevFirstIdRef.current = firstId;
 
     // Own send — jump to the bottom immediately, even if scrolled far up.
     if (forceScrollRef.current) {
@@ -302,6 +309,13 @@ function SessionPage() {
     // Initial history load (refresh / session entry) — start at the bottom.
     if (prevCount === 0) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      return;
+    }
+
+    // Older-page prepend grows the list from the top (first id changes), not
+    // the tail. The prepend-restore layout effect already keeps the viewport
+    // anchored, so don't mistake it for a new tail message and auto-follow.
+    if (firstId !== undefined && firstId !== prevFirstId) {
       return;
     }
 
@@ -369,6 +383,10 @@ function SessionPage() {
     if (!el || !didInitialScrollRef.current) return;
     if (el.scrollHeight > el.clientHeight) return;
     if (!history.hasNextPage || history.isFetchingNextPage) return;
+    // Anchor so the prepend-restore effect repositions the viewport. The list
+    // isn't scrollable yet (scrollTop 0), so the restore clamps to the bottom,
+    // keeping the newest messages in view while older context backfills above.
+    prependAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
     void history.fetchNextPage();
   }, [historyMessages.length, history.hasNextPage, history.isFetchingNextPage, history.fetchNextPage]);
 
