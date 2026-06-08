@@ -59,8 +59,11 @@ export function FilePreviewModal({ globalPath, onClose }: Props) {
     if (e.key !== 'Tab') return;
     const root = modalRef.current;
     if (!root) return;
+    // Deliberately excludes `iframe`: focusing the sandboxed HTML-preview frame
+    // would swallow keydowns (ESC/Tab) inside its browsing context, breaking the
+    // dialog's keyboard handling. The frame stays scrollable via mouse.
     const focusables = root.querySelectorAll<HTMLElement>(
-      'button, [href], iframe, input, [tabindex]:not([tabindex="-1"])',
+      'button, [href], input, [tabindex]:not([tabindex="-1"])',
     );
     if (focusables.length === 0) return;
     const first = focusables[0]!;
@@ -119,6 +122,10 @@ export function FilePreviewModal({ globalPath, onClose }: Props) {
     <div
       className="cw-dialog-backdrop"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      // Stop clicks from bubbling through the React portal tree to an ancestor
+      // (e.g. the AttachmentPreview chip's onClick toggle) when this modal is
+      // mounted as a descendant of a clickable element.
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         className="cw-preview-modal"

@@ -76,14 +76,16 @@ const TINY_PNG = Buffer.from(
   'base64',
 );
 
-// Minimal valid PDF (hand-rolled, < 200 bytes).
+// Minimal single-page PDF. No xref table is emitted on purpose — computing exact
+// byte offsets by hand is brittle, so we let pdf.js rebuild the cross-reference
+// via its recovery path ("Indexing all PDF objects"), which still renders a
+// <canvas>. A wrong-offset xref is worse than none (it can defeat recovery).
 const TINY_PDF = Buffer.from(
-  '%PDF-1.0\n1 0 obj<</Type /Catalog /Pages 2 0 R>>endobj ' +
-  '2 0 obj<</Type /Pages /Kids[3 0 R]/Count 1>>endobj ' +
-  '3 0 obj<</Type /Page /MediaBox[0 0 3 3]>>endobj\n' +
-  'xref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n' +
-  '0000000058 00000 n\n0000000115 00000 n\n' +
-  'trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF',
+  '%PDF-1.1\n' +
+  '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n' +
+  '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n' +
+  '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n' +
+  'trailer<</Root 1 0 R>>\n%%EOF',
 );
 
 const TINY_HTML = Buffer.from('<html><body><p>hello</p></body></html>');
