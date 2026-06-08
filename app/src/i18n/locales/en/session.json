@@ -32,6 +32,14 @@
     "project_label": "project · {{name}}"
   },
   "artifacts_header": "Artifacts",
+  "shared_files_header": "Shared files",
+  "shared_files": {
+    "import": "Add to message",
+    "up": "Back",
+    "drag_hint": "Drag into the chat to attach",
+    "empty_title": "No shared files",
+    "empty_body": "Project shared files appear here. Drag one into the chat to attach it."
+  },
   "menu": {
     "options": "Session options",
     "duplicate": "Duplicate session",

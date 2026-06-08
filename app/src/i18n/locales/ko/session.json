@@ -32,6 +32,14 @@
     "project_label": "프로젝트 · {{name}}"
   },
   "artifacts_header": "산출물",
+  "shared_files_header": "공유 파일",
+  "shared_files": {
+    "import": "메시지에 추가",
+    "up": "뒤로가기",
+    "drag_hint": "채팅으로 끌어다 놓으면 첨부돼요",
+    "empty_title": "공유 파일이 없어요",
+    "empty_body": "프로젝트 공유 파일이 여기에 표시돼요. 채팅으로 끌어다 놓으면 첨부돼요."
+  },
   "menu": {
     "options": "세션 옵션",
     "duplicate": "세션 복제",

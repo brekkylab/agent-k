@@ -317,6 +317,9 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 
 .cw-session-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; flex: 1; min-height: 0; overflow: hidden; }
 .cw-chat-surface { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
+/* While a shared file is dragged over the conversation, ring the surface to
+   signal it can be dropped here (imported as an attachment). */
+.cw-chat-surface.is-import-target { box-shadow: inset 0 0 0 2px var(--cw-accent); background: color-mix(in oklch, var(--cw-accent), transparent 94%); }
 .cw-chat-head { padding: 34px 28px 18px; border-bottom: 1px solid var(--cw-border); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cw-chat-head p { display: flex; align-items: center; gap: 7px; color: var(--cw-fg-3); margin: 14px 0 0; }
 .cw-session-head-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
@@ -334,9 +337,52 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-message-meta time { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
 .cw-message p { margin: 7px 0 0; line-height: 1.65; white-space: pre-wrap; }
 .cw-composer small { grid-column: 1 / -1; color: var(--cw-fg-4); font-size: 11px; }
-.cw-session-side { padding: 22px 18px; background: var(--cw-bg-subtle); overflow: auto; }
+.cw-session-side { padding: 0; background: var(--cw-bg-subtle); overflow: hidden; display: flex; flex-direction: column; }
 .cw-session-side h3 { margin: 16px 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--cw-fg-3); font-weight: 500; }
 .cw-session-side p { color: var(--cw-fg-3); line-height: 1.55; }
+
+/* Two stacked sidebar views (info ↔ file browser) on a horizontal track. The
+   default info view sits on the right half; tapping "browse" slides the track
+   right so the file-browser view (left half) glides into place. */
+.cw-side-views { flex: 1; min-height: 0; display: flex; width: 200%; transform: translateX(-50%); transition: transform .28s cubic-bezier(.4, 0, .2, 1); }
+.cw-side-views.show-files { transform: translateX(0); }
+.cw-side-view { width: 50%; flex: 0 0 50%; min-height: 0; display: flex; flex-direction: column; }
+.cw-side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 18px; }
+
+/* Bottom switch — pinned outside the sliding track, identical position in both
+   views. iOS-style toggle: tap to swap to the file browser, tap again to swap
+   back (the cursor never leaves the control). */
+.cw-side-switchbar { flex-shrink: 0; padding: 10px 16px; border-top: 1px solid var(--cw-border); }
+.cw-side-switch { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 11px; border: 1px solid var(--cw-border); border-radius: 999px; background: var(--cw-bg); cursor: pointer; user-select: none; touch-action: pan-y; transition: background 100ms, border-color 100ms; }
+.cw-side-switch:hover { background: var(--cw-bg-muted); border-color: var(--cw-ink-4); }
+.cw-side-switch-icon { display: inline-flex; color: var(--cw-ink-3); transition: color 120ms; }
+.cw-side-switch[aria-checked="true"] .cw-side-switch-icon { color: var(--cw-accent); }
+.cw-side-switch-text { flex: 1; text-align: left; font-size: 13px; font-weight: 500; color: var(--cw-ink-2); }
+.cw-side-switch-toggle { position: relative; flex-shrink: 0; width: 34px; height: 20px; border-radius: 999px; background: var(--cw-bg-muted); border: 1px solid var(--cw-border); transition: background 160ms, border-color 160ms; }
+.cw-side-switch[aria-checked="true"] .cw-side-switch-toggle { background: var(--cw-accent); border-color: var(--cw-accent); }
+.cw-side-switch-knob { position: absolute; top: 1px; left: 1px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform 160ms cubic-bezier(.4, 0, .2, 1); }
+.cw-side-switch[aria-checked="true"] .cw-side-switch-knob { transform: translateX(14px); }
+
+/* File-browser view inside the sidebar — mirrors the Files page layout in the
+   narrow column: fixed head + breadcrumb, scrolling row list. */
+.cw-files-browser { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.cw-files-breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 1px; flex-shrink: 0; padding: 20px 14px 8px; font-size: 11px; color: var(--cw-ink-3); }
+.cw-files-up { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-right: 3px; border: 0; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-ink-2); cursor: pointer; transition: background 100ms, color 100ms; }
+.cw-files-up:not(:disabled):hover { background: var(--cw-bg-muted); color: var(--cw-ink); }
+/* Reserve the slot at root so entering a folder doesn't shift the breadcrumb. */
+.cw-files-up:disabled { visibility: hidden; }
+/* Keep the project-name root constant whether or not it's the current dir
+   (the home button is disabled at root, enabled deeper — don't let that recolor it). */
+.cw-files-home, .cw-files-home:disabled { gap: 5px; max-width: 150px; color: var(--cw-ink-2); }
+.cw-files-home-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.cw-files-breadcrumb button { display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--cw-ink-3); font-size: 11px; cursor: pointer; padding: 2px 3px; border-radius: 4px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-files-breadcrumb button:not(:disabled):hover { background: var(--cw-bg-muted); color: var(--cw-ink); }
+.cw-files-breadcrumb button:disabled { cursor: default; color: var(--cw-ink-2); }
+.cw-files-crumb { display: inline-flex; align-items: center; }
+.cw-files-browser-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 14px; display: flex; flex-direction: column; gap: 2px; }
+.cw-files-dir-row { width: 100%; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.cw-files-dir-row .cw-artifact-name { color: var(--cw-ink-2); }
+.cw-files-dir-row > :last-child { color: var(--cw-ink-4); flex-shrink: 0; }
 .cw-side-row, .cw-side-file { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; font-size: 13px; }
 .cw-side-file > span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-side-file small { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
