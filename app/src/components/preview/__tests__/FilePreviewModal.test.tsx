@@ -4,10 +4,10 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
-const fetchFileBlob = vi.fn();
+const fetchFileForPreview = vi.fn();
 const downloadFileByGlobalPath = vi.fn();
 vi.mock('@/api/dirents', () => ({
-  fetchFileBlob: (...a: unknown[]) => fetchFileBlob(...a),
+  fetchFileForPreview: (...a: unknown[]) => fetchFileForPreview(...a),
   downloadFileByGlobalPath: (...a: unknown[]) => downloadFileByGlobalPath(...a),
 }));
 
@@ -20,7 +20,7 @@ import { FilePreviewModal } from '../../FilePreviewModal';
 
 const revoke = vi.fn();
 beforeEach(() => {
-  fetchFileBlob.mockReset();
+  fetchFileForPreview.mockReset();
   revoke.mockReset();
   URL.createObjectURL = vi.fn(() => 'blob:x');
   URL.revokeObjectURL = revoke;
@@ -34,20 +34,20 @@ function blobOf(size: number, type: string) {
 }
 
 describe('FilePreviewModal', () => {
-  it('shows too-large fallback when blob exceeds 20MB', async () => {
-    fetchFileBlob.mockResolvedValue(blobOf(21 * 1024 * 1024, 'application/pdf'));
+  it('shows too-large fallback when the file exceeds the cap', async () => {
+    fetchFileForPreview.mockResolvedValue({ tooLarge: true });
     render(<FilePreviewModal globalPath="projects/p/shared/a.pdf" onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText('preview.too_large_title')).toBeTruthy());
   });
 
   it('shows error fallback when fetch fails', async () => {
-    fetchFileBlob.mockRejectedValue(new Error('boom'));
+    fetchFileForPreview.mockRejectedValue(new Error('boom'));
     render(<FilePreviewModal globalPath="projects/p/shared/a.png" onClose={() => {}} />);
     await waitFor(() => expect(screen.getByText('preview.error_title')).toBeTruthy());
   });
 
   it('renders image and revokes object URL on unmount', async () => {
-    fetchFileBlob.mockResolvedValue(blobOf(1000, 'image/png'));
+    fetchFileForPreview.mockResolvedValue({ tooLarge: false, blob: blobOf(1000, 'image/png') });
     const { unmount } = render(<FilePreviewModal globalPath="projects/p/shared/a.png" onClose={() => {}} />);
     await waitFor(() => expect(document.querySelector('img')).toBeTruthy());
     unmount();

@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { fetchFileBlob, downloadFileByGlobalPath } from '@/api/dirents';
+import { fetchFileForPreview, downloadFileByGlobalPath } from '@/api/dirents';
 import { resolvePreviewKind, previewCodeLang, type PreviewKind } from '@/domain/files';
 import { useDialogEscape } from '@/lib/useDialogEscape';
 import { Icon } from './Icon';
@@ -82,22 +82,23 @@ export function FilePreviewModal({ globalPath, onClose }: Props) {
     }
 
     setState({ status: 'loading' });
+    // Text decodes on the main thread, so cap it lower than the media cap. The
+    // cap is chosen before the fetch so oversized files are rejected from the
+    // Content-Length header without downloading the body.
+    const cap = TEXT_KINDS.includes(kind) ? MAX_TEXT_BYTES : MAX_PREVIEW_BYTES;
     void (async () => {
       try {
-        const blob = await fetchFileBlob(globalPath);
+        const result = await fetchFileForPreview(globalPath, cap);
         if (cancelled) return;
-        if (blob.size > MAX_PREVIEW_BYTES) {
+        if (result.tooLarge) {
           setState({ status: 'fallback', reason: 'too-large' });
           return;
         }
+        const { blob } = result;
         if (MEDIA_KINDS.includes(kind)) {
           createdUrl = URL.createObjectURL(blob);
           setState({ status: 'media', objectUrl: createdUrl, kind: kind as 'image' | 'html' | 'pdf' });
         } else if (TEXT_KINDS.includes(kind)) {
-          if (blob.size > MAX_TEXT_BYTES) {
-            setState({ status: 'fallback', reason: 'too-large' });
-            return;
-          }
           const content = await blob.text();
           if (cancelled) return;
           setState({ status: 'text', content, kind: kind as 'markdown' | 'code' | 'text' });
