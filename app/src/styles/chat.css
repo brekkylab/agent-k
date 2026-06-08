@@ -148,13 +148,16 @@
 /* Media stage: full-bleed dark scroll area; content centers, pans when zoomed. */
 .cw-preview-stage {
   flex: 1; width: 100%; height: 100%; overflow: auto;
-  display: flex; align-items: center; justify-content: center;
+  /* `safe center` centers when content fits but aligns to start when it
+     overflows — without it, plain `center` (or margin:auto) pushes the top of
+     an oversized page above scrollTop:0 where it can never be scrolled into view. */
+  display: flex; align-items: safe center; justify-content: safe center;
   padding: 64px 24px 88px;   /* clear chrome (top) and zoom pill (bottom) */
 }
-.cw-preview-img { display: block; margin: auto; user-select: none; max-width: 100%; max-height: 100%; object-fit: contain; }
+.cw-preview-img { display: block; user-select: none; max-width: 100%; max-height: 100%; object-fit: contain; }
 
 .cw-preview-pdf { flex-direction: column; }
-.cw-preview-pdf-doc { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: auto; }
+.cw-preview-pdf-doc { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .cw-preview-pdf .react-pdf__Page { box-shadow: 0 4px 16px rgb(0 0 0 / 0.4); }
 
 /* Floating zoom pill, bottom-center. */
