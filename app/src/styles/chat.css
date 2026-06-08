@@ -139,6 +139,7 @@
 .cw-preview-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .cw-preview-actions button {
   display: grid; place-items: center; width: 34px; height: 34px;
+  border: none; appearance: none;   /* drop the UA outset border (raised look) */
   border-radius: var(--cw-radius-full); color: #fff; background: transparent;
 }
 .cw-preview-actions button:hover { background: rgb(255 255 255 / 0.16); }
@@ -170,6 +171,7 @@
 .cw-zoom-controls button {
   min-width: 32px; height: 32px; padding: 0 8px;
   display: grid; place-items: center;
+  border: none; appearance: none;   /* drop the UA outset border (raised look) */
   color: #fff; background: transparent; border-radius: var(--cw-radius-md);
   font-size: 18px; line-height: 1;
 }
