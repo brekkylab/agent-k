@@ -50,7 +50,8 @@
     "delete": "Delete",
     "new_folder": "New folder",
     "upload": "Upload",
-    "uploading": "Uploading…"
+    "uploading": "Uploading…",
+    "preview": "Preview"
   },
   "page": {
     "title": "Files",
