@@ -700,16 +700,23 @@ function FilesPage() {
                 })}
               </nav>
             )}
-            <div className="cw-file-pane-tools">
-              <label className="cw-files-search">
-                <Icon name="search" size={12} />
-                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('files:ui.search_placeholder')} />
-              </label>
-              <div className="cw-view-toggle" role="tablist" aria-label={t('files:ui.view_toggle_label')}>
-                <button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'is-active' : ''} onClick={() => setViewMode('list')} aria-label={t('files:ui.list_view')}><Icon name="list" size={14} /></button>
-                <button type="button" role="tab" aria-selected={viewMode === 'grid'} className={viewMode === 'grid' ? 'is-active' : ''} onClick={() => setViewMode('grid')} aria-label={t('files:ui.grid_view')}><Icon name="grid" size={14} /></button>
+            {/* Hide search/view-toggle while in bulk-select mode. The bulk toolbar
+                replaces the breadcrumb on the left; keeping the tools on the right
+                made the flex header wrap to a 2nd row on narrow panes, shifting the
+                file list down between the two clicks of a double-click and opening
+                the wrong file. One-row header in both states keeps double-click on target. */}
+            {selectedPaths.size === 0 && (
+              <div className="cw-file-pane-tools">
+                <label className="cw-files-search">
+                  <Icon name="search" size={12} />
+                  <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('files:ui.search_placeholder')} />
+                </label>
+                <div className="cw-view-toggle" role="tablist" aria-label={t('files:ui.view_toggle_label')}>
+                  <button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'is-active' : ''} onClick={() => setViewMode('list')} aria-label={t('files:ui.list_view')}><Icon name="list" size={14} /></button>
+                  <button type="button" role="tab" aria-selected={viewMode === 'grid'} className={viewMode === 'grid' ? 'is-active' : ''} onClick={() => setViewMode('grid')} aria-label={t('files:ui.grid_view')}><Icon name="grid" size={14} /></button>
+                </div>
               </div>
-            </div>
+            )}
           </header>
 
           <div
