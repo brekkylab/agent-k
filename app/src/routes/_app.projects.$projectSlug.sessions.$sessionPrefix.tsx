@@ -33,6 +33,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { loadNs } from '@/i18n/loader';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
+import { resolveComposerKeyAction } from '@/lib/composerKeys';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
@@ -310,15 +311,6 @@ function SessionPage() {
     // On success: the WS event (agent_run_done) handles completion. No finally block.
   }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments, t]);
 
-  // Enter sends; Shift+Enter inserts a newline. isComposing guards Korean/IME
-  // composition so confirming a character with Enter doesn't fire a send.
-  const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      void send();
-    }
-  }, [send]);
-
   const stopGeneration = useCallback(async () => {
     if (!ownedRunId || !sessionId || stopping) return;
     setStopping(true);
@@ -330,6 +322,17 @@ function SessionPage() {
       setStopping(false);
     }
   }, [ownedRunId, sessionId, stopping, showToast, t]);
+
+  const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const action = resolveComposerKeyAction(
+      { key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing },
+      { streaming, ownedRunId, stopping },
+    );
+    if (action === 'none') return;
+    e.preventDefault();
+    if (action === 'send') void send();
+    else void stopGeneration();
+  }, [send, stopGeneration, streaming, ownedRunId, stopping]);
 
   const duplicateMutation = useDuplicateSession(projectSlug);
 
