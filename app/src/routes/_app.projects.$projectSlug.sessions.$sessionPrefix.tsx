@@ -378,6 +378,9 @@ function SessionPage() {
 
         // 낙관적 유저 버블이 있으면 유지, 없으면(다른 탭/유저) event에서 추가
         setLiveMessages((prev) => {
+          // Skip duplicate `started` for the run we're already rendering — replay can
+          // resend it (subscribe race, reconnect, resync) and would add a second bubble.
+          if (!isNewRun && prev.some((m) => m.id === `live-ai-${sessionId}`)) return prev;
           const hasOptimistic = optimisticUserIdRef.current &&
             prev.some((m) => m.id === optimisticUserIdRef.current);
           if (hasOptimistic) {
