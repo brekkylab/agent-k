@@ -21,7 +21,11 @@
   "chat": {
     "started_by": "Started by",
     "files_count": "{{count}} files",
-    "default_label": "Cowork Default"
+    "default_label": "Cowork Default",
+    "model_in_use": "Model used in this session",
+    "model_unavailable": "This model is currently unavailable; a recommended model runs instead",
+    "model_unavailable_suffix": " (unavailable)",
+    "agent_chip": "Session agent"
   },
   "side": {
     "members": "Members",

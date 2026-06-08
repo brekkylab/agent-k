@@ -4,7 +4,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use agent_k::{
     agents::{
-        get_calculate_tool_func, get_find_in_document_tool_func, get_search_document_tool_func,
+        get_calculate_tool_func, get_find_in_document_tool_func, get_read_document_tool_func,
+        get_search_document_tool_func,
     },
     knowledge_base::Store,
 };
@@ -96,6 +97,10 @@ async fn run_server(mode: ServeMode) -> std::io::Result<()> {
             "find_in_document",
             get_find_in_document_tool_func(store.clone()),
         );
+        // Speedwagon (the `rag` agent surface) also reads matched spans.
+        provider
+            .tools
+            .insert_func("read_document", get_read_document_tool_func(store.clone()));
     }
 
     let data_root = std::env::var("AGENT_K_DATA_ROOT")

@@ -42,7 +42,7 @@
   },
   "list_page": {
     "title": "내 프로젝트",
-    "description": "각 프로젝트는 하나의 워크스페이스예요. 세션, 파일, 멤버, 스킬, 일정이 모두 그 안에서 관리됩니다.",
+    "description": "각 프로젝트는 하나의 워크스페이스예요. 세션, 파일, 멤버, 자동화가 모두 그 안에서 관리됩니다.",
     "new_project": "새 프로젝트",
     "section_label": "프로젝트 · {{count}}개"
   },
@@ -67,7 +67,8 @@
   "home": {
     "preview_pill_aria": "미리보기 — 아직 서버에 전달되지 않습니다",
     "attach_coming_soon": "파일 추가 기능은 곧 추가됩니다.",
-    "suggested_prompts_aria": "추천 프롬프트 (미리보기)"
+    "suggested_prompts_aria": "추천 프롬프트 (미리보기)",
+    "send_blocked_hint": "사용 가능한 모델이 없어요. Provider API 키를 설정하거나 다른 모델을 선택하세요."
   },
   "settings_page": {
     "section_label": "프로젝트 설정",
@@ -98,5 +99,21 @@
       "description_success": "설명을 변경했습니다",
       "delete_success": "프로젝트가 삭제되었습니다"
     }
+  },
+  "chains_editor": {
+    "section_label": "권장 모델 우선순위 설정",
+    "loading": "모델 목록을 불러오는 중…",
+    "saved": "추천 모델 체인을 저장했습니다",
+    "save_failed": "추천 모델 체인 저장에 실패했습니다",
+    "default": "(기본값)",
+    "reset_to_default": "기본값으로",
+    "no_provider": "Provider 없음",
+    "no_provider_inline": " — Provider 없음",
+    "add_model": "+ 모델 추가…",
+    "save": "추천 모델 저장",
+    "saving": "저장 중…",
+    "move_up": "위로",
+    "move_down": "아래로",
+    "remove": "제거"
   }
 }

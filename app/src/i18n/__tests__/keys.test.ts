@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import enAuth from '../locales/en/auth.json';
 import koAuth from '../locales/ko/auth.json';
+import enAutomation from '../locales/en/automation.json';
+import koAutomation from '../locales/ko/automation.json';
 import enCommon from '../locales/en/common.json';
 import koCommon from '../locales/ko/common.json';
 import enDialogs from '../locales/en/dialogs.json';
@@ -45,6 +47,7 @@ function collectKeys(obj: JsonShape, prefix = ''): string[] {
 
 const NAMESPACES: Array<{ name: string; en: JsonShape; ko: JsonShape }> = [
   { name: 'auth', en: enAuth, ko: koAuth },
+  { name: 'automation', en: enAutomation, ko: koAutomation },
   { name: 'common', en: enCommon, ko: koCommon },
   { name: 'dialogs', en: enDialogs, ko: koDialogs },
   { name: 'errors', en: enErrors, ko: koErrors },

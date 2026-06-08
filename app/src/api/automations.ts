@@ -40,6 +40,8 @@ export interface CreateAutomationInput {
   name: string;
   description?: string | null;
   prompts: string[];
+  agentType?: string | null;
+  model?: string | null;
 }
 
 export interface UpdateAutomationInput {
@@ -47,6 +49,8 @@ export interface UpdateAutomationInput {
   description?: string | null;
   prompts?: string[];
   enabled?: boolean;
+  agentType?: string;
+  model?: string | null;
 }
 
 /** Omit `projectRef` to list across projects (admin only on the backend). */
@@ -64,6 +68,8 @@ export async function createAutomation(input: CreateAutomationInput): Promise<Au
       name: input.name,
       description: input.description ?? null,
       prompts: input.prompts,
+      agent_type: input.agentType ?? null,
+      model: input.model ?? null,
     },
   });
   return toAutomation(raw);
@@ -85,6 +91,9 @@ export async function updateAutomation(
       ...(patch.description !== undefined ? { description: patch.description } : {}),
       ...(patch.prompts !== undefined ? { prompts: patch.prompts } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+      ...(patch.agentType !== undefined ? { agent_type: patch.agentType } : {}),
+      // null is intentional (→ recommended); only `undefined` means "leave as-is".
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
     },
   });
   return toAutomation(raw);
