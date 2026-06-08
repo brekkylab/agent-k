@@ -544,6 +544,9 @@ function SessionPage() {
     setLiveMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
     streamingRef.current = true;
+    // Keep the composer focused for the next message — covers the send-button
+    // click path too (Enter already leaves focus in the textarea).
+    composerRef.current?.focus();
 
     try {
       const ack = await sendMessage(sessionId, text, attachmentPaths.length > 0 ? attachmentPaths : undefined);
@@ -1038,7 +1041,6 @@ function SessionPage() {
               onChange={(e) => setComposerText(e.target.value)}
               onKeyDown={handleComposerKeyDown}
               placeholder={t('ui.composer_placeholder')}
-              disabled={streaming}
               rows={1}
             />
             <div className="cw-composer-actions">
