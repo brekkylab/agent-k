@@ -138,10 +138,10 @@
 }
 .cw-preview-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .cw-preview-actions button {
-  display: grid; place-items: center; width: 32px; height: 32px;
-  border-radius: var(--cw-radius-sm); color: #fff; background: transparent;
+  display: grid; place-items: center; width: 34px; height: 34px;
+  border-radius: var(--cw-radius-full); color: #fff; background: transparent;
 }
-.cw-preview-actions button:hover { background: rgb(255 255 255 / 0.14); }
+.cw-preview-actions button:hover { background: rgb(255 255 255 / 0.16); }
 
 .cw-preview-loading { margin: auto; color: rgb(255 255 255 / 0.85); }
 
@@ -161,23 +161,21 @@
 .cw-preview-pdf .react-pdf__Page { box-shadow: 0 4px 16px rgb(0 0 0 / 0.4); }
 
 /* Floating zoom pill, bottom-center. */
-/* Flat, design-system surface (paper + hairline border, no drop shadow) rather
-   than a raised glossy pill. */
 .cw-zoom-controls {
   position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 3;
   display: flex; align-items: center; gap: 2px;
-  padding: 3px; border-radius: var(--cw-radius-md);
-  background: var(--cw-bg-elevated); border: 1px solid var(--cw-border);
+  padding: 4px; border-radius: var(--cw-radius-full);
+  background: rgb(32 32 32 / 0.92); box-shadow: var(--cw-shadow-lg);
 }
 .cw-zoom-controls button {
-  min-width: 30px; height: 30px; padding: 0 8px;
+  min-width: 32px; height: 32px; padding: 0 8px;
   display: grid; place-items: center;
-  color: var(--cw-fg-1); background: transparent; border-radius: var(--cw-radius-sm);
-  font-size: 17px; line-height: 1;
+  color: #fff; background: transparent; border-radius: var(--cw-radius-md);
+  font-size: 18px; line-height: 1;
 }
-.cw-zoom-controls button:hover:not(:disabled) { background: var(--cw-bg-muted); }
-.cw-zoom-controls button:disabled { opacity: 0.4; cursor: default; }
-.cw-zoom-controls .cw-zoom-pct { font-size: var(--cw-text-xs); color: var(--cw-fg-2); min-width: 50px; font-variant-numeric: tabular-nums; }
+.cw-zoom-controls button:hover:not(:disabled) { background: rgb(255 255 255 / 0.16); }
+.cw-zoom-controls button:disabled { opacity: 0.35; cursor: default; }
+.cw-zoom-controls .cw-zoom-pct { font-size: var(--cw-text-xs); min-width: 52px; font-variant-numeric: tabular-nums; }
 
 /* Document sheet: readable light page centered on the dim. */
 .cw-preview-sheet {
