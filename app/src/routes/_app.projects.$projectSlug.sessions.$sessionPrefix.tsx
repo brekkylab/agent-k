@@ -6,7 +6,7 @@ import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-route
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
-import { getSession, updateSessionShareMode } from '@/api/sessions';
+import { getSession, markSessionRead, updateSessionShareMode } from '@/api/sessions';
 import { listMessageItems, sendMessage, stopRun, getRunActive, deriveStreamState } from '@/api/messages';
 import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
@@ -106,11 +106,6 @@ function SessionPage() {
       return { newer: 0 };
     },
     enabled: Boolean(session.data && currentUser),
-    // Refetch on every entry so the backend's mark-read side effect runs, which
-    // clears the sidebar unread badge via the dataUpdatedAt effect below. Without
-    // this, the QueryClient's default 30s staleTime kept re-entries within that
-    // window from triggering mark-read and the badge stayed visible.
-    staleTime: 0,
   });
   // Stable reference for the WS handler effect deps (stable identity in v5).
   const { fetchPreviousPage } = history;
@@ -235,22 +230,25 @@ function SessionPage() {
     didInitialScrollRef.current = false;
   }
 
-  // After messages load, mark-read side effect has run on the backend — zero this
-  // session's unread badge directly in every cached session list (any origin filter)
-  // instead of refetching whole lists on each session entry.
+  // On entering a session, mark it read on the server with a lightweight POST
+  // (no history refetch) and zero its unread badge directly in every cached
+  // session list (any origin filter). Keyed on sessionId so it fires once per
+  // entry instead of on every message page fetch.
   useEffect(() => {
-    if (history.isSuccess && sessionId) {
-      void queryClient.cancelQueries({ queryKey: ['sessions', projectSlug] });
-      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', projectSlug] }, (old) => {
-        if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
-        return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ['sessions', projectSlug],
-        refetchType: 'none',
-      });
-    }
-  }, [history.isSuccess, history.dataUpdatedAt, projectSlug, sessionId, queryClient]);
+    if (!sessionId) return;
+    void markSessionRead(sessionId).catch(() => {});
+    // Cancel + zero + invalidate-without-refetch so an in-flight session-list
+    // fetch can't clobber the optimistic unread reset.
+    void queryClient.cancelQueries({ queryKey: ['sessions', projectSlug] });
+    queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', projectSlug] }, (old) => {
+      if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
+      return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
+    });
+    void queryClient.invalidateQueries({
+      queryKey: ['sessions', projectSlug],
+      refetchType: 'none',
+    });
+  }, [sessionId, projectSlug, queryClient]);
 
   // Merge pages oldest→newest, collapse once so tool_call/result pairs span
   // window boundaries; seq dedupe absorbs overlap from stale after_seq refetches.
