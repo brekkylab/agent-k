@@ -10,6 +10,8 @@ import { Icon } from './Icon';
 import { useDialogEscape } from '@/lib/useDialogEscape';
 
 interface SessionCardMenuProps {
+  onMarkRead?: () => void;
+  markReadDisabled?: boolean;
   onDuplicate?: () => void;
   duplicateDisabled?: boolean;
   onDelete?: () => void;
@@ -17,9 +19,9 @@ interface SessionCardMenuProps {
 
 interface MenuRect { top: number; left: number; }
 
-export function SessionCardMenu({ onDuplicate, duplicateDisabled, onDelete }: SessionCardMenuProps) {
+export function SessionCardMenu({ onMarkRead, markReadDisabled, onDuplicate, duplicateDisabled, onDelete }: SessionCardMenuProps) {
   const { t } = useTranslation('session');
-  const hasActions = Boolean(onDuplicate || onDelete);
+  const hasActions = Boolean(onMarkRead || onDuplicate || onDelete);
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<MenuRect | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -106,6 +108,42 @@ export function SessionCardMenu({ onDuplicate, duplicateDisabled, onDelete }: Se
             zIndex: 100,
           }}
         >
+          {onMarkRead && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={markReadDisabled}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (markReadDisabled) return;
+                setOpen(false);
+                onMarkRead();
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                textAlign: 'left',
+                padding: '7px 10px',
+                border: 0,
+                background: 'transparent',
+                color: markReadDisabled ? 'var(--cw-ink-4)' : 'var(--cw-ink-1)',
+                fontSize: 12.5,
+                borderRadius: 'var(--cw-radius-sm)',
+                cursor: markReadDisabled ? 'not-allowed' : 'pointer',
+                opacity: markReadDisabled ? 0.6 : 1,
+              }}
+              onMouseEnter={(e) => {
+                if (markReadDisabled) return;
+                (e.currentTarget as HTMLButtonElement).style.background = 'var(--cw-paper-3)';
+              }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+            >
+              <Icon name="check" size={13} />
+              {t('menu.mark_read')}
+            </button>
+          )}
           {onDuplicate && (
             <button
               type="button"

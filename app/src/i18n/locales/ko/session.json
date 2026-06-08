@@ -46,6 +46,7 @@
   "artifacts_header": "산출물",
   "menu": {
     "options": "세션 옵션",
+    "mark_read": "읽음으로 표시",
     "duplicate": "세션 복제",
     "delete": "세션 삭제"
   },

@@ -797,6 +797,30 @@ pub async fn get_message_history(
     Ok(Json(SessionMessageListResponse { items }))
 }
 
+/// POST /sessions/{session_id}/read — mark the session read without fetching
+/// history (e.g. the sidebar "Mark as read" action).
+pub async fn mark_session_read(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(session_ref): Path<String>,
+) -> ApiResult<StatusCode> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// DELETE /sessions/{session_id}/messages — creator or project owner
 pub async fn clear_message_history(
     State(state): State<Arc<AppState>>,

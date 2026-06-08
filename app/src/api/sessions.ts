@@ -49,6 +49,11 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await request(`/sessions/${sessionId}`, { method: 'DELETE' });
 }
 
+// Marks the session read without fetching its history (sidebar "Mark as read").
+export async function markSessionRead(sessionId: string): Promise<void> {
+  await request(`/sessions/${sessionId}/read`, { method: 'POST' });
+}
+
 // User-facing label is "Duplicate" (the action clones the entire session
 // — messages + sandbox); the backend endpoint is still `/fork` since that
 // is the internal mechanism name.
