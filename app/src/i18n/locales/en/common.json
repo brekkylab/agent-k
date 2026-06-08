@@ -89,6 +89,10 @@
     "too_large_body": "This file is too large to preview. Download to view.",
     "error_title": "Couldn't load preview",
     "error_body": "Try again or download to view.",
-    "close": "Close"
+    "close": "Close",
+    "zoom": "Zoom",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "zoom_reset": "Reset zoom"
   }
 }

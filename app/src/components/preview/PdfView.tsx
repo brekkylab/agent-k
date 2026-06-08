@@ -3,17 +3,21 @@ import { Document, Page } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import './pdfWorker'; // side-effect: configure worker once
+import { useZoom, useWheelZoom } from './useZoom';
+import { ZoomControls } from './ZoomControls';
 
 interface Props { objectUrl: string }
 
 export function PdfView({ objectUrl }: Props) {
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState(0);
-  const [width, setWidth] = useState(760);
+  const [fitWidth, setFitWidth] = useState(760);
+  const zoom = useZoom();
+  useWheelZoom(stageRef, zoom);
 
   useLayoutEffect(() => {
     function measure() {
-      if (wrapRef.current) setWidth(Math.min(900, wrapRef.current.clientWidth - 24));
+      if (stageRef.current) setFitWidth(Math.min(900, stageRef.current.clientWidth - 48));
     }
     measure();
     window.addEventListener('resize', measure);
@@ -21,12 +25,24 @@ export function PdfView({ objectUrl }: Props) {
   }, []);
 
   return (
-    <div className="cw-preview-pdf" ref={wrapRef}>
-      <Document file={objectUrl} onLoadSuccess={({ numPages }) => setNumPages(numPages)}>
-        {Array.from({ length: numPages }, (_, i) => (
-          <Page key={i} pageNumber={i + 1} width={width} renderAnnotationLayer renderTextLayer />
-        ))}
-      </Document>
-    </div>
+    <>
+      <div className="cw-preview-stage cw-preview-pdf" ref={stageRef} onDoubleClick={zoom.toggle}>
+        <div className="cw-preview-content cw-preview-pdf-doc">
+          <Document file={objectUrl} onLoadSuccess={({ numPages }) => setNumPages(numPages)}>
+            {Array.from({ length: numPages }, (_, i) => (
+              <Page key={i} pageNumber={i + 1} width={fitWidth * zoom.scale} renderAnnotationLayer renderTextLayer />
+            ))}
+          </Document>
+        </div>
+      </div>
+      <ZoomControls
+        scale={zoom.scale}
+        onZoomIn={zoom.zoomIn}
+        onZoomOut={zoom.zoomOut}
+        onReset={zoom.reset}
+        canZoomIn={zoom.canZoomIn}
+        canZoomOut={zoom.canZoomOut}
+      />
+    </>
   );
 }

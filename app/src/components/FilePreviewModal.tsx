@@ -118,49 +118,66 @@ export function FilePreviewModal({ globalPath, onClose }: Props) {
     void downloadFileByGlobalPath(globalPath);
   }
 
+  // Click anywhere that isn't the content/chrome/zoom-pill (i.e. the dimmed
+  // area) dismisses — works for both the media stage's margins and the sheet's
+  // surrounding dim, regardless of nesting depth.
+  function maybeClose(e: React.MouseEvent) {
+    if (!(e.target as HTMLElement).closest('.cw-preview-content, .cw-preview-chrome, .cw-zoom-controls')) {
+      onClose();
+    }
+  }
+
+  // image/pdf render full-bleed on the dark "stage" with zoom; everything else
+  // (html/markdown/code/text/fallback) shows on a readable light "sheet".
+  const isStage = state.status === 'media' && (state.kind === 'image' || state.kind === 'pdf');
+
   const titleId = useId();
   return createPortal(
     <div
-      className="cw-dialog-backdrop"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      // Stop clicks from bubbling through the React portal tree to an ancestor
-      // (e.g. the AttachmentPreview chip's onClick toggle) when this modal is
-      // mounted as a descendant of a clickable element.
+      className="cw-preview-backdrop"
+      data-mode={isStage ? 'stage' : 'sheet'}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      ref={modalRef}
+      onKeyDown={onTrapKeyDown}
+      onMouseDown={maybeClose}
+      // Stop clicks bubbling through the React portal tree to an ancestor (e.g.
+      // the AttachmentPreview chip's onClick toggle) when mounted under one.
       onClick={(e) => e.stopPropagation()}
     >
-      <div
-        className="cw-preview-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        ref={modalRef}
-        onKeyDown={onTrapKeyDown}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <header className="cw-preview-head">
-          <span id={titleId} className="cw-preview-title" title={filename}>{filename}</span>
-          <div className="cw-preview-actions">
-            <button type="button" aria-label={t('preview.download')} onClick={handleDownload}>
-              <Icon name="download" size={15} />
-            </button>
-            <button type="button" ref={closeBtnRef} aria-label={t('preview.close')} onClick={onClose}>
-              <Icon name="x" size={16} />
-            </button>
-          </div>
-        </header>
-        <div className="cw-preview-body">
-          {state.status === 'loading' && <div className="cw-preview-loading">{t('preview.loading')}</div>}
-          {state.status === 'fallback' && (
-            <FallbackCard filename={filename} reason={state.reason} onDownload={handleDownload} />
-          )}
-          {state.status === 'media' && state.kind === 'image' && <ImageView objectUrl={state.objectUrl} alt={filename} />}
-          {state.status === 'media' && state.kind === 'html' && <HtmlView objectUrl={state.objectUrl} title={filename} />}
-          {state.status === 'media' && state.kind === 'pdf' && <PdfView objectUrl={state.objectUrl} />}
-          {state.status === 'text' && state.kind === 'markdown' && <MarkdownView content={state.content} />}
-          {state.status === 'text' && state.kind === 'code' && <CodeView content={state.content} lang={previewCodeLang(filename)} />}
-          {state.status === 'text' && state.kind === 'text' && <TextView content={state.content} />}
+      <div className="cw-preview-chrome">
+        <span id={titleId} className="cw-preview-title" title={filename}>{filename}</span>
+        <div className="cw-preview-actions">
+          <button type="button" aria-label={t('preview.download')} onClick={handleDownload}>
+            <Icon name="download" size={16} />
+          </button>
+          <button type="button" ref={closeBtnRef} aria-label={t('preview.close')} onClick={onClose}>
+            <Icon name="x" size={18} />
+          </button>
         </div>
       </div>
+
+      {state.status === 'loading' && <div className="cw-preview-loading">{t('preview.loading')}</div>}
+      {state.status === 'fallback' && (
+        <div className="cw-preview-content cw-preview-fallcard">
+          <FallbackCard filename={filename} reason={state.reason} onDownload={handleDownload} />
+        </div>
+      )}
+      {state.status === 'media' && state.kind === 'image' && <ImageView objectUrl={state.objectUrl} alt={filename} />}
+      {state.status === 'media' && state.kind === 'pdf' && <PdfView objectUrl={state.objectUrl} />}
+      {state.status === 'media' && state.kind === 'html' && (
+        <div className="cw-preview-content cw-preview-sheet cw-preview-sheet--frame"><HtmlView objectUrl={state.objectUrl} title={filename} /></div>
+      )}
+      {state.status === 'text' && state.kind === 'markdown' && (
+        <div className="cw-preview-content cw-preview-sheet"><MarkdownView content={state.content} /></div>
+      )}
+      {state.status === 'text' && state.kind === 'code' && (
+        <div className="cw-preview-content cw-preview-sheet"><CodeView content={state.content} lang={previewCodeLang(filename)} /></div>
+      )}
+      {state.status === 'text' && state.kind === 'text' && (
+        <div className="cw-preview-content cw-preview-sheet"><TextView content={state.content} /></div>
+      )}
     </div>,
     document.body,
   );
