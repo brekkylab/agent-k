@@ -160,10 +160,10 @@ export function fileTypeIcon(name: string): 'file' | 'file-text' | 'sheet' | 'im
 // ── Preview kind resolution ────────────────────────────────────────
 // 이 resolver는 categorise()(색상/아이콘용 분류)와 의도적으로 다른 taxonomy다:
 //   - categorise는 .html/.htm을 'code'로, .csv/.tsv를 'sheet'로, .ini/.env/.cfg/.conf를
-//     'code'로 묶지만, 미리보기는 html=라이브 렌더, csv/tsv/ini/env/cfg/conf=평문 text로 분기한다.
+//     'code'로 묶지만, 미리보기는 html=라이브 렌더, csv/tsv=표(table), ini/env/cfg/conf=평문 text로 분기한다.
 //   - 따라서 categorise의 정규식을 재사용하지 않고 독립 정의한다(공유하면 잘못된 결합이 된다).
 //     "preview kind"와 "badge color"는 서로 다른 관심사다.
-export type PreviewKind = 'pdf' | 'image' | 'html' | 'markdown' | 'code' | 'text' | 'unsupported';
+export type PreviewKind = 'pdf' | 'image' | 'html' | 'markdown' | 'code' | 'table' | 'text' | 'unsupported';
 
 const CODE_EXT =
   /\.(js|mjs|cjs|ts|tsx|jsx|json|jsonc|css|scss|sass|less|py|rb|rs|go|java|kt|kts|c|cc|cpp|h|hpp|cs|fs|fsx|swift|m|sh|bash|zsh|fish|ps1|bat|cmd|yml|yaml|toml|xml|sql|graphql|gql|lua|php|r|scala|clj|cljs|ex|exs|erl|hrl|hs|ml|mli|nim|zig|dart|vue|svelte|elm|tf|tfvars|bicep|proto|gradle|groovy|cmake|make|dockerfile)$/;
@@ -175,7 +175,8 @@ export function resolvePreviewKind(filename: string): PreviewKind {
   if (/\.html?$/.test(lower)) return 'html';        // MUST precede code
   if (/\.(md|markdown)$/.test(lower)) return 'markdown';
   if (CODE_EXT.test(lower)) return 'code';
-  if (/\.(txt|log|csv|tsv|env|ini|cfg|conf)$/.test(lower)) return 'text';
+  if (/\.(csv|tsv)$/.test(lower)) return 'table';
+  if (/\.(txt|log|env|ini|cfg|conf)$/.test(lower)) return 'text';
   return 'unsupported';
 }
 

@@ -11,6 +11,7 @@ import { HtmlView } from './preview/HtmlView';
 import { PdfView } from './preview/PdfView';
 import { MarkdownView } from './preview/MarkdownView';
 import { CodeView } from './preview/CodeView';
+import { TableView } from './preview/TableView';
 import { TextView } from './preview/TextView';
 
 const MAX_PREVIEW_BYTES = 20 * 1024 * 1024;
@@ -27,10 +28,10 @@ type Loaded =
   | { status: 'loading' }
   | { status: 'fallback'; reason: FallbackReason }
   | { status: 'media'; objectUrl: string; kind: 'image' | 'html' | 'pdf' }
-  | { status: 'text'; content: string; kind: 'markdown' | 'code' | 'text' };
+  | { status: 'text'; content: string; kind: 'markdown' | 'code' | 'table' | 'text' };
 
 const MEDIA_KINDS: PreviewKind[] = ['image', 'html', 'pdf'];
-const TEXT_KINDS: PreviewKind[] = ['markdown', 'code', 'text'];
+const TEXT_KINDS: PreviewKind[] = ['markdown', 'code', 'table', 'text'];
 
 export function FilePreviewModal({ globalPath, onClose }: Props) {
   const { t } = useTranslation('common');
@@ -101,7 +102,7 @@ export function FilePreviewModal({ globalPath, onClose }: Props) {
         } else if (TEXT_KINDS.includes(kind)) {
           const content = await blob.text();
           if (cancelled) return;
-          setState({ status: 'text', content, kind: kind as 'markdown' | 'code' | 'text' });
+          setState({ status: 'text', content, kind: kind as 'markdown' | 'code' | 'table' | 'text' });
         }
       } catch {
         if (!cancelled) setState({ status: 'fallback', reason: 'error' });
@@ -174,6 +175,11 @@ export function FilePreviewModal({ globalPath, onClose }: Props) {
       )}
       {state.status === 'text' && state.kind === 'code' && (
         <div className="cw-preview-content cw-preview-sheet"><CodeView content={state.content} lang={previewCodeLang(filename)} /></div>
+      )}
+      {state.status === 'text' && state.kind === 'table' && (
+        <div className="cw-preview-content cw-preview-sheet cw-preview-sheet--wide">
+          <TableView content={state.content} delimiter={filename.toLowerCase().endsWith('.tsv') ? '\t' : ''} />
+        </div>
       )}
       {state.status === 'text' && state.kind === 'text' && (
         <div className="cw-preview-content cw-preview-sheet"><TextView content={state.content} /></div>

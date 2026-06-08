@@ -21,8 +21,12 @@ describe('resolvePreviewKind', () => {
       expect(resolvePreviewKind(n)).toBe('code');
     }
   });
+  it('maps tabular', () => {
+    expect(resolvePreviewKind('data.csv')).toBe('table');
+    expect(resolvePreviewKind('data.tsv')).toBe('table');
+  });
   it('maps text', () => {
-    for (const n of ['a.txt', 'b.log', 'c.csv', 'd.env', 'e.ini']) {
+    for (const n of ['a.txt', 'b.log', 'd.env', 'e.ini']) {
       expect(resolvePreviewKind(n)).toBe('text');
     }
   });

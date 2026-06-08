@@ -93,6 +93,8 @@
     "zoom": "Zoom",
     "zoom_in": "Zoom in",
     "zoom_out": "Zoom out",
-    "zoom_reset": "Reset zoom"
+    "zoom_reset": "Reset zoom",
+    "table_truncated": "Large table — showing the first {{n}} of {{total}} rows",
+    "table_empty": "No rows to display"
   }
 }
