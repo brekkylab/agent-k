@@ -318,23 +318,31 @@ function SessionPage() {
   // MAX_ATTACHMENTS, dropping the overflow with a toast.
   const importSharedFiles = useCallback((items: SessionImportItem[]) => {
     if (items.length === 0) return;
-    const existing = new Set(pendingAttachments.map((a) => a.globalPath).filter(Boolean));
-    const fresh = items.filter((it) => !existing.has(it.globalPath));
-    const slots = Math.max(0, MAX_ATTACHMENTS - pendingAttachments.length);
-    const toAdd = fresh.slice(0, slots);
-    if (toAdd.length < fresh.length) {
+    // Best-effort overflow toast from the current state (accurate for a single drop).
+    const curPaths = new Set(pendingAttachments.map((a) => a.globalPath).filter(Boolean));
+    const freshCount = items.filter((it) => !curPaths.has(it.globalPath)).length;
+    if (pendingAttachments.length + freshCount > MAX_ATTACHMENTS) {
       showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
     }
-    if (toAdd.length === 0) return;
-    setPendingAttachments((prev) => [
-      ...prev,
-      ...toAdd.map((it, i) => ({
-        tempId: `shared-${Date.now()}-${i}-${it.filename}`,
-        filename: it.filename,
-        status: 'uploaded' as const,
-        globalPath: it.globalPath,
-      })),
-    ]);
+    // Dedupe + cap against the authoritative `prev` inside the updater, so a
+    // repeated or concurrent call (e.g. StrictMode's double-invoked effect)
+    // can't append the same files twice.
+    setPendingAttachments((prev) => {
+      const existing = new Set(prev.map((a) => a.globalPath).filter(Boolean));
+      const toAdd = items
+        .filter((it) => !existing.has(it.globalPath))
+        .slice(0, Math.max(0, MAX_ATTACHMENTS - prev.length));
+      if (toAdd.length === 0) return prev;
+      return [
+        ...prev,
+        ...toAdd.map((it, i) => ({
+          tempId: `shared-${Date.now()}-${i}-${it.filename}`,
+          filename: it.filename,
+          status: 'uploaded' as const,
+          globalPath: it.globalPath,
+        })),
+      ];
+    });
   }, [pendingAttachments, showToast, t]);
 
   const handleImportDrop = useCallback((e: React.DragEvent) => {
