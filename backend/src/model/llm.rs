@@ -365,8 +365,11 @@ mod tests {
         }
         let pinned = resolve_model(Some("coworker"), Some("anthropic/claude-opus-4-8"));
         assert!(catalog_entry(&pinned).is_some());
-        // An unknown/empty pin is ignored, falling through to the chain.
-        let bogus = resolve_model(Some("buddy"), Some("openai/does-not-exist"));
+        // A pin whose provider is not configured is ignored, falling through to
+        // the chain. Use an unregistered provider so the case holds regardless of
+        // which API keys are present — a `<configured-provider>/<unknown>` pin
+        // resolves via the provider glob and would be honored as-is.
+        let bogus = resolve_model(Some("buddy"), Some("nonexistent/model"));
         assert!(catalog_entry(&bogus).is_some());
     }
 }
