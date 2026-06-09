@@ -178,7 +178,7 @@ export function FilePreviewModal({ globalPath, onClose }: Props) {
         <div className="cw-preview-content cw-preview-sheet"><MarkdownView content={state.content} /></div>
       )}
       {state.status === 'text' && state.kind === 'code' && (
-        <div className="cw-preview-content cw-preview-sheet"><CodeView content={state.content} lang={previewCodeLang(filename)} /></div>
+        <div className="cw-preview-content cw-preview-sheet cw-preview-sheet--code"><CodeView content={state.content} lang={previewCodeLang(filename)} /></div>
       )}
       {state.status === 'text' && state.kind === 'table' && (
         <div className="cw-preview-content cw-preview-sheet cw-preview-sheet--wide">

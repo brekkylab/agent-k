@@ -197,15 +197,29 @@
    magnifier sits in a balanced square like the −/+ buttons. */
 .cw-zoom-controls .cw-zoom-pct--icon { min-width: 32px; padding: 0; }
 
-/* Document sheet: readable light page centered on the dim. */
+/* Document sheet: readable light page centered on the dim. Width breathes with
+   the viewport via clamp() instead of a hard min() cap, so a wide window gives
+   the sheet room instead of pinning it narrow. `vw` is always ≤ viewport, so the
+   only overflow risk is the clamp floor on a tiny screen — kept low (320px). */
 .cw-preview-sheet {
-  margin: 64px auto 32px; width: min(820px, 100%);
+  margin: 64px auto 32px; width: clamp(320px, 84vw, 1000px);
   max-height: calc(100vh - 96px); overflow: auto;
   background: var(--cw-bg-elevated);
   border-radius: var(--cw-radius-lg); box-shadow: var(--cw-shadow-lg);
 }
-.cw-preview-sheet--frame { width: min(960px, 100%); height: calc(100vh - 96px); overflow: hidden; }
-.cw-preview-sheet--wide { width: min(1100px, 100%); }
+/* HTML preview is a live page in an iframe (sheet stays fixed-height, the frame
+   scrolls internally). It's the most browser-like surface, so give its width the
+   most room — the page's own CSS handles its internal layout. Only width changes;
+   height/overflow keep the iframe behaviour. */
+.cw-preview-sheet--frame { width: clamp(320px, 92vw, 1360px); height: calc(100vh - 96px); overflow: hidden; }
+/* CSV/TSV table: cells don't wrap (the table-wrap scrolls horizontally), so like
+   code its width governs how many columns show before scroll — give it the same
+   wide cap as the HTML surface. */
+.cw-preview-sheet--wide { width: clamp(320px, 92vw, 1360px); }
+/* Code preview doesn't wrap, so width only governs how much shows before the
+   horizontal scroll kicks in — give it a wider cap than prose (whose width is a
+   reading measure that shouldn't grow unbounded). */
+.cw-preview-sheet--code { width: clamp(320px, 90vw, 1280px); }
 
 /* CSV/TSV table */
 .cw-preview-table-wrap { overflow: auto; }
@@ -224,6 +238,18 @@
 .cw-preview-html { width: 100%; height: 100%; border: 0; background: var(--cw-bg-elevated); display: block; }
 .cw-preview-doc { padding: 24px 28px; }
 .cw-preview-text { white-space: pre-wrap; word-break: break-word; color: var(--cw-fg-1); font-family: var(--cw-font-mono); font-size: var(--cw-text-xs); margin: 0; padding: 24px 28px; }
+/* Full-file code preview: the lone <pre> IS the whole document, so strip the
+   chat-style code-card chrome (bg/border/radius/margin/padding) and let the code
+   sit flush on the sheet with only the doc's single inset — like the plain-text
+   preview. Scoped to .cw-preview-code so markdown previews and chat keep their
+   boxed code blocks. Horizontal scroll stays (code must not soft-wrap). */
+.cw-preview-code .cw-md pre {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
 
 /* Fallback card centered on the dim. */
 .cw-preview-fallcard {
