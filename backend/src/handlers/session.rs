@@ -102,13 +102,13 @@ pub async fn build_session_agent(
             .map_err(|e| e.to_string())?,
         // Speedwagon answers questions over this project's document corpus.
         // Tools bind to the project-scoped store; runs on a local RunEnv (not
-        // the session sandbox). Shell is off in production.
+        // the session sandbox). Shell is exposed as a secondary tool.
         AgentType::Speedwagon => {
             let store = state
                 .store_for(project_id)
                 .await
                 .map_err(|(status, _)| format!("failed to open document store ({status})"))?;
-            agent_k::agents::get_speedwagon_agent(&model, store, false)
+            agent_k::agents::get_speedwagon_agent(TOP_LEVEL_AGENT_NAME, &model, store, true)
                 .await
                 .map_err(|e| e.to_string())?
         }

@@ -6,30 +6,38 @@ use super::tool::{
 };
 use crate::knowledge_base::SharedStore;
 
-pub const SYSTEM_PROMPT: &str = r#"You are a research assistant that answers questions from a document corpus using the provided tools.
+pub const SYSTEM_PROMPT: &str = r#"You are {{NAME}}. Your primary role is to answer the user's questions from a project's document corpus, searching the web only when the corpus is not enough.
 
-# Tools
-
-- **search_document(query)** — find candidate documents ranked by relevance. Start here.
+## Corpus tools
+- **search_document(query)** — find candidate documents ranked by relevance. Start here for any question about the project's documents.
 - **find_in_document(id, query)** — locate the lines where a term appears in one document. Returns line numbers.
 - **read_document(id, start, end)** — read a line range. Keep ranges tight (20-40 lines around a match).
-- **calculate(expression)** — evaluate one arithmetic expression, e.g. `"1577 * 1.08"`, `"sqrt(2) * pi"`.
+- **calculate(expression)** — evaluate one arithmetic expression, e.g. `"1577 * 1.08"`, `"sqrt(2) * pi"`. For a figure derived from corpus data, read the raw numbers first, then calculate.
 
-# How to work
-
-Chain the tools: `search_document` to find the document, `find_in_document` to locate the term, `read_document` to read just that range. One find followed by one read is usually enough to confirm a fact.
-
+## How to work
+- Chain the corpus tools: `search_document` to find the document, `find_in_document` to locate the term, `read_document` to read just that range. One find followed by one read is usually enough to confirm a fact.
 - Do not re-read a range you have already read, and do not re-run a query that already answered the question. Each call should add information you do not yet have.
-- If a search returns nothing useful, try different terms or synonyms before concluding — but two or three distinct queries is the limit, not a dozen.
-- For a number derived from corpus data (a growth rate, a ratio), read the raw figures first, then call `calculate`.
+- If a search returns nothing useful, try different terms or synonyms — but two or three distinct queries is the limit, not a dozen.
 
-# When to stop
+## Web search
+- **web_search** is available as a fallback. Use it when the corpus does not contain the answer, or when the question needs current or external information the documents cannot have (recent events, live figures, definitions of outside terms).
+- Some questions need both: find the fact in the corpus, then use the web to supplement it (e.g. a company named in a document plus its latest public information). Cover both halves.
+- Treat the corpus as primary. Do not web-search a question the documents already answer.
 
-Stop searching as soon as you have the facts the question asks for, and answer. Reading on after the answer is in hand wastes effort and risks contradicting yourself. If you have tried the reasonable queries and the corpus does not hold the answer, say so and state what you searched — do not keep retrying the same approach.
+## Shell
+- **shell** is available as a secondary tool for things the corpus/web tools cannot do — inspecting an uploaded file's raw form, a quick local computation, light data wrangling.
+- It is not a substitute for corpus search. For questions about the documents, use the corpus tools; reach for shell only when they cannot accomplish the step.
 
-# Answer
+## When to stop
+Stop as soon as you have the facts the question asks for, and answer. Continuing to search after the answer is in hand wastes effort and risks contradicting yourself. If you have tried the reasonable approaches and neither the corpus nor the web holds the answer, say so and state what you tried — do not keep retrying the same thing.
 
-Lead with the direct answer in one or two sentences, then cite the source: the document title or filepath and the line numbers you read it from. Keep it concise."#;
+## Answer
+- Lead with the direct answer in one or two sentences, then cite the source: the document title (and the line numbers you read) for corpus facts, or the URL for web facts. When you combine both, attribute each part.
+- Keep it concise.
+
+## Others
+- Current time: {{TIME}}
+- Always respond in the language the user used."#;
 
 /// Builder for a Speedwagon agent spec — corpus question-answering over a
 /// document [`SharedStore`](crate::knowledge_base::SharedStore).
@@ -41,6 +49,7 @@ Lead with the direct answer in one or two sentences, then cite the source: the d
 /// opt-in for callers that need it).
 #[derive(Debug, Clone)]
 pub struct SpeedwagonSpec {
+    name: String,
     model: String,
     card: Option<AgentCard>,
     web_search: bool,
@@ -50,6 +59,11 @@ pub struct SpeedwagonSpec {
 impl SpeedwagonSpec {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 
     pub fn model(mut self, model: impl Into<String>) -> Self {
@@ -81,8 +95,11 @@ impl SpeedwagonSpec {
     /// functions are resolved at agent-construction time against the
     /// [`AgentProvider`] (see [`get_speedwagon_agent`]).
     pub fn into_spec(self) -> AgentSpec {
+        let instruction = SYSTEM_PROMPT
+            .replace("{{NAME}}", &self.name)
+            .replace("{{TIME}}", &chrono::Utc::now().to_rfc3339());
         let mut spec = AgentSpec::new(self.model)
-            .instruction(SYSTEM_PROMPT)
+            .instruction(instruction)
             .tools([
                 get_search_document_tool_desc(),
                 get_find_in_document_tool_desc(),
@@ -103,10 +120,11 @@ impl SpeedwagonSpec {
 impl Default for SpeedwagonSpec {
     fn default() -> Self {
         Self {
+            name: "agent-k".into(),
             model: "openai/gpt-5.4-mini".into(),
             card: None,
             web_search: true,
-            shell: false,
+            shell: true,
         }
     }
 }
@@ -130,6 +148,7 @@ impl From<SpeedwagonSpec> for AgentSpec {
 ///
 /// [`RunEnv`]: ailoy::runenv::RunEnv
 pub async fn get_speedwagon_agent(
+    name: impl AsRef<str>,
     model: impl AsRef<str>,
     store: SharedStore,
     with_shell: bool,
@@ -143,9 +162,12 @@ pub async fn get_speedwagon_agent(
         tools: build_tools(store),
     };
 
+    let instruction = SYSTEM_PROMPT
+        .replace("{{NAME}}", name.as_ref())
+        .replace("{{TIME}}", &chrono::Utc::now().to_rfc3339());
     let mut builder = AgentBuilder::new(model.as_ref())
         .provider(provider)
-        .instruction(SYSTEM_PROMPT)
+        .instruction(instruction)
         .tools([
             get_search_document_tool_desc(),
             get_find_in_document_tool_desc(),
@@ -168,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn default_spec_has_corpus_tools_and_web_search_no_shell() {
+    fn default_spec_has_corpus_tools_web_search_and_shell() {
         let names = tool_names(SpeedwagonSpec::new().into_spec());
         for t in [
             "search_document",
@@ -176,21 +198,18 @@ mod tests {
             "read_document",
             "calculate",
             "web_search",
+            "shell",
         ] {
             assert!(names.iter().any(|n| n == t), "missing tool: {t} in {names:?}");
         }
-        assert!(
-            !names.iter().any(|n| n == "shell"),
-            "shell should be off by default"
-        );
     }
 
     #[test]
-    fn with_shell_adds_shell_tool() {
-        let names = tool_names(SpeedwagonSpec::new().with_shell(true).into_spec());
-        // canonical built-in name is "shell" — the provider resolves it against
-        // the pre-registered builtin factory of the same name.
-        assert!(names.iter().any(|n| n == "shell"), "shell missing in {names:?}");
+    fn with_shell_off_drops_shell_tool() {
+        let names = tool_names(SpeedwagonSpec::new().with_shell(false).into_spec());
+        assert!(!names.iter().any(|n| n == "shell"), "shell should be droppable");
+        // corpus tools remain
+        assert!(names.iter().any(|n| n == "search_document"));
     }
 
     #[test]
@@ -207,5 +226,15 @@ mod tests {
             .model("anthropic/claude-haiku-4-5-20251001")
             .into_spec();
         assert_eq!(spec.model, "anthropic/claude-haiku-4-5-20251001");
+    }
+
+    #[test]
+    fn instruction_renders_name_and_time() {
+        let spec = SpeedwagonSpec::new().name("agent-k").into_spec();
+        let inst = spec.instruction.expect("instruction set");
+        assert!(inst.contains("You are agent-k."), "name not rendered: {inst}");
+        assert!(!inst.contains("{{NAME}}"), "NAME placeholder left unrendered");
+        assert!(!inst.contains("{{TIME}}"), "TIME placeholder left unrendered");
+        assert!(inst.contains("Current time:"), "time line missing");
     }
 }
