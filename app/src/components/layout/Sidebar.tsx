@@ -260,6 +260,10 @@ export function Sidebar() {
     let paths: string[];
     try { paths = JSON.parse(raw); } catch { return; }
     if (!Array.isArray(paths) || paths.length === 0) return;
+    // A drag can leave a stray text selection highlighted; clear it before we
+    // navigate away (otherwise it stays stuck on the next page). Folders are
+    // expanded into their contained files by the session page.
+    window.getSelection()?.removeAllRanges();
     navigate({
       to: '/projects/$projectSlug/sessions/$sessionPrefix',
       params: { projectSlug, sessionPrefix: shortSessionId(sessionId) },

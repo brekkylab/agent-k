@@ -246,7 +246,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-brand-lockup strong { color: var(--cw-fg-1); font-size: 22px; line-height: 1; letter-spacing: -0.035em; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-section-label-app { padding: 5px 3px 5px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--cw-fg-3); font-weight: 500; }
 .cw-nav-list, .cw-session-rail { display: flex; flex-direction: column; gap: 1px; }
-.cw-nav-row, .cw-session-row { width: 100%; min-height: 31px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: var(--cw-radius-md); background: transparent; color: var(--cw-fg-2); padding: 6px 8px; text-align: left; font-size: 13px; transition: background 120ms, color 120ms, transform 120ms; }
+.cw-nav-row, .cw-session-row { width: 100%; min-height: 31px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: var(--cw-radius-md); background: transparent; color: var(--cw-fg-2); padding: 6px 8px; text-align: left; font-size: 13px; user-select: none; transition: background 120ms, color 120ms, transform 120ms; }
 .cw-nav-row:hover, .cw-session-row:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
 .cw-nav-row:active, .cw-session-row:active, .cw-btn-primary:active, .cw-btn-secondary:active { transform: translateY(1px); }
 .cw-nav-row.is-active, .cw-session-row.is-active { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
