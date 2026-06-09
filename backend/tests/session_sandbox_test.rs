@@ -18,7 +18,7 @@ use ailoy::{
 use axum::http::StatusCode;
 use common::{
     delete_session, extract_text, extract_text_from_slice, get_personal_project, login, make_repo,
-    make_test_store, post_session_authed, send_message, send_message_stream, setup_provider,
+    post_session_authed, send_message, send_message_stream, setup_provider,
     signup, test_jwt_config, upload_dirents,
 };
 
@@ -33,11 +33,9 @@ fn ensure_test_provider() {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 async fn make_state() -> Arc<AppState> {
-    let store = make_test_store();
     let data_root = std::env::temp_dir().join(format!("agent-k-sandbox-{}", uuid::Uuid::new_v4()));
     Arc::new(AppState::new(
         make_repo().await,
-        store,
         test_jwt_config(),
         data_root,
     ))

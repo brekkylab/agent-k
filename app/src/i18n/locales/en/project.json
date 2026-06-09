@@ -97,7 +97,14 @@
     "toasts": {
       "rename_success": "Project name updated",
       "description_success": "Description updated",
-      "delete_success": "Project deleted"
+      "delete_success": "Project deleted",
+      "pdf_engine_success": "PDF engine updated"
+    },
+    "pdf_engine": {
+      "heading": "PDF reading engine",
+      "help": "How PDFs in the knowledge folder are read. Kreuzberg is fast; Docling is more thorough but takes longer.",
+      "option_kreuzberg": "Kreuzberg (fast)",
+      "option_docling": "Docling (slower, more thorough)"
     }
   },
   "chains_editor": {

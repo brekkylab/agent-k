@@ -734,6 +734,11 @@ function FilesPage() {
               onDropFiles(e.dataTransfer.files);
             }}
           >
+            {currentPath[0] === 'knowledge' && !view.isSearch && (
+              <div className="cw-knowledge-banner">
+                <Icon name="sparkles" size={14} /> <span>{t('files:knowledge.banner')}</span>
+              </div>
+            )}
             {allRows.length === 0 ? (
               <EmptyState
                 title={view.isSearch ? t('files:empty.search_no_results') : t('files:empty.folder_empty_title')}

@@ -250,6 +250,15 @@ pub async fn update_project(
         }
     };
 
+    let new_pdf_engine = match payload.pdf_engine {
+        None => None,
+        Some(ref s) => {
+            let engine = agent_k::knowledge_base::PdfEngine::from_str_opt(s)
+                .ok_or_else(|| AppError::bad_request("pdf_engine must be 'kreuzberg' or 'docling'"))?;
+            Some(engine.as_str().to_string())
+        }
+    };
+
     let updated = state
         .repository
         .update_project(
@@ -258,6 +267,7 @@ pub async fn update_project(
             payload.description.map(Some),
             new_slug,
             new_chains,
+            new_pdf_engine,
         )
         .await
         .map_err(|e| match e {

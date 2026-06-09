@@ -86,5 +86,8 @@
     "move_confirm": "Move",
     "copy_title": "Copy",
     "copy_confirm": "Copy"
+  },
+  "knowledge": {
+    "banner": "Files here are read by the AI to answer questions about this project. New files become available shortly after upload."
   }
 }

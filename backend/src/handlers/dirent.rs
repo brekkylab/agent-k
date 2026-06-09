@@ -54,7 +54,7 @@ pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
     Ok(root.join(normalized))
 }
 
-fn has_path_prefix(rel: &str, prefix: &str) -> bool {
+pub(crate) fn has_path_prefix(rel: &str, prefix: &str) -> bool {
     let prefix = prefix.trim_end_matches('/');
     if prefix.is_empty() {
         return true;
@@ -72,7 +72,7 @@ pub(crate) enum DirentScope {
 }
 
 impl DirentScope {
-    fn project_id(&self) -> Uuid {
+    pub(crate) fn project_id(&self) -> Uuid {
         match self {
             Self::Shared { project_id }
             | Self::Inputs { project_id, .. }
@@ -423,6 +423,14 @@ pub async fn dirent_upload(
 
     tracing::info!(path = %scope_q.path, count = %succeeded.len(), "dirents uploaded");
 
+    let touched_knowledge = matches!(parsed.scope, DirentScope::Shared { .. })
+        && succeeded.iter().any(|d| {
+            d.path
+                .strip_prefix(&format!("{scope_prefix}/"))
+                .is_some_and(super::knowledge::tail_in_knowledge)
+        });
+    super::knowledge::maybe_trigger_resync(&state, parsed.scope.project_id(), touched_knowledge);
+
     Ok(Json(DirentBatchResult { succeeded, failed }))
 }
 
@@ -446,6 +454,9 @@ pub async fn dirent_list(
         ));
     }
     enforce_scope_access(&state, &auth_user, &parsed.scope, false).await?;
+    if let DirentScope::Shared { project_id } = parsed.scope {
+        super::knowledge::ensure_knowledge_folder(&state, project_id).await;
+    }
     let root = scope_root(&state, &parsed.scope);
     let scope_prefix = parsed.scope.prefix_str();
 
@@ -613,6 +624,11 @@ pub async fn dirent_delete(
         return Err(AppError::bad_request("cannot delete a scope root"));
     }
     enforce_scope_access(&state, &auth_user, &parsed.scope, true).await?;
+    if super::knowledge::is_knowledge_root(&parsed.scope, &parsed.tail.to_string_lossy()) {
+        return Err(AppError::bad_request(
+            "the knowledge folder is fixed and cannot be deleted",
+        ));
+    }
     let root = scope_root(&state, &parsed.scope);
     let host_path =
         safe_join(&root, &parsed.tail.to_string_lossy()).map_err(AppError::bad_request)?;
@@ -652,6 +668,10 @@ pub async fn dirent_delete(
             tracing::warn!(%session_id, %rel_path, "failed to remove artifact from messages: {e}");
         }
     }
+
+    let touched_knowledge = matches!(parsed.scope, DirentScope::Shared { .. })
+        && super::knowledge::tail_in_knowledge(&parsed.tail.to_string_lossy());
+    super::knowledge::maybe_trigger_resync(&state, parsed.scope.project_id(), touched_knowledge);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -998,6 +1018,13 @@ pub async fn dirent_batch_op(
         }
     }
 
+    // Capture source (scope, tail) pairs before `body` is consumed by `match`.
+    let succeeded_sources: Vec<(DirentScope, String)> = all_sources
+        .iter()
+        .filter_map(|s| parse_dirent_path(s).ok())
+        .map(|p| (p.scope, p.tail.to_string_lossy().to_string()))
+        .collect();
+
     let mut succeeded: Vec<Dirent> = Vec::new();
     let mut failed: Vec<FailedFile> = Vec::new();
 
@@ -1092,6 +1119,17 @@ pub async fn dirent_batch_op(
                 "dirents copied"
             );
         }
+    }
+
+    // Resync if a knowledge path is involved on either end (in→out purges,
+    // out→in indexes). Sources were captured before `body` was consumed.
+    let dest_in_knowledge = matches!(scope, DirentScope::Shared { .. })
+        && super::knowledge::tail_in_knowledge(&dest_tail_str);
+    let src_in_knowledge = succeeded_sources.iter().any(|(s, t)| {
+        matches!(s, DirentScope::Shared { .. }) && super::knowledge::tail_in_knowledge(t)
+    });
+    if dest_in_knowledge || src_in_knowledge {
+        super::knowledge::maybe_trigger_resync(&state, scope.project_id(), true);
     }
 
     Ok(Json(DirentBatchResult { succeeded, failed }))

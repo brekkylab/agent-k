@@ -15,7 +15,7 @@ use ailoy::message::{Message, Part, Role};
 use common::{
     SessionGuard, authed, clear_message_history, clear_message_history_status, get_message_history,
     get_message_history_status, login, make_app_with_repo, make_app_with_state, make_repo,
-    make_test_store, post_session_authed, send_message_status, setup_provider, signup,
+    post_session_authed, send_message_status, setup_provider, signup,
     test_jwt_config,
 };
 use uuid::Uuid;
@@ -116,11 +116,10 @@ async fn unknown_session_returns_404() {
 /// A freshly created session has an empty message history.
 #[tokio::test]
 async fn get_messages_returns_empty_for_new_session() {
-    let store = make_test_store();
     let repo = make_repo().await;
     let data_root =
         std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
+    let state = Arc::new(AppState::new(repo, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
@@ -168,11 +167,10 @@ async fn get_messages_returns_404_for_unknown_session() {
 async fn get_messages_returns_persisted_messages_in_order() {
     use ailoy::message::{Message, Part, Role};
 
-    let store = make_test_store();
     let repo = make_repo().await;
     let data_root =
         std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
+    let state = Arc::new(AppState::new(repo, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
@@ -236,11 +234,10 @@ async fn clear_messages_returns_404_for_unknown_session() {
 async fn clear_messages_removes_persisted_messages() {
     use ailoy::message::{Message, Part, Role};
 
-    let store = make_test_store();
     let repo = make_repo().await;
     let data_root =
         std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
+    let state = Arc::new(AppState::new(repo, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
@@ -290,11 +287,10 @@ async fn clear_messages_removes_persisted_messages() {
 async fn clear_messages_does_not_delete_session() {
     use ailoy::message::{Message, Part, Role};
 
-    let store = make_test_store();
     let repo = make_repo().await;
     let data_root =
         std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
+    let state = Arc::new(AppState::new(repo, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
@@ -334,11 +330,10 @@ async fn clear_messages_does_not_delete_session() {
 async fn can_append_messages_after_clear() {
     use ailoy::message::{Message, Part, Role};
 
-    let store = make_test_store();
     let repo = make_repo().await;
     let data_root =
         std::env::temp_dir().join(format!("agent-k-msg-persist-{}", uuid::Uuid::new_v4()));
-    let state = Arc::new(AppState::new(repo, store, test_jwt_config(), data_root));
+    let state = Arc::new(AppState::new(repo, test_jwt_config(), data_root));
     let app = make_app_with_state(state.clone());
 
     let username = format!("user_{}", uuid::Uuid::new_v4().simple());
@@ -390,12 +385,10 @@ async fn get_messages_response_includes_correct_sender_field() {
     use agent_k_backend::repository::{DbSenderKind, NewSessionMessage};
     use ailoy::message::{Message, Part, Role};
 
-    let store = common::make_test_store();
     let repo = common::make_repo().await;
     let data_root = std::env::temp_dir().join(format!("agent-k-sender-{}", Uuid::new_v4()));
     let state = std::sync::Arc::new(agent_k_backend::state::AppState::new(
         repo.clone(),
-        store,
         common::test_jwt_config(),
         data_root,
     ));
@@ -565,10 +558,8 @@ async fn symlink_as_attachment_is_rejected() {
     let repo = repository::create_repository("sqlite::memory:")
         .await
         .unwrap();
-    let store = common::make_test_store();
     let state = Arc::new(AppState::new(
         repo.clone(),
-        store,
         common::test_jwt_config(),
         data_root.path().to_path_buf(),
     ));

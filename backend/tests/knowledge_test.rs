@@ -1,0 +1,204 @@
+#[path = "common/mod.rs"]
+mod common;
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use agent_k_backend::state::AppState;
+use axum::http::StatusCode;
+use common::{
+    authed, build_multipart_body, get_personal_project, login, make_app_repo_state, signup,
+};
+use tower::ServiceExt;
+use uuid::Uuid;
+
+/// Upload files into a project's `shared/knowledge/` folder. Filenames carry
+/// the `knowledge/` prefix so dirent routes them into the corpus folder.
+async fn upload_to_knowledge(
+    app: &axum::Router,
+    token: &str,
+    project_id: &str,
+    files: &[(&str, &[u8])],
+) -> StatusCode {
+    let prefixed: Vec<(String, &[u8])> = files
+        .iter()
+        .map(|(name, body)| (format!("knowledge/{name}"), *body))
+        .collect();
+    let refs: Vec<(&str, &[u8])> = prefixed.iter().map(|(n, b)| (n.as_str(), *b)).collect();
+    let (boundary, body) = build_multipart_body(&refs);
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/dirents?path=projects/{project_id}/shared"))
+        .header("authorization", format!("Bearer {token}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap().status()
+}
+
+/// Poll the project's corpus store until `count()` reaches `want`, or time out.
+async fn wait_for_count(state: &Arc<AppState>, project_id: Uuid, want: u32) -> u32 {
+    for _ in 0..100 {
+        let store = state.store_for(project_id).await.expect("store_for");
+        let n = store.read().await.count();
+        if n == want {
+            return n;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let store = state.store_for(project_id).await.expect("store_for");
+    let n = store.read().await.count();
+    n
+}
+
+async fn personal_project_uuid(app: &axum::Router, token: &str) -> (String, Uuid) {
+    let p = get_personal_project(app, token).await;
+    let slug = p["slug"].as_str().unwrap().to_string();
+    let id = Uuid::parse_str(p["id"].as_str().unwrap()).unwrap();
+    (slug, id)
+}
+
+#[tokio::test]
+async fn upload_to_knowledge_indexes_and_delete_removes() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+
+    // Touch shared so the knowledge folder is created and listed.
+    let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
+
+    let status = upload_to_knowledge(
+        &app,
+        &token,
+        &pid.to_string(),
+        &[("note.md", b"# Freedonia\n\nThe capital is Glorkville." as &[u8])],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(wait_for_count(&state, pid, 1).await, 1, "doc should be indexed");
+
+    // Search finds it.
+    let store = state.store_for(pid).await.unwrap();
+    let page = store.read().await.search("Glorkville", 0, 10).unwrap();
+    assert!(!page.results.is_empty(), "search should find the document");
+
+    // Delete the file → resync purges it.
+    let del = authed(
+        &app,
+        "DELETE",
+        &format!("/dirents/projects/{pid}/shared/knowledge/note.md"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(del.0, StatusCode::NO_CONTENT);
+    assert_eq!(wait_for_count(&state, pid, 0).await, 0, "doc should be purged");
+}
+
+#[tokio::test]
+async fn duplicate_content_indexed_once() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+
+    upload_to_knowledge(
+        &app,
+        &token,
+        &pid.to_string(),
+        &[
+            ("a.md", b"# Same\n\nIdentical body." as &[u8]),
+            ("b.md", b"# Same\n\nIdentical body." as &[u8]),
+        ],
+    )
+    .await;
+    // UUIDv5 on identical bytes collides → one document.
+    assert_eq!(wait_for_count(&state, pid, 1).await, 1);
+}
+
+#[tokio::test]
+async fn upload_outside_knowledge_is_not_indexed() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+
+    // Upload to shared root (not knowledge).
+    let (boundary, body) = build_multipart_body(&[("loose.md", b"# Loose\n\nNot indexed." as &[u8])]);
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/dirents?path=projects/{pid}/shared"))
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", format!("multipart/form-data; boundary={boundary}"))
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
+
+    // Give any (incorrectly triggered) resync a chance, then assert empty.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let store = state.store_for(pid).await.unwrap();
+    assert_eq!(store.read().await.count(), 0, "files outside knowledge must not be indexed");
+}
+
+#[tokio::test]
+async fn knowledge_folder_cannot_be_deleted() {
+    let (app, _repo, _state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+
+    let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
+
+    let del = authed(
+        &app,
+        "DELETE",
+        &format!("/dirents/projects/{pid}/shared/knowledge"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(del.0, StatusCode::BAD_REQUEST, "knowledge folder must be protected");
+}
+
+#[tokio::test]
+async fn deleting_a_subfolder_purges_its_documents() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+
+    // Two docs under a nested subfolder; recursion indexes both.
+    upload_to_knowledge(
+        &app,
+        &token,
+        &pid.to_string(),
+        &[
+            ("sub/one.md", b"# One\n\nAlpha content." as &[u8]),
+            ("sub/two.md", b"# Two\n\nBeta content." as &[u8]),
+        ],
+    )
+    .await;
+    assert_eq!(wait_for_count(&state, pid, 2).await, 2, "both nested docs indexed");
+
+    // Delete the whole subfolder → resync purges every doc that lived under it.
+    let del = authed(
+        &app,
+        "DELETE",
+        &format!("/dirents/projects/{pid}/shared/knowledge/sub"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(del.0, StatusCode::NO_CONTENT);
+    assert_eq!(wait_for_count(&state, pid, 0).await, 0, "subfolder docs purged");
+}

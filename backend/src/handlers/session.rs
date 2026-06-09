@@ -100,13 +100,17 @@ pub async fn build_session_agent(
         }
         AgentType::Buddy => agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model)
             .map_err(|e| e.to_string())?,
-        // Speedwagon: Q&A over the global document corpus (not the session
-        // sandbox); non-sandboxed. Interim until it moves to a sandbox agent.
+        // Speedwagon answers questions over this project's document corpus.
+        // Tools bind to the project-scoped store; runs on a local RunEnv (not
+        // the session sandbox). Shell is off in production.
         AgentType::Speedwagon => {
-            let spec = agent_k::agents::SpeedwagonSpec::new()
-                .model(&model)
-                .into_spec();
-            Agent::try_new(spec).map_err(|e| e.to_string())?
+            let store = state
+                .store_for(project_id)
+                .await
+                .map_err(|(status, _)| format!("failed to open document store ({status})"))?;
+            agent_k::agents::get_speedwagon_agent(&model, store, false)
+                .await
+                .map_err(|e| e.to_string())?
         }
         // Coworker runs the sandboxed coworker agent over the session's files.
         AgentType::Coworker => {

@@ -86,5 +86,8 @@
     "move_confirm": "이동",
     "copy_title": "복사",
     "copy_confirm": "복사"
+  },
+  "knowledge": {
+    "banner": "여기에 올린 파일은 AI가 이 프로젝트 질문에 답할 때 참고합니다. 새 파일은 올린 직후 잠시 뒤부터 쓰입니다."
   }
 }

@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use agent_k::knowledge_base::SharedStore;
+use agent_k::knowledge_base::{SharedStore, Store};
 use ailoy::{agent::Agent, message::MessageOutput};
 use dashmap::DashMap;
 use tokio::sync::{Mutex, RwLock, broadcast};
@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::JwtConfig,
+    error::{ApiError, AppError},
     events::{RunUserMessage, WsEvent},
     repository::AppRepository,
 };
@@ -23,7 +24,10 @@ pub struct AppState {
     agents: DashMap<Uuid, Arc<Mutex<Agent>>>,
     active_agent_runs: DashMap<Uuid, Arc<RwLock<ActiveAgentRun>>>,
     pub repository: AppRepository,
-    pub store: SharedStore,
+    /// Per-project document corpora (Speedwagon). Each project gets its own
+    /// on-disk store under `data_root/projects/{project_id}/.speedwagon`,
+    /// opened lazily on first access via [`AppState::store_for`].
+    document_stores: DashMap<Uuid, SharedStore>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -31,12 +35,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(
-        repository: AppRepository,
-        store: SharedStore,
-        jwt: JwtConfig,
-        data_root: PathBuf,
-    ) -> Self {
+    pub fn new(repository: AppRepository, jwt: JwtConfig, data_root: PathBuf) -> Self {
         let max_upload_bytes = std::env::var("AGENT_K_MAX_UPLOAD_BYTES")
             .ok()
             .and_then(|v| {
@@ -54,12 +53,40 @@ impl AppState {
             agents: DashMap::new(),
             active_agent_runs: DashMap::new(),
             repository,
-            store,
+            document_stores: DashMap::new(),
             jwt,
             data_root,
             max_upload_bytes,
             ws_tx,
         }
+    }
+
+    /// Return the document corpus [`SharedStore`] for `project_id`, opening it
+    /// on first access. The store lives at
+    /// `data_root/projects/{project_id}/.speedwagon`; its directories are
+    /// created if absent.
+    pub async fn store_for(&self, project_id: Uuid) -> Result<SharedStore, ApiError> {
+        if let Some(store) = self.document_stores.get(&project_id) {
+            return Ok(store.clone());
+        }
+        let root = self
+            .data_root
+            .join("projects")
+            .join(project_id.to_string())
+            .join(".speedwagon");
+        // `Store::new` does blocking filesystem + tantivy index work.
+        let store = tokio::task::spawn_blocking(move || Store::new(&root))
+            .await
+            .map_err(|e| AppError::internal(format!("store init join error: {e}")))?
+            .map_err(|e| AppError::internal(format!("store init failed: {e}")))?;
+        let shared: SharedStore = Arc::new(RwLock::new(store));
+        // Race-safe: if another task opened it first between the get() above
+        // and here, keep the existing entry.
+        Ok(self
+            .document_stores
+            .entry(project_id)
+            .or_insert(shared)
+            .clone())
     }
 
     pub fn insert_agent(&self, id: Uuid, agent: Agent) {

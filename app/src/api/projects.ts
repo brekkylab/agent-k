@@ -24,13 +24,19 @@ export async function getProject(projectRef: string): Promise<Project> {
 
 export async function updateProject(
   projectRef: string,
-  input: { name?: string; description?: string | null; recommendedChains?: Record<string, string[]> },
+  input: {
+    name?: string;
+    description?: string | null;
+    recommendedChains?: Record<string, string[]>;
+    pdfEngine?: string;
+  },
 ): Promise<Project> {
   const body: Record<string, unknown> = {};
   if (input.name !== undefined) body.name = input.name;
   if (input.description !== undefined) body.description = input.description;
   // Send only when provided; `{}` resets all agents to defaults.
   if (input.recommendedChains !== undefined) body.recommended_chains = input.recommendedChains;
+  if (input.pdfEngine !== undefined) body.pdf_engine = input.pdfEngine;
   const raw = await request<BackendProject>(`/projects/${projectRef}`, {
     method: 'PATCH',
     body,

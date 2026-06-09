@@ -23,6 +23,8 @@ export interface Project {
   memberIds: UserId[];
   /** Per-agent_type recommendation-chain overrides (agent_type → ordered model ids). */
   recommendedChains: Record<string, string[]>;
+  /** Knowledge-corpus PDF engine: "kreuzberg" | "docling". */
+  pdfEngine: string;
 }
 
 export type SessionOrigin = 'user' | 'automation';

@@ -29,6 +29,8 @@ export interface BackendProject {
   owner_id: string;
   /** Per-agent_type recommendation-chain overrides; only customized agents present. */
   recommended_chains?: Record<string, string[]>;
+  /** Knowledge-corpus PDF engine: "kreuzberg" | "docling". */
+  pdf_engine?: string;
   created_at: string;
   updated_at: string;
 }

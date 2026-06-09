@@ -15,10 +15,8 @@ use tower::ServiceExt;
 async fn make_state_with_dir() -> (Arc<AppState>, TempDir) {
     let tmp = TempDir::new().unwrap();
     let repo = common::make_repo().await;
-    let store = common::make_test_store();
     let state = Arc::new(AppState::new(
         repo,
-        store,
         common::test_jwt_config(),
         tmp.path().to_path_buf(),
     ));
@@ -28,11 +26,9 @@ async fn make_state_with_dir() -> (Arc<AppState>, TempDir) {
 async fn make_state_with_dir_and_max_bytes(max_bytes: usize) -> (Arc<AppState>, TempDir) {
     let tmp = TempDir::new().unwrap();
     let repo = common::make_repo().await;
-    let store = common::make_test_store();
     // Build AppState directly with a custom max_upload_bytes to avoid env var races.
     let mut state = AppState::new(
         repo,
-        store,
         common::test_jwt_config(),
         tmp.path().to_path_buf(),
     );
