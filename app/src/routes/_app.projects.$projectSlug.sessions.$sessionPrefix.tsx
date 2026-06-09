@@ -350,6 +350,9 @@ function SessionPage() {
     if (!raw) return;
     e.preventDefault();
     setImportDragOver(false);
+    // Clear any selection the drag formed underneath the overlay, so it doesn't
+    // reappear once the overlay is gone.
+    window.getSelection()?.removeAllRanges();
     let items: SessionImportItem[];
     try { items = JSON.parse(raw); } catch { return; }
     if (Array.isArray(items)) importSharedFiles(items);

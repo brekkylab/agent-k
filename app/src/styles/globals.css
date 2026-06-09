@@ -318,10 +318,17 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-activity-row time { color: var(--cw-fg-3); font-family: var(--cw-font-mono); font-size: 11px; }
 
 .cw-session-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; flex: 1; min-height: 0; overflow: hidden; }
-.cw-chat-surface { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
-/* While a shared file is dragged over the conversation, ring the surface to
-   signal it can be dropped here (imported as an attachment). */
-.cw-chat-surface.is-import-target { box-shadow: inset 0 0 0 2px var(--cw-accent); background: color-mix(in oklch, var(--cw-accent), transparent 94%); }
+.cw-chat-surface { position: relative; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
+/* While a shared file is dragged over the conversation, lay a single uniform
+   accent overlay over the whole surface (a clean drop zone) instead of letting
+   the drag paint a ragged text selection. pointer-events:none so the drop still
+   reaches the surface underneath. */
+.cw-chat-surface.is-import-target::after {
+  content: ''; position: absolute; inset: 0; z-index: 5; pointer-events: none;
+  background: color-mix(in oklch, var(--cw-accent), transparent 82%);
+  /* Ring on the overlay (above content) so opaque children can't break it. */
+  box-shadow: inset 0 0 0 2px var(--cw-accent);
+}
 .cw-chat-head { padding: 34px 28px 18px; border-bottom: 1px solid var(--cw-border); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cw-chat-head p { display: flex; align-items: center; gap: 7px; color: var(--cw-fg-3); margin: 14px 0 0; }
 /* Session title shares its row with the agent chip (mode lives at title level). */
