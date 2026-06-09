@@ -12,7 +12,7 @@ import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
 import { getProject, listMembers } from '@/api/projects';
-import { deleteDirent, downloadFile, scopeRoot, uploadFiles, type DirentScope } from '@/api/dirents';
+import { deleteDirent, downloadFile, listDirentsRaw, scopeRoot, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
@@ -40,6 +40,10 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sess
   loader: () => loadNs('session', 'dialogs'),
   component: SessionPage,
 });
+
+// Cap on how many files one action can attach (folder expand / multi-drag),
+// to keep messages, the agent context, and the chip tray manageable.
+const MAX_ATTACHMENTS = 20;
 
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
@@ -220,25 +224,31 @@ function SessionPage() {
   const [importDragOver, setImportDragOver] = useState(false);
 
 
-  // Import shared files (dragged from SharedFilesBrowser, or its inline button) as
-  // pending attachments. They already exist in shared storage, so no upload is
-  // needed — we just carry the global path that the send flow forwards as an
-  // attachment. Dedupe against already-pending paths.
+  // Import shared files (dragged from SharedFilesBrowser, its inline button, or a
+  // folder drop expanded to its files) as pending attachments. They already exist
+  // in shared storage, so no upload is needed — we just carry the global path the
+  // send flow forwards. Dedupe against pending paths and cap the total at
+  // MAX_ATTACHMENTS, dropping the overflow with a toast.
   const importSharedFiles = useCallback((items: SessionImportItem[]) => {
     if (items.length === 0) return;
-    setPendingAttachments((prev) => {
-      const existing = new Set(prev.map((a) => a.globalPath).filter(Boolean));
-      const additions = items
-        .filter((it) => !existing.has(it.globalPath))
-        .map((it, i) => ({
-          tempId: `shared-${Date.now()}-${i}-${it.filename}`,
-          filename: it.filename,
-          status: 'uploaded' as const,
-          globalPath: it.globalPath,
-        }));
-      return additions.length > 0 ? [...prev, ...additions] : prev;
-    });
-  }, []);
+    const existing = new Set(pendingAttachments.map((a) => a.globalPath).filter(Boolean));
+    const fresh = items.filter((it) => !existing.has(it.globalPath));
+    const slots = Math.max(0, MAX_ATTACHMENTS - pendingAttachments.length);
+    const toAdd = fresh.slice(0, slots);
+    if (toAdd.length < fresh.length) {
+      showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+    }
+    if (toAdd.length === 0) return;
+    setPendingAttachments((prev) => [
+      ...prev,
+      ...toAdd.map((it, i) => ({
+        tempId: `shared-${Date.now()}-${i}-${it.filename}`,
+        filename: it.filename,
+        status: 'uploaded' as const,
+        globalPath: it.globalPath,
+      })),
+    ]);
+  }, [pendingAttachments, showToast, t]);
 
   const handleImportDrop = useCallback((e: React.DragEvent) => {
     const raw = e.dataTransfer.getData(SESSION_IMPORT_MIME);
@@ -251,19 +261,45 @@ function SessionPage() {
   }, [importSharedFiles]);
 
   // Files dragged from the Files page onto this session's row arrive as
-  // scope-relative shared paths in router state. Reconstruct each global path
-  // (shared scope, this project) and attach once the session/project resolve,
-  // then clear the state so a refresh doesn't re-attach.
+  // scope-relative shared paths in router state. Attach them once session/project
+  // resolve, then clear the state so a refresh doesn't re-attach. A dropped folder
+  // is expanded into the files it contains (recursively).
   useEffect(() => {
     const rels = location.state.attachShared;
     if (!rels?.length || !projectId || !sessionId) return;
-    const root = scopeRoot({ kind: 'shared', projectId });
-    importSharedFiles(rels.map((rel) => ({
-      globalPath: `${root}/${rel}`,
-      filename: rel.split('/').pop() ?? rel,
-    })));
     void navigate({ replace: true, state: (prev) => ({ ...prev, attachShared: undefined }) });
-  }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate]);
+    void (async () => {
+      const sharedScope: DirentScope = { kind: 'shared', projectId };
+      const root = scopeRoot(sharedScope);
+      let entries: Awaited<ReturnType<typeof listDirentsRaw>> = [];
+      try {
+        entries = await queryClient.fetchQuery({
+          queryKey: ['dirents', 'shared', projectId],
+          queryFn: () => listDirentsRaw(sharedScope, true),
+        });
+      } catch { /* fall back to treating each path as a file */ }
+      const items: SessionImportItem[] = [];
+      const seen = new Set<string>();
+      const add = (globalPath: string) => {
+        if (seen.has(globalPath)) return;
+        seen.add(globalPath);
+        items.push({ globalPath, filename: globalPath.split('/').pop() ?? globalPath });
+      };
+      for (const rel of rels) {
+        const gp = `${root}/${rel}`;
+        const entry = entries.find((e) => e.path === gp);
+        if (entry?.kind === 'dir') {
+          // Expand the folder into its descendant files.
+          for (const e of entries) {
+            if (e.kind === 'file' && e.path.startsWith(`${gp}/`)) add(e.path);
+          }
+        } else {
+          add(gp);
+        }
+      }
+      if (items.length) importSharedFiles(items);
+    })();
+  }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate, queryClient]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
