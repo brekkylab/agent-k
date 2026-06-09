@@ -18,6 +18,9 @@ interface ProjectHomeComposerProps {
   disabled?: boolean;
   // While the send is being processed (waiting for session creation / stream start): show a spinner on the send button to indicate "sending".
   pending?: boolean;
+  // 현재 모델 선택이 실행 불가(가용 provider 없음)일 때 send 를 막고 힌트를 표시.
+  sendBlocked?: boolean;
+  sendBlockedHint?: string;
   placeholder?: string;
   // Entry point for adding files (placeholder — to be wired up to PR #114's attachment tray).
   onAttachClick?: () => void;
@@ -38,13 +41,15 @@ export function ProjectHomeComposer({
   onSubmit,
   disabled = false,
   pending = false,
+  sendBlocked = false,
+  sendBlockedHint,
   placeholder = DEFAULT_PLACEHOLDER,
   onAttachClick,
   modelPicker,
   focusSignal,
 }: ProjectHomeComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const canSubmit = value.trim().length > 0 && !disabled;
+  const canSubmit = value.trim().length > 0 && !disabled && !sendBlocked;
 
   useEffect(() => {
     if (focusSignal) textareaRef.current?.focus();
@@ -120,7 +125,9 @@ export function ProjectHomeComposer({
           {sendButton}
         </div>
       </div>
-      <small>{DEFAULT_HINT}</small>
+      <small className={sendBlocked ? 'is-blocked' : undefined}>
+        {sendBlocked && sendBlockedHint ? sendBlockedHint : DEFAULT_HINT}
+      </small>
     </form>
   );
 }

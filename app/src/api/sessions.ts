@@ -8,10 +8,24 @@ export async function listSessions(projectRef: string): Promise<Session[]> {
   return res.items.map(toSession);
 }
 
-export async function createSession(projectRef: string): Promise<Session> {
+export interface CreateSessionOptions {
+  /** Agent surface (coworker | rag | deep-research | buddy). Omit for coworker. */
+  agentType?: string;
+  /** Explicit model pin ("provider/model-id"). Omit/null for recommended. */
+  model?: string | null;
+}
+
+export async function createSession(
+  projectRef: string,
+  opts: CreateSessionOptions = {},
+): Promise<Session> {
   const raw = await request<BackendSession>(`/sessions`, {
     method: 'POST',
-    body: { project_ref: projectRef },
+    body: {
+      project_ref: projectRef,
+      ...(opts.agentType ? { agent_type: opts.agentType } : {}),
+      ...(opts.model ? { model: opts.model } : {}),
+    },
   });
   return toSession(raw);
 }

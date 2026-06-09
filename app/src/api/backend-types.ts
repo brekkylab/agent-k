@@ -27,6 +27,8 @@ export interface BackendProject {
   name: string;
   description?: string | null;
   owner_id: string;
+  /** Per-agent_type recommendation-chain overrides; only customized agents present. */
+  recommended_chains?: Record<string, string[]>;
   created_at: string;
   updated_at: string;
 }
@@ -49,6 +51,9 @@ export interface BackendSession {
   title: string | null;
   last_message_at: string | null;
   last_message_snippet: string | null;
+  agent_type: string | null;
+  model: string | null;
+  model_available: boolean;
   unread_count: number;
   created_at: string;
   updated_at: string;
@@ -129,6 +134,8 @@ export interface BackendAutomation {
   description: string | null;
   prompts: string[];
   enabled: boolean;
+  agent_type: string | null;
+  model: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -143,6 +150,8 @@ export interface CreateAutomationRequest {
   name: string;
   description?: string | null;
   prompts: string[];
+  agent_type?: string | null;
+  model?: string | null;
 }
 
 export interface UpdateAutomationRequest {
@@ -150,6 +159,8 @@ export interface UpdateAutomationRequest {
   description?: string | null;
   prompts?: string[];
   enabled?: boolean;
+  agent_type?: string | null;
+  model?: string | null;
 }
 
 // ── Trigger ────────────────────────────────────────────────────────────────
@@ -208,6 +219,8 @@ export interface BackendRun {
   scheduled_for: string;
   lease_until: string | null;
   previous_run_id: string | null;
+  agent_type: string | null;
+  model: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -18,6 +18,11 @@ pub struct DbAutomation {
     pub description: Option<String>,
     pub prompts: Vec<String>,
     pub enabled: bool,
+    /// Agent surface for runs (coworker | speedwagon | deep-research | buddy);
+    /// `None` resolves to coworker when the run's session is built.
+    pub agent_type: Option<String>,
+    /// Model pin ("provider/model-id") for runs; `None` = "recommended".
+    pub model: Option<String>,
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -47,6 +52,12 @@ pub struct DbAutomationRun {
     pub lease_until: Option<DateTime<Utc>>,
     pub previous_run_id: Option<Uuid>,
     pub idempotency_key: Option<String>,
+    /// Agent surface of the run's session; populated only by the read paths
+    /// that JOIN sessions (get_run / list_runs_for_automation), else `None`.
+    pub agent_type: Option<String>,
+    /// Effective model of the run's session (materialized at build time), from
+    /// the same session JOIN; `None` on internal paths that don't join.
+    pub model: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -73,11 +84,11 @@ fn automation_session_title(
     scheduled_for: DateTime<Utc>,
 ) -> String {
     // DB stores 'cron' for the trigger kind, but in user-visible labels we use
-    // 'recurring' — pairs cleanly against 'webhook' (event-driven) and
+    // 'schedule' — pairs cleanly against 'webhook' (event-driven) and
     // 'manual' (user-driven) on the kind axis. Keep this in sync with the
     // frontend label mapping.
     let kind_label = match trigger_kind {
-        "cron" => "recurring",
+        "cron" => "schedule",
         other => other,
     };
     format!(
@@ -102,6 +113,8 @@ impl SqliteRepository {
             description: row.get("description"),
             prompts,
             enabled: row.get::<i64, _>("enabled") != 0,
+            agent_type: row.get("agent_type"),
+            model: row.get("model"),
             created_by: Self::parse_uuid(
                 row.get::<String, _>("created_by"),
                 "automations.created_by",
@@ -184,6 +197,9 @@ impl SqliteRepository {
             lease_until,
             previous_run_id,
             idempotency_key: row.get("idempotency_key"),
+            // Present only when the query JOINs sessions; absent on internal paths.
+            agent_type: row.try_get("agent_type").unwrap_or(None),
+            model: row.try_get("model").unwrap_or(None),
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "automation_runs.created_at",
@@ -228,20 +244,24 @@ impl SqliteRepository {
         name: String,
         description: Option<String>,
         prompts: Vec<String>,
+        agent_type: Option<String>,
+        model: Option<String>,
         created_by: Uuid,
     ) -> RepositoryResult<DbAutomation> {
         let id = Uuid::new_v4();
         let now = Self::now_string();
         let prompts_json = serde_json::to_string(&prompts)?;
         sqlx::query(
-            "INSERT INTO automations (id, project_id, name, description, prompts_json, created_by, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO automations (id, project_id, name, description, prompts_json, agent_type, model, created_by, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(project_id.to_string())
         .bind(&name)
         .bind(&description)
         .bind(&prompts_json)
+        .bind(&agent_type)
+        .bind(&model)
         .bind(created_by.to_string())
         .bind(&now)
         .bind(&now)
@@ -255,6 +275,8 @@ impl SqliteRepository {
             description,
             prompts,
             enabled: true,
+            agent_type,
+            model,
             created_by,
             created_at: Self::parse_timestamp(now.clone(), "automations.created_at")?,
             updated_at: Self::parse_timestamp(now, "automations.updated_at")?,
@@ -263,7 +285,7 @@ impl SqliteRepository {
 
     pub async fn get_automation(&self, id: Uuid) -> RepositoryResult<Option<DbAutomation>> {
         let row = sqlx::query(
-            "SELECT id, project_id, name, description, prompts_json, enabled, created_by, created_at, updated_at \
+            "SELECT id, project_id, name, description, prompts_json, enabled, agent_type, model, created_by, created_at, updated_at \
              FROM automations WHERE id = ?",
         )
         .bind(id.to_string())
@@ -277,7 +299,7 @@ impl SqliteRepository {
         project_id: Uuid,
     ) -> RepositoryResult<Vec<DbAutomation>> {
         let rows = sqlx::query(
-            "SELECT id, project_id, name, description, prompts_json, enabled, created_by, created_at, updated_at \
+            "SELECT id, project_id, name, description, prompts_json, enabled, agent_type, model, created_by, created_at, updated_at \
              FROM automations WHERE project_id = ? ORDER BY created_at DESC",
         )
         .bind(project_id.to_string())
@@ -293,7 +315,7 @@ impl SqliteRepository {
     ) -> RepositoryResult<Vec<DbAutomation>> {
         let uid = requesting_user_id.to_string();
         let rows = sqlx::query(
-            "SELECT a.id, a.project_id, a.name, a.description, a.prompts_json, a.enabled, a.created_by, a.created_at, a.updated_at
+            "SELECT a.id, a.project_id, a.name, a.description, a.prompts_json, a.enabled, a.agent_type, a.model, a.created_by, a.created_at, a.updated_at
              FROM automations a
              JOIN projects p ON p.id = a.project_id
              WHERE p.owner_id = ?1
@@ -307,12 +329,15 @@ impl SqliteRepository {
         rows.iter().map(Self::row_to_db_automation).collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_automation(
         &self,
         id: Uuid,
         name: Option<String>,
         description: Option<Option<String>>,
         prompts: Option<Vec<String>>,
+        agent_type: Option<Option<String>>,
+        model: Option<Option<String>>,
         enabled: Option<bool>,
     ) -> RepositoryResult<DbAutomation> {
         let current = self
@@ -323,6 +348,10 @@ impl SqliteRepository {
         let new_desc = description.unwrap_or(current.description);
         let new_prompts = prompts.unwrap_or(current.prompts);
         let new_prompts_json = serde_json::to_string(&new_prompts)?;
+        // agent_type/model are tri-state: outer None = leave as-is, Some(None) =
+        // clear to NULL (recommended / default surface), Some(Some) = set.
+        let new_agent_type = agent_type.unwrap_or(current.agent_type);
+        let new_model = model.unwrap_or(current.model);
         let new_enabled = enabled.unwrap_or(current.enabled);
         let now = Self::now_string();
         let disabling = current.enabled && !new_enabled;
@@ -331,12 +360,14 @@ impl SqliteRepository {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "UPDATE automations SET name = ?, description = ?, prompts_json = ?, enabled = ?, updated_at = ? \
+            "UPDATE automations SET name = ?, description = ?, prompts_json = ?, agent_type = ?, model = ?, enabled = ?, updated_at = ? \
              WHERE id = ?",
         )
         .bind(&new_name)
         .bind(&new_desc)
         .bind(&new_prompts_json)
+        .bind(&new_agent_type)
+        .bind(&new_model)
         .bind(if new_enabled { 1i64 } else { 0i64 })
         .bind(&now)
         .bind(id.to_string())
@@ -672,6 +703,8 @@ impl SqliteRepository {
             lease_until: None,
             previous_run_id,
             idempotency_key: None,
+            agent_type: None,
+            model: None,
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         })
@@ -696,11 +729,13 @@ impl SqliteRepository {
         let now = Self::now_string();
         let scheduled_s = Self::ts_string(scheduled_for);
 
-        let automation_name: String =
-            sqlx::query_scalar("SELECT name FROM automations WHERE id = ?")
-                .bind(automation_id.to_string())
-                .fetch_one(&mut *tx)
-                .await?;
+        let auto_row = sqlx::query("SELECT name, agent_type, model FROM automations WHERE id = ?")
+            .bind(automation_id.to_string())
+            .fetch_one(&mut *tx)
+            .await?;
+        let automation_name: String = auto_row.get("name");
+        let agent_type: Option<String> = auto_row.get("agent_type");
+        let model: Option<String> = auto_row.get("model");
         let trigger_kind_label: String = match trigger_id {
             Some(tid) => {
                 sqlx::query_scalar("SELECT kind FROM automation_triggers WHERE id = ?")
@@ -715,13 +750,15 @@ impl SqliteRepository {
 
         let session_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?)",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, agent_type, model, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
         .bind(&session_title)
+        .bind(&agent_type)
+        .bind(&model)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
@@ -789,6 +826,8 @@ impl SqliteRepository {
             lease_until: None,
             previous_run_id,
             idempotency_key: idempotency_key.map(|s| s.to_string()),
+            agent_type,
+            model,
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         })
@@ -813,22 +852,26 @@ impl SqliteRepository {
         let scheduled_s = Self::ts_string(scheduled_for);
         let next_s = Self::ts_string(next_fire_at);
 
-        let automation_name: String =
-            sqlx::query_scalar("SELECT name FROM automations WHERE id = ?")
-                .bind(automation_id.to_string())
-                .fetch_one(&mut *tx)
-                .await?;
+        let auto_row = sqlx::query("SELECT name, agent_type, model FROM automations WHERE id = ?")
+            .bind(automation_id.to_string())
+            .fetch_one(&mut *tx)
+            .await?;
+        let automation_name: String = auto_row.get("name");
+        let agent_type: Option<String> = auto_row.get("agent_type");
+        let model: Option<String> = auto_row.get("model");
         let session_title = automation_session_title(&automation_name, "cron", scheduled_for);
 
         let session_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?)",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, agent_type, model, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
         .bind(&session_title)
+        .bind(&agent_type)
+        .bind(&model)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
@@ -902,6 +945,8 @@ impl SqliteRepository {
             lease_until: None,
             previous_run_id: None,
             idempotency_key: None,
+            agent_type,
+            model,
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         })
@@ -947,8 +992,9 @@ impl SqliteRepository {
 
     pub async fn get_run(&self, id: Uuid) -> RepositoryResult<Option<DbAutomationRun>> {
         let row = sqlx::query(
-            "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at \
-             FROM automation_runs WHERE id = ?",
+            "SELECT r.id, r.automation_id, r.trigger_id, r.session_id, r.status, r.scheduled_for, r.lease_until, r.previous_run_id, r.idempotency_key, r.created_at, r.updated_at, s.agent_type, s.model \
+             FROM automation_runs r JOIN sessions s ON s.id = r.session_id \
+             WHERE r.id = ?",
         )
         .bind(id.to_string())
         .fetch_optional(&self.pool)
@@ -963,9 +1009,10 @@ impl SqliteRepository {
         offset: i64,
     ) -> RepositoryResult<Vec<DbAutomationRun>> {
         let rows = sqlx::query(
-            "SELECT id, automation_id, trigger_id, session_id, status, scheduled_for, lease_until, previous_run_id, idempotency_key, created_at, updated_at \
-             FROM automation_runs WHERE automation_id = ? \
-             ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            "SELECT r.id, r.automation_id, r.trigger_id, r.session_id, r.status, r.scheduled_for, r.lease_until, r.previous_run_id, r.idempotency_key, r.created_at, r.updated_at, s.agent_type, s.model \
+             FROM automation_runs r JOIN sessions s ON s.id = r.session_id \
+             WHERE r.automation_id = ? \
+             ORDER BY r.created_at DESC LIMIT ? OFFSET ?",
         )
         .bind(automation_id.to_string())
         .bind(limit)
@@ -1112,7 +1159,7 @@ impl SqliteRepository {
         let scheduled_s = Self::ts_string(scheduled_for);
 
         let row = sqlx::query(
-            "SELECT project_id, created_by, enabled, name FROM automations WHERE id = ?",
+            "SELECT project_id, created_by, enabled, name, agent_type, model FROM automations WHERE id = ?",
         )
         .bind(previous_run.automation_id.to_string())
         .fetch_one(&mut *tx)
@@ -1144,6 +1191,8 @@ impl SqliteRepository {
         let creator_id =
             Self::parse_uuid(row.get::<String, _>("created_by"), "automations.created_by")?;
         let automation_name: String = row.get("name");
+        let agent_type: Option<String> = row.get("agent_type");
+        let model: Option<String> = row.get("model");
         let trigger_kind_label: String = match previous_run.trigger_id {
             Some(tid) => {
                 sqlx::query_scalar("SELECT kind FROM automation_triggers WHERE id = ?")
@@ -1158,13 +1207,15 @@ impl SqliteRepository {
 
         let session_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, created_at, updated_at) \
-             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?)",
+            "INSERT INTO sessions (id, project_id, creator_id, share_mode, origin, title, agent_type, model, created_at, updated_at) \
+             VALUES (?, ?, ?, 'private', 'automation', ?, ?, ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(project_id.to_string())
         .bind(creator_id.to_string())
         .bind(&session_title)
+        .bind(&agent_type)
+        .bind(&model)
         .bind(&now)
         .bind(&now)
         .execute(&mut *tx)
@@ -1225,6 +1276,8 @@ impl SqliteRepository {
             lease_until: None,
             previous_run_id: Some(previous_run.id),
             idempotency_key: None,
+            agent_type,
+            model,
             created_at: Self::parse_timestamp(now.clone(), "automation_runs.created_at")?,
             updated_at: Self::parse_timestamp(now, "automation_runs.updated_at")?,
         }))

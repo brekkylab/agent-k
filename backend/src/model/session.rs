@@ -12,6 +12,10 @@ pub use crate::repository::{SessionOrigin, ShareMode};
 pub struct CreateSessionRequest {
     /// Project UUID, active slug, or retired slug — backend resolves all three.
     pub project_ref: String,
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -30,6 +34,12 @@ pub struct SessionResponse {
     pub title: Option<String>,
     pub last_message_at: Option<DateTime<Utc>>,
     pub last_message_snippet: Option<String>,
+    pub agent_type: Option<String>,
+    pub model: Option<String>,
+    /// Whether the pinned `model`'s provider is currently configured. `true`
+    /// when there is no pin (recommended). When `false`, agent-build falls back
+    /// to an available model, so the UI can flag that `model` isn't what runs.
+    pub model_available: bool,
     pub unread_count: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -46,6 +56,13 @@ impl SessionResponse {
             title: s.title,
             last_message_at: s.last_message_at,
             last_message_snippet: s.last_message_snippet,
+            model_available: s
+                .model
+                .as_deref()
+                .filter(|m| !m.is_empty())
+                .map_or(true, crate::model::provider_available),
+            agent_type: s.agent_type,
+            model: s.model,
             unread_count,
             created_at: s.created_at,
             updated_at: s.updated_at,

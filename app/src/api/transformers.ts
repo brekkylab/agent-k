@@ -109,6 +109,7 @@ export function toProject(backend: BackendProject, memberIds: string[] = []): Pr
     description: backend.description || '',
     ownerId: backend.owner_id,
     memberIds: memberIds.length > 0 ? memberIds : [backend.owner_id],
+    recommendedChains: backend.recommended_chains ?? {},
   };
 }
 
@@ -125,6 +126,9 @@ export function toSession(backend: BackendSession): Session {
     lastMessageSnippet: backend.last_message_snippet,
     unreadCount: backend.unread_count,
     references: [],
+    agentType: backend.agent_type ?? null,
+    model: backend.model ?? null,
+    modelAvailable: backend.model_available,
   };
 }
 
@@ -302,6 +306,8 @@ export function toAutomation(backend: BackendAutomation): Automation {
     description: backend.description,
     prompts: backend.prompts,
     enabled: backend.enabled,
+    agentType: backend.agent_type,
+    model: backend.model,
     createdBy: backend.created_by,
     createdAt: backend.created_at,
     updatedAt: backend.updated_at,
@@ -345,6 +351,8 @@ export function toRun(backend: BackendRun): Run {
     scheduledFor: backend.scheduled_for,
     leaseUntil: backend.lease_until,
     previousRunId: backend.previous_run_id,
+    agentType: backend.agent_type,
+    model: backend.model,
     createdAt: backend.created_at,
     updatedAt: backend.updated_at,
   };

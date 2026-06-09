@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -12,6 +14,9 @@ pub struct ProjectResponse {
     pub name: String,
     pub description: Option<String>,
     pub owner_id: Uuid,
+    /// Per-agent_type recommendation-chain overrides (only the agent types this
+    /// project customized; missing ones use the built-in default chain).
+    pub recommended_chains: BTreeMap<String, Vec<String>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -24,6 +29,11 @@ impl From<DbProject> for ProjectResponse {
             name: p.name,
             description: p.description,
             owner_id: p.owner_id,
+            recommended_chains: p
+                .recommended_chains
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or_default(),
             created_at: p.created_at,
             updated_at: p.updated_at,
         }
@@ -44,6 +54,10 @@ pub struct CreateProjectRequest {
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// Replace the project's recommendation-chain overrides (JSON object keyed
+    /// by agent_type). Omit to leave unchanged; send `{}` to reset all to default.
+    #[serde(default)]
+    pub recommended_chains: Option<BTreeMap<String, Vec<String>>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

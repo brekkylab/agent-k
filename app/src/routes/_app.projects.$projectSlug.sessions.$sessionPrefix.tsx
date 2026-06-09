@@ -16,6 +16,7 @@ import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
+import { getModelCatalog, modelLabel } from '@/api/models';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
@@ -56,6 +57,12 @@ function SessionPage() {
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const session = useQuery({ queryKey: ['session', sessionPrefix], queryFn: () => getSession(sessionPrefix) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
+  // Catalog (with this project's chains) to label the session's effective model.
+  const catalog = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
 
   // The project/session queries key off the URL slug + prefix, but everything
   // session-scoped (messages, dirent scopes, attachments, artifacts) keys off the
@@ -87,7 +94,13 @@ function SessionPage() {
   } else if (location.state.initialAgentId && agentPreview.agentId !== location.state.initialAgentId) {
     setAgentPreview({ sessionPrefix, agentId: location.state.initialAgentId });
   }
-  const activeAgent = agentPreview.agentId ? getAgentSurface(agentPreview.agentId) : undefined;
+  // Prefer the session's stored agent_type (authoritative); fall back to the
+  // router-state preview only before the session has loaded (smooth from home).
+  const activeAgent = session.data?.agentType
+    ? getAgentSurface(session.data.agentType)
+    : agentPreview.agentId
+      ? getAgentSurface(agentPreview.agentId)
+      : undefined;
 
   // Auto-send initial message refs — useRef instead of module-level Set so each
   // component instance tracks its own state (StrictMode-safe, no cross-session leak).
@@ -98,6 +111,12 @@ function SessionPage() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Set when the local user sends a message — the next scroll effect jumps to
+  // the bottom instantly, regardless of how far up the user has scrolled.
+  const forceScrollRef = useRef(false);
+  // Previous message count, to distinguish "new message arrived" from the
+  // initial history load / refetch (no pill on first render of a session).
+  const prevMsgCountRef = useRef(0);
 
   // WS-driven: outputs map sorted by seq order (for idempotent catch-up + live merging)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
@@ -127,6 +146,11 @@ function SessionPage() {
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  // "New message arrived while scrolled up" pill above the composer.
+  const [showNewMsgPill, setShowNewMsgPill] = useState(false);
+  // Ghost scroll-to-bottom button — visible whenever scrolled past the
+  // auto-follow threshold, regardless of new messages.
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
 
   type PendingAttachment = {
@@ -149,11 +173,15 @@ function SessionPage() {
     setStreaming(false);
     streamingRef.current = false;
     setPendingAttachments([]);
+    setShowNewMsgPill(false);
+    setShowScrollDown(false);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
     optimisticUserIdRef.current = null;
     currentRunIdRef.current = null;
     doneRunIdsRef.current.clear();
+    forceScrollRef.current = false;
+    prevMsgCountRef.current = 0;
   }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
@@ -168,14 +196,72 @@ function SessionPage() {
     ...liveMessages,
   ], [history.data, liveMessages]);
 
+  // Total rendered-content size. Streaming updates grow a live bubble in place
+  // (body text, tool calls, tool results) without changing the message count,
+  // so the auto-follow effect below also keys off this to keep re-checking
+  // while content grows. `+ 1` per tool call counts its appearance; results
+  // count by length so their arrival is visible even on short outputs.
+  const contentVersion = useMemo(
+    () =>
+      allMessages.reduce(
+        (n, m) =>
+          n +
+          m.body.length +
+          (m.toolCalls?.reduce((a, tc) => a + 1 + (tc.result?.length ?? 0), 0) ?? 0),
+        0,
+      ),
+    [allMessages],
+  );
+
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom <= 150) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const prevCount = prevMsgCountRef.current;
+    prevMsgCountRef.current = allMessages.length;
+
+    // Own send — jump to the bottom immediately, even if scrolled far up.
+    if (forceScrollRef.current) {
+      forceScrollRef.current = false;
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      setShowNewMsgPill(false);
+      return;
     }
-  }, [allMessages.length, streaming]);
+
+    // Initial history load (refresh / session entry) — start at the bottom.
+    if (prevCount === 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      return;
+    }
+
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom <= 700) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    } else if (allMessages.length > prevCount) {
+      // Scrolled too far up to auto-follow — surface a "new message" pill instead.
+      setShowNewMsgPill(true);
+    }
+  }, [allMessages.length, streaming, contentVersion]);
+
+  // Track scroll position: dismiss the pill once the user is back near the
+  // bottom, and toggle the ghost scroll-down button past the follow threshold.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom <= 40) {
+        setShowNewMsgPill(false);
+      }
+      setShowScrollDown(distanceFromBottom > 700);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    setShowNewMsgPill(false);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+  }, []);
 
   // Auto-grow the composer textarea + drive the compact↔expanded layout flip.
   // Reset to auto first so deleting lines shrinks the box; overflow stays hidden
@@ -266,6 +352,7 @@ function SessionPage() {
       status: 'done',
       attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
     };
+    forceScrollRef.current = true;
     setLiveMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
     streamingRef.current = true;
@@ -570,30 +657,49 @@ function SessionPage() {
   const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
   const sessionForkable = !streaming && allMessages.length > 0;
 
+  // `sessions.model` is authoritative: an explicit pin, or — for a recommended
+  // session — the model materialized at first build (see build_session_agent).
+  // So just label it; catalog only maps the id → display name. (NULL only in the
+  // brief pre-build window of an unsent session → falls back to the default text.)
+  const sessionModelLabel = sess?.model ? modelLabel(catalog.data, sess.model) : undefined;
+  // A pinned model whose provider key is gone still shows here, but the backend
+  // silently runs a fallback at build time. The session carries `modelAvailable`
+  // (judged server-side for any id, catalogued or not) so we can flag that
+  // `model` isn't what actually runs. The catalog is still used only to label.
+  const sessionModelUnavailable = !!sess?.model && sess.modelAvailable === false;
+
   return (
     <div className="cw-session-layout cw-page-enter">
       <section className="cw-chat-surface">
         <div className="cw-chat-head">
           <div>
-            <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
+            <div className="cw-session-title-row">
+              <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
+              {activeAgent && (
+                <span
+                  className="cw-session-agent-chip"
+                  data-agent={activeAgent.id}
+                  title={t('chat.agent_chip')}
+                >
+                  <Icon name={activeAgent.icon} size={13} />
+                  <span>{activeAgent.label}</span>
+                </span>
+              )}
+            </div>
             <p>
               {creator && <>{t('chat.started_by')} <Avatar user={creator} small /> {creator.name} · </>}
               {t('chat.files_count', { count: sess?.references.length ?? 0 })} ·{' '}
-              <Avatar user={AI_USER} small /> {t('chat.default_label')}
+              <Avatar user={AI_USER} small />{' '}
+              <span
+                className={sessionModelUnavailable ? 'cw-session-model-unavailable' : undefined}
+                title={sessionModelUnavailable ? t('chat.model_unavailable') : t('chat.model_in_use')}
+              >
+                {sessionModelLabel ?? t('chat.default_label')}
+                {sessionModelUnavailable && t('chat.model_unavailable_suffix')}
+              </span>
             </p>
           </div>
           <div className="cw-session-head-actions">
-            {activeAgent && (
-              <span
-                className="cw-session-agent-chip"
-                data-agent={activeAgent.id}
-                title="이 세션에서 선택된 에이전트 (미리보기)"
-              >
-                <Icon name={activeAgent.icon} size={13} />
-                <span>{activeAgent.label}</span>
-                <span className="cw-preview-pill cw-preview-pill--micro">Preview</span>
-              </span>
-            )}
             {sess && (
               <IconButton
                 icon="sticky-notes"
@@ -646,6 +752,28 @@ function SessionPage() {
           <div ref={messagesEndRef} />
         </div>
         </div>
+
+        {(showNewMsgPill || showScrollDown) && (
+          <div className="cw-new-msg-anchor">
+            {showNewMsgPill && (
+              <button type="button" className="cw-new-msg-pill" onClick={scrollToBottom}>
+                <Icon name="chevron" size={12} />
+                {t('ui.new_message')}
+              </button>
+            )}
+            {showScrollDown && (
+              <button
+                type="button"
+                className="cw-scroll-down-btn"
+                aria-label={t('ui.scroll_to_bottom')}
+                title={t('ui.scroll_to_bottom')}
+                onClick={scrollToBottom}
+              >
+                <Icon name="chevron" size={14} />
+              </button>
+            )}
+          </div>
+        )}
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           {pendingAttachments.length > 0 && (

@@ -16,9 +16,7 @@ import { Route as AppProjectsRouteImport } from './routes/_app.projects'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app.projects.index'
 import { Route as AppProjectsProjectSlugRouteImport } from './routes/_app.projects.$projectSlug'
 import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app.projects.$projectSlug.index'
-import { Route as AppProjectsProjectSlugSkillsRouteImport } from './routes/_app.projects.$projectSlug.skills'
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app.projects.$projectSlug.settings'
-import { Route as AppProjectsProjectSlugScheduleRouteImport } from './routes/_app.projects.$projectSlug.schedule'
 import { Route as AppProjectsProjectSlugMembersRouteImport } from './routes/_app.projects.$projectSlug.members'
 import { Route as AppProjectsProjectSlugFilesRouteImport } from './routes/_app.projects.$projectSlug.files'
 import { Route as AppProjectsProjectSlugAutomationRouteImport } from './routes/_app.projects.$projectSlug.automation'
@@ -62,22 +60,10 @@ const AppProjectsProjectSlugIndexRoute =
     path: '/',
     getParentRoute: () => AppProjectsProjectSlugRoute,
   } as any)
-const AppProjectsProjectSlugSkillsRoute =
-  AppProjectsProjectSlugSkillsRouteImport.update({
-    id: '/skills',
-    path: '/skills',
-    getParentRoute: () => AppProjectsProjectSlugRoute,
-  } as any)
 const AppProjectsProjectSlugSettingsRoute =
   AppProjectsProjectSlugSettingsRouteImport.update({
     id: '/settings',
     path: '/settings',
-    getParentRoute: () => AppProjectsProjectSlugRoute,
-  } as any)
-const AppProjectsProjectSlugScheduleRoute =
-  AppProjectsProjectSlugScheduleRouteImport.update({
-    id: '/schedule',
-    path: '/schedule',
     getParentRoute: () => AppProjectsProjectSlugRoute,
   } as any)
 const AppProjectsProjectSlugMembersRoute =
@@ -132,9 +118,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectSlug/automation': typeof AppProjectsProjectSlugAutomationRouteWithChildren
   '/projects/$projectSlug/files': typeof AppProjectsProjectSlugFilesRoute
   '/projects/$projectSlug/members': typeof AppProjectsProjectSlugMembersRoute
-  '/projects/$projectSlug/schedule': typeof AppProjectsProjectSlugScheduleRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
-  '/projects/$projectSlug/skills': typeof AppProjectsProjectSlugSkillsRoute
   '/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
   '/projects/$projectSlug/automation/$automationId': typeof AppProjectsProjectSlugAutomationAutomationIdRoute
   '/projects/$projectSlug/automation/new': typeof AppProjectsProjectSlugAutomationNewRoute
@@ -147,9 +131,7 @@ export interface FileRoutesByTo {
   '/projects': typeof AppProjectsIndexRoute
   '/projects/$projectSlug/files': typeof AppProjectsProjectSlugFilesRoute
   '/projects/$projectSlug/members': typeof AppProjectsProjectSlugMembersRoute
-  '/projects/$projectSlug/schedule': typeof AppProjectsProjectSlugScheduleRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
-  '/projects/$projectSlug/skills': typeof AppProjectsProjectSlugSkillsRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugIndexRoute
   '/projects/$projectSlug/automation/$automationId': typeof AppProjectsProjectSlugAutomationAutomationIdRoute
   '/projects/$projectSlug/automation/new': typeof AppProjectsProjectSlugAutomationNewRoute
@@ -167,9 +149,7 @@ export interface FileRoutesById {
   '/_app/projects/$projectSlug/automation': typeof AppProjectsProjectSlugAutomationRouteWithChildren
   '/_app/projects/$projectSlug/files': typeof AppProjectsProjectSlugFilesRoute
   '/_app/projects/$projectSlug/members': typeof AppProjectsProjectSlugMembersRoute
-  '/_app/projects/$projectSlug/schedule': typeof AppProjectsProjectSlugScheduleRoute
   '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
-  '/_app/projects/$projectSlug/skills': typeof AppProjectsProjectSlugSkillsRoute
   '/_app/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
   '/_app/projects/$projectSlug/automation/$automationId': typeof AppProjectsProjectSlugAutomationAutomationIdRoute
   '/_app/projects/$projectSlug/automation/new': typeof AppProjectsProjectSlugAutomationNewRoute
@@ -187,9 +167,7 @@ export interface FileRouteTypes {
     | '/projects/$projectSlug/automation'
     | '/projects/$projectSlug/files'
     | '/projects/$projectSlug/members'
-    | '/projects/$projectSlug/schedule'
     | '/projects/$projectSlug/settings'
-    | '/projects/$projectSlug/skills'
     | '/projects/$projectSlug/'
     | '/projects/$projectSlug/automation/$automationId'
     | '/projects/$projectSlug/automation/new'
@@ -202,9 +180,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/projects/$projectSlug/files'
     | '/projects/$projectSlug/members'
-    | '/projects/$projectSlug/schedule'
     | '/projects/$projectSlug/settings'
-    | '/projects/$projectSlug/skills'
     | '/projects/$projectSlug'
     | '/projects/$projectSlug/automation/$automationId'
     | '/projects/$projectSlug/automation/new'
@@ -221,9 +197,7 @@ export interface FileRouteTypes {
     | '/_app/projects/$projectSlug/automation'
     | '/_app/projects/$projectSlug/files'
     | '/_app/projects/$projectSlug/members'
-    | '/_app/projects/$projectSlug/schedule'
     | '/_app/projects/$projectSlug/settings'
-    | '/_app/projects/$projectSlug/skills'
     | '/_app/projects/$projectSlug/'
     | '/_app/projects/$projectSlug/automation/$automationId'
     | '/_app/projects/$projectSlug/automation/new'
@@ -287,25 +261,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugIndexRouteImport
       parentRoute: typeof AppProjectsProjectSlugRoute
     }
-    '/_app/projects/$projectSlug/skills': {
-      id: '/_app/projects/$projectSlug/skills'
-      path: '/skills'
-      fullPath: '/projects/$projectSlug/skills'
-      preLoaderRoute: typeof AppProjectsProjectSlugSkillsRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRoute
-    }
     '/_app/projects/$projectSlug/settings': {
       id: '/_app/projects/$projectSlug/settings'
       path: '/settings'
       fullPath: '/projects/$projectSlug/settings'
       preLoaderRoute: typeof AppProjectsProjectSlugSettingsRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRoute
-    }
-    '/_app/projects/$projectSlug/schedule': {
-      id: '/_app/projects/$projectSlug/schedule'
-      path: '/schedule'
-      fullPath: '/projects/$projectSlug/schedule'
-      preLoaderRoute: typeof AppProjectsProjectSlugScheduleRouteImport
       parentRoute: typeof AppProjectsProjectSlugRoute
     }
     '/_app/projects/$projectSlug/members': {
@@ -385,9 +345,7 @@ interface AppProjectsProjectSlugRouteChildren {
   AppProjectsProjectSlugAutomationRoute: typeof AppProjectsProjectSlugAutomationRouteWithChildren
   AppProjectsProjectSlugFilesRoute: typeof AppProjectsProjectSlugFilesRoute
   AppProjectsProjectSlugMembersRoute: typeof AppProjectsProjectSlugMembersRoute
-  AppProjectsProjectSlugScheduleRoute: typeof AppProjectsProjectSlugScheduleRoute
   AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
-  AppProjectsProjectSlugSkillsRoute: typeof AppProjectsProjectSlugSkillsRoute
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
   AppProjectsProjectSlugSessionsSessionPrefixRoute: typeof AppProjectsProjectSlugSessionsSessionPrefixRoute
 }
@@ -398,9 +356,7 @@ const AppProjectsProjectSlugRouteChildren: AppProjectsProjectSlugRouteChildren =
       AppProjectsProjectSlugAutomationRouteWithChildren,
     AppProjectsProjectSlugFilesRoute: AppProjectsProjectSlugFilesRoute,
     AppProjectsProjectSlugMembersRoute: AppProjectsProjectSlugMembersRoute,
-    AppProjectsProjectSlugScheduleRoute: AppProjectsProjectSlugScheduleRoute,
     AppProjectsProjectSlugSettingsRoute: AppProjectsProjectSlugSettingsRoute,
-    AppProjectsProjectSlugSkillsRoute: AppProjectsProjectSlugSkillsRoute,
     AppProjectsProjectSlugIndexRoute: AppProjectsProjectSlugIndexRoute,
     AppProjectsProjectSlugSessionsSessionPrefixRoute:
       AppProjectsProjectSlugSessionsSessionPrefixRoute,

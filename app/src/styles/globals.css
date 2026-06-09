@@ -319,6 +319,8 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-chat-surface { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
 .cw-chat-head { padding: 34px 28px 18px; border-bottom: 1px solid var(--cw-border); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cw-chat-head p { display: flex; align-items: center; gap: 7px; color: var(--cw-fg-3); margin: 14px 0 0; }
+/* Session title shares its row with the agent chip (mode lives at title level). */
+.cw-session-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .cw-session-head-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 /* Two-layer chat scroll: `.cw-messages-scroll` is the actual scroller and
    spans the full chat-surface width, so the scrollbar lives at the chat
@@ -639,7 +641,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .cw-nav-home { background: color-mix(in oklch, var(--cw-cozy-clay) 16%, var(--cw-paper)); color: var(--cw-cozy-clay); }
 .cw-nav-files { background: color-mix(in oklch, var(--cw-cozy-honey) 22%, var(--cw-paper)); color: oklch(0.50 0.13 75); }
-.cw-nav-skills, .cw-nav-schedule { background: color-mix(in oklch, var(--cw-cozy-mustard) 24%, var(--cw-paper)); color: oklch(0.50 0.11 90); }
+.cw-nav-schedule { background: color-mix(in oklch, var(--cw-cozy-mustard) 24%, var(--cw-paper)); color: oklch(0.50 0.11 90); }
 .cw-nav-members { background: color-mix(in oklch, var(--cw-cozy-rose) 14%, var(--cw-paper)); color: var(--cw-cozy-rose); }
 .cw-nav-settings, .cw-nav-neutral { background: var(--cw-paper-3); color: var(--cw-ink-3); }
 
@@ -1392,11 +1394,76 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   color: var(--cw-fg-4);
   font-size: 11px;
 }
+/* "New message" pill — floats just above the composer when a message arrives
+   while the user is scrolled up past the auto-follow threshold. */
+.cw-new-msg-anchor {
+  position: relative;
+  height: 0;
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+}
+.cw-new-msg-pill {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--cw-primary);
+  color: var(--cw-fg-on-primary, white);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  transition: background 120ms, transform 120ms;
+  animation: cw-pill-in 160ms ease-out;
+}
+.cw-new-msg-pill:hover { background: var(--cw-primary-hover, var(--cw-primary)); }
+@keyframes cw-pill-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+/* Ghost scroll-to-bottom button — right end above the composer, shown whenever
+   the user is scrolled past the auto-follow threshold. */
+.cw-scroll-down-btn {
+  position: absolute;
+  right: 58px;
+  bottom: 12px;
+  z-index: 5;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--cw-border);
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--cw-paper), transparent 30%);
+  backdrop-filter: blur(4px);
+  color: var(--cw-fg-3);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: background 120ms, color 120ms;
+  animation: cw-fade-up 160ms ease-out;
+}
+.cw-scroll-down-btn:hover { background: var(--cw-paper); color: var(--cw-fg-1); }
+@keyframes cw-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 .cw-home-composer small {
   text-align: center;
   color: var(--cw-fg-4);
   font-size: 11px;
 }
+.cw-home-composer small.is-blocked { color: var(--cw-destructive); }
 .cw-model-picker {
   display: inline-flex;
   align-items: center;
@@ -1410,6 +1477,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-size: 12px;
 }
 .cw-model-picker-trigger { border: 0; background: transparent; color: inherit; font-size: 12px; }
+
+/* Session header model label when its provider is unavailable (a fallback runs). */
+.cw-session-model-unavailable { color: var(--cw-warn-fg); }
 
 /* Project home — "new conversation" surface */
 .cw-project-hero.is-slim { align-items: center; padding-bottom: var(--cw-space-4); margin-bottom: var(--cw-space-5); }
@@ -1627,24 +1697,28 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 /* Per-agent accent swaps. The same custom properties feed the home composer
    and the session preview chip, keeping visual state in one selector family. */
 .cw-agent-composer-wrap[data-agent="coworker"],
+.cw-agent-pickwrap[data-agent="coworker"],
 .cw-session-agent-chip[data-agent="coworker"] {
   --cw-agent-accent: oklch(0.55 0.13 68);
   --cw-agent-accent-soft: oklch(0.96 0.025 68);
   --cw-agent-send-bg: oklch(0.38 0.11 68);
 }
 .cw-agent-composer-wrap[data-agent="speedwagon"],
+.cw-agent-pickwrap[data-agent="speedwagon"],
 .cw-session-agent-chip[data-agent="speedwagon"] {
   --cw-agent-accent: oklch(0.52 0.13 240);
   --cw-agent-accent-soft: oklch(0.95 0.025 240);
   --cw-agent-send-bg: oklch(0.38 0.12 240);
 }
 .cw-agent-composer-wrap[data-agent="deep-research"],
+.cw-agent-pickwrap[data-agent="deep-research"],
 .cw-session-agent-chip[data-agent="deep-research"] {
   --cw-agent-accent: oklch(0.52 0.10 155);
   --cw-agent-accent-soft: oklch(0.95 0.020 155);
   --cw-agent-send-bg: oklch(0.38 0.09 155);
 }
 .cw-agent-composer-wrap[data-agent="buddy"],
+.cw-agent-pickwrap[data-agent="buddy"],
 .cw-session-agent-chip[data-agent="buddy"] {
   --cw-agent-accent: oklch(0.58 0.12 20);
   --cw-agent-accent-soft: oklch(0.96 0.028 20);
@@ -1657,7 +1731,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 16px 0 36px;
+  padding: 0 20px;
   background: transparent;
   border-bottom: 0;
   position: relative;
@@ -1668,7 +1742,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 12px;
+  gap: 3px;
   padding: 0;
   background: transparent;
   overflow: visible;
@@ -1681,8 +1755,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   left: 0;
   z-index: 1;
   width: var(--cw-agent-indicator-width);
-  height: 34px;
-  border-radius: 14px 14px 0 0;
+  height: 28px;
+  border-radius: 10px 10px 0 0;
   background: var(--cw-agent-accent);
   pointer-events: none;
   transform: translateX(var(--cw-agent-indicator-left));
@@ -1710,7 +1784,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   background: transparent;
   color: var(--cw-fg-4);
   opacity: 0.7;
-  padding: 8px 16px;
+  padding: 5px 10px;
   font-size: 13px;
   font-weight: 500;
   font-family: inherit;
@@ -1728,6 +1802,18 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-weight: 600;
   border-radius: 14px 14px 0 0;
   margin-bottom: -1px;
+}
+
+/* Standalone variant: the picker stands on its own (no composer box beneath),
+   so the indicator is a fully-rounded pill on all four corners and doesn't
+   overlap anything below it. */
+.cw-agent-tabs.is-standalone .cw-agent-tab-indicator {
+  border-radius: 10px;
+  bottom: 0;
+}
+.cw-agent-tabs.is-standalone .cw-agent-tab.is-active {
+  border-radius: 10px;
+  margin-bottom: 0;
 }
 
 /* composer-box owns the paper frame: agent-tinted border + radius. */
@@ -1852,7 +1938,6 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-pocket.cw-nav-members { background: color-mix(in oklch, var(--cw-cozy-rose) 14%, var(--cw-paper)); color: var(--cw-cozy-rose); }
 .cw-pocket.cw-nav-settings,
 .cw-pocket.cw-nav-neutral { background: var(--cw-paper-3); color: var(--cw-ink-3); }
-.cw-pocket.cw-nav-skills,
 .cw-pocket.cw-nav-schedule,
 .cw-pocket.cw-nav-content { background: color-mix(in oklch, var(--cw-cozy-mustard) 18%, var(--cw-paper)); color: oklch(0.5 0.1 95); }
 .cw-pocket.cw-nav-search,
@@ -3587,6 +3672,17 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-run-preview .cw-message p { margin: 0; line-height: 1.55; }
 .cw-run-preview-empty { color: var(--cw-ink-3); font-size: 12px; margin: 4px 0; }
 
+/* Full-width flex item: forces the session info (agent + model) to wrap onto
+   its own line within the run-drawer meta row. */
+.cw-run-meta-break { flex-basis: 100%; height: 0; }
+/* Compact the agent chip here so it sits inline with the 12px meta text. */
+.cw-run-drawer-meta .cw-session-agent-chip {
+  padding: 5px 8px;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+
 /* ── Trigger badge hover popover ──────────────────────────────────────── */
 .cw-trigger-badge-host { position: relative; cursor: default; }
 .cw-trigger-popover {
@@ -4144,14 +4240,19 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-sched-suffix { font-size: 13px; color: var(--cw-ink-2); }
 .cw-weekday-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .cw-weekday-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 34px;
   height: 34px;
+  padding: 0;
   border-radius: 999px;
   border: 1px solid var(--cw-line);
   background: var(--cw-paper-2);
   color: var(--cw-ink-2);
   font-size: 12px;
   font-weight: 600;
+  line-height: 1;
   cursor: pointer;
   transition: background 120ms, border 120ms, color 120ms;
 }

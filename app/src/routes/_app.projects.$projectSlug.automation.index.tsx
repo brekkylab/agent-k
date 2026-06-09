@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Icon } from '@/components/Icon';
 import { IconButton } from '@/components/uiPrimitives';
 import { Select } from '@/components/Select';
@@ -10,12 +12,16 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { summarizeCron } from '@/components/SchedulePicker';
 import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, listRuns, listTriggers } from '@/api/automations';
 import { listMessages } from '@/api/messages';
+import { getModelCatalog, modelLabel } from '@/api/models';
+import { getAgentSurface } from '@/domain/agentSurfaces';
 import { formatMessageTime } from '@/lib/formatMessageTime';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
+import { loadNs } from '@/i18n/loader';
 import type { Automation, Message, Run, Trigger } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')({
+  loader: () => loadNs('automation'),
   component: AutomationsPage,
 });
 
@@ -29,63 +35,63 @@ const MAX_PAGES_ALL = 10;
 const ALL_MODE_CAP = PAGE_SIZE * MAX_PAGES_ALL;
 const SINGLE_MODE_CAP = 200;
 
-const STATUS_LABEL: Record<RunStatus, string> = {
-  queued: 'Queued', running: 'Running', succeeded: 'Succeeded', failed: 'Failed', cancelled: 'Cancelled',
+const STATUS_KEY: Record<RunStatus, string> = {
+  queued: 'status.queued', running: 'status.running', succeeded: 'status.succeeded', failed: 'status.failed', cancelled: 'status.cancelled',
 };
 
-const TRIGGER_LABEL: Record<TriggerKind, string> = {
-  cron: 'recurring', webhook: 'webhook', manual: 'manual',
+const TRIGGER_KIND_KEY: Record<TriggerKind, string> = {
+  cron: 'trigger_kind.schedule', webhook: 'trigger_kind.webhook', manual: 'trigger_kind.manual',
 };
 
-function formatRunWhen(run: Run): string {
-  const t = Date.parse(run.createdAt);
-  if (Number.isNaN(t)) return run.createdAt.slice(0, 10);
-  const diffSec = Math.max(0, Math.round((Date.now() - t) / 1000));
-  if (diffSec < 60) return '방금';
+function formatRunWhen(run: Run, t: TFunction<'automation'>): string {
+  const parsed = Date.parse(run.createdAt);
+  if (Number.isNaN(parsed)) return run.createdAt.slice(0, 10);
+  const diffSec = Math.max(0, Math.round((Date.now() - parsed) / 1000));
+  if (diffSec < 60) return t('relative.just_now');
   const min = Math.round(diffSec / 60);
-  if (min < 60) return `${min}분 전`;
+  if (min < 60) return t('relative.minutes_ago', { count: min });
   const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}시간 전`;
+  if (hr < 24) return t('relative.hours_ago', { count: hr });
   const day = Math.round(hr / 24);
-  if (day < 7) return day === 1 ? '어제' : `${day}일 전`;
+  if (day < 7) return day === 1 ? t('relative.yesterday') : t('relative.days_ago', { count: day });
   return run.createdAt.slice(0, 10);
 }
 
-function formatRunDuration(run: Run): string {
+function formatRunDuration(run: Run, t: TFunction<'automation'>): string {
   if (run.status === 'queued') return '—';
-  if (run.status === 'running') return '진행중';
+  if (run.status === 'running') return t('relative.running');
   const start = Date.parse(run.createdAt);
   const end = Date.parse(run.updatedAt);
   if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '—';
   const sec = Math.max(0, Math.round((end - start) / 1000));
-  if (sec < 60) return `${sec}s`;
+  if (sec < 60) return t('relative.dur_s', { count: sec });
   const m = Math.floor(sec / 60);
   const s = sec % 60;
-  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  return s === 0 ? t('relative.dur_m', { count: m }) : t('relative.dur_ms', { m, s });
 }
 
-function formatScheduledAt(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso.slice(0, 16).replace('T', ' ');
-  const diffSec = Math.round((t - Date.now()) / 1000);
+function formatScheduledAt(iso: string, t: TFunction<'automation'>): string {
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return iso.slice(0, 16).replace('T', ' ');
+  const diffSec = Math.round((parsed - Date.now()) / 1000);
   if (diffSec < 0) {
     const ago = -diffSec;
-    if (ago < 60) return '방금';
+    if (ago < 60) return t('relative.just_now');
     const min = Math.round(ago / 60);
-    if (min < 60) return `${min}분 전`;
+    if (min < 60) return t('relative.minutes_ago', { count: min });
     const hr = Math.round(min / 60);
-    if (hr < 24) return `${hr}시간 전`;
+    if (hr < 24) return t('relative.hours_ago', { count: hr });
     const day = Math.round(hr / 24);
-    return day === 1 ? '어제' : `${day}일 전`;
+    return day === 1 ? t('relative.yesterday') : t('relative.days_ago', { count: day });
   }
-  if (diffSec < 60) return '곧';
+  if (diffSec < 60) return t('relative.soon');
   const min = Math.round(diffSec / 60);
-  if (min < 60) return `${min}분 후`;
+  if (min < 60) return t('relative.in_minutes', { count: min });
   const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}시간 후`;
+  if (hr < 24) return t('relative.in_hours', { count: hr });
   const day = Math.round(hr / 24);
-  if (day === 1) return '내일';
-  if (day < 7) return `${day}일 후`;
+  if (day === 1) return t('relative.tomorrow');
+  if (day < 7) return t('relative.in_days', { count: day });
   return iso.slice(0, 10);
 }
 
@@ -112,22 +118,29 @@ function formatEventPayload(payload: unknown): string | undefined {
   }
 }
 
-function triggerSummaryText(t: Trigger): string {
-  if (t.spec.kind === 'cron') {
-    const cron = summarizeCron(t.spec.expr);
-    return t.spec.tz ? `${cron}\n${t.spec.tz}` : `${cron}\nUTC`;
+function triggerSummaryText(trig: Trigger, t: TFunction<'automation'>): string {
+  if (trig.spec.kind === 'cron') {
+    const cron = summarizeCron(trig.spec.expr, t);
+    return trig.spec.tz ? `${cron}\n${trig.spec.tz}` : `${cron}\nUTC`;
   }
-  return `whk_${t.id.slice(0, 6)}`;
+  return `whk_${trig.id.slice(0, 6)}`;
 }
 
 function AutomationsPage() {
   const { projectSlug } = Route.useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation('automation');
   const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<RunStatus | 'all'>('all');
   const [triggerFilter, setTriggerFilter] = useState<TriggerKind | 'all'>('all');
   const [page, setPage] = useState(0);
+
+  const catalogQuery = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
 
   const automationsQuery = useQuery({
     queryKey: ['automations', projectSlug],
@@ -347,6 +360,8 @@ function AutomationsPage() {
     const cancellable = status === 'queued' || status === 'running';
     const forkable = !cancellable;
     const trigger = run.triggerId ? triggerById[run.triggerId] ?? null : null;
+    const agentSurface = run.agentType ? getAgentSurface(run.agentType) : null;
+    const runModelLabel = run.model ? modelLabel(catalogQuery.data, run.model) : t('run_detail.recommended_model');
     return (
     <>
       <header className="cw-run-drawer-head">
@@ -358,14 +373,14 @@ function AutomationsPage() {
         <div className="cw-run-drawer-actions">
           <IconButton
             icon="sticky-notes"
-            label="이 run의 세션 복제"
+            label={t('run_detail.duplicate_label')}
             title={
-              !forkable ? '완료된 run만 복제할 수 있습니다'
-              : duplicateMutation.isPending ? '복제 중...'
-              : '이 run의 세션을 복제'
+              !forkable ? t('run_detail.duplicate_disabled')
+              : duplicateMutation.isPending ? t('run_detail.duplicating')
+              : t('run_detail.duplicate_title')
             }
-            expandedText={duplicateMutation.isPending ? '복제 중...' : '세션으로 복제'}
-            confirmText="한 번 더 눌러 복제"
+            expandedText={duplicateMutation.isPending ? t('run_detail.duplicating') : t('run_detail.duplicate_expanded')}
+            confirmText={t('run_detail.duplicate_confirm')}
             disabled={!forkable || duplicateMutation.isPending}
             onClick={() => duplicateMutation.mutate(run.sessionId, {
               onSuccess: (newSession) => {
@@ -381,37 +396,52 @@ function AutomationsPage() {
               type="button"
               className="cw-btn-secondary cw-btn-destructive cw-run-cancel"
               onClick={() => requestCancel(run)}
-              title="실행 취소"
+              title={t('run_detail.cancel_title')}
             >
-              <Icon name="x" size={14} /> Cancel
+              <Icon name="x" size={14} /> {t('run_detail.cancel')}
             </button>
           )}
           <button
             type="button"
             className="cw-run-drawer-close"
             onClick={() => setSelectedRunId(null)}
-            aria-label="Close run detail"
+            aria-label={t('run_detail.close_aria')}
           >
             <Icon name="x" size={16} />
           </button>
         </div>
         <div className="cw-run-drawer-meta">
           <TriggerBadge trigger={trigger} placement="below-start" />
-          <span>{STATUS_LABEL[status]}</span>
+          <span>{formatRunWhen(run, t)}</span>
           <span>·</span>
-          <span>{formatRunWhen(run)}</span>
-          <span>·</span>
-          {status === 'queued' ? (
-            <span>scheduled {formatScheduledAt(run.scheduledFor)}</span>
-          ) : (
-            <span>duration {formatRunDuration(run)}</span>
+          <span>
+            {t(STATUS_KEY[status])}
+            {status === 'queued'
+              ? `(${t('run_detail.scheduled', { when: formatScheduledAt(run.scheduledFor, t) })})`
+              : `(${t('run_detail.duration', { value: formatRunDuration(run, t) })})`}
+          </span>
+          {/* force the session info (agent + model) onto its own line */}
+          <span className="cw-run-meta-break" aria-hidden />
+          {agentSurface && (
+            <>
+              <span
+                className="cw-session-agent-chip"
+                data-agent={agentSurface.id}
+                title={t('run_detail.agent_chip_title')}
+              >
+                <Icon name={agentSurface.icon} size={11} />
+                <span>{agentSurface.label}</span>
+              </span>
+              <span>·</span>
+            </>
           )}
+          <span title={t('run_detail.model_title')}>{runModelLabel}</span>
         </div>
       </header>
 
       <div className="cw-run-preview cw-messages">
         {previewMessages.length === 0 ? (
-          <p className="cw-run-preview-empty">이 run에는 표시할 세션 내용이 없습니다.</p>
+          <p className="cw-run-preview-empty">{t('run_detail.preview_empty')}</p>
         ) : (
           previewMessages.map((msg) => {
             const isAi = msg.sender.kind === 'agent';
@@ -423,7 +453,7 @@ function AutomationsPage() {
                 {isAi && <span className="cw-ai-chip">AI</span>}
                 <div className="cw-message-body">
                   <div className="cw-message-meta">
-                    <b>{isAi ? 'Agent' : 'Prompt'}</b>
+                    <b>{isAi ? t('run_detail.msg_agent') : t('run_detail.msg_prompt')}</b>
                     <time>{formatMessageTime(msg.createdAt)}</time>
                   </div>
                   <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
@@ -443,11 +473,11 @@ function AutomationsPage() {
       <details className="cw-event-logs">
         <summary>
           <Icon name="chevron-right" size={14} />
-          Event logs
+          {t('run_detail.event_logs')}
           <span className="cw-event-logs-count">{runEvents.length}</span>
         </summary>
         {runEvents.length === 0 ? (
-          <p className="cw-run-preview-empty">기록된 이벤트가 없습니다.</p>
+          <p className="cw-run-preview-empty">{t('run_detail.events_empty')}</p>
         ) : (
           <ol className="cw-event-feed">
             {runEvents.map((event) => (
@@ -468,32 +498,23 @@ function AutomationsPage() {
     <section className="cw-page cw-automation-page cw-page-enter">
       <header className="cw-page-head">
         <div>
-          <h1>Automations</h1>
-          <p>Agent에게 시킬 일을 미리 정의해두고, 일정·웹훅·수동 등 다양한 방법으로 실행합니다.</p>
-        </div>
-        <div>
-          <button
-            className="cw-btn-primary"
-            type="button"
-            onClick={() => navigate({ to: '/projects/$projectSlug/automation/new', params: { projectSlug } })}
-          >
-            <Icon name="plus" size={14} /> New automation
-          </button>
+          <h1>{t('list.title')}</h1>
+          <p>{t('list.subtitle')}</p>
         </div>
       </header>
 
       <div className={`cw-automation-grid ${isWide ? '' : 'cw-automation-grid--narrow'}`}>
         <aside className="cw-automation-rail">
           <header className="cw-rail-header">
-            <h2 className="cw-rail-title">Automations</h2>
+            <h2 className="cw-rail-title">{t('list.rail_title')}</h2>
             <button
               type="button"
               className="cw-rail-create"
-              aria-label="New automation"
-              title="New automation"
+              aria-label={t('list.rail_new_aria')}
+              title={t('list.rail_new_aria')}
               onClick={() => navigate({ to: '/projects/$projectSlug/automation/new', params: { projectSlug } })}
             >
-              <Icon name="plus" size={14} /> New
+              <Icon name="plus" size={14} /> {t('list.rail_new')}
             </button>
           </header>
 
@@ -503,7 +524,7 @@ function AutomationsPage() {
             className={`cw-rail-row ${selectedAutomationId === null ? 'is-active' : ''}`}
             onClick={() => setSelectedAutomationId(null)}
           >
-            <span className="cw-rail-name">All automations</span>
+            <span className="cw-rail-name">{t('list.all_automations')}</span>
             <span className="cw-rail-count">{allRuns.length}</span>
           </button>
 
@@ -528,18 +549,18 @@ function AutomationsPage() {
                 <StatusDot status={lastRunByAutomation[automation.id]?.status ?? 'queued'} compact />
                 <span className="cw-rail-name">{automation.name}</span>
                 {isDisabled(automation.id) && (
-                  <span className="cw-rail-off" title="비활성화됨">Off</span>
+                  <span className="cw-rail-off" title={t('list.off_title')}>{t('list.off')}</span>
                 )}
                 <span className="cw-rail-actions">
                   {!isDisabled(automation.id) && (
                     <RailAction
-                      label="수동 실행"
+                      label={t('list.manual_run')}
                       icon="rocket"
                       onClick={() => triggerManualRun(automation.id)}
                     />
                   )}
                   <RailAction
-                    label="설정"
+                    label={t('list.settings')}
                     icon="settings"
                     onClick={() => openSettings(automation.id)}
                   />
@@ -552,13 +573,13 @@ function AutomationsPage() {
                   <ul className="cw-rail-trigger-summary">
                     {(triggersByAutomation[automation.id] ?? []).length === 0 ? (
                       <li>
-                        <span className="cw-trigger-badge cw-trigger-manual">manual only</span>
-                        <span className="cw-rail-trigger-meta">트리거 없음</span>
+                        <span className="cw-trigger-badge cw-trigger-manual">{t('list.manual_only')}</span>
+                        <span className="cw-rail-trigger-meta">{t('list.no_triggers')}</span>
                       </li>
-                    ) : triggersByAutomation[automation.id].map((t) => (
-                      <li key={t.id}>
-                        <span className={`cw-trigger-badge cw-trigger-${t.kind}`}>{t.kind === 'cron' ? 'recurring' : t.kind}</span>
-                        <span className="cw-rail-trigger-meta">{triggerSummaryText(t)}</span>
+                    ) : triggersByAutomation[automation.id].map((trig) => (
+                      <li key={trig.id}>
+                        <span className={`cw-trigger-badge cw-trigger-${trig.kind}`}>{t(TRIGGER_KIND_KEY[trig.kind as TriggerKind])}</span>
+                        <span className="cw-rail-trigger-meta">{triggerSummaryText(trig, t)}</span>
                       </li>
                     ))}
                   </ul>
@@ -578,27 +599,27 @@ function AutomationsPage() {
               </div>
             )}
             <FilterSelect<RunStatus | 'all'>
-              label="Status"
+              label={t('list.context_status')}
               value={statusFilter}
               onChange={setStatusFilter}
               options={[
-                { value: 'all',       label: 'All status' },
-                { value: 'queued',    label: 'Queued' },
-                { value: 'running',   label: 'Running' },
-                { value: 'succeeded', label: 'Succeeded' },
-                { value: 'failed',    label: 'Failed' },
-                { value: 'cancelled', label: 'Cancelled' },
+                { value: 'all',       label: t('list.status_all') },
+                { value: 'queued',    label: t('status.queued') },
+                { value: 'running',   label: t('status.running') },
+                { value: 'succeeded', label: t('status.succeeded') },
+                { value: 'failed',    label: t('status.failed') },
+                { value: 'cancelled', label: t('status.cancelled') },
               ]}
             />
             <FilterSelect<TriggerKind | 'all'>
-              label="Trigger"
+              label={t('list.context_trigger')}
               value={triggerFilter}
               onChange={setTriggerFilter}
               options={[
-                { value: 'all',     label: 'All triggers' },
-                { value: 'cron',    label: 'recurring' },
-                { value: 'webhook', label: 'webhook' },
-                { value: 'manual',  label: 'manual' },
+                { value: 'all',     label: t('list.trigger_all') },
+                { value: 'cron',    label: t('trigger_kind.schedule') },
+                { value: 'webhook', label: t('trigger_kind.webhook') },
+                { value: 'manual',  label: t('trigger_kind.manual') },
               ]}
             />
             {(statusFilter !== 'all' || triggerFilter !== 'all') && (
@@ -607,17 +628,17 @@ function AutomationsPage() {
                 className="cw-filter-reset"
                 onClick={() => { setStatusFilter('all'); setTriggerFilter('all'); }}
               >
-                <Icon name="rotate-ccw" size={12} /> reset filter
+                <Icon name="rotate-ccw" size={12} /> {t('list.reset_filter')}
               </button>
             )}
-            <span className="cw-runs-count">{visibleRuns.length} runs</span>
+            <span className="cw-runs-count">{t('list.runs_count', { count: visibleRuns.length })}</span>
           </div>
 
           {visibleRuns.length === 0 ? (
             <div className="cw-runs-empty">
               <Icon name="calendar" size={20} />
-              <b>표시할 run이 없습니다</b>
-              <p>필터를 풀거나 새로 실행해보세요.</p>
+              <b>{t('list.empty_title')}</b>
+              <p>{t('list.empty_hint')}</p>
             </div>
           ) : (
             <ul className="cw-runs-list">
@@ -638,16 +659,16 @@ function AutomationsPage() {
                     >
                       <StatusDot status={effectiveStatus(run)} />
                       <span className="cw-run-title">
-                        <strong>{automation?.name ?? '(deleted)'}</strong>
+                        <strong>{automation?.name ?? t('list.deleted')}</strong>
                         <span className="cw-run-attempt">#{shortRunId(run)}</span>
                       </span>
                       <TriggerBadge trigger={run.triggerId ? triggerById[run.triggerId] ?? null : null} />
                       <span className="cw-run-duration">
                         {effectiveStatus(run) === 'queued'
-                          ? formatScheduledAt(run.scheduledFor)
-                          : formatRunDuration(run)}
+                          ? formatScheduledAt(run.scheduledFor, t)
+                          : formatRunDuration(run, t)}
                       </span>
-                      <span className="cw-run-when">{formatRunWhen(run)}</span>
+                      <span className="cw-run-when">{formatRunWhen(run, t)}</span>
                       <Icon
                         name="chevron-right"
                         size={14}
@@ -673,7 +694,7 @@ function AutomationsPage() {
                 disabled={safePage === 0}
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
               >
-                <Icon name="arrow-left" size={12} /> Prev
+                <Icon name="chevron-left" size={12} /> {t('list.prev')}
               </button>
               <span className="cw-page-indicator">
                 {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, visibleRuns.length)} / {visibleRuns.length}
@@ -684,7 +705,7 @@ function AutomationsPage() {
                 disabled={safePage >= totalPages - 1}
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
               >
-                Next <Icon name="chevron-right" size={12} />
+                {t('list.next')} <Icon name="chevron-right" size={12} />
               </button>
             </footer>
           )}
@@ -695,8 +716,8 @@ function AutomationsPage() {
             {selectedRun ? renderRunDetail(selectedRun) : (
               <div className="cw-run-drawer-empty">
                 <Icon name="message-square" size={22} />
-                <b>Run을 선택하세요</b>
-                <p>Runs 목록에서 항목을 클릭하면 상세 정보가 여기에 표시됩니다.</p>
+                <b>{t('list.select_run_title')}</b>
+                <p>{t('list.select_run_hint')}</p>
               </div>
             )}
           </aside>
@@ -705,9 +726,9 @@ function AutomationsPage() {
 
       {pendingManualRun && (
         <ConfirmDialog
-          title="수동 실행 확인"
-          body={`'${pendingManualRun.name}' automation을 지금 한 번 실행할까요?`}
-          confirmLabel="실행"
+          title={t('list.manual_confirm_title')}
+          body={t('list.manual_confirm_body', { name: pendingManualRun.name })}
+          confirmLabel={t('list.manual_confirm_label')}
           pending={manualRunMutation.isPending}
           onConfirm={confirmManualRun}
           onClose={() => setPendingManualRun(null)}
@@ -719,7 +740,8 @@ function AutomationsPage() {
 }
 
 function StatusDot({ status, compact = false }: { status: RunStatus; compact?: boolean }) {
-  const title = STATUS_LABEL[status];
+  const { t } = useTranslation('automation');
+  const title = t(STATUS_KEY[status]);
   return <span className={`cw-status-dot cw-status-${status} ${compact ? 'is-compact' : ''}`} title={title} aria-label={title} />;
 }
 
@@ -733,6 +755,7 @@ function TriggerBadge({
   trigger: Trigger | null;
   placement?: TriggerPlacement;
 }) {
+  const { t } = useTranslation('automation');
   const badgeRef = useRef<HTMLSpanElement | null>(null);
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
@@ -762,7 +785,7 @@ function TriggerBadge({
   }, [open, recompute]);
 
   const kind: TriggerKind = trigger?.kind ?? 'manual';
-  const label = TRIGGER_LABEL[kind];
+  const label = t(TRIGGER_KIND_KEY[kind]);
 
   if (!trigger) {
     return <span className={`cw-trigger-badge cw-trigger-${kind}`}>{label}</span>;
@@ -790,17 +813,17 @@ function TriggerBadge({
           <span className="cw-trigger-popover-row"><b>{label}</b></span>
           {trigger.spec.kind === 'cron' && (
             <>
-              <span className="cw-trigger-popover-row"><span>when</span><code>{summarizeCron(trigger.spec.expr)}</code></span>
+              <span className="cw-trigger-popover-row"><span>{t('trigger_badge.when')}</span><code>{summarizeCron(trigger.spec.expr, t)}</code></span>
               {trigger.spec.tz && (
-                <span className="cw-trigger-popover-row"><span>tz</span><code>{trigger.spec.tz}</code></span>
+                <span className="cw-trigger-popover-row"><span>{t('trigger_badge.tz')}</span><code>{trigger.spec.tz}</code></span>
               )}
               {trigger.nextFireAt && (
-                <span className="cw-trigger-popover-row"><span>next</span><code>{trigger.nextFireAt.slice(0, 16).replace('T', ' ')}</code></span>
+                <span className="cw-trigger-popover-row"><span>{t('trigger_badge.next')}</span><code>{trigger.nextFireAt.slice(0, 16).replace('T', ' ')}</code></span>
               )}
             </>
           )}
           {trigger.spec.kind === 'webhook' && (
-            <span className="cw-trigger-popover-row"><span>token</span><code>whk_{trigger.id.slice(0, 6)}</code></span>
+            <span className="cw-trigger-popover-row"><span>{t('trigger_badge.token')}</span><code>whk_{trigger.id.slice(0, 6)}</code></span>
           )}
         </span>,
         document.body,
