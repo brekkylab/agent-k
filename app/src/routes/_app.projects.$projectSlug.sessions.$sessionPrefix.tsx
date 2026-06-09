@@ -43,8 +43,9 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sess
 });
 
 // Cap on how many files one action can attach (folder expand / multi-drag),
-// to keep messages, the agent context, and the chip tray manageable.
-const MAX_ATTACHMENTS = 20;
+// to keep messages, the agent context, and the chip tray manageable. Matches
+// the backend's server-side ceiling.
+const MAX_ATTACHMENTS = 30;
 
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
