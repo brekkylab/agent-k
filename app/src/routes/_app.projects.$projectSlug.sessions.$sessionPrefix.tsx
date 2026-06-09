@@ -219,41 +219,6 @@ function SessionPage() {
   // Highlight the chat surface while a shared file is dragged over it.
   const [importDragOver, setImportDragOver] = useState(false);
 
-  // Sidebar switch — supports tap-to-toggle AND press-and-drag (like a real
-  // toggle): dragging the knob right reveals files, left returns to info. A
-  // drag suppresses the trailing click so it doesn't immediately toggle back.
-  const switchDragRef = useRef<{ startX: number; dragged: boolean } | null>(null);
-  const switchSuppressClickRef = useRef(false);
-  const SWITCH_DRAG_THRESHOLD = 5;
-
-  const onSwitchPointerDown = useCallback((e: React.PointerEvent) => {
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-    switchDragRef.current = { startX: e.clientX, dragged: false };
-  }, []);
-
-  const onSwitchPointerMove = useCallback((e: React.PointerEvent) => {
-    const st = switchDragRef.current;
-    if (!st) return;
-    const dx = e.clientX - st.startX;
-    if (Math.abs(dx) > SWITCH_DRAG_THRESHOLD) st.dragged = true;
-    if (dx > SWITCH_DRAG_THRESHOLD) setSideView('files');
-    else if (dx < -SWITCH_DRAG_THRESHOLD) setSideView('info');
-  }, []);
-
-  const onSwitchPointerUp = useCallback((e: React.PointerEvent) => {
-    const st = switchDragRef.current;
-    switchDragRef.current = null;
-    e.currentTarget.releasePointerCapture?.(e.pointerId);
-    if (st?.dragged) switchSuppressClickRef.current = true;
-  }, []);
-
-  const onSwitchClick = useCallback(() => {
-    if (switchSuppressClickRef.current) {
-      switchSuppressClickRef.current = false;
-      return;
-    }
-    setSideView((v) => (v === 'files' ? 'info' : 'files'));
-  }, []);
 
   // Import shared files (dragged from SharedFilesBrowser, or its inline button) as
   // pending attachments. They already exist in shared storage, so no upload is
@@ -834,25 +799,31 @@ function SessionPage() {
           </div>
         </div>
 
-        {/* Pinned outside the sliding track, so it stays under the cursor in
-            both views — tap to swap, tap again in the same spot to swap back. */}
+        {/* Segmented view switch — pinned outside the sliding track so it stays
+            put in both views. Two tabs: session info ↔ shared file browser. */}
         <div className="cw-side-switchbar">
-          <button
-            type="button"
-            className="cw-side-switch"
-            role="switch"
-            aria-checked={sideView === 'files'}
-            onPointerDown={onSwitchPointerDown}
-            onPointerMove={onSwitchPointerMove}
-            onPointerUp={onSwitchPointerUp}
-            onClick={onSwitchClick}
-          >
-            <span className="cw-side-switch-icon">
-              <Icon name="folder" size={15} />
-            </span>
-            <span className="cw-side-switch-text">{t('shared_files_header')}</span>
-            <span className="cw-side-switch-toggle"><span className="cw-side-switch-knob" /></span>
-          </button>
+          <div className="cw-side-seg" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sideView === 'info'}
+              className="cw-side-seg-tab"
+              onClick={() => setSideView('info')}
+            >
+              <Icon name="message-square" size={14} />
+              {t('side.info_tab')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sideView === 'files'}
+              className="cw-side-seg-tab"
+              onClick={() => setSideView('files')}
+            >
+              <Icon name="folder" size={14} />
+              {t('side.files_tab')}
+            </button>
+          </div>
         </div>
       </aside>
 

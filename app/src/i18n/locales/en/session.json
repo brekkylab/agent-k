@@ -29,7 +29,9 @@
     "no_pinned_files": "No pinned files yet.",
     "access": "Access",
     "session": "Session",
-    "project_label": "project · {{name}}"
+    "project_label": "project · {{name}}",
+    "info_tab": "Info",
+    "files_tab": "Files"
   },
   "artifacts_header": "Artifacts",
   "shared_files_header": "Shared files",

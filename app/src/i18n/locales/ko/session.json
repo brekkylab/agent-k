@@ -29,7 +29,9 @@
     "no_pinned_files": "고정된 파일이 아직 없어요.",
     "access": "접근",
     "session": "세션",
-    "project_label": "프로젝트 · {{name}}"
+    "project_label": "프로젝트 · {{name}}",
+    "info_tab": "정보",
+    "files_tab": "파일"
   },
   "artifacts_header": "산출물",
   "shared_files_header": "공유 파일",
