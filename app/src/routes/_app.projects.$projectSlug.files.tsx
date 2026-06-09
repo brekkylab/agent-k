@@ -25,6 +25,7 @@ import {
   downloadFile,
   listDirentsRaw,
   moveDirents,
+  scopeRoot,
   uploadFiles,
   type DirentBatchResult,
   type DirentScope,
@@ -152,6 +153,34 @@ function FilesPage() {
       const items = files.map((file) => ({ file, targetPath: targetPathFor(file) }));
       return uploadFiles(scope, items);
     },
+    onMutate: async (files) => {
+      // Cancel any in-flight refetch so it doesn't overwrite the optimistic entries.
+      await queryClient.cancelQueries({ queryKey: ['dirents', 'shared', projectId], exact: true });
+      const previousData = queryClient.getQueryData<BackendDirent[]>(['dirents', 'shared', projectId]);
+      if (previousData !== undefined) {
+        const root = scopeRoot(scope);
+        const existingPaths = new Set(previousData.map((e) => e.path));
+        // Only add optimistic entries for files that don't already exist — uploading a
+        // file that collides with an existing name gets auto-renamed by the server, so
+        // we can't predict the final path. Skip those to avoid duplicate-key issues;
+        // they'll appear in the list after the refetch in onSuccess.
+        const optimistic: BackendDirent[] = files
+          .filter((file) => !existingPaths.has(`${root}/${targetPathFor(file)}`))
+          .map((file) => ({
+            path: `${root}/${targetPathFor(file)}`,
+            kind: 'file' as const,
+            bytes: file.size,
+            modified_at: null,
+          }));
+        if (optimistic.length > 0) {
+          queryClient.setQueryData<BackendDirent[]>(
+            ['dirents', 'shared', projectId],
+            [...previousData, ...optimistic],
+          );
+        }
+      }
+      return { previousData };
+    },
     onSuccess: async (result, files) => {
       await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
       const ok = result.succeeded.length;
@@ -177,7 +206,10 @@ function FilesPage() {
         showToast(t('files:toast.upload_success', { count: ok }));
       }
     },
-    onError: (err) => {
+    onError: (err, _files, context) => {
+      if (context?.previousData !== undefined) {
+        queryClient.setQueryData(['dirents', 'shared', projectId], context.previousData);
+      }
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'upload failed';
       showToast(t('files:toast.upload_failed', { message: msg }));
     },
