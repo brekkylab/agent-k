@@ -125,40 +125,41 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
           row.kind === 'dir' ? (
             <button
               type="button"
-              className="cw-artifact-row cw-files-dir-row"
+              className="cw-sf-row cw-sf-dir"
               key={row.relPath}
               onClick={() => setDir(row.relPath)}
             >
-              <span className="cw-artifact-name">
-                <Icon name="folder" size={16} />
-                <span className="cw-file-label">{row.name}</span>
-              </span>
-              <Icon name="chevron-right" size={13} />
+              <span className="cw-sf-grip-spacer" aria-hidden="true" />
+              <Icon name="folder" size={18} />
+              <span className="cw-file-label">{row.name}</span>
+              <Icon name="chevron-right" size={14} />
             </button>
           ) : (
             <div
-              className="cw-artifact-row"
+              className="cw-sf-row"
               key={row.relPath}
               draggable
               onDragStart={(e) => handleDragStart(e, { globalPath: row.globalPath, filename: row.name })}
-              style={{ cursor: 'grab' }}
-              title={t('shared_files.drag_hint')}
+              title={`${row.name}${row.bytes != null ? ` · ${formatBytes(row.bytes)}` : ''}`}
             >
-              <span className="cw-artifact-name">
-                <FileTypeIcon filename={row.name} size={16} />
-                <span className="cw-file-label">{row.name}</span>
+              <span className="cw-sf-grip" aria-hidden="true">
+                <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+                  <circle cx="2" cy="2" r="1.2" /><circle cx="8" cy="2" r="1.2" />
+                  <circle cx="2" cy="7" r="1.2" /><circle cx="8" cy="7" r="1.2" />
+                  <circle cx="2" cy="12" r="1.2" /><circle cx="8" cy="12" r="1.2" />
+                </svg>
               </span>
-              <span className="cw-artifact-size">{row.bytes != null ? formatBytes(row.bytes) : ''}</span>
-              <div className="cw-artifact-menu-wrap">
-                <button
-                  type="button"
-                  aria-label={t('shared_files.import')}
-                  title={t('shared_files.import')}
-                  onClick={() => onImport([{ globalPath: row.globalPath, filename: row.name }])}
-                >
-                  <Icon name="plus" size={13} />
-                </button>
-              </div>
+              <FileTypeIcon filename={row.name} size={18} />
+              <span className="cw-file-label">{row.name}</span>
+              <button
+                type="button"
+                className="cw-sf-add"
+                aria-label={t('shared_files.import')}
+                title={t('shared_files.import')}
+                onClick={() => onImport([{ globalPath: row.globalPath, filename: row.name }])}
+              >
+                <Icon name="plus" size={13} />
+              </button>
             </div>
           ),
         )}
