@@ -36,4 +36,17 @@ describe('useZoom', () => {
     act(() => result.current.toggle());
     expect(result.current.scale).toBe(1);
   });
+
+  it('zoomBy zooms continuously (negative delta = in) and clamps to [0.25, 5]', () => {
+    const { result } = renderHook(() => useZoom());
+    act(() => result.current.zoomBy(-100)); // wheel up
+    expect(result.current.scale).toBeGreaterThan(1);
+    act(() => result.current.reset());
+    act(() => result.current.zoomBy(100)); // wheel down
+    expect(result.current.scale).toBeLessThan(1);
+    for (let i = 0; i < 200; i++) act(() => result.current.zoomBy(-100));
+    expect(result.current.scale).toBe(5);
+    for (let i = 0; i < 400; i++) act(() => result.current.zoomBy(100));
+    expect(result.current.scale).toBe(0.25);
+  });
 });

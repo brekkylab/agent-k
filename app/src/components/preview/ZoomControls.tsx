@@ -24,7 +24,9 @@ export function ZoomControls({ scale, onZoomIn, onZoomOut, onReset, canZoomIn, c
         className={`cw-zoom-pct${resetAsIcon ? ' cw-zoom-pct--icon' : ''}`}
         onClick={onReset}
         aria-label={t('preview.zoom_reset')}
-        title={`${Math.round(scale * 100)}%`}
+        // The icon variant hides the number, so surface it on hover; the % variant
+        // already shows it, so a matching title would just be noise.
+        title={resetAsIcon ? `${Math.round(scale * 100)}%` : undefined}
       >
         {resetAsIcon ? <Icon name="zoom-out" size={16} /> : `${Math.round(scale * 100)}%`}
       </button>

@@ -1,5 +1,10 @@
 import { useEffect, useState, type RefObject } from 'react';
 
+/** Whether a scroll container's content exceeds its viewport (so it can pan).
+ *  The +1 absorbs sub-pixel rounding. */
+const isOverflowing = (el: HTMLElement) =>
+  el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+
 /**
  * Drag-to-pan for a scrollable stage whose content overflows when zoomed in.
  * A mouse drag that starts on the content translates into scroll offset; pointer
@@ -26,10 +31,7 @@ export function useDragPan(
     const stage = stageRef.current;
     const content = contentRef.current;
     if (!stage) return;
-    const update = () =>
-      setPannable(
-        stage.scrollWidth > stage.clientWidth + 1 || stage.scrollHeight > stage.clientHeight + 1,
-      );
+    const update = () => setPannable(isOverflowing(stage));
     update();
     const ro = new ResizeObserver(update);
     ro.observe(stage);
@@ -46,14 +48,11 @@ export function useDragPan(
     let startTop = 0;
     let active = false;
 
-    const overflows = () =>
-      stage.scrollWidth > stage.clientWidth + 1 || stage.scrollHeight > stage.clientHeight + 1;
-
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0 || e.pointerType !== 'mouse') return;
       const content = contentRef.current;
       if (!content || !(e.target instanceof Node) || !content.contains(e.target)) return;
-      if (!overflows()) return;
+      if (!isOverflowing(stage)) return;
       active = true;
       startX = e.clientX;
       startY = e.clientY;

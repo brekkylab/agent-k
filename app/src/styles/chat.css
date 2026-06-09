@@ -164,8 +164,9 @@
    affordance over the image, and keep it while dragging even as the pointer
    crosses the dim margin (pointer capture is on the stage). */
 .cw-preview-img.is-pannable { cursor: move; }
-.cw-preview-img-stage.is-panning,
-.cw-preview-img-stage.is-panning .cw-preview-img { cursor: move; }
+/* `cursor` is inherited, so setting it on the panning stage covers the image
+   (and the dim margin the pointer may cross mid-drag) without a second rule. */
+.cw-preview-img-stage.is-panning { cursor: move; }
 /* Panning replaces scrollbars for the image stage — keep overflow scrollable
    (drag sets scrollLeft/Top) but hide the bars. PDF keeps its scrollbars. */
 .cw-preview-img-stage { scrollbar-width: none; }
