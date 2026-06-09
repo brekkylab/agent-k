@@ -64,6 +64,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/projects/{project_ref}/members/{user_id}",
             delete(handlers::remove_member),
         )
+        .api_route(
+            "/projects/{project_ref}/knowledge/status",
+            get(handlers::knowledge_status),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,

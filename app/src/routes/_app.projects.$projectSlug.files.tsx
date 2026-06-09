@@ -30,7 +30,7 @@ import {
   type DirentScope,
   stripScopePrefix,
 } from '@/api/dirents';
-import { getProject } from '@/api/projects';
+import { getProject, getKnowledgeStatus } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -82,6 +82,16 @@ function FilesPage() {
   // ── Navigation state ─────────────────────────────────────────────
   const [currentPath, setCurrentPath] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // Knowledge-corpus indexing status. Only polled while inside the knowledge
+  // folder; re-fetches every 1.5s as long as a background resync is in flight.
+  const inKnowledge = currentPath[0] === 'knowledge';
+  const knowledge = useQuery({
+    queryKey: ['knowledge-status', projectSlug],
+    queryFn: () => getKnowledgeStatus(projectSlug),
+    enabled: inKnowledge && Boolean(project.data),
+    refetchInterval: (q) => (q.state.data?.indexing ? 1500 : false),
+  });
 
   useEffect(() => {
     setExpanded((prev) => {
@@ -154,6 +164,9 @@ function FilesPage() {
     },
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
+      // Uploading into knowledge kicks off a background resync; refetch its
+      // status so the banner flips to "indexing…" and then polls to done.
+      queryClient.invalidateQueries({ queryKey: ['knowledge-status', projectSlug] });
       const ok = result.succeeded.length;
       const ko = result.failed.length;
       if (ko === 0) {
@@ -734,9 +747,13 @@ function FilesPage() {
               onDropFiles(e.dataTransfer.files);
             }}
           >
-            {currentPath[0] === 'knowledge' && !view.isSearch && (
+            {inKnowledge && !view.isSearch && (
               <div className="cw-knowledge-banner">
-                <Icon name="sparkles" size={14} /> <span>{t('files:knowledge.banner')}</span>
+                {knowledge.data?.indexing ? (
+                  <><Icon name="rotate-ccw" size={14} /> <span>{t('files:knowledge.indexing')}</span></>
+                ) : (
+                  <><Icon name="sparkles" size={14} /> <span>{t('files:knowledge.banner')}</span></>
+                )}
               </div>
             )}
             {allRows.length === 0 ? (

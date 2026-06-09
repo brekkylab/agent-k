@@ -11,6 +11,7 @@ mod ws;
 pub use auth::*;
 pub use automation::*;
 pub use dirent::*;
+pub use knowledge::*;
 pub use models::*;
 pub use project::*;
 pub use session::*;

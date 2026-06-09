@@ -101,10 +101,10 @@
       "pdf_engine_success": "PDF 엔진이 변경되었습니다"
     },
     "pdf_engine": {
-      "heading": "PDF 읽기 엔진",
-      "help": "knowledge 폴더의 PDF를 읽는 방식. Kreuzberg는 빠르고, Docling은 더 꼼꼼하지만 시간이 더 걸립니다.",
+      "heading": "PDF 처리 방식",
+      "help": "knowledge 폴더의 PDF에서 텍스트를 추출하는 방식입니다. Kreuzberg는 빠르고, Docling은 표·레이아웃까지 더 정확히 읽지만 시간이 더 걸립니다.",
       "option_kreuzberg": "Kreuzberg (빠름)",
-      "option_docling": "Docling (느리지만 꼼꼼함)"
+      "option_docling": "Docling (정확·느림)"
     }
   },
   "chains_editor": {

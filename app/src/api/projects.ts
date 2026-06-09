@@ -44,6 +44,19 @@ export async function updateProject(
   return toProject(raw);
 }
 
+export interface KnowledgeStatus {
+  indexing: boolean;
+  documentCount: number;
+}
+
+/** Knowledge-corpus indexing status — whether a background resync is in flight. */
+export async function getKnowledgeStatus(projectRef: string): Promise<KnowledgeStatus> {
+  const raw = await request<{ indexing: boolean; document_count: number }>(
+    `/projects/${projectRef}/knowledge/status`,
+  );
+  return { indexing: raw.indexing, documentCount: raw.document_count };
+}
+
 export async function deleteProject(projectRef: string): Promise<void> {
   await request(`/projects/${projectRef}`, { method: 'DELETE' });
 }

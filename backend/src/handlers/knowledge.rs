@@ -5,11 +5,22 @@ use std::{
 };
 
 use agent_k::knowledge_base::{FileType, PdfEngine};
+use axum::{
+    Extension, Json,
+    extract::{Path, State},
+};
+use schemars::JsonSchema;
+use serde::Serialize;
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::{
+    auth::AuthUser,
+    error::{ApiResult, AppError},
+    state::AppState,
+};
 
 use super::dirent::{DirentScope, scope_root};
+use super::project::resolve_project_id;
 
 /// Scope-relative prefix of the knowledge corpus folder under `shared/`.
 pub(crate) const KNOWLEDGE_PREFIX: &str = "knowledge";
@@ -53,9 +64,11 @@ fn indexable_filetype(name: &str) -> Option<FileType> {
 /// `shared/knowledge/` folder: ingest new/changed files, purge documents whose
 /// source is gone, then compact. Errors are logged, not propagated (background).
 pub(crate) async fn resync_knowledge(state: Arc<AppState>, project_id: Uuid) {
+    state.begin_indexing(project_id);
     if let Err(e) = resync_inner(&state, project_id).await {
         tracing::warn!(%project_id, "knowledge resync failed: {e}");
     }
+    state.end_indexing(project_id);
 }
 
 async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), String> {
@@ -134,4 +147,35 @@ pub(crate) async fn ensure_knowledge_folder(state: &AppState, project_id: Uuid) 
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         tracing::warn!(%project_id, "failed to create knowledge folder: {e}");
     }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct KnowledgeStatusResponse {
+    /// A background resync is in flight (files were just uploaded/changed).
+    pub indexing: bool,
+    /// Documents currently in the searchable corpus.
+    pub document_count: u32,
+}
+
+/// GET /projects/{project_ref}/knowledge/status — membership-gated. Lets the
+/// Files UI show "indexing..." until the background resync settles.
+pub async fn knowledge_status(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(project_ref): Path<String>,
+) -> ApiResult<Json<KnowledgeStatusResponse>> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
+    let is_member = state
+        .repository
+        .user_in_project(auth_user.id, project_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !is_member {
+        return Err(AppError::forbidden("not a member of this project"));
+    }
+    let document_count = state.store_for(project_id).await?.read().await.count();
+    Ok(Json(KnowledgeStatusResponse {
+        indexing: state.is_indexing(project_id),
+        document_count,
+    }))
 }

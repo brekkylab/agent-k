@@ -28,6 +28,8 @@ pub struct AppState {
     /// on-disk store under `data_root/projects/{project_id}/.speedwagon`,
     /// opened lazily on first access via [`AppState::store_for`].
     document_stores: DashMap<Uuid, SharedStore>,
+    /// In-flight knowledge resync count per project (>0 means indexing).
+    knowledge_indexing: DashMap<Uuid, u32>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -54,11 +56,29 @@ impl AppState {
             active_agent_runs: DashMap::new(),
             repository,
             document_stores: DashMap::new(),
+            knowledge_indexing: DashMap::new(),
             jwt,
             data_root,
             max_upload_bytes,
             ws_tx,
         }
+    }
+
+    /// Mark a knowledge resync as started for `project_id`.
+    pub fn begin_indexing(&self, project_id: Uuid) {
+        *self.knowledge_indexing.entry(project_id).or_insert(0) += 1;
+    }
+
+    /// Mark a knowledge resync as finished for `project_id`.
+    pub fn end_indexing(&self, project_id: Uuid) {
+        if let Some(mut n) = self.knowledge_indexing.get_mut(&project_id) {
+            *n = n.saturating_sub(1);
+        }
+    }
+
+    /// Whether a knowledge resync is currently in flight for `project_id`.
+    pub fn is_indexing(&self, project_id: Uuid) -> bool {
+        self.knowledge_indexing.get(&project_id).map(|n| *n > 0).unwrap_or(false)
     }
 
     /// Return the document corpus [`SharedStore`] for `project_id`, opening it
