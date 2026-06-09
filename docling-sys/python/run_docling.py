@@ -29,12 +29,18 @@ DEFAULT_OPTIONS = {
 def build_converter(opts: dict):
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import (
-        PdfPipelineOptions,
+        ThreadedPdfPipelineOptions,
         TableStructureOptions,
     )
     from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.pipeline.threaded_standard_pdf_pipeline import (
+        ThreadedStandardPdfPipeline,
+    )
 
-    pipeline_options = PdfPipelineOptions(
+    # Threaded pipeline (docling >= 2.96, docling-parse v6): pages flow through
+    # concurrent stages (parse/layout/table) connected by bounded queues, so
+    # multi-page PDFs convert faster than the sequential StandardPdfPipeline.
+    pipeline_options = ThreadedPdfPipelineOptions(
         do_ocr=opts["do_ocr"],
         do_table_structure=opts["do_table_structure"],
         table_structure_options=TableStructureOptions(
@@ -55,7 +61,10 @@ def build_converter(opts: dict):
     )
     return DocumentConverter(
         format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_cls=ThreadedStandardPdfPipeline,
+                pipeline_options=pipeline_options,
+            ),
         }
     )
 
