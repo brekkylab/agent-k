@@ -79,5 +79,22 @@
   },
   "errors": {
     "unknown": "Something went wrong. Please try again."
+  },
+  "preview": {
+    "loading": "Loading…",
+    "download": "Download",
+    "unsupported_title": "Preview not available for this format",
+    "unsupported_body": "Download the file to view it.",
+    "too_large_title": "File too large",
+    "too_large_body": "This file is too large to preview. Download to view.",
+    "error_title": "Couldn't load preview",
+    "error_body": "Try again or download to view.",
+    "close": "Close",
+    "zoom": "Zoom",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "zoom_reset": "Reset zoom",
+    "table_truncated": "Large table — showing the first {{n}} of {{total}} rows",
+    "table_empty": "No rows to display"
   }
 }

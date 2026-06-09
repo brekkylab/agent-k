@@ -46,7 +46,8 @@
   "artifact": {
     "download": "Download",
     "copy_to_shared": "Copy to shared folder",
-    "delete": "Delete"
+    "delete": "Delete",
+    "preview": "Preview"
   },
   "delete_artifact": {
     "title": "Delete file?",

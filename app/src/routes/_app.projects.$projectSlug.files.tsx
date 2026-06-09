@@ -39,6 +39,7 @@ import { FolderPickerDialog } from '@/components/FolderPickerDialog';
 import { NewFolderDialog } from '@/components/NewFolderDialog';
 import { RenameDialog } from '@/components/RenameDialog';
 import { EmptyState, IconPocket } from '@/components/uiPrimitives';
+import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { useToastStore } from '@/components/Toast';
 import { ApiError } from '@/api/client';
 import {
@@ -251,6 +252,7 @@ function FilesPage() {
   const [pendingMove, setPendingMove] = useState<BackendDirent[] | null>(null);
   const [pendingCopy, setPendingCopy] = useState<BackendDirent[] | null>(null);
   const [openMenuPath, setOpenMenuPath] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   // Disambiguates "rename via dialog" from generic moves so we can show the
   // right toast copy ("the name was changed" vs "moved").
@@ -336,8 +338,10 @@ function FilesPage() {
 
   const openEntry = useCallback((entry: BackendDirent) => {
     if (entry.kind === 'dir') setCurrentPath(entry.path.split('/').filter(Boolean));
-    else downloadMutation.mutate(entry);
-  }, [downloadMutation]);
+    // scope is a fresh object literal each render so depending on it would recreate
+    // the callback every render. projectId is stable; build the shared-scope global path directly.
+    else setPreviewPath(`projects/${projectId}/shared/${entry.path}`);
+  }, [projectId]);
 
   const clearSelection = useCallback(() => {
     setSelectedPaths(new Set());
@@ -740,16 +744,23 @@ function FilesPage() {
                 })}
               </nav>
             )}
-            <div className="cw-file-pane-tools">
-              <label className="cw-files-search">
-                <Icon name="search" size={12} />
-                <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('files:ui.search_placeholder')} />
-              </label>
-              <div className="cw-view-toggle" role="tablist" aria-label={t('files:ui.view_toggle_label')}>
-                <button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'is-active' : ''} onClick={() => setViewMode('list')} aria-label={t('files:ui.list_view')}><Icon name="list" size={14} /></button>
-                <button type="button" role="tab" aria-selected={viewMode === 'grid'} className={viewMode === 'grid' ? 'is-active' : ''} onClick={() => setViewMode('grid')} aria-label={t('files:ui.grid_view')}><Icon name="grid" size={14} /></button>
+            {/* Hide search/view-toggle while in bulk-select mode. The bulk toolbar
+                replaces the breadcrumb on the left; keeping the tools on the right
+                made the flex header wrap to a 2nd row on narrow panes, shifting the
+                file list down between the two clicks of a double-click and opening
+                the wrong file. One-row header in both states keeps double-click on target. */}
+            {selectedPaths.size === 0 && (
+              <div className="cw-file-pane-tools">
+                <label className="cw-files-search">
+                  <Icon name="search" size={12} />
+                  <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('files:ui.search_placeholder')} />
+                </label>
+                <div className="cw-view-toggle" role="tablist" aria-label={t('files:ui.view_toggle_label')}>
+                  <button type="button" role="tab" aria-selected={viewMode === 'list'} className={viewMode === 'list' ? 'is-active' : ''} onClick={() => setViewMode('list')} aria-label={t('files:ui.list_view')}><Icon name="list" size={14} /></button>
+                  <button type="button" role="tab" aria-selected={viewMode === 'grid'} className={viewMode === 'grid' ? 'is-active' : ''} onClick={() => setViewMode('grid')} aria-label={t('files:ui.grid_view')}><Icon name="grid" size={14} /></button>
+                </div>
               </div>
-            </div>
+            )}
           </header>
 
           <div
@@ -911,6 +922,10 @@ function FilesPage() {
           onClose={() => { if (!copyMutation.isPending) setPendingCopy(null); }}
         />
       )}
+
+      {previewPath && (
+        <FilePreviewModal globalPath={previewPath} onClose={() => setPreviewPath(null)} />
+      )}
     </section>
   );
 }
@@ -1038,12 +1053,13 @@ function folderSubtitle(entry: BackendDirent, entries: BackendDirent[], t: TFunc
 }
 
 function RowMenu({
-  entry, menuOpen, onMenuToggle, onDownload, onRename, onMove, onCopy, onDelete,
+  entry, menuOpen, onMenuToggle, onDownload, onPreview, onRename, onMove, onCopy, onDelete,
 }: {
   entry: BackendDirent;
   menuOpen: boolean;
   onMenuToggle: (path: string | null) => void;
   onDownload: () => void;
+  onPreview: () => void;
   onRename: () => void;
   onMove: () => void;
   onCopy: () => void;
@@ -1067,6 +1083,13 @@ function RowMenu({
           role="menu"
           onClick={(e) => e.stopPropagation()}
         >
+          {entry.kind === 'file' && (
+            <li role="menuitem">
+              <button type="button" onClick={() => { onMenuToggle(null); onPreview(); }}>
+                <Icon name="eye" size={13} /> {t('ui.preview')}
+              </button>
+            </li>
+          )}
           {entry.kind === 'file' && (
             <li role="menuitem">
               <button type="button" onClick={() => { onMenuToggle(null); onDownload(); }}>
@@ -1136,6 +1159,7 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
         menuOpen={menuOpen}
         onMenuToggle={onMenuToggle}
         onDownload={() => onDownload(entry)}
+        onPreview={() => onOpen(entry)}
         onRename={() => onRename(entry)}
         onMove={() => onMove(entry)}
         onCopy={() => onCopy(entry)}
@@ -1179,6 +1203,7 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
         menuOpen={menuOpen}
         onMenuToggle={onMenuToggle}
         onDownload={() => onDownload(entry)}
+        onPreview={() => onOpen(entry)}
         onRename={() => onRename(entry)}
         onMove={() => onMove(entry)}
         onCopy={() => onCopy(entry)}
