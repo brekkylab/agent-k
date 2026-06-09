@@ -304,6 +304,21 @@ async fn resolve_session_id(state: &Arc<AppState>, session_ref: &str) -> ApiResu
     }
 }
 
+/// Hard ceiling on attachments per message — a server-side backstop for the
+/// frontend's softer limit. Bounds the agent prompt, DB row, and fs stats even
+/// if a crafted request bypasses the client.
+const MAX_ATTACHMENTS: usize = 30;
+
+/// Reject a message that attaches more than [`MAX_ATTACHMENTS`] files.
+pub fn ensure_attachment_count(count: usize) -> ApiResult<()> {
+    if count > MAX_ATTACHMENTS {
+        return Err(AppError::bad_request(format!(
+            "too many attachments: {count} (max {MAX_ATTACHMENTS})"
+        )));
+    }
+    Ok(())
+}
+
 async fn validate_attachments(
     state: &Arc<AppState>,
     auth_user: &AuthUser,
@@ -311,6 +326,7 @@ async fn validate_attachments(
     project_id: Uuid,
     attachments: &[String],
 ) -> ApiResult<()> {
+    ensure_attachment_count(attachments.len())?;
     for path in attachments {
         let parsed = parse_dirent_path(path)
             .map_err(|_| AppError::bad_request(format!("invalid attachment path: {path}")))?;
