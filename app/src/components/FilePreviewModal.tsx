@@ -14,10 +14,14 @@ import { CodeView } from './preview/CodeView';
 import { TableView } from './preview/TableView';
 import { TextView } from './preview/TextView';
 
-const MAX_PREVIEW_BYTES = 20 * 1024 * 1024;
-// Decoding text on the main thread blocks the UI, so cap text-family previews
-// (markdown/code/text) well below the media cap.
-const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+// These caps bound client-side RENDER cost, not storage: we fetch the original
+// into the browser (unlike Drive/Dropbox/Slack, which preview server-made
+// derivatives). Image/PDF/HTML decode off the main thread (objectURL →
+// browser / pdf.js / sandboxed iframe), so they get headroom; text-family
+// previews decode + syntax-highlight synchronously on the main thread, so they
+// stay tighter. (PDF Range streaming would lift its cap entirely — separate task.)
+const MAX_PREVIEW_BYTES = 50 * 1024 * 1024; // image / html / pdf
+const MAX_TEXT_BYTES = 5 * 1024 * 1024; // markdown / code / table / text
 
 interface Props {
   globalPath: string;
