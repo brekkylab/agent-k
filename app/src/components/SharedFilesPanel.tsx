@@ -131,7 +131,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
             >
               <span className="cw-artifact-name">
                 <Icon name="folder" size={16} />
-                {row.name}
+                <span className="cw-file-label">{row.name}</span>
               </span>
               <Icon name="chevron-right" size={13} />
             </button>
@@ -146,7 +146,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
             >
               <span className="cw-artifact-name">
                 <FileTypeIcon filename={row.name} size={16} />
-                {row.name}
+                <span className="cw-file-label">{row.name}</span>
               </span>
               <span className="cw-artifact-size">{row.bytes != null ? formatBytes(row.bytes) : ''}</span>
               <div className="cw-artifact-menu-wrap">

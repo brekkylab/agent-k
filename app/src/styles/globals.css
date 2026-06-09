@@ -397,6 +397,10 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-artifact-row { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 4px; border-radius: var(--cw-radius-sm); font-size: 12.5px; transition: background 100ms; }
 .cw-artifact-row:hover { background: var(--cw-bg-muted); }
 .cw-artifact-name { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cw-fg-1); }
+/* The icon stays fixed; the label takes the remaining width and ellipsizes.
+   (text-overflow needs a real element — a bare text node in the flex row won't clip.) */
+.cw-artifact-name > svg, .cw-artifact-name > img { flex-shrink: 0; }
+.cw-file-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-artifact-size { flex-shrink: 0; font-family: var(--cw-font-mono); font-size: 10.5px; color: var(--cw-fg-4); }
 .cw-artifact-menu-wrap { flex-shrink: 0; position: relative; }
 .cw-artifact-menu-wrap > button { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-fg-3); cursor: pointer; opacity: 0; transition: opacity 100ms, background 100ms; }
