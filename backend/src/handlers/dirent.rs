@@ -1038,8 +1038,8 @@ pub async fn dirent_batch_op(
                 ));
             }
             for src_global in &sources {
-                let src_tail = match parse_dirent_path(src_global) {
-                    Ok(p) => p.tail.to_string_lossy().to_string(),
+                let (src_scope, src_tail) = match parse_dirent_path(src_global) {
+                    Ok(p) => (p.scope, p.tail.to_string_lossy().to_string()),
                     Err(_) => {
                         failed.push(FailedFile {
                             path: src_global.clone(),
@@ -1052,6 +1052,15 @@ pub async fn dirent_batch_op(
                     failed.push(FailedFile {
                         path: src_global.clone(),
                         error: "cannot move a scope root".into(),
+                    });
+                    continue;
+                }
+                // The fixed knowledge folder must not be moved or renamed; it is
+                // the corpus root and the indexer depends on its path.
+                if super::knowledge::is_knowledge_root(&src_scope, &src_tail) {
+                    failed.push(FailedFile {
+                        path: src_global.clone(),
+                        error: "the knowledge folder cannot be moved or renamed".into(),
                     });
                     continue;
                 }
@@ -1090,6 +1099,15 @@ pub async fn dirent_batch_op(
                     failed.push(FailedFile {
                         path: src_global.clone(),
                         error: "cannot copy a scope root".into(),
+                    });
+                    continue;
+                }
+                // Copying the knowledge folder would create a second folder with
+                // the same name/contents and confuse the single-corpus contract.
+                if super::knowledge::is_knowledge_root(&src_parsed.scope, &src_tail) {
+                    failed.push(FailedFile {
+                        path: src_global.clone(),
+                        error: "the knowledge folder cannot be copied".into(),
                     });
                     continue;
                 }

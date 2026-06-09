@@ -64,11 +64,12 @@ fn indexable_filetype(name: &str) -> Option<FileType> {
 /// `shared/knowledge/` folder: ingest new/changed files, purge documents whose
 /// source is gone, then compact. Errors are logged, not propagated (background).
 pub(crate) async fn resync_knowledge(state: Arc<AppState>, project_id: Uuid) {
-    state.begin_indexing(project_id);
+    // Held for the whole resync; its Drop decrements the indexing count on any
+    // exit path (return, error, or panic), so the UI never sticks on "indexing".
+    let _guard = state.begin_indexing(project_id);
     if let Err(e) = resync_inner(&state, project_id).await {
         tracing::warn!(%project_id, "knowledge resync failed: {e}");
     }
-    state.end_indexing(project_id);
 }
 
 async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), String> {
@@ -94,8 +95,14 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             if let Some(filetype) = indexable_filetype(&name) {
-                let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
-                items.push((bytes, filetype));
+                // Skip a file we can't read rather than aborting the whole
+                // resync — otherwise one unreadable file (transient I/O, a race
+                // with a concurrent delete) would block the purge of files that
+                // really are gone, leaving stale entries in the corpus.
+                match tokio::fs::read(&path).await {
+                    Ok(bytes) => items.push((bytes, filetype)),
+                    Err(e) => tracing::warn!(%project_id, ?path, "skipping unreadable knowledge file: {e}"),
+                }
             }
         }
     }
@@ -112,6 +119,12 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
         .ingest_many(items, pdf_engine)
         .await
         .map_err(|e| e.to_string())?;
+    // Surface per-file ingest failures (a bad PDF, a parse error). Without this
+    // they'd be silently dropped and the file would just be absent from the
+    // corpus with no trace.
+    for f in &result.failed {
+        tracing::warn!(%project_id, index = f.index, "knowledge file failed to index: {}", f.error);
+    }
     let desired: HashSet<Uuid> = result.succeeded.into_iter().collect();
 
     let stale: Vec<Uuid> = store
@@ -153,8 +166,10 @@ pub(crate) async fn ensure_knowledge_folder(state: &AppState, project_id: Uuid) 
 pub struct KnowledgeStatusResponse {
     /// A background resync is in flight (files were just uploaded/changed).
     pub indexing: bool,
-    /// Documents currently in the searchable corpus.
-    pub document_count: u32,
+    /// Documents currently in the searchable corpus. `None` when the store is
+    /// momentarily locked by an in-flight resync (the count is unknown right
+    /// then; `indexing` will be true).
+    pub document_count: Option<u32>,
 }
 
 /// GET /projects/{project_ref}/knowledge/status — membership-gated. Lets the
@@ -173,7 +188,11 @@ pub async fn knowledge_status(
     if !is_member {
         return Err(AppError::forbidden("not a member of this project"));
     }
-    let document_count = state.store_for(project_id).await?.read().await.count();
+    // Don't block on the store write lock: a resync holds it across PDF
+    // parsing, and the status poll must stay responsive. If the lock is held,
+    // report indexing with the count omitted rather than stalling the request.
+    let store = state.store_for(project_id).await?;
+    let document_count = store.try_read().ok().map(|s| s.count());
     Ok(Json(KnowledgeStatusResponse {
         indexing: state.is_indexing(project_id),
         document_count,

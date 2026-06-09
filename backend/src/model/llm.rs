@@ -250,27 +250,44 @@ impl ProjectChains {
     }
 
     /// Effective chain for an agent: the project override, else the default.
+    /// Models the agent forbids are dropped (defence in depth — `validate_chains`
+    /// rejects them at storage time, but an override stored before that check,
+    /// or by another path, must still not resolve to a forbidden model). If the
+    /// override is left empty after filtering, fall back to the built-in chain.
     pub fn chain_for(&self, agent: AgentType) -> Vec<String> {
+        let default = || agent.chain().iter().map(|s| s.to_string()).collect::<Vec<_>>();
         match self.by_agent.get(&agent) {
-            Some(ids) => ids.clone(),
-            None => agent.chain().iter().map(|s| s.to_string()).collect(),
+            Some(ids) => {
+                let allowed: Vec<String> =
+                    ids.iter().filter(|id| agent.allows_model(id)).cloned().collect();
+                if allowed.is_empty() { default() } else { allowed }
+            }
+            None => default(),
         }
     }
 }
 
 /// Validate project chain overrides for storage: known agent_type keys, non-empty
-/// lists of catalogued model ids. Provider availability is NOT required.
+/// lists of catalogued model ids that the agent is allowed to use. Provider
+/// availability is NOT required.
 pub fn validate_chains(chains: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
     for (key, ids) in chains {
-        if AgentType::from_str(key).is_none() {
+        let Some(agent) = AgentType::from_str(key) else {
             return Err(format!("unknown agent_type: {key}"));
-        }
+        };
         if ids.is_empty() {
             return Err(format!("chain for '{key}' must not be empty"));
         }
         for id in ids {
             if catalog_entry(id).is_none() {
                 return Err(format!("unknown model in '{key}' chain: {id}"));
+            }
+            // Enforce per-agent model restrictions at storage time so a chain
+            // override can't smuggle in a model the agent forbids (e.g. a
+            // non-2.5 Gemini for Speedwagon), which would otherwise bypass the
+            // pin-level filter at resolution.
+            if !agent.allows_model(id) {
+                return Err(format!("model '{id}' is not allowed for agent '{key}'"));
             }
         }
     }
@@ -429,6 +446,43 @@ mod tests {
         for m in CATALOG {
             assert!(AgentType::Coworker.allows_model(m.id), "coworker blocked {}", m.id);
         }
+    }
+
+    #[test]
+    fn validate_chains_rejects_disallowed_model_for_agent() {
+        // A non-2.5 Gemini is catalogued but forbidden for Speedwagon, so a
+        // chain override carrying it must be rejected at storage time.
+        let mut chains = BTreeMap::new();
+        chains.insert("speedwagon".to_string(), vec!["google/gemini-3-flash".to_string()]);
+        assert!(validate_chains(&chains).is_err());
+
+        // The same model is fine for Coworker.
+        let mut ok = BTreeMap::new();
+        ok.insert("coworker".to_string(), vec!["google/gemini-3-flash".to_string()]);
+        assert!(validate_chains(&ok).is_ok());
+
+        // 2.5 Flash is allowed for Speedwagon.
+        let mut ok2 = BTreeMap::new();
+        ok2.insert("speedwagon".to_string(), vec!["google/gemini-2.5-flash".to_string()]);
+        assert!(validate_chains(&ok2).is_ok());
+    }
+
+    #[test]
+    fn chain_for_filters_disallowed_models() {
+        // Defence in depth: even if a forbidden model is stored in an override,
+        // chain_for drops it; and if that empties the override, it falls back to
+        // the built-in chain rather than returning an empty (or forbidden) one.
+        let json = r#"{"speedwagon":["google/gemini-3-flash","openai/gpt-5.4-mini"]}"#;
+        let chains = ProjectChains::parse(Some(json));
+        let resolved = chains.chain_for(AgentType::Speedwagon);
+        assert!(!resolved.iter().any(|m| m == "google/gemini-3-flash"));
+        assert!(resolved.iter().any(|m| m == "openai/gpt-5.4-mini"));
+
+        let only_bad = r#"{"speedwagon":["google/gemini-3-flash"]}"#;
+        let chains = ProjectChains::parse(Some(only_bad));
+        let resolved = chains.chain_for(AgentType::Speedwagon);
+        // Empty after filtering → built-in Speedwagon chain (which uses 2.5).
+        assert_eq!(resolved, AgentType::Speedwagon.chain());
     }
 
     #[test]

@@ -38,6 +38,22 @@ pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     format!("session-{}", &s[..12])
 }
 
+/// Open the project's corpus store for use as a sub-agent, logging (not
+/// swallowing) a failure. A `None` here means Coworker/Deep Research run without
+/// corpus access; logging makes that visible instead of a silent capability loss.
+async fn corpus_store_or_log(
+    state: &AppState,
+    project_id: Uuid,
+) -> Option<agent_k::knowledge_base::SharedStore> {
+    match state.store_for(project_id).await {
+        Ok(store) => Some(store),
+        Err((status, _)) => {
+            tracing::warn!(%project_id, "corpus store unavailable ({status}); sub-agent will run without corpus access");
+            None
+        }
+    }
+}
+
 fn session_root(state: &AppState, project_id: Uuid, session_id: Uuid) -> std::path::PathBuf {
     state
         .data_root
@@ -100,8 +116,9 @@ pub async fn build_session_agent(
     let agent = match agent_type {
         AgentType::DeepResearch => {
             // Attach a Speedwagon sub-agent when the project's corpus store
-            // opens; on failure, run without it rather than failing the session.
-            let corpus = state.store_for(project_id).await.ok();
+            // opens; on failure, run without it rather than failing the session
+            // (but log it — a broken store silently drops corpus access).
+            let corpus = corpus_store_or_log(&*state, project_id).await;
             agent_k::agents::get_deep_research_agent(
                 TOP_LEVEL_AGENT_NAME,
                 &model,
@@ -128,12 +145,13 @@ pub async fn build_session_agent(
         // Coworker runs the sandboxed coworker agent over the session's files.
         AgentType::Coworker => {
             // Attach a Speedwagon sub-agent when the project's corpus store
-            // opens; on failure, run without it rather than failing the session.
+            // opens; on failure, run without it rather than failing the session
+            // (but log it — a broken store silently drops corpus access).
             let opts = agent_k::agents::CoworkerSandboxOptions {
                 sandbox_name: Some(sandbox_name_for(&session_id)),
                 persist: true,
                 with_skill: true,
-                corpus_store: state.store_for(project_id).await.ok(),
+                corpus_store: corpus_store_or_log(&*state, project_id).await,
             };
             agent_k::agents::get_coworker_agent_with_opts(
                 TOP_LEVEL_AGENT_NAME,

@@ -29,7 +29,9 @@ pub struct AppState {
     /// opened lazily on first access via [`AppState::store_for`].
     document_stores: DashMap<Uuid, SharedStore>,
     /// In-flight knowledge resync count per project (>0 means indexing).
-    knowledge_indexing: DashMap<Uuid, u32>,
+    /// `Arc` so an [`IndexingGuard`] can decrement it on drop, surviving early
+    /// returns and panics in the background resync task.
+    knowledge_indexing: Arc<DashMap<Uuid, u32>>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -56,7 +58,7 @@ impl AppState {
             active_agent_runs: DashMap::new(),
             repository,
             document_stores: DashMap::new(),
-            knowledge_indexing: DashMap::new(),
+            knowledge_indexing: Arc::new(DashMap::new()),
             jwt,
             data_root,
             max_upload_bytes,
@@ -64,15 +66,15 @@ impl AppState {
         }
     }
 
-    /// Mark a knowledge resync as started for `project_id`.
-    pub fn begin_indexing(&self, project_id: Uuid) {
+    /// Mark a knowledge resync as in flight for `project_id`, returning a guard
+    /// that decrements the count when dropped. Using a guard (rather than a
+    /// paired `end_indexing` call) keeps the count correct even if the resync
+    /// returns early or panics, so the UI never gets stuck showing "indexing".
+    pub fn begin_indexing(&self, project_id: Uuid) -> IndexingGuard {
         *self.knowledge_indexing.entry(project_id).or_insert(0) += 1;
-    }
-
-    /// Mark a knowledge resync as finished for `project_id`.
-    pub fn end_indexing(&self, project_id: Uuid) {
-        if let Some(mut n) = self.knowledge_indexing.get_mut(&project_id) {
-            *n = n.saturating_sub(1);
+        IndexingGuard {
+            counts: self.knowledge_indexing.clone(),
+            project_id,
         }
     }
 
@@ -107,6 +109,14 @@ impl AppState {
             .entry(project_id)
             .or_insert(shared)
             .clone())
+    }
+
+    /// Drop the cached corpus store handle for `project_id`, if any. The next
+    /// [`store_for`](Self::store_for) reopens it from disk. Used when the corpus
+    /// must be rebuilt (e.g. the project's PDF engine changed and existing
+    /// derivations are now stale).
+    pub fn evict_store(&self, project_id: Uuid) {
+        self.document_stores.remove(&project_id);
     }
 
     pub fn insert_agent(&self, id: Uuid, agent: Agent) {
@@ -174,5 +184,21 @@ impl AppState {
     /// Failing to call this leaks the in-memory run buffer indefinitely.
     pub fn end_run(&self, session_id: &Uuid) {
         self.active_agent_runs.remove(session_id);
+    }
+}
+
+/// Decrements a project's knowledge-indexing count when dropped. Held for the
+/// duration of a resync so the count is released on every exit path (success,
+/// early return, or panic). Obtained from [`AppState::begin_indexing`].
+pub struct IndexingGuard {
+    counts: Arc<DashMap<Uuid, u32>>,
+    project_id: Uuid,
+}
+
+impl Drop for IndexingGuard {
+    fn drop(&mut self) {
+        if let Some(mut n) = self.counts.get_mut(&self.project_id) {
+            *n = n.saturating_sub(1);
+        }
     }
 }

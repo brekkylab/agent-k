@@ -259,6 +259,23 @@ pub async fn update_project(
         }
     };
 
+    // Did the PDF engine actually change? If so the existing corpus was parsed
+    // by the old engine and is stale — it must be rebuilt. Compare against the
+    // current stored value before the update.
+    let engine_changed = match &new_pdf_engine {
+        None => false,
+        Some(new) => {
+            let current = state
+                .repository
+                .get_project(project_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|p| p.pdf_engine);
+            current.as_deref() != Some(new.as_str())
+        }
+    };
+
     let updated = state
         .repository
         .update_project(
@@ -274,6 +291,24 @@ pub async fn update_project(
             RepositoryError::UniqueViolation(_) => AppError::conflict("slug already in use"),
             other => AppError::internal(other.to_string()),
         })?;
+
+    // Rebuild the corpus under the new engine: drop the cached store, delete the
+    // derived corpus/index on disk (originals stay in the knowledge folder), and
+    // trigger a resync that re-parses every PDF with the new engine.
+    if engine_changed {
+        state.evict_store(project_id);
+        let speedwagon_dir = state
+            .data_root
+            .join("projects")
+            .join(project_id.to_string())
+            .join(".speedwagon");
+        if let Err(e) = tokio::fs::remove_dir_all(&speedwagon_dir).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(%project_id, "failed to clear corpus on engine change: {e}");
+            }
+        }
+        super::knowledge::maybe_trigger_resync(&state, project_id, true);
+    }
 
     Ok(Json(ProjectResponse::from(updated)))
 }

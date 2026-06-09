@@ -202,3 +202,47 @@ async fn deleting_a_subfolder_purges_its_documents() {
     assert_eq!(del.0, StatusCode::NO_CONTENT);
     assert_eq!(wait_for_count(&state, pid, 0).await, 0, "subfolder docs purged");
 }
+
+#[tokio::test]
+async fn knowledge_folder_cannot_be_moved_or_renamed() {
+    let (app, _repo, _state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+    let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
+
+    let body = serde_json::json!({
+        "op": "move",
+        "sources": [format!("projects/{pid}/shared/knowledge")],
+        "destination": format!("projects/{pid}/shared"),
+        "new_name": "notes",
+    });
+    let (status, json) = authed(&app, "PATCH", "/dirents", &token, Some(body)).await;
+    assert_eq!(status, StatusCode::OK);
+    // Rejected per-item (the batch returns 200 but the source lands in `failed`,
+    // not `succeeded`), so the folder is never moved or renamed.
+    let failed = json["failed"].as_array().expect("failed array");
+    assert_eq!(failed.len(), 1, "knowledge root must be rejected: {json}");
+    assert!(json["succeeded"].as_array().map(|a| a.is_empty()).unwrap_or(false));
+}
+
+#[tokio::test]
+async fn knowledge_folder_cannot_be_copied() {
+    let (app, _repo, _state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+    let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
+
+    let body = serde_json::json!({
+        "op": "copy",
+        "sources": [format!("projects/{pid}/shared/knowledge")],
+        "destination": format!("projects/{pid}/shared"),
+    });
+    let (status, json) = authed(&app, "PATCH", "/dirents", &token, Some(body)).await;
+    assert_eq!(status, StatusCode::OK);
+    let failed = json["failed"].as_array().expect("failed array");
+    assert_eq!(failed.len(), 1, "copying knowledge root must be rejected: {json}");
+}
