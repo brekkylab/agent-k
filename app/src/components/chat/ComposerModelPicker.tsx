@@ -3,7 +3,8 @@
 // headers — never selected directly. The first option is "recommended"
 // (value = null), which resolves dynamically per agent type at agent-build
 // time. Models in the active agent's recommendation chain are marked with ★;
-// models whose provider has no API key on this server are disabled.
+// models whose provider has no API key, and models the active agent does not
+// permit (e.g. non-2.5 Gemini for Speedwagon), are disabled.
 
 import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
@@ -33,6 +34,9 @@ export function ComposerModelPicker({
   const { t } = useTranslation('automation');
   const rec = recommendationFor(catalog, agentType);
   const recommendedSet = new Set(rec?.chain ?? []);
+  // Models this agent permits. Absent `allowed` (older backend) → unrestricted.
+  const allowedSet = rec?.allowed ? new Set(rec.allowed) : null;
+  const isAllowed = (id: string) => !allowedSet || allowedSet.has(id);
   // Name the resolved model in the "recommended" label only when it can run;
   // otherwise stay generic.
   const resolvedAvailable = rec
@@ -56,15 +60,20 @@ export function ComposerModelPicker({
       if (models.length === 0) return [];
       return [{
         label: t(`tier.${tier}`),
-        options: models.map((model) => ({
-          value: model.id,
-          label: model.label + (
-            !model.available
-              ? t('model_picker.unavailable_suffix')
-              : recommendedSet.has(model.id) ? ' ★' : ''
-          ),
-          disabled: !model.available,
-        })),
+        options: models.map((model) => {
+          const restricted = !isAllowed(model.id);
+          return {
+            value: model.id,
+            label: model.label + (
+              !model.available
+                ? t('model_picker.unavailable_suffix')
+                : restricted
+                  ? t('model_picker.restricted_suffix')
+                  : recommendedSet.has(model.id) ? ' ★' : ''
+            ),
+            disabled: !model.available || restricted,
+          };
+        }),
       }];
     }),
   ];

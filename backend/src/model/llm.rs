@@ -65,15 +65,36 @@ impl AgentType {
         AgentType::Buddy,
     ];
 
+    /// Whether `model_id` may be selected for this agent (a product-level
+    /// restriction, separate from provider availability). Speedwagon allows
+    /// only `gemini-2.5-flash` among the Gemini family; others allow all.
+    pub fn allows_model(self, model_id: &str) -> bool {
+        match self {
+            AgentType::Speedwagon => {
+                !model_id.starts_with("google/gemini-")
+                    || model_id == "google/gemini-2.5-flash"
+            }
+            _ => true,
+        }
+    }
+
     /// Ordered, provider-diverse recommendation chain. The last entry is the
     /// terminal default (returned even if its provider is unavailable).
     pub fn chain(self) -> &'static [&'static str] {
         match self {
-            // Coworker + Speedwagon (RAG) share a balanced "standard" chain.
-            AgentType::Coworker | AgentType::Speedwagon => &[
+            // Coworker: a balanced "standard" general-assistant chain.
+            AgentType::Coworker => &[
                 "openai/gpt-5.4-mini",
                 "anthropic/claude-sonnet-4-6",
                 "google/gemini-3-flash",
+                "moonshotai/kimi-k2.6",
+            ],
+            // Speedwagon (corpus QA): its own chain, tuned independently of
+            // Coworker. The Gemini slot is 2.5 Flash rather than 3 Flash.
+            AgentType::Speedwagon => &[
+                "openai/gpt-5.4-mini",
+                "anthropic/claude-sonnet-4-6",
+                "google/gemini-2.5-flash",
                 "moonshotai/kimi-k2.6",
             ],
             AgentType::DeepResearch => &[
@@ -117,6 +138,11 @@ pub const CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "google/gemini-3.1-flash-lite",
         label: "Gemini 3.1 Flash-Lite",
+        tier: ModelTier::Light,
+    },
+    ModelInfo {
+        id: "google/gemini-2.5-flash",
+        label: "Gemini 2.5 Flash",
         tier: ModelTier::Light,
     },
     // ── standard ─────────────────────────────────────────────────────────────
@@ -271,6 +297,9 @@ pub struct AgentRecommendation {
     /// The model that resolution would pick right now given provider
     /// availability — the value the composer pre-selects for "recommended".
     pub resolved_model: String,
+    /// Catalog ids this agent permits (see [`AgentType::allows_model`]). The
+    /// picker disables every catalog model not in this list.
+    pub allowed: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -300,6 +329,11 @@ pub fn catalog_response(chains: &ProjectChains) -> ModelCatalogResponse {
                 agent_type: agent,
                 resolved_model: resolve_model_in(&chain, None),
                 chain,
+                allowed: CATALOG
+                    .iter()
+                    .filter(|m| agent.allows_model(m.id))
+                    .map(|m| m.id.to_string())
+                    .collect(),
             }
         })
         .collect();
@@ -353,6 +387,48 @@ mod tests {
         // 'rag' is no longer an accepted alias.
         assert_eq!(AgentType::from_str("rag"), None);
         assert_eq!(AgentType::from_str("nope"), None);
+    }
+
+    #[test]
+    fn speedwagon_chain_uses_gemini_2_5_flash() {
+        // Speedwagon's chain is independent of Coworker's: its Gemini slot is
+        // 2.5 Flash, and Coworker keeps 3 Flash. Guards the split from
+        // silently collapsing back to a shared chain.
+        let sw = AgentType::Speedwagon.chain();
+        let cw = AgentType::Coworker.chain();
+        assert!(
+            sw.contains(&"google/gemini-2.5-flash"),
+            "speedwagon chain should use gemini-2.5-flash: {sw:?}"
+        );
+        assert!(
+            !sw.contains(&"google/gemini-3-flash"),
+            "speedwagon chain should not use gemini-3-flash: {sw:?}"
+        );
+        assert!(
+            cw.contains(&"google/gemini-3-flash"),
+            "coworker chain should keep gemini-3-flash: {cw:?}"
+        );
+        assert!(
+            !cw.contains(&"google/gemini-2.5-flash"),
+            "coworker chain should not use gemini-2.5-flash: {cw:?}"
+        );
+    }
+
+    #[test]
+    fn speedwagon_allows_only_gemini_2_5_flash() {
+        let sw = AgentType::Speedwagon;
+        assert!(sw.allows_model("google/gemini-2.5-flash"));
+        assert!(!sw.allows_model("google/gemini-3-flash"));
+        assert!(!sw.allows_model("google/gemini-3.5-flash"));
+        assert!(!sw.allows_model("google/gemini-3.1-flash-lite"));
+        // Non-Gemini providers are unrestricted.
+        assert!(sw.allows_model("openai/gpt-5.4-mini"));
+        assert!(sw.allows_model("anthropic/claude-sonnet-4-6"));
+        assert!(sw.allows_model("moonshotai/kimi-k2.6"));
+        // Other agents allow the whole catalog.
+        for m in CATALOG {
+            assert!(AgentType::Coworker.allows_model(m.id), "coworker blocked {}", m.id);
+        }
     }
 
     #[test]
