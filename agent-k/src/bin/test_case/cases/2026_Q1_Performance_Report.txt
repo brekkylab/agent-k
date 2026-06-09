@@ -1,0 +1,110 @@
+[PixelLife Co., Ltd.] Q1 2026 Business Performance Report
+
+Date: April 18, 2026
+Prepared by: Corporate Planning Team
+
+────────────────────────────────────────
+
+1. Quarterly Performance Summary
+
+Revenue for Q1 2026 (January–March) reached approximately KRW 18.7 billion, representing a 31.7% increase compared to KRW 14.2 billion in the same period last year. Operating profit amounted to KRW 1.42 billion, achieving an operating margin of 7.6%, which is an improvement of 3.5 percentage points over the 4.1% operating margin recorded in Q1 of the previous year. Net income totaled KRW 980 million.
+
+The increase in revenue can be attributed to two primary factors. First, the major update "Shining Chronicle Season 2" (featuring 12 new characters and 4 new dungeons), released to the live service at the end of January, generated cumulative in-game purchase revenue of KRW 2.8 billion within eight weeks, driving strong performance for the company's flagship title. Second, the number of integrated PixelLife accounts increased from 380,000 at the end of the previous quarter to 520,000 by the end of Q1, an increase of approximately 140,000 users, significantly boosting cross-title monetization across the company's IP portfolio. Average Revenue Per Paying User (ARPPU) for Q1 reached KRW 32,400, up 15.3% from KRW 28,100 in the same period last year.
+
+────────────────────────────────────────
+
+2. Revenue Breakdown by Title
+
+- Shining Chronicle (Mobile MMORPG): KRW 7.8 billion (41.7% of total revenue, +24% YoY)
+- Tap Tap Tycoon Series (3 Casual Titles): KRW 5.2 billion (27.8% of total revenue, +58% YoY)
+- Abyss Lord (Action RPG, launched in 2025): KRW 3.1 billion (16.6% of total revenue, +19% YoY)
+- PC/Steam Premium Titles (2 Indie Adventure Games): KRW 1.8 billion (9.6% of total revenue, +12% YoY)
+- Other (Advertising, IP Licensing, etc.): KRW 800 million (4.3% of total revenue)
+
+The Tap Tap Tycoon series demonstrated particularly strong growth. The new title "Idle Empire," targeting casual gamers in their 20s and 30s, achieved 410,000 cumulative downloads during the quarter and accounted for 67% of revenue within the category. In contrast, growth in the PC/Steam indie lineup has slowed, highlighting the need for a lineup restructuring during Q2.
+
+────────────────────────────────────────
+
+3. Revenue Analysis by Platform
+
+- Google Play: KRW 8.9 billion (47.6%)
+- Apple App Store: KRW 4.2 billion (22.5%)
+- Proprietary PC Client (Direct Sales): KRW 2.8 billion (15.0%)
+- Steam: KRW 1.6 billion (8.6%)
+- Console/Others (Switch, PSN): KRW 1.2 billion (6.4%)
+
+The most notable change this quarter was that revenue generated through the proprietary PC client exceeded 15% for the first time. Direct sales offer superior margins due to the absence of platform fees. The paid membership program "PixelPass" reached 78,000 subscribers by quarter-end, and PixelPass members spent an average of KRW 58,700 per month, approximately 2.75 times higher than the KRW 21,300 spent by regular users. Although revenue through the Apple App Store increased due to featured placement exposure, the effective profit margin remained relatively lower (averaging 18.2%) because of the platform's 30% commission fee.
+
+────────────────────────────────────────
+
+4. User Metrics
+
+- New Registrations: 143,000 (+42% YoY)
+- Monthly Active Users (MAU): 412,000
+- Daily Active Users (DAU): 118,000 (DAU/MAU = 28.6%)
+- D7 Retention Rate: 32.4% (26.1% in the same period last year)
+- D30 Retention Rate: 11.7% (8.9% in the same period last year)
+- Conversion Rate to Paying Users: 6.4% (5.1% in the same period last year)
+- Net Promoter Score (NPS): 58 (Industry Average: 32)
+
+The most encouraging result was the 6.3 percentage-point increase in D7 retention. This improvement is believed to be driven by the personalized content recommendation algorithm introduced in Q4 of last year. Revenue generated through recommended content increased to 31% of total revenue.
+
+────────────────────────────────────────
+
+5. User Acquisition (UA) and Marketing Efficiency
+
+Total marketing expenses for Q1 amounted to KRW 2.24 billion, representing 12.0% of revenue. This reflects a 2.8 percentage-point improvement in efficiency compared to 14.8% during the same period last year.
+
+Marketing spend by channel:
+- Performance Advertising (Meta/Google/TikTok UA): KRW 1.12 billion
+- Game Streamer & Influencer Collaborations: KRW 560 million
+- Brand Campaigns (YouTube Ads, etc.): KRW 410 million
+- Offline Events & PR (G-STAR, Game Shows, etc.): KRW 150 million
+
+Cost Per Install (CPI) decreased to KRW 15,700, down 18.2% from KRW 19,200 last year. Lifetime Value (LTV) averaged KRW 187,000 per user, resulting in an LTV/CPI ratio of 11.9x. Considering that an LTV/CPI ratio above 3x is generally regarded as healthy within the gaming industry, this performance is exceptionally strong.
+
+────────────────────────────────────────
+
+6. Operations and Development Status
+
+- Live Service Titles: 4 (Shining Chronicle and 3 Tap Tap series titles)
+- Average Server Response Time: 65ms (92ms in the previous quarter)
+- Service Availability: 99.97% (exceeding the 99.9% target)
+- Average User Report Resolution Time: 1.3 hours (Industry Average: 4.2 hours)
+- Introduction of an automated CS chatbot improved support cases handled per staff member by 35%
+
+The company plans to launch a global Closed Beta Test (CBT) for its new action RPG IP, "AetherCry," during Q2. This initiative will expand the live-service portfolio to five titles.
+
+────────────────────────────────────────
+
+7. Q2 Strategy and Objectives
+
+- Revenue Target: KRW 22.0 billion (+17.6% QoQ)
+- Content Updates:
+  - Shining Chronicle Season 3 (April)
+  - Global Launch of Idle Empire (May)
+- International Expansion:
+  - Entry into the Japanese market planned for July
+  - Tokyo Game Show announcement and Japanese-language build release
+- PixelPass Paid Membership Target: 100,000 subscribers
+- Additional 5% increase in ARPPU through recommendation algorithm enhancements
+- Global CBT launch for AetherCry in May
+
+────────────────────────────────────────
+
+8. Key Risk Factors
+
+Rising server infrastructure and labor costs remain the most significant risks. As of Q1, cloud computing expenses increased by 8.3% year-over-year, while game developer salaries rose by 12.1%. User acquisition advertising costs (CPI) have also increased by approximately 6% across the market, adding pressure to marketing expenditures.
+
+To address these challenges, the company plans to expand direct sales through its proprietary PC client and optimize cloud infrastructure costs starting in Q2. The goal is to increase the direct-sales share from the current 15% to 25% by year-end. In addition, the proportion of development based on proprietary engines and tools will be expanded from 22% to 30%, reducing external middleware licensing expenses.
+
+────────────────────────────────────────
+
+[Appendix] Key KPI Comparison with the Same Period Last Year
+
+Revenue: KRW 14.2 billion → KRW 18.7 billion (+31.7%)
+Operating Profit: KRW 580 million → KRW 1.42 billion (+144.8%)
+Operating Margin: 4.1% → 7.6% (+3.5 percentage points)
+Integrated PixelLife Accounts: 280,000 → 520,000 (+85.7%)
+D7 Retention: 26.1% → 32.4% (+6.3 percentage points)
+CPI: KRW 19,200 → KRW 15,700 (-18.2%)
