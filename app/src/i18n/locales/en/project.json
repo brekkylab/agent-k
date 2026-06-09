@@ -42,7 +42,7 @@
   },
   "list_page": {
     "title": "Your projects",
-    "description": "Each project is a workspace. Sessions, files, members, skills, schedule — all live inside.",
+    "description": "Each project is a workspace. Sessions, files, members, automation — all live inside.",
     "new_project": "New project",
     "section_label": "Projects · {{count}} projects"
   },
@@ -67,7 +67,8 @@
   "home": {
     "preview_pill_aria": "Preview — not yet sent to the server",
     "attach_coming_soon": "File attachment is coming soon.",
-    "suggested_prompts_aria": "Suggested prompts (preview)"
+    "suggested_prompts_aria": "Suggested prompts (preview)",
+    "send_blocked_hint": "No available model. Set a provider API key or pick another model."
   },
   "settings_page": {
     "section_label": "Project settings",
@@ -98,5 +99,21 @@
       "description_success": "Description updated",
       "delete_success": "Project deleted"
     }
+  },
+  "chains_editor": {
+    "section_label": "Model recommendations",
+    "loading": "Loading model list…",
+    "saved": "Saved the recommended model chains",
+    "save_failed": "Failed to save the recommended model chains",
+    "default": "(default)",
+    "reset_to_default": "Reset to default",
+    "no_provider": "No provider",
+    "no_provider_inline": " — No provider",
+    "add_model": "+ Add model…",
+    "save": "Save recommended models",
+    "saving": "Saving…",
+    "move_up": "Move up",
+    "move_down": "Move down",
+    "remove": "Remove"
   }
 }

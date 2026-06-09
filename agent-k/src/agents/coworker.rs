@@ -9,6 +9,7 @@ const XLSX_SKILL_DIR: &str = "/workspace/skills/xlsx";
 pub const GUEST_ATTACHED_DIR: &str = "/workspace/attached";
 pub const GUEST_SHARED_DIR: &str = "/workspace/shared";
 pub const GUEST_ARTIFACTS_DIR: &str = "/workspace/artifacts";
+pub const PPTX_SKILL_DIR: &str = "/workspace/skills/pptx";
 
 const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to plan and perform tasks based on the user's query.
 
@@ -26,6 +27,7 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 ## Skills
 - An "Available Skills" table is appended to this system prompt. It lists every loaded skill with the absolute path to its `SKILL.md`.
 - For any task whose domain matches an entry in that table, your FIRST action MUST be to read the SKILL.md at the listed path — either via `cat <SKILL.md path>` or the `read` tool — and you must follow that file literally, including every "DO NOT" rule.
+- **The first read of a SKILL.md must fetch the whole file** — use `cat <SKILL.md path>` via shell, or call the `read` tool with only the `path` argument (omit `offset` and `limit`). Partial reads skip rules near the end of the file.
 - Inside a skill directory, the ONLY path you may pass to the `read` tool (or `cat`) is the `SKILL.md`. Do not `read` supporting files (scripts, data, etc.) — even partial / offset+limit reads are forbidden — unless the SKILL.md explicitly directs you to.
 
 ## Input files
@@ -46,9 +48,10 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 pub struct CoworkerSandboxOptions {
     pub sandbox_name: Option<String>,
     pub persist: bool,
-    /// When true, the bundled XLSX skill is materialised under [`XLSX_SKILL_DIR`]
-    /// and surfaced via the auto-rendered "Available Skills" table. Default
-    /// `false`; the CLI wrappers (`run`, `test_case`) flip this on explicitly.
+    /// When true, the bundled PPTX and XLSX skills are materialised under
+    /// [`PPTX_SKILL_DIR`] / [`XLSX_SKILL_DIR`] and surfaced via the
+    /// auto-rendered "Available Skills" table. Default `false`; the CLI
+    /// wrappers (`run`, `test_case`) flip this on explicitly.
     pub with_skill: bool,
 }
 
@@ -147,32 +150,41 @@ pub async fn get_coworker_agent_with_opts(
         .replace("{{ARTIFACTS}}", GUEST_ARTIFACTS_DIR)
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
-    // XLSX skill: when `opts.with_skill` is true, ailoy materialises the
-    // skill files into the sandbox under `XLSX_SKILL_DIR` on first run and
-    // auto-renders an "Available Skills" table into the system instruction
-    // so the model can `cat` it on demand. The CLI wrappers (`run`,
-    // `test_case`) flip this on by default; pass `--no-skill` for the
-    // no-skill baseline.
     let mut spec = AgentSpec::new(model.as_ref())
         .instruction(inst)
         .system_tools()
         .web_search_tool(vec![])
         .max_tokens(32_000);
     if opts.with_skill {
-        let skill_dir = PathBuf::from(XLSX_SKILL_DIR);
-        spec = spec.skill(
-            &skill_dir,
-            [
-                FileEntry::new(
-                    skill_dir.join("SKILL.md"),
-                    include_bytes!("skill/xlsx/SKILL.md").to_vec(),
-                ),
-                FileEntry::new(
-                    skill_dir.join("xlsx_skill.py"),
-                    include_bytes!("skill/xlsx/script/xlsx_skill.py").to_vec(),
-                ),
-            ],
-        );
+        let pptx_dir = PathBuf::from(PPTX_SKILL_DIR);
+        let xlsx_dir = PathBuf::from(XLSX_SKILL_DIR);
+        spec = spec
+            .skill(
+                &pptx_dir,
+                [
+                    FileEntry::new(
+                        pptx_dir.join("SKILL.md"),
+                        include_bytes!("skill/pptx/SKILL.md").to_vec(),
+                    ),
+                    FileEntry::new(
+                        pptx_dir.join("script/verify_pptx.py"),
+                        include_bytes!("skill/pptx/script/verify_pptx.py").to_vec(),
+                    ),
+                ],
+            )
+            .skill(
+                &xlsx_dir,
+                [
+                    FileEntry::new(
+                        xlsx_dir.join("SKILL.md"),
+                        include_bytes!("skill/xlsx/SKILL.md").to_vec(),
+                    ),
+                    FileEntry::new(
+                        xlsx_dir.join("xlsx_skill.py"),
+                        include_bytes!("skill/xlsx/script/xlsx_skill.py").to_vec(),
+                    ),
+                ],
+            );
     }
     Agent::try_with_runenv(spec, RunEnv::sandbox(config).await?)
 }

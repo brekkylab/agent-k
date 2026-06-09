@@ -9,7 +9,7 @@ import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 import { WelcomeCarousel } from '@/components/WelcomeCarousel';
 import { Icon } from '@/components/Icon';
-import { consumeLogoutReason, consumeRedirectAfterLogin, type LogoutReason } from '@/lib/forceLogout';
+import { consumeLogoutReason, consumeRedirectAfterLogin, resetLogoutGuard, type LogoutReason } from '@/lib/forceLogout';
 
 type Mode = 'login' | 'signup';
 
@@ -76,6 +76,8 @@ function AuthPanel() {
       // refetching the identical payload right after this navigation.
       queryClient.setQueryData(['me'], me);
       setCurrentUser(me);
+      // Re-arm the guard so the next session can trigger forceLogout again.
+      resetLogoutGuard();
       const redirectTo = consumeRedirectAfterLogin();
       navigate({ to: redirectTo ?? '/projects' });
     } catch (err) {
@@ -115,6 +117,7 @@ function AuthPanel() {
           <label>
             {t('fields.username')}
             <input
+              name="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
@@ -126,6 +129,7 @@ function AuthPanel() {
             <label>
               {t('fields.display_name')} <span className="cw-welcome-optional">{t('fields.display_name_optional')}</span>
               <input
+                name="displayName"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder={t('fields.display_name_placeholder')}
@@ -136,6 +140,7 @@ function AuthPanel() {
             {t('fields.password')}
             <div className="cw-input-with-toggle">
               <input
+                name="password"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

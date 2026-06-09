@@ -15,6 +15,8 @@ pub struct AutomationResponse {
     pub description: Option<String>,
     pub prompts: Vec<String>,
     pub enabled: bool,
+    pub agent_type: Option<String>,
+    pub model: Option<String>,
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -29,6 +31,8 @@ impl From<DbAutomation> for AutomationResponse {
             description: a.description,
             prompts: a.prompts,
             enabled: a.enabled,
+            agent_type: a.agent_type,
+            model: a.model,
             created_by: a.created_by,
             created_at: a.created_at,
             updated_at: a.updated_at,
@@ -44,6 +48,10 @@ pub struct CreateAutomationRequest {
     pub name: String,
     pub description: Option<String>,
     pub prompts: Vec<String>,
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -53,6 +61,23 @@ pub struct UpdateAutomationRequest {
     pub description: Option<String>,
     pub prompts: Option<Vec<String>>,
     pub enabled: Option<bool>,
+    /// Agent surface for triggered runs. Absent = unchanged; a string sets it.
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    /// Model pin for triggered runs. Tri-state: absent = unchanged,
+    /// `null` = recommended, string = pin a specific model.
+    #[serde(default, deserialize_with = "double_option")]
+    pub model: Option<Option<String>>,
+}
+
+/// Distinguish an absent JSON field from an explicit `null` for PATCH semantics
+/// — without it, serde collapses both to `None` and a field can't be cleared.
+fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::deserialize(de)?))
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -234,6 +259,11 @@ pub struct RunResponse {
     pub scheduled_for: DateTime<Utc>,
     pub lease_until: Option<DateTime<Utc>>,
     pub previous_run_id: Option<Uuid>,
+    /// Agent surface the run's session used; `None` if not joined/unknown.
+    pub agent_type: Option<String>,
+    /// Effective model the run's session used (materialized at build); `None`
+    /// before the session agent is built.
+    pub model: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -249,6 +279,8 @@ impl From<DbAutomationRun> for RunResponse {
             scheduled_for: r.scheduled_for,
             lease_until: r.lease_until,
             previous_run_id: r.previous_run_id,
+            agent_type: r.agent_type,
+            model: r.model,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }

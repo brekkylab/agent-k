@@ -16,15 +16,18 @@ interface ProjectHomeComposerProps {
   onChange: (next: string) => void;
   onSubmit: (submission: ProjectHomeComposerSubmission) => void | Promise<void>;
   disabled?: boolean;
-  // 전송 처리 중(세션 생성/스트림 시작 대기): send 버튼에 스피너를 띄워 "보내는 중"을 알림.
+  // While the send is being processed (waiting for session creation / stream start): show a spinner on the send button to indicate "sending".
   pending?: boolean;
+  // 현재 모델 선택이 실행 불가(가용 provider 없음)일 때 send 를 막고 힌트를 표시.
+  sendBlocked?: boolean;
+  sendBlockedHint?: string;
   placeholder?: string;
-  // 파일 추가 진입점 (placeholder — PR #114 의 attachment tray 와 연결 예정).
+  // Entry point for adding files (placeholder — to be wired up to PR #114's attachment tray).
   onAttachClick?: () => void;
   // Home-only model picker slot. Session composer owns its own compact controls.
   modelPicker?: ReactNode;
-  // focus 요청 신호. 값이 바뀔 때마다 input 에 focus (boolean 이 아니라 nonce 라
-  // 같은 요청이 반복돼도 매번 focus 가 걸린다). 0/undefined 면 focus 안 함.
+  // Focus request signal. Focuses the input whenever the value changes (it's a nonce, not a
+  // boolean, so focus fires every time even if the same request repeats). 0/undefined means no focus.
   focusSignal?: number;
 }
 
@@ -38,13 +41,15 @@ export function ProjectHomeComposer({
   onSubmit,
   disabled = false,
   pending = false,
+  sendBlocked = false,
+  sendBlockedHint,
   placeholder = DEFAULT_PLACEHOLDER,
   onAttachClick,
   modelPicker,
   focusSignal,
 }: ProjectHomeComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const canSubmit = value.trim().length > 0 && !disabled;
+  const canSubmit = value.trim().length > 0 && !disabled && !sendBlocked;
 
   useEffect(() => {
     if (focusSignal) textareaRef.current?.focus();
@@ -120,7 +125,9 @@ export function ProjectHomeComposer({
           {sendButton}
         </div>
       </div>
-      <small>{DEFAULT_HINT}</small>
+      <small className={sendBlocked ? 'is-blocked' : undefined}>
+        {sendBlocked && sendBlockedHint ? sendBlockedHint : DEFAULT_HINT}
+      </small>
     </form>
   );
 }

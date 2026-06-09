@@ -16,6 +16,7 @@ import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
+import { getModelCatalog, modelLabel } from '@/api/models';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
@@ -56,6 +57,12 @@ function SessionPage() {
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
   const session = useQuery({ queryKey: ['session', sessionPrefix], queryFn: () => getSession(sessionPrefix) });
   const members = useQuery({ queryKey: ['members', projectSlug], queryFn: () => listMembers(projectSlug) });
+  // Catalog (with this project's chains) to label the session's effective model.
+  const catalog = useQuery({
+    queryKey: ['models', projectSlug],
+    queryFn: () => getModelCatalog(projectSlug),
+    staleTime: 5 * 60_000,
+  });
 
   // The project/session queries key off the URL slug + prefix, but everything
   // session-scoped (messages, dirent scopes, attachments, artifacts) keys off the
@@ -69,6 +76,11 @@ function SessionPage() {
     queryKey: ['messages', sessionId],
     queryFn: () => listMessages(sessionId),
     enabled: Boolean(session.data && currentUser),
+    // Refetch on every entry so the backend's mark-read side effect runs, which
+    // clears the sidebar unread badge via the dataUpdatedAt effect below. Without
+    // this, the QueryClient's default 30s staleTime kept re-entries within that
+    // window from triggering mark-read and the badge stayed visible.
+    staleTime: 0,
   });
 
   // Agent chip — transient preview state from home. Persist it after router state
@@ -82,7 +94,13 @@ function SessionPage() {
   } else if (location.state.initialAgentId && agentPreview.agentId !== location.state.initialAgentId) {
     setAgentPreview({ sessionPrefix, agentId: location.state.initialAgentId });
   }
-  const activeAgent = agentPreview.agentId ? getAgentSurface(agentPreview.agentId) : undefined;
+  // Prefer the session's stored agent_type (authoritative); fall back to the
+  // router-state preview only before the session has loaded (smooth from home).
+  const activeAgent = session.data?.agentType
+    ? getAgentSurface(session.data.agentType)
+    : agentPreview.agentId
+      ? getAgentSurface(agentPreview.agentId)
+      : undefined;
 
   // Auto-send initial message refs — useRef instead of module-level Set so each
   // component instance tracks its own state (StrictMode-safe, no cross-session leak).
@@ -92,12 +110,19 @@ function SessionPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Set when the local user sends a message — the next scroll effect jumps to
+  // the bottom instantly, regardless of how far up the user has scrolled.
+  const forceScrollRef = useRef(false);
+  // Previous message count, to distinguish "new message arrived" from the
+  // initial history load / refetch (no pill on first render of a session).
+  const prevMsgCountRef = useRef(0);
 
-  // WS 구동: seq 순서로 정렬된 outputs 맵 (catch-up + live 멱등 병합용)
+  // WS-driven: outputs map sorted by seq order (for idempotent catch-up + live merging)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
-  // 낙관적 유저 버블 ID (agent_run_started 도착 시 교체 여부 결정)
+  // Optimistic user bubble ID (decides whether to replace when agent_run_started arrives)
   const optimisticUserIdRef = useRef<string | null>(null);
-  // agent_run_started 미도착 시 자동 복구용 타임아웃 ref
+  // Timeout ref for auto-recovery when agent_run_started never arrives
   const runStartedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Mirror of the `streaming` state, accessible from WS event handler closures
   // without adding `streaming` to the effect dependency array (which would
@@ -113,8 +138,19 @@ function SessionPage() {
   const doneRunIdsRef = useRef<Set<string>>(new Set());
 
   const [composerText, setComposerText] = useState('');
+  // Composer layout — false = compact pill (textarea + buttons inline),
+  // true = stacked layout (textarea on top, actions row below). We flip to
+  // expanded the moment text would wrap to a second row in compact mode and
+  // collapse back only when the field empties, so partial edits don't
+  // oscillate between layouts.
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const [streaming, setStreaming] = useState(false);
+  // "New message arrived while scrolled up" pill above the composer.
+  const [showNewMsgPill, setShowNewMsgPill] = useState(false);
+  // Ghost scroll-to-bottom button — visible whenever scrolled past the
+  // auto-follow threshold, regardless of new messages.
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
 
   type PendingAttachment = {
@@ -137,11 +173,15 @@ function SessionPage() {
     setStreaming(false);
     streamingRef.current = false;
     setPendingAttachments([]);
+    setShowNewMsgPill(false);
+    setShowScrollDown(false);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
     optimisticUserIdRef.current = null;
     currentRunIdRef.current = null;
     doneRunIdsRef.current.clear();
+    forceScrollRef.current = false;
+    prevMsgCountRef.current = 0;
   }
 
   // After messages load, mark-read side effect has run on the backend — sync badge in session list.
@@ -156,14 +196,105 @@ function SessionPage() {
     ...liveMessages,
   ], [history.data, liveMessages]);
 
+  // Total rendered-content size. Streaming updates grow a live bubble in place
+  // (body text, tool calls, tool results) without changing the message count,
+  // so the auto-follow effect below also keys off this to keep re-checking
+  // while content grows. `+ 1` per tool call counts its appearance; results
+  // count by length so their arrival is visible even on short outputs.
+  const contentVersion = useMemo(
+    () =>
+      allMessages.reduce(
+        (n, m) =>
+          n +
+          m.body.length +
+          (m.toolCalls?.reduce((a, tc) => a + 1 + (tc.result?.length ?? 0), 0) ?? 0),
+        0,
+      ),
+    [allMessages],
+  );
+
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom <= 150) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const prevCount = prevMsgCountRef.current;
+    prevMsgCountRef.current = allMessages.length;
+
+    // Own send — jump to the bottom immediately, even if scrolled far up.
+    if (forceScrollRef.current) {
+      forceScrollRef.current = false;
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      setShowNewMsgPill(false);
+      return;
     }
-  }, [allMessages.length, streaming]);
+
+    // Initial history load (refresh / session entry) — start at the bottom.
+    if (prevCount === 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      return;
+    }
+
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom <= 700) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    } else if (allMessages.length > prevCount) {
+      // Scrolled too far up to auto-follow — surface a "new message" pill instead.
+      setShowNewMsgPill(true);
+    }
+  }, [allMessages.length, streaming, contentVersion]);
+
+  // Track scroll position: dismiss the pill once the user is back near the
+  // bottom, and toggle the ghost scroll-down button past the follow threshold.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distanceFromBottom <= 40) {
+        setShowNewMsgPill(false);
+      }
+      setShowScrollDown(distanceFromBottom > 700);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    setShowNewMsgPill(false);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+  }, []);
+
+  // Auto-grow the composer textarea + drive the compact↔expanded layout flip.
+  // Reset to auto first so deleting lines shrinks the box; overflow stays hidden
+  // until we hit the 200px cap to avoid a phantom scrollbar from sub-pixel
+  // rounding.
+  //
+  // Layout trigger:
+  //   - empty text  → compact (pill, inline actions)
+  //   - while compact, if scrollHeight indicates the text just wrapped to a
+  //     second row in the narrow inline-width context, flip to expanded.
+  //   - once expanded, stay until the field empties (don't toggle back while
+  //     the user is mid-edit; ChatGPT-style stability).
+  useEffect(() => {
+    const ta = composerRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const next = Math.min(ta.scrollHeight, 200);
+    ta.style.height = `${next}px`;
+    ta.style.overflowY = ta.scrollHeight > 200 ? 'auto' : 'hidden';
+
+    if (composerText.length === 0) {
+      setComposerExpanded(false);
+    } else if (!composerExpanded) {
+      const cs = getComputedStyle(ta);
+      const padTop = parseFloat(cs.paddingTop) || 0;
+      const padBot = parseFloat(cs.paddingBottom) || 0;
+      const lineHeight = parseFloat(cs.lineHeight) || 24;
+      // +4px slack so sub-pixel rounding doesn't flip on a single-line value.
+      if (ta.scrollHeight > lineHeight + padTop + padBot + 4) {
+        setComposerExpanded(true);
+      }
+    }
+  }, [composerText, composerExpanded]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -208,7 +339,7 @@ function SessionPage() {
     setComposerText('');
     setPendingAttachments([]);
 
-    // 낙관적 유저 버블 (WS agent_run_started 도착 전까지 즉각적 피드백)
+    // Optimistic user bubble (immediate feedback until the WS agent_run_started arrives)
     const nowIso = new Date().toISOString();
     const optimisticUserId = `live-user-${Date.now()}`;
     optimisticUserIdRef.current = optimisticUserId;
@@ -221,13 +352,14 @@ function SessionPage() {
       status: 'done',
       attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
     };
+    forceScrollRef.current = true;
     setLiveMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
     streamingRef.current = true;
 
     try {
       await sendMessage(sessionId, text, attachmentPaths.length > 0 ? attachmentPaths : undefined);
-      // agent_run_started가 10초 내에 도착하지 않으면 자동 복구
+      // Auto-recover if agent_run_started doesn't arrive within 10 seconds
       if (runStartedTimeoutRef.current) clearTimeout(runStartedTimeoutRef.current);
       runStartedTimeoutRef.current = setTimeout(() => {
         if (optimisticUserIdRef.current === optimisticUserId) {
@@ -241,7 +373,7 @@ function SessionPage() {
         }
       }, 10_000);
     } catch (err) {
-      // 전송 실패 (네트워크, 403, 423 등) — 즉시 복구
+      // Send failed (network, 403, 423, etc.) — recover immediately
       if (runStartedTimeoutRef.current) {
         clearTimeout(runStartedTimeoutRef.current);
         runStartedTimeoutRef.current = null;
@@ -254,8 +386,17 @@ function SessionPage() {
       wsOutputsRef.current.clear();
       optimisticUserIdRef.current = null;
     }
-    // 성공 시: WS 이벤트(agent_run_done)가 completion을 처리함. finally 블록 없음.
+    // On success: the WS event (agent_run_done) handles completion. No finally block.
   }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments]);
+
+  // Enter sends; Shift+Enter inserts a newline. isComposing guards Korean/IME
+  // composition so confirming a character with Enter doesn't fire a send.
+  const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void send();
+    }
+  }, [send]);
 
   const duplicateMutation = useDuplicateSession(projectSlug);
 
@@ -275,21 +416,26 @@ function SessionPage() {
     void send(msg);
   }, [session.data, send, navigate]);
 
-  // WS 세션 구독 — sessionId 변경 시 구독/해제.
+  // WS session subscription — subscribe/unsubscribe when sessionId changes.
+  // subscribeSession is ref-counted, so a session the sidebar already subscribes to
+  // won't send a fresh `subscribe` to the server (no catch-up). resyncSession forces
+  // that re-request on every entry, so we receive either the in-progress run
+  // (started + messages) or an idle sync.
   useEffect(() => {
     if (!sessionId) return;
     appWs.subscribeSession(sessionId);
+    appWs.resyncSession(sessionId);
     return () => {
       appWs.unsubscribeSession(sessionId);
     };
   }, [sessionId]);
 
-  // WS 이벤트 핸들러 — agent 응답을 WS 이벤트로 구동.
+  // WS event handler — drives agent responses from WS events.
   useEffect(() => {
     if (!sessionId) return;
 
     const unsubscribe = appWs.subscribe((event: AppWsEvent) => {
-      // 이 세션과 관련 없는 이벤트는 무시
+      // Ignore events not related to this session
       if (!('session_id' in event) || event.session_id !== sessionId) return;
 
       if (event.type === 'agent_run_started') {
@@ -298,7 +444,7 @@ function SessionPage() {
         // [B] Sequence 1: if Done for this run already arrived, ignore the late Started.
         if (doneRunIdsRef.current.has(run_id)) return;
 
-        // agent_run_started 도착 — 복구 타임아웃 취소
+        // agent_run_started arrived — cancel the recovery timeout
         if (runStartedTimeoutRef.current) {
           clearTimeout(runStartedTimeoutRef.current);
           runStartedTimeoutRef.current = null;
@@ -317,12 +463,15 @@ function SessionPage() {
         setStreaming(true);
         streamingRef.current = true;
 
-        // 낙관적 유저 버블이 있으면 유지, 없으면(다른 탭/유저) event에서 추가
+        // Keep the optimistic user bubble if present; otherwise (another tab/user) add it from the event
         setLiveMessages((prev) => {
+          // Skip duplicate `started` for the run we're already rendering — replay can
+          // resend it (subscribe race, reconnect, resync) and would add a second bubble.
+          if (!isNewRun && prev.some((m) => m.id === `live-ai-${sessionId}`)) return prev;
           const hasOptimistic = optimisticUserIdRef.current &&
             prev.some((m) => m.id === optimisticUserIdRef.current);
           if (hasOptimistic) {
-            // 이미 낙관적 버블 있음 — AI 버블만 추가
+            // Optimistic bubble already exists — add only the AI bubble
             const nowIso = new Date().toISOString();
             return [...prev, {
               id: `live-ai-${sessionId}`,
@@ -333,7 +482,7 @@ function SessionPage() {
               status: 'streaming' as const,
             }];
           } else {
-            // 다른 탭/유저: event.user_message에서 유저 버블 추가
+            // Another tab/user: add the user bubble from event.user_message
             const { user_message } = event;
             const nowIso = new Date().toISOString();
             return [...prev,
@@ -391,7 +540,7 @@ function SessionPage() {
               : m.toolCalls;
             return { ...m, body: update.text, status: 'streaming' as const, toolCalls: updatedToolCalls };
           });
-          // 서브에이전트 버블 upsert
+          // Upsert subagent bubbles
           for (const sub of update.subagentUpdates) {
             const subId = `live-sub-${sub.sourceAgent}`;
             const exists = next.some((m) => m.id === subId);
@@ -447,7 +596,7 @@ function SessionPage() {
           runStartedTimeoutRef.current = null;
         }
 
-        // 완료: history refetch → liveMessages clear → streaming stop → invalidate
+        // Completion: history refetch → liveMessages clear → streaming stop → invalidate
         void (async () => {
           if (sessionId) {
             await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
@@ -467,23 +616,21 @@ function SessionPage() {
 
       if (event.type === 'agent_run_idle') {
         // The server has no active run for this session (completed before we
-        // subscribed, or server restarted). If the client is currently in
-        // streaming mode, reset cleanly — refetch history once to surface any
-        // persisted messages.
-        if (streamingRef.current) {
-          if (runStartedTimeoutRef.current) {
-            clearTimeout(runStartedTimeoutRef.current);
-            runStartedTimeoutRef.current = null;
-          }
-          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
-          setLiveMessages([]);
-          wsOutputsRef.current.clear();
-          maxSeqRef.current = -1;
-          optimisticUserIdRef.current = null;
-          currentRunIdRef.current = null;
-          setStreaming(false);
-          streamingRef.current = false;
+        // subscribed, or server restarted). resyncSession re-requests this on every
+        // entry, so refetch history once to surface any persisted messages and reset
+        // streaming state — covers navigating away mid-run and returning after done.
+        if (runStartedTimeoutRef.current) {
+          clearTimeout(runStartedTimeoutRef.current);
+          runStartedTimeoutRef.current = null;
         }
+        void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+        setLiveMessages([]);
+        wsOutputsRef.current.clear();
+        maxSeqRef.current = -1;
+        optimisticUserIdRef.current = null;
+        currentRunIdRef.current = null;
+        setStreaming(false);
+        streamingRef.current = false;
       }
     });
 
@@ -510,30 +657,49 @@ function SessionPage() {
   const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
   const sessionForkable = !streaming && allMessages.length > 0;
 
+  // `sessions.model` is authoritative: an explicit pin, or — for a recommended
+  // session — the model materialized at first build (see build_session_agent).
+  // So just label it; catalog only maps the id → display name. (NULL only in the
+  // brief pre-build window of an unsent session → falls back to the default text.)
+  const sessionModelLabel = sess?.model ? modelLabel(catalog.data, sess.model) : undefined;
+  // A pinned model whose provider key is gone still shows here, but the backend
+  // silently runs a fallback at build time. The session carries `modelAvailable`
+  // (judged server-side for any id, catalogued or not) so we can flag that
+  // `model` isn't what actually runs. The catalog is still used only to label.
+  const sessionModelUnavailable = !!sess?.model && sess.modelAvailable === false;
+
   return (
     <div className="cw-session-layout cw-page-enter">
       <section className="cw-chat-surface">
         <div className="cw-chat-head">
           <div>
-            <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
+            <div className="cw-session-title-row">
+              <h1><SessionTitleText title={sess?.title ?? '...'} /></h1>
+              {activeAgent && (
+                <span
+                  className="cw-session-agent-chip"
+                  data-agent={activeAgent.id}
+                  title={t('chat.agent_chip')}
+                >
+                  <Icon name={activeAgent.icon} size={13} />
+                  <span>{activeAgent.label}</span>
+                </span>
+              )}
+            </div>
             <p>
               {creator && <>{t('chat.started_by')} <Avatar user={creator} small /> {creator.name} · </>}
               {t('chat.files_count', { count: sess?.references.length ?? 0 })} ·{' '}
-              <Avatar user={AI_USER} small /> {t('chat.default_label')}
+              <Avatar user={AI_USER} small />{' '}
+              <span
+                className={sessionModelUnavailable ? 'cw-session-model-unavailable' : undefined}
+                title={sessionModelUnavailable ? t('chat.model_unavailable') : t('chat.model_in_use')}
+              >
+                {sessionModelLabel ?? t('chat.default_label')}
+                {sessionModelUnavailable && t('chat.model_unavailable_suffix')}
+              </span>
             </p>
           </div>
           <div className="cw-session-head-actions">
-            {activeAgent && (
-              <span
-                className="cw-session-agent-chip"
-                data-agent={activeAgent.id}
-                title="이 세션에서 선택된 에이전트 (미리보기)"
-              >
-                <Icon name={activeAgent.icon} size={13} />
-                <span>{activeAgent.label}</span>
-                <span className="cw-preview-pill cw-preview-pill--micro">Preview</span>
-              </span>
-            )}
             {sess && (
               <IconButton
                 icon="sticky-notes"
@@ -563,7 +729,8 @@ function SessionPage() {
           </div>
         </div>
 
-        <div className="cw-messages" ref={scrollContainerRef}>
+        <div className="cw-messages-scroll" ref={scrollContainerRef}>
+        <div className="cw-messages">
           {allMessages.map((msg) => (
             <MessageBubble
               key={msg.id}
@@ -584,6 +751,29 @@ function SessionPage() {
           )}
           <div ref={messagesEndRef} />
         </div>
+        </div>
+
+        {(showNewMsgPill || showScrollDown) && (
+          <div className="cw-new-msg-anchor">
+            {showNewMsgPill && (
+              <button type="button" className="cw-new-msg-pill" onClick={scrollToBottom}>
+                <Icon name="chevron" size={12} />
+                {t('ui.new_message')}
+              </button>
+            )}
+            {showScrollDown && (
+              <button
+                type="button"
+                className="cw-scroll-down-btn"
+                aria-label={t('ui.scroll_to_bottom')}
+                title={t('ui.scroll_to_bottom')}
+                onClick={scrollToBottom}
+              >
+                <Icon name="chevron" size={14} />
+              </button>
+            )}
+          </div>
+        )}
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           {pendingAttachments.length > 0 && (
@@ -599,26 +789,31 @@ function SessionPage() {
               ))}
             </div>
           )}
-          <div className="cw-composer-box">
-            <input
+          <div className="cw-composer-box" data-expanded={composerExpanded ? 'true' : 'false'}>
+            <textarea
+              ref={composerRef}
               value={composerText}
               onChange={(e) => setComposerText(e.target.value)}
+              onKeyDown={handleComposerKeyDown}
               placeholder={t('ui.composer_placeholder')}
               disabled={streaming}
+              rows={1}
             />
-            <button
-              type="button"
-              className="cw-attach-btn"
-              aria-label={t('ui.attach_file')}
-              onClick={() => fileInputRef.current?.click()}
-              disabled={streaming}
-              style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
-            >
-              <Icon name="paperclip" size={13} />
-            </button>
-            <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
-              <Icon name="send" size={12} />
-            </button>
+            <div className="cw-composer-actions">
+              <button
+                type="button"
+                className="cw-attach-btn"
+                aria-label={t('ui.attach_file')}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={streaming}
+                style={{ width: 30, height: 30, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: '50%', background: 'transparent', color: 'var(--cw-ink-3)', cursor: 'pointer', flexShrink: 0 }}
+              >
+                <Icon name="paperclip" size={13} />
+              </button>
+              <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!composerText.trim() || !sessionId || streaming || hasUploadingAttachments}>
+                <Icon name="send" size={12} />
+              </button>
+            </div>
           </div>
           <input
             ref={fileInputRef}

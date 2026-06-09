@@ -42,8 +42,8 @@ declare module '@tanstack/react-router' {
     router: typeof router;
   }
   // Transient navigation payloads handed off between routes via router state.
-  // initialMessage: home composer 가 만든 첫 발화를 세션 페이지가 받아 자동 전송.
-  // focusComposer: sidebar '+' 가 home 진입 시 composer 모드 + input focus 를 요청.
+  // initialMessage: the first utterance created by the home composer, received and auto-sent by the session page.
+  // focusComposer: sidebar '+' requests composer mode + input focus when entering home.
   interface HistoryState {
     initialMessage?: string;
     focusComposer?: boolean;

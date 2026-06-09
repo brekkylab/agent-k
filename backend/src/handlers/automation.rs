@@ -27,6 +27,22 @@ use crate::{
 
 // ── automations ──────────────────────────────────────────────────────────────
 
+/// Normalize an agent surface to its canonical value (client error if unknown).
+fn normalize_agent_type(s: &str) -> ApiResult<String> {
+    crate::model::AgentType::from_str(s)
+        .map(|a| a.as_str().to_string())
+        .ok_or_else(|| AppError::bad_request(format!("unknown agent_type: {s}")))
+}
+
+/// Ensure a model pin exists in the catalog (client error if unknown). Provider
+/// availability is not required — an unavailable pin falls through to the chain.
+fn validate_model(model: &str) -> ApiResult<()> {
+    if crate::model::catalog_entry(model).is_none() {
+        return Err(AppError::bad_request(format!("unknown model: {model}")));
+    }
+    Ok(())
+}
+
 /// POST /automations
 /// body must include `project_ref` (UUID or slug); user must be a member of that project.
 pub async fn create_automation(
@@ -39,6 +55,14 @@ pub async fn create_automation(
     if payload.name.trim().is_empty() {
         return Err(AppError::bad_request("name must not be empty"));
     }
+    let agent_type = payload
+        .agent_type
+        .as_deref()
+        .map(normalize_agent_type)
+        .transpose()?;
+    if let Some(model) = payload.model.as_deref() {
+        validate_model(model)?;
+    }
 
     let automation = state
         .repository
@@ -47,6 +71,8 @@ pub async fn create_automation(
             payload.name,
             payload.description,
             payload.prompts,
+            agent_type,
+            payload.model,
             auth_user.id,
         )
         .await
@@ -118,6 +144,15 @@ pub async fn update_automation(
             return Err(AppError::bad_request("name must not be empty"));
         }
     }
+    // agent_type: absent = unchanged; a value is validated and normalized.
+    let agent_type = match payload.agent_type.as_deref() {
+        None => None,
+        Some(s) => Some(Some(normalize_agent_type(s)?)),
+    };
+    // model: absent = unchanged, null = recommended, string = validated pin.
+    if let Some(Some(model)) = payload.model.as_ref() {
+        validate_model(model)?;
+    }
 
     let updated = state
         .repository
@@ -126,6 +161,8 @@ pub async fn update_automation(
             payload.name,
             payload.description.map(Some),
             payload.prompts,
+            agent_type,
+            payload.model,
             payload.enabled,
         )
         .await

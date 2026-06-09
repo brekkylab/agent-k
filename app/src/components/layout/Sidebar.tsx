@@ -1,8 +1,8 @@
-// Sidebar — header(brand) + 단일 스크롤 본문(PROJECTS section, active project
-// menu, Sessions section) + user-area 푸터. 폭은 사용자가 오른쪽 가장자리
-// resizer로 직접 조절(layout store에 persist). PROJECTS/Sessions는 sticky
-// SectionHeader를 통해 펼치고 접을 수 있고, 접힘 상태에서도 active 항목과
-// (Sessions 한정) unread 항목은 유지된다.
+// Sidebar — header(brand) + single scrollable body(PROJECTS section, active project
+// menu, Sessions section) + user-area footer. The width is adjusted directly by the user
+// via the right-edge resizer(persisted to the layout store). PROJECTS/Sessions can be
+// expanded and collapsed via the sticky SectionHeader, and even when collapsed the active item
+// and (Sessions only) unread items remain visible.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
@@ -231,8 +231,8 @@ export function Sidebar() {
   }, [cancelClose, revealed, scheduleClose, sidebarMode]);
 
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: listProjects });
-  // URL에 projectSlug가 있을 때만 활성 프로젝트로 인정한다 — /projects 같은 곳에서는
-  // sub-nav(Home/Files/.../Sessions)가 보이지 않아야 사용자 멘탈 모델과 일치.
+  // Only treat a project as active when the URL has a projectSlug — on pages like /projects
+  // the sub-nav(Home/Files/.../Sessions) should not be shown, matching the user's mental model.
   const activeProjectSlug = useActiveProjectSlug();
   const activeProject = (projectsQuery.data ?? []).find((p) => p.slug === activeProjectSlug);
 
@@ -445,12 +445,6 @@ export function Sidebar() {
               <IconPocket tone="files" icon="folder-open" /> <span>{t('sidebar.nav.files')}</span>
             </button>
             <button
-              className={`cw-nav-row ${activeRoute === 'skills' ? 'is-active' : ''}`}
-              onClick={() => navigate({ to: '/projects/$projectSlug/skills', params: { projectSlug: activeProject.slug } })}
-            >
-              <IconPocket tone="skills" icon="zap" /> <span>{t('sidebar.nav.skills')}</span>
-            </button>
-            <button
               className={`cw-nav-row ${activeRoute === 'automation' ? 'is-active' : ''}`}
               onClick={() => navigate({ to: '/projects/$projectSlug/automation', params: { projectSlug: activeProject.slug } })}
             >
@@ -503,8 +497,12 @@ export function Sidebar() {
                         <span /><span /><span />
                       </span>
                     ) : session.unreadCount > 0 ? (
-                      <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>
-                        <span className="n">{session.unreadCount}</span>
+                      <span
+                        className="cw-unread-badge cw-unread-badge-compact"
+                        aria-label={`unread ${session.unreadCount}`}
+                        title={`${session.unreadCount} unread`}
+                      >
+                        <span className="n">{session.unreadCount > 99 ? '99+' : session.unreadCount}</span>
                       </span>
                     ) : (
                       <IconPocket tone="trust" icon="message-square" compact />
@@ -612,12 +610,11 @@ function useParamFromMatches(key: string): string | null {
   return null;
 }
 
-function useActiveRouteKey(): 'project' | 'files' | 'skills' | 'automation' | 'members' | 'settings' | 'session' | 'projects' {
+function useActiveRouteKey(): 'project' | 'files' | 'automation' | 'members' | 'settings' | 'session' | 'projects' {
   const state = useRouterState();
   const path = state.location.pathname;
   if (path.includes('/sessions/')) return 'session';
   if (path.endsWith('/files')) return 'files';
-  if (path.endsWith('/skills')) return 'skills';
   if (/\/automation(\/|$)/.test(path)) return 'automation';
   if (path.endsWith('/members')) return 'members';
   if (path.endsWith('/settings')) return 'settings';

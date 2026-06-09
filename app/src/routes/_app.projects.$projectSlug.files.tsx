@@ -221,7 +221,7 @@ function FilesPage() {
   const [openMenuPath, setOpenMenuPath] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   // Disambiguates "rename via dialog" from generic moves so we can show the
-  // right toast copy ("이름이 변경되었습니다" vs "이동되었습니다").
+  // right toast copy ("the name was changed" vs "moved").
   const renamingRef = useRef(false);
 
   const bulkDeleteMutation = useMutation({
@@ -324,7 +324,7 @@ function FilesPage() {
 
   // Single unified mutation for both rename (1-item move with new_name) and
   // bulk move. The `renamingRef` flag tells the success/error handler whether
-  // to show "이름이 변경되었습니다" or "이동되었습니다" copy.
+  // to show the "the name was changed" or "moved" copy.
   const moveMutation = useMutation({
     mutationFn: ({ sources, destination, newName }: { sources: string[]; destination: string; newName?: string }) =>
       moveDirents(scope, sources, destination, newName),

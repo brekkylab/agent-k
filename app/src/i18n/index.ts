@@ -18,6 +18,7 @@ export const I18N_NAMESPACES = [
   'dialogs',
   'errors',
   'members',
+  'automation',
 ] as const;
 
 // All namespaces are loaded lazily via Vite chunks. Each route declares the
