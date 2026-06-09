@@ -76,9 +76,9 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
   const segments = dir ? dir.split('/') : [];
 
   function handleDragStart(e: React.DragEvent, item: SessionImportItem) {
+    // Custom MIME only — omit text/plain so external apps can't accept the drop.
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData(SESSION_IMPORT_MIME, JSON.stringify([item]));
-    e.dataTransfer.setData('text/plain', item.filename);
 
     const ghost = document.createElement('div');
     ghost.className = 'cw-drag-ghost';

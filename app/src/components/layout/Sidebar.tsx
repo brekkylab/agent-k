@@ -244,6 +244,28 @@ export function Sidebar() {
 
   const queryClient = useQueryClient();
   const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set());
+  // Session row currently under a file drag (from the Files page) — highlights
+  // the drop target. Dropping navigates to the session and attaches the file.
+  const [dropSessionId, setDropSessionId] = useState<string | null>(null);
+
+  // Accept files dragged from the Files page onto a session row: navigate to
+  // that session, handing the (scope-relative) shared paths via router state so
+  // the session page attaches them to the next message.
+  const FILE_DRAG_MIME = 'application/x-cowork-dirent-paths';
+  function handleSessionDrop(e: React.DragEvent, projectSlug: string, sessionId: string) {
+    setDropSessionId(null);
+    const raw = e.dataTransfer.getData(FILE_DRAG_MIME);
+    if (!raw) return;
+    e.preventDefault();
+    let paths: string[];
+    try { paths = JSON.parse(raw); } catch { return; }
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    navigate({
+      to: '/projects/$projectSlug/sessions/$sessionPrefix',
+      params: { projectSlug, sessionPrefix: shortSessionId(sessionId) },
+      state: { attachShared: paths },
+    });
+  }
   const activeProjectSlugRef = useRef<string | null>(null);
   useEffect(() => {
     activeProjectSlugRef.current = activeProjectSlug;
@@ -492,11 +514,23 @@ export function Sidebar() {
                       shortSessionId(session.id) === activeSessionId ? 'is-active' : '',
                       session.unreadCount > 0 ? 'is-unread' : '',
                       streamingIds.has(session.id) ? 'is-streaming' : '',
+                      dropSessionId === session.id ? 'is-drop-target' : '',
                     ].filter(Boolean).join(' ')}
                     onClick={() => openSession(activeProject.slug, shortSessionId(session.id))}
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
+                    onDragOver={(e) => {
+                      if (!e.dataTransfer.types.includes(FILE_DRAG_MIME)) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'copy';
+                      if (dropSessionId !== session.id) setDropSessionId(session.id);
+                    }}
+                    onDragLeave={(e) => {
+                      if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                      setDropSessionId((cur) => (cur === session.id ? null : cur));
+                    }}
+                    onDrop={(e) => handleSessionDrop(e, activeProject.slug, session.id)}
                   >
                     {streamingIds.has(session.id) ? (
                       <span className="cw-typing-dots" aria-label="agent responding">

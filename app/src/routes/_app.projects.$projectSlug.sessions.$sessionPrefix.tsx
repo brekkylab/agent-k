@@ -12,7 +12,7 @@ import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
 import { getProject, listMembers } from '@/api/projects';
-import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
+import { deleteDirent, downloadFile, scopeRoot, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
@@ -284,6 +284,21 @@ function SessionPage() {
     try { items = JSON.parse(raw); } catch { return; }
     if (Array.isArray(items)) importSharedFiles(items);
   }, [importSharedFiles]);
+
+  // Files dragged from the Files page onto this session's row arrive as
+  // scope-relative shared paths in router state. Reconstruct each global path
+  // (shared scope, this project) and attach once the session/project resolve,
+  // then clear the state so a refresh doesn't re-attach.
+  useEffect(() => {
+    const rels = location.state.attachShared;
+    if (!rels?.length || !projectId || !sessionId) return;
+    const root = scopeRoot({ kind: 'shared', projectId });
+    importSharedFiles(rels.map((rel) => ({
+      globalPath: `${root}/${rel}`,
+      filename: rel.split('/').pop() ?? rel,
+    })));
+    void navigate({ replace: true, state: (prev) => ({ ...prev, attachShared: undefined }) });
+  }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate]);
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
