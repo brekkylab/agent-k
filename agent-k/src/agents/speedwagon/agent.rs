@@ -1,4 +1,4 @@
-use ailoy::agent::{Agent, AgentCard, AgentProvider, AgentSpec, default_provider};
+use ailoy::agent::{Agent, AgentBuilder, AgentCard, AgentProvider, AgentSpec, default_provider};
 
 use super::tool::{
     build_tools, get_calculate_tool_desc, get_find_in_document_tool_desc,
@@ -134,11 +134,6 @@ pub async fn get_speedwagon_agent(
     store: SharedStore,
     with_shell: bool,
 ) -> anyhow::Result<Agent> {
-    let spec = SpeedwagonSpec::new()
-        .model(model.as_ref())
-        .with_shell(with_shell)
-        .into_spec();
-
     // Models come from the global provider (env-populated); the tool registry
     // is the store-bound one. `web_search` / `shell` resolve against the
     // built-in factories that `build_tools` (via `ToolProvider::new`)
@@ -148,7 +143,20 @@ pub async fn get_speedwagon_agent(
         tools: build_tools(store),
     };
 
-    Agent::try_with_provider(spec, &provider)
+    let mut builder = AgentBuilder::new(model.as_ref())
+        .provider(provider)
+        .instruction(SYSTEM_PROMPT)
+        .tools([
+            get_search_document_tool_desc(),
+            get_find_in_document_tool_desc(),
+            get_read_document_tool_desc(),
+            get_calculate_tool_desc(),
+        ])
+        .web_search_tool(vec![]);
+    if with_shell {
+        builder = builder.shell_tool();
+    }
+    builder.build()
 }
 
 #[cfg(test)]
