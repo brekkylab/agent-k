@@ -15,9 +15,6 @@ describe('agent surface preview registry', () => {
     for (const surface of AGENT_SURFACES) {
       expect(surface.label).toBeTruthy();
       expect(surface.icon).toBeTruthy();
-      expect(surface.placeholder).toBeTruthy();
-      expect(surface.greeting).toBeTruthy();
-      expect(surface.prompts).toHaveLength(3);
     }
   });
 });

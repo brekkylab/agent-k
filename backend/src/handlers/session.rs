@@ -30,8 +30,6 @@ use crate::{
     state::AppState,
 };
 
-// const DEFAULT_MODEL: &str = "openai/gpt-5.4";
-const DEFAULT_MODEL: &str = "anthropic/claude-haiku-4-5";
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
 
@@ -74,21 +72,71 @@ pub async fn build_session_agent(
             .await
             .map_err(|e| format!("failed to create dir {}: {e}", d.display()))?;
     }
-    let opts = agent_k::agents::CoworkerSandboxOptions {
-        sandbox_name: Some(sandbox_name_for(&session_id)),
-        persist: true,
-        with_skill: true,
+    // Resolve the effective model from the session's agent_type + optional pin.
+    let (agent_type, model_pin) = match state.repository.get_session(session_id).await {
+        Ok(Some(s)) => (s.agent_type, s.model),
+        Ok(None) => (None, None),
+        Err(e) => return Err(e.to_string()),
     };
-    agent_k::agents::get_coworker_agent_with_opts(
-        TOP_LEVEL_AGENT_NAME,
-        DEFAULT_MODEL,
-        &inputs,
-        &shared,
-        &artifacts,
-        opts,
-    )
-    .await
-    .map_err(|e| e.to_string())
+    // The same agent type drives both model resolution and dispatch; unknown → coworker.
+    let agent_type = agent_type
+        .as_deref()
+        .and_then(crate::model::AgentType::from_str)
+        .unwrap_or(crate::model::AgentType::Coworker);
+    // Resolve within the project's chain for this agent (built-in default if uncustomized).
+    let project_chains = match state.repository.get_project(project_id).await {
+        Ok(Some(p)) => crate::model::ProjectChains::parse(p.recommended_chains.as_deref()),
+        _ => crate::model::ProjectChains::default(),
+    };
+    let chain = project_chains.chain_for(agent_type);
+    let model = crate::model::resolve_model_in(&chain, model_pin.as_deref());
+
+    use crate::model::AgentType;
+    let agent = match agent_type {
+        AgentType::DeepResearch => {
+            agent_k::agents::get_deep_research_agent(TOP_LEVEL_AGENT_NAME, &model, &artifacts)
+                .await
+                .map_err(|e| e.to_string())?
+        }
+        AgentType::Buddy => agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model)
+            .map_err(|e| e.to_string())?,
+        // Speedwagon: Q&A over the global document corpus (not the session
+        // sandbox); non-sandboxed. Interim until it moves to a sandbox agent.
+        AgentType::Speedwagon => {
+            let spec = agent_k::agents::SpeedwagonSpec::new()
+                .model(&model)
+                .into_spec();
+            Agent::try_new(spec).map_err(|e| e.to_string())?
+        }
+        // Coworker runs the sandboxed coworker agent over the session's files.
+        AgentType::Coworker => {
+            let opts = agent_k::agents::CoworkerSandboxOptions {
+                sandbox_name: Some(sandbox_name_for(&session_id)),
+                persist: true,
+                with_skill: true,
+            };
+            agent_k::agents::get_coworker_agent_with_opts(
+                TOP_LEVEL_AGENT_NAME,
+                &model,
+                &inputs,
+                &shared,
+                &artifacts,
+                opts,
+            )
+            .await
+            .map_err(|e| e.to_string())?
+        }
+    };
+
+    // Pin the resolved model onto a "recommended" (NULL) session so it stays
+    // stable if the chain/availability later changes. Best-effort; pins untouched.
+    if model_pin.is_none()
+        && let Err(e) = state.repository.set_session_model(session_id, &model).await
+    {
+        tracing::warn!(session = %session_id, "failed to persist resolved model: {e}");
+    }
+
+    Ok(agent)
 }
 
 /// Builds the LLM hint note for attached files, using the correct sandbox path per scope.
@@ -379,13 +427,36 @@ pub async fn create_session(
         return Err(AppError::forbidden("not a member of this project"));
     }
 
+    // Validate agent_type/model against the catalog (unknown = client error).
+    // Provider availability is not required — an unavailable pin falls through.
+    let agent_type = match payload.agent_type.as_deref() {
+        None => None,
+        Some(s) => Some(
+            crate::model::AgentType::from_str(s)
+                .ok_or_else(|| AppError::bad_request(format!("unknown agent_type: {s}")))?
+                .as_str()
+                .to_string(),
+        ),
+    };
+    if let Some(model) = payload.model.as_deref() {
+        if crate::model::catalog_entry(model).is_none() {
+            return Err(AppError::bad_request(format!("unknown model: {model}")));
+        }
+    }
+
     let session = state
         .repository
-        .create_session(project_id, auth_user.id)
+        .create_session_full(
+            project_id,
+            auth_user.id,
+            crate::repository::SessionOrigin::User,
+            agent_type.as_deref(),
+            payload.model.as_deref(),
+        )
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    tracing::info!(id = %session.id, "session created");
+    tracing::info!(id = %session.id, agent_type = ?session.agent_type, model = ?session.model, "session created");
     Ok((
         StatusCode::CREATED,
         Json(SessionResponse::from_db(session, 0)),

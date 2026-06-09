@@ -2,24 +2,29 @@
 // row attached to the top of the composer box. Picks WHICH agent surface drives
 // the conversation — a different axis from the LLM model picker.
 //
-// Mock for now: the selection is not wired to create-session / dispatch yet
-// (the backend's CreateSessionRequest only takes project_id, with
-// deny_unknown_fields). The IDs below are the real intended agent surfaces so the
-// seam is concrete — a follow-up PR routes the home-composer agent hint here.
+// The selected surface id IS the `agent_type` sent to POST /sessions (no
+// mapping): it selects the recommended model chain and drives agent dispatch.
 
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 import { AGENT_SURFACES, type AgentId } from '@/domain/agentSurfaces';
 
 // Renders only the tab row — the wrapping container lives in the home route
 // so the picker and composer share one bordered box.
+//
+// `standalone` rounds all four corners of the active-tab indicator (a pill); the
+// default leaves the bottom square so it sits flush on the composer box.
 export function ComposerAgentPicker({
   value,
   onChange,
+  standalone = false,
 }: {
   value: AgentId;
   onChange: (id: AgentId) => void;
+  standalone?: boolean;
 }) {
+  const { t } = useTranslation('automation');
   const tabsRef = useRef<HTMLDivElement>(null);
   const [indicator, setIndicator] = useState({ left: 0, width: 0 });
 
@@ -61,8 +66,8 @@ export function ComposerAgentPicker({
     <div
       ref={tabsRef}
       role="group"
-      aria-label="에이전트 선택"
-      className="cw-agent-tabs"
+      aria-label={t('agent_picker.group_label')}
+      className={`cw-agent-tabs${standalone ? ' is-standalone' : ''}`}
     >
       <span
         key={value}

@@ -76,7 +76,7 @@ async fn ensure_slug_not_retired_by_other(
 /// The server-generated path is always safe by construction; this guard mirrors
 /// the same rule for explicit slugs that arrive via the API contract, so seed
 /// scripts and any future rename UI cannot quietly stash a malformed slug in
-/// the database (`my/project`, `한글`, leading/trailing hyphens, etc.).
+/// the database (`my/project`, `Korean text`, leading/trailing hyphens, etc.).
 fn validate_explicit_slug(s: &str) -> ApiResult<()> {
     if s.is_empty() || s.len() > 64 {
         return Err(AppError::bad_request("slug must be 1-64 characters"));
@@ -239,6 +239,17 @@ pub async fn update_project(
         None
     };
 
+    // Validate and serialize any recommendation-chain overrides. Keys must be
+    // known agent types and values catalogued model ids (provider availability
+    // not required); `None` leaves the stored chains unchanged.
+    let new_chains = match payload.recommended_chains {
+        None => None,
+        Some(chains) => {
+            crate::model::validate_chains(&chains).map_err(AppError::bad_request)?;
+            Some(serde_json::to_string(&chains).map_err(|e| AppError::internal(e.to_string()))?)
+        }
+    };
+
     let updated = state
         .repository
         .update_project(
@@ -246,6 +257,7 @@ pub async fn update_project(
             payload.name,
             payload.description.map(Some),
             new_slug,
+            new_chains,
         )
         .await
         .map_err(|e| match e {

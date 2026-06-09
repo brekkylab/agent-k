@@ -11,11 +11,12 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useToastStore } from '@/components/Toast';
 import { useAuthStore } from '@/stores/auth';
 import { canEditProject } from '@/lib/permissions';
+import { ProjectModelChainsEditor } from '@/components/settings/ProjectModelChainsEditor';
 import { ApiError } from '@/api/client';
 import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/settings')({
-  loader: () => loadNs('project'),
+  loader: () => loadNs('project', 'automation'),
   component: SettingsPage,
 });
 
@@ -356,6 +357,15 @@ function SettingsPage() {
             </p>
           )}
         </div>
+      )}
+
+      {project.data && (
+        <ProjectModelChainsEditor
+          key={project.data.id}
+          projectSlug={projectSlug}
+          overrides={project.data.recommendedChains}
+          editable={editable}
+        />
       )}
 
       {submitError && (
