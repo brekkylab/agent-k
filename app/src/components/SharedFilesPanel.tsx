@@ -83,6 +83,9 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
   const [dragRect, setDragRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const dragOriginRef = useRef<{ x: number; y: number; base: Map<string, string>; additive: boolean } | null>(null);
   const didDragRef = useRef(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lastScrollTopRef = useRef(0);
   const DRAG_THRESHOLD = 4;
 
   // Selection is per-view — reset when changing folders.
@@ -99,21 +102,26 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       base: rowEl || additive ? new Map(selected) : new Map(),
       additive,
     };
+    lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    lastScrollTopRef.current = listRef.current?.scrollTop ?? 0;
     didDragRef.current = false;
     if (!rowEl && !additive) setSelected(new Map());
   }
 
   // Global marquee tracking — draw a rectangle and select intersecting file rows.
   useEffect(() => {
-    function onMove(e: MouseEvent) {
+    // Compute the rect (viewport coords) from the anchor to the pointer, draw it,
+    // and select every file row it intersects. Rows use getBoundingClientRect, so
+    // scrolled-off rows still test correctly once the anchor is scroll-adjusted.
+    function applyMarquee(clientX: number, clientY: number) {
       const origin = dragOriginRef.current;
       if (!origin) return;
-      const dx = e.clientX - origin.x;
-      const dy = e.clientY - origin.y;
+      const dx = clientX - origin.x;
+      const dy = clientY - origin.y;
       if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD && !dragRect) return;
       didDragRef.current = true;
-      const left = Math.min(origin.x, e.clientX);
-      const top = Math.min(origin.y, e.clientY);
+      const left = Math.min(origin.x, clientX);
+      const top = Math.min(origin.y, clientY);
       const width = Math.abs(dx);
       const height = Math.abs(dy);
       setDragRect({ left, top, width, height });
@@ -128,6 +136,22 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       }
       setSelected(next);
     }
+    function onMove(e: MouseEvent) {
+      lastPointerRef.current = { x: e.clientX, y: e.clientY };
+      applyMarquee(e.clientX, e.clientY);
+    }
+    // Scrolling the list while dragging: the anchor is pinned to content, so
+    // shift it by the scroll delta and re-test (mousemove may not fire on a wheel).
+    function onScroll() {
+      const origin = dragOriginRef.current;
+      const list = listRef.current;
+      if (!origin || !list) return;
+      const delta = list.scrollTop - lastScrollTopRef.current;
+      lastScrollTopRef.current = list.scrollTop;
+      origin.y -= delta;
+      const { x, y } = lastPointerRef.current;
+      applyMarquee(x, y);
+    }
     function onUp() {
       const dragged = didDragRef.current && dragOriginRef.current;
       dragOriginRef.current = null;
@@ -138,11 +162,14 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
         window.addEventListener('click', swallow, true);
       }
     }
+    const list = listRef.current;
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    list?.addEventListener('scroll', onScroll);
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      list?.removeEventListener('scroll', onScroll);
     };
   }, [dragRect]);
 
@@ -209,7 +236,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       </div>
 
       {/* ── rows ─────────────────────────────────────────────────── */}
-      <div className="cw-files-browser-list" onMouseDown={onListMouseDown}>
+      <div className="cw-files-browser-list" ref={listRef} onMouseDown={onListMouseDown}>
         {rows.map((row) =>
           row.kind === 'dir' ? (
             <button

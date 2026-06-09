@@ -469,6 +469,8 @@ function FilesPage() {
     additive: boolean;
   } | null>(null);
   const didDragRef = useRef(false);
+  const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lastScrollTopRef = useRef(0);
   const [dragRect, setDragRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
   const onBodyMouseDown = useCallback((e: React.MouseEvent) => {
@@ -482,21 +484,23 @@ function FilesPage() {
       startedOnRow: !!rowEl,
       additive,
     };
+    lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    lastScrollTopRef.current = bodyRef.current?.scrollTop ?? 0;
     didDragRef.current = false;
     if (!rowEl && !additive) clearSelection();
   }, [selectedPaths, clearSelection]);
 
   useEffect(() => {
-    function onMove(e: MouseEvent) {
+    function applyMarquee(clientX: number, clientY: number) {
       const origin = dragOriginRef.current;
       if (!origin) return;
-      const dx = e.clientX - origin.x;
-      const dy = e.clientY - origin.y;
+      const dx = clientX - origin.x;
+      const dy = clientY - origin.y;
       if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD && !dragRect) return;
       didDragRef.current = true;
 
-      const left = Math.min(origin.x, e.clientX);
-      const top = Math.min(origin.y, e.clientY);
+      const left = Math.min(origin.x, clientX);
+      const top = Math.min(origin.y, clientY);
       const width = Math.abs(dx);
       const height = Math.abs(dy);
       setDragRect({ left, top, width, height });
@@ -514,6 +518,22 @@ function FilesPage() {
       }
       setSelectedPaths(next);
     }
+    function onMove(e: MouseEvent) {
+      lastPointerRef.current = { x: e.clientX, y: e.clientY };
+      applyMarquee(e.clientX, e.clientY);
+    }
+    // Scrolling the file body while dragging: pin the anchor to content by
+    // shifting it by the scroll delta, then re-test (a wheel fires no mousemove).
+    function onScroll() {
+      const origin = dragOriginRef.current;
+      const body = bodyRef.current;
+      if (!origin || !body) return;
+      const delta = body.scrollTop - lastScrollTopRef.current;
+      lastScrollTopRef.current = body.scrollTop;
+      origin.y -= delta;
+      const { x, y } = lastPointerRef.current;
+      applyMarquee(x, y);
+    }
     function onUp() {
       const origin = dragOriginRef.current;
       dragOriginRef.current = null;
@@ -528,11 +548,14 @@ function FilesPage() {
         window.addEventListener('click', swallow, true);
       }
     }
+    const body = bodyRef.current;
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    body?.addEventListener('scroll', onScroll);
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      body?.removeEventListener('scroll', onScroll);
     };
   }, [dragRect]);
 
