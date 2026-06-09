@@ -379,14 +379,18 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-files-home-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .cw-files-breadcrumb button { display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--cw-ink-3); font-size: 11px; cursor: pointer; padding: 2px 3px; border-radius: 4px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-files-breadcrumb button:not(:disabled):hover { background: var(--cw-bg-muted); color: var(--cw-ink); }
-.cw-files-breadcrumb button:disabled { cursor: default; color: var(--cw-ink-2); }
+/* pointer-events:none so releasing a marquee over a disabled (gray) crumb still
+   fires window mouseup — disabled buttons otherwise swallow the event. */
+.cw-files-breadcrumb button:disabled { cursor: default; color: var(--cw-ink-2); pointer-events: none; }
 .cw-files-crumb { display: inline-flex; align-items: center; }
-.cw-files-browser-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 14px; display: flex; flex-direction: column; gap: 1px; }
+.cw-files-browser-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 14px; display: flex; flex-direction: column; gap: 1px; user-select: none; }
 
 /* Shared-file rows: color-chip icon (FileTypeIcon) + name, with a drag handle
    that fades in on hover to signal the row is draggable. */
 .cw-sf-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 3px 6px 3px 3px; border: 0; border-radius: var(--cw-radius-sm); background: transparent; font-size: 13px; color: var(--cw-fg-1); text-align: left; transition: background 100ms; }
 .cw-sf-row:hover { background: var(--cw-bg-muted); }
+.cw-sf-row.is-selected { background: color-mix(in oklch, var(--cw-accent) 16%, transparent); }
+.cw-sf-row.is-selected .cw-sf-grip, .cw-sf-row.is-selected .cw-sf-add { opacity: 1; }
 .cw-sf-row > svg { flex-shrink: 0; }
 .cw-sf-row .cw-file-label { flex: 1; }
 .cw-sf-grip, .cw-sf-grip-spacer { width: 12px; flex-shrink: 0; }
