@@ -1,43 +1,31 @@
-import { useEffect, useState, type RefObject } from 'react';
-
-/** Whether a scroll container's content exceeds its viewport (so it can pan).
- *  The +1 absorbs sub-pixel rounding. */
-const isOverflowing = (el: HTMLElement) =>
-  el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+import { useEffect, useRef, useState, type RefObject } from 'react';
 
 /**
  * Drag-to-pan for a scrollable stage whose content overflows when zoomed in.
  * A mouse drag that starts on the content translates into scroll offset; pointer
  * capture keeps the gesture alive once the cursor leaves the element.
  *
+ * - `pannable` (computed by the caller from its own measurements) gates whether
+ *   a drag can start, so this hook owns only the gesture — no second
+ *   ResizeObserver or overflow math duplicating the caller's.
  * - Restricted to mouse pointers so touch keeps its native momentum scrolling.
  * - A drag must start on `contentRef` (not the dim margin) — pressing the margin
  *   still falls through to the backdrop's click-to-dismiss. Since the modal
  *   dismisses on `mousedown` over a non-content target, a press that lands on the
  *   content never triggers dismissal, so no click suppression is needed here.
  *
- * `pannable` reflects whether the content currently overflows (so the caller can
- * show a move-cursor affordance); `dragging` is true mid-gesture.
+ * Returns `dragging` (true mid-gesture) so the caller can show a grabbing cursor.
  */
 export function useDragPan(
   stageRef: RefObject<HTMLElement | null>,
   contentRef: RefObject<HTMLElement | null>,
+  pannable: boolean,
 ) {
-  const [pannable, setPannable] = useState(false);
   const [dragging, setDragging] = useState(false);
-
-  // Recompute overflow when the content resizes (zoom) or the viewport changes.
-  useEffect(() => {
-    const stage = stageRef.current;
-    const content = contentRef.current;
-    if (!stage) return;
-    const update = () => setPannable(isOverflowing(stage));
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(stage);
-    if (content) ro.observe(content);
-    return () => ro.disconnect();
-  }, [stageRef, contentRef]);
+  // Latest `pannable` read inside the long-lived pointerdown listener without
+  // re-binding it every render.
+  const pannableRef = useRef(pannable);
+  pannableRef.current = pannable;
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -49,10 +37,9 @@ export function useDragPan(
     let active = false;
 
     const onDown = (e: PointerEvent) => {
-      if (e.button !== 0 || e.pointerType !== 'mouse') return;
+      if (e.button !== 0 || e.pointerType !== 'mouse' || !pannableRef.current) return;
       const content = contentRef.current;
       if (!content || !(e.target instanceof Node) || !content.contains(e.target)) return;
-      if (!isOverflowing(stage)) return;
       active = true;
       startX = e.clientX;
       startY = e.clientY;
@@ -95,5 +82,5 @@ export function useDragPan(
     };
   }, [stageRef, contentRef]);
 
-  return { pannable, dragging };
+  return { dragging };
 }

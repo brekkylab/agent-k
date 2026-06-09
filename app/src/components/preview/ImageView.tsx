@@ -5,22 +5,24 @@ import { ZoomControls } from './ZoomControls';
 
 interface Props { objectUrl: string; alt: string }
 
+/** The fit baseline measured on load/resize: the px width at which the image is
+ *  fully contained in the stage (never upscaled past natural), plus the
+ *  available stage box and the image's height/width ratio — enough to derive
+ *  both the rendered size and whether it overflows at any zoom. */
+interface Fit { width: number; availW: number; availH: number; ratio: number }
+
 export function ImageView({ objectUrl, alt }: Props) {
   const zoom = useZoom();
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   // Plain wheel zooms (no modifier needed) since panning is by drag, not scroll.
   useWheelZoom(stageRef, zoom, { plain: true });
-  const { pannable, dragging } = useDragPan(stageRef, imgRef);
 
-  // `fitWidth` is the px width at which the image is fully contained in the
-  // stage without upscaling past its natural size (the 100% baseline). Every
-  // zoom level renders at `fitWidth * scale`, so the % label maps linearly to
-  // on-screen size for portrait and landscape alike. Computing it from the
-  // measured natural + stage dimensions replaces the old dual-model approach
-  // (object-fit:contain at scale 1, width-percent otherwise) whose two
-  // baselines disagreed — making "100%" jump to a thumbnail for tall images.
-  const [fitWidth, setFitWidth] = useState<number | null>(null);
+  // `fit.width * scale` is the rendered px width — every zoom level is a clean
+  // multiple of one fit baseline, so the % label maps linearly to on-screen
+  // size for portrait and landscape alike. (Replaces an old dual model whose
+  // two baselines disagreed, making "100%" a thumbnail for tall images.)
+  const [fit, setFit] = useState<Fit | null>(null);
 
   const measure = useCallback(() => {
     const stage = stageRef.current;
@@ -33,11 +35,12 @@ export function ImageView({ objectUrl, alt }: Props) {
     const availH = stage.clientHeight - padY;
     // never upscale past natural — mirrors the old `max-width/height: 100%`.
     const fitScale = Math.min(availW / img.naturalWidth, availH / img.naturalHeight, 1);
-    setFitWidth(img.naturalWidth * fitScale);
+    setFit({ width: img.naturalWidth * fitScale, availW, availH, ratio: img.naturalHeight / img.naturalWidth });
   }, []);
 
   // Re-measure when the stage resizes (window resize); the image's natural size
-  // is stable so it's read fresh inside `measure` each time.
+  // is stable so it's read fresh inside `measure` each time. Zoom changes don't
+  // re-measure — `pannable`/`width` derive from `fit` + scale on render.
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
@@ -46,7 +49,15 @@ export function ImageView({ objectUrl, alt }: Props) {
     return () => ro.disconnect();
   }, [measure]);
 
-  const width = fitWidth != null ? fitWidth * zoom.scale : null;
+  const width = fit ? fit.width * zoom.scale : null;
+  // The rendered image overflows the stage box (so a drag can pan it). Derived
+  // arithmetically from the already-measured fit — equivalent to comparing the
+  // stage's scrollWidth/Height against its clientWidth/Height, without a second
+  // ResizeObserver or any extra layout reads.
+  const pannable =
+    width != null && fit != null && (width > fit.availW + 1 || width * fit.ratio > fit.availH + 1);
+
+  const { dragging } = useDragPan(stageRef, imgRef, pannable);
 
   return (
     <>
