@@ -222,7 +222,12 @@
 .cw-preview-sheet--code { width: clamp(320px, 90vw, 1280px); }
 
 /* CSV/TSV table */
-.cw-preview-table-wrap { overflow: auto; }
+/* Let the sheet own scrolling (both axes) instead of this wrap: a wrap-level
+   horizontal scrollbar would sit at the bottom of the full (tall) table, below
+   the fold. With the wrap visible, the table overflows to the sheet whose
+   scrollbar is at its fixed visible edge — and the sticky header now pins against
+   the sheet (the actual vertical scroller) instead of this never-scrolling wrap. */
+.cw-preview-table-wrap { overflow: visible; }
 .cw-preview-table { border-collapse: collapse; width: 100%; font-size: var(--cw-text-xs); color: var(--cw-fg-1); }
 .cw-preview-table th, .cw-preview-table td {
   border: 1px solid var(--cw-border); padding: 6px 10px;
@@ -242,7 +247,7 @@
    chat-style code-card chrome (bg/border/radius/margin/padding) and let the code
    sit flush on the sheet with only the doc's single inset — like the plain-text
    preview. Scoped to .cw-preview-code so markdown previews and chat keep their
-   boxed code blocks. Horizontal scroll stays (code must not soft-wrap). */
+   boxed code blocks. */
 .cw-preview-code .cw-md pre {
   margin: 0;
   padding: 0;
@@ -250,6 +255,14 @@
   border: 0;
   border-radius: 0;
 }
+/* Release the inner horizontal scroll so the SHEET owns it. highlight.js's theme
+   sets `.hljs { overflow-x: auto }` on the <code>, which would otherwise park the
+   horizontal scrollbar at the bottom of the whole (tall) code block — below the
+   fold, invisible until you scroll all the way down. With both visible, the long
+   line overflows up to the sheet, whose scrollbar sits at its fixed visible edge.
+   Code still must not soft-wrap (white-space: pre is kept). */
+.cw-preview-code .cw-md pre,
+.cw-preview-code .cw-md pre code { overflow: visible; }
 
 /* Fallback card centered on the dim. */
 .cw-preview-fallcard {
