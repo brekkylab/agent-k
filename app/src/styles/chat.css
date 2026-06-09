@@ -155,7 +155,21 @@
   display: flex; align-items: safe center; justify-content: safe center;
   padding: 64px 24px 88px;   /* clear chrome (top) and zoom pill (bottom) */
 }
-.cw-preview-img { display: block; user-select: none; max-width: 100%; max-height: 100%; object-fit: contain; }
+/* `flex-shrink: 0` keeps the JS-measured width honored — without it the flex
+   stage shrinks a zoomed-in image back to fit, collapsing every level ≥125%
+   to one clamped size. max-width/height:100% apply only pre-measure (no inline
+   width yet) to letterbox the first paint. */
+.cw-preview-img { display: block; user-select: none; flex-shrink: 0; max-width: 100%; max-height: 100%; object-fit: contain; }
+/* When the zoomed image overflows it's pannable by drag — show the 4-way move
+   affordance over the image, and keep it while dragging even as the pointer
+   crosses the dim margin (pointer capture is on the stage). */
+.cw-preview-img.is-pannable { cursor: move; }
+.cw-preview-img-stage.is-panning,
+.cw-preview-img-stage.is-panning .cw-preview-img { cursor: move; }
+/* Panning replaces scrollbars for the image stage — keep overflow scrollable
+   (drag sets scrollLeft/Top) but hide the bars. PDF keeps its scrollbars. */
+.cw-preview-img-stage { scrollbar-width: none; }
+.cw-preview-img-stage::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 .cw-preview-pdf { flex-direction: column; }
 .cw-preview-pdf-doc { display: flex; flex-direction: column; align-items: center; gap: 12px; }
@@ -178,6 +192,9 @@
 .cw-zoom-controls button:hover:not(:disabled) { background: rgb(255 255 255 / 0.16); }
 .cw-zoom-controls button:disabled { opacity: 0.35; cursor: default; }
 .cw-zoom-controls .cw-zoom-pct { font-size: var(--cw-text-xs); min-width: 52px; font-variant-numeric: tabular-nums; }
+/* icon variant (image preview): drop the number's reserved width so the
+   magnifier sits in a balanced square like the −/+ buttons. */
+.cw-zoom-controls .cw-zoom-pct--icon { min-width: 32px; padding: 0; }
 
 /* Document sheet: readable light page centered on the dim. */
 .cw-preview-sheet {

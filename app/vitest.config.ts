@@ -14,6 +14,9 @@ export default mergeConfig(
       // Loading them under Vitest throws "Playwright Test did not expect
       // test.describe() to be called here". Vitest = unit/component tests only.
       exclude: [...configDefaults.exclude, 'tests/e2e/**'],
+      // Polyfills jsdom is missing (ResizeObserver) so size-measuring components
+      // can mount in component tests.
+      setupFiles: ['./vitest.setup.ts'],
     },
   }),
 );
