@@ -154,7 +154,7 @@ class AppWebSocketManager {
     const count = (this.sessionRefCounts.get(sessionId) ?? 0) + 1;
     this.sessionRefCounts.set(sessionId, count);
     if (count === 1) {
-      // 첫 구독 시에만 서버에 전송; 소켓이 닫혀 있으면 reconnect 후 onopen에서 재전송됨
+      // Send to the server only on the first subscription; if the socket is closed it will be resent in onopen after reconnect.
       this.subscribedSessions.add(sessionId);
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));

@@ -1913,8 +1913,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-welcome {
   min-height: 100vh;
   display: grid;
-  /* 기본: 로그인 우세 (≈ 33% 가이드 · 67% 폼) — 가이드는 "엿보기" 정도.
-     마우스를 가이드로 옮기면 :has()로 비율이 뒤집혀 가이드가 풀로 펼쳐진다. */
+  /* Default: login dominant (≈ 33% guide · 67% form) — the guide is just a "peek".
+     Moving the mouse onto the guide flips the ratio via :has() so the guide expands fully. */
   grid-template-columns: 0.5fr 1fr;
   background: var(--cw-paper);
   transition: grid-template-columns 320ms cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -1922,7 +1922,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 
 .cw-welcome:has(.cw-welcome-showcase:hover),
 .cw-welcome:has(.cw-welcome-showcase:focus-within) {
-  grid-template-columns: 1.5fr 1fr; /* 가이드 우세 (≈ 60% 가이드 · 40% 폼) */
+  grid-template-columns: 1.5fr 1fr; /* guide dominant (≈ 60% guide · 40% form) */
 }
 
 .cw-welcome-showcase {
@@ -1985,8 +1985,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   place-items: center;
 }
 
-/* 도트 그리드 텍스처 — 모션 예산 0으로 "디자인된 공간" 인상.
-   미디어 안의 mock이 작을 때 배경이 단순한 빈 색면이 아니게 한다. */
+/* Dot-grid texture — gives a "designed space" impression with zero motion budget.
+   Keeps the background from being a plain empty color field when the mock inside the media is small. */
 .cw-welcome-media::before {
   content: '';
   position: absolute;
@@ -2063,9 +2063,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   background: color-mix(in oklch, white, transparent 74%);
 }
 
-/* WCAG 2.2.2 pause/play — arrow보다 살짝 작게 잡아 navigation control과
-   구분하되 같은 컨트롤 행 안에 함께 둔다. aria-pressed=true(=paused)일 때
-   배경을 더 진하게 해 "지금 멈춰 있다"는 신호가 분명히 보이도록. */
+/* WCAG 2.2.2 pause/play — sized slightly smaller than the arrow to distinguish it
+   from the navigation control while keeping it in the same control row. When
+   aria-pressed=true (=paused), the background darkens so the "currently stopped" signal is clearly visible. */
 .cw-welcome-pause {
   flex: none;
   width: 32px;
@@ -2095,10 +2095,10 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-welcome-dots {
   display: flex;
   align-items: center;
-  gap: 2px; /* 버튼 간 간격은 좁게 — 실제 hit area는 버튼 padding이 만든다 */
+  gap: 2px; /* keep the gap between buttons tight — the actual hit area comes from button padding */
 }
 
-/* 버튼 = hit target (시각엔 안 보이고, 손가락/커서 잡기는 쉬움 ≥ 44px) */
+/* button = hit target (invisible visually, but easy to tap/click ≥ 44px) */
 .cw-welcome-dot {
   display: inline-flex;
   align-items: center;
@@ -2109,7 +2109,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   cursor: pointer;
 }
 
-/* 시각적 막대 = 진행바 트랙 */
+/* visual bar = progress-bar track */
 .cw-welcome-dot-track {
   display: block;
   width: 28px;
@@ -2123,7 +2123,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 
 .cw-welcome-dot[data-active="true"] .cw-welcome-dot-track {
   width: 56px;
-  /* 활성 트랙은 비활성보다 살짝 진하게 — 흰 채움 막대와의 콘트라스트 확보 */
+  /* the active track is slightly darker than inactive ones — ensures contrast against the white fill bar */
   background: color-mix(in oklch, white, transparent 70%);
 }
 
@@ -2135,9 +2135,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   transform-origin: left;
 }
 
-/* 활성 상태는 track 길이(28→56px)로 표시하고, 채움은 "자동전환 진행 중"일 때만
-   보여준다. 수동으로 이동/일시정지하면 채움은 비어 있어, "지금은 카운트가
-   멈춤"이라는 정보를 시각적으로 정확히 전달한다. */
+/* The active state is shown by track length (28→56px), and the fill is shown only while
+   "auto-advance is in progress". When moved manually or paused, the fill stays empty, so it
+   accurately conveys visually that "the countdown is currently stopped". */
 .cw-welcome-dot-fill[data-run="true"] {
   animation-name: cw-dot-progress;
   animation-timing-function: linear;
@@ -2158,10 +2158,10 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   padding: 18px;
 }
 
-/* 에이전트 피커 모크 — 새 세션 시작 시 에이전트를 고르는 화면을 흉내낸다.
-   "선택" 행에 흰 배경 + 체크가 들어가 무엇을 골랐는지 분명히 보인다. */
-/* Agent 슬라이드 — picker(agent-list)와 그 결과인 composer를 세로 스택.
-   기본 .cw-mock(grid place-items:center) 대신 flex column으로 갭 둔다. */
+/* Agent picker mock — mimics the screen for choosing an agent when starting a new session.
+   The "selected" row gets a white background + check so it's clear what was chosen. */
+/* Agent slide — vertically stacks the picker (agent-list) and the resulting composer.
+   Uses a flex column with a gap instead of the default .cw-mock (grid place-items:center). */
 .cw-mock-agent {
   display: flex;
   flex-direction: column;
@@ -2200,7 +2200,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-size: 12px;
   color: color-mix(in oklch, white, transparent 32%);
 }
-/* picker 행들이 들어온 뒤(1.0s)에 등장 — "선택 → 입력" 이야기 흐름 */
+/* appears after the picker rows arrive (1.0s) — the "select → type" narrative flow */
 .cw-mock-agent[data-active="true"] .cw-mock-composer {
   animation: cw-loop-rise 4s ease 1.0s infinite;
 }
@@ -2243,17 +2243,17 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="1"] { animation-delay: 0.15s; }
 .cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="2"] { animation-delay: 0.3s;  }
 .cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-i="3"] { animation-delay: 0.45s; }
-/* 선택된 row(검색)에는 loop-fade + box-shadow 펄스를 동시에 — "골랐다"는 신호가 hold 동안에도 살아 있다 */
+/* the selected row (search) gets loop-fade + box-shadow pulse at once — the "chosen" signal stays alive during hold too */
 .cw-mock-agent[data-active="true"] .cw-mock-agent-row[data-on="true"] {
   animation:
     cw-loop-fade   4s ease 0.15s infinite,
     cw-breathe-ring 2.4s ease-in-out infinite;
 }
 
-/* Knowledge mock — 업로드된 파일 chip + 사용자 질문 + 답변 라인 + 출처 chip.
-   타임라인: 파일들이 먼저 떠오르고(0s, 0.15s), 사용자 질문(0.3s), 답변 라인이
-   가로로 채워지며(0.45s, 0.6s), 마지막에 출처 chip이 pop으로 강조된다(0.75s).
-   "출처와 함께 답한다"는 RAG의 본질을 모션의 종점에 두는 설계. */
+/* Knowledge mock — uploaded file chip + user question + answer lines + source chip.
+   Timeline: the files surface first (0s, 0.15s), then the user question (0.3s), the answer lines
+   fill horizontally (0.45s, 0.6s), and finally the source chip is emphasized with a pop (0.75s).
+   A design that places the essence of RAG — "answering with sources" — at the motion's endpoint. */
 .cw-mock-knowledge {
   display: flex;
   flex-direction: column;
@@ -2310,8 +2310,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   margin-left: 4%;
   max-width: 80%;
 }
-/* 짧은 실제 답변 한 줄 — placeholder 라인 대신 의미를 직접 전달한다.
-   다른 슬라이드들(03 채팅 버블, 04 run 라벨, 05 chip)과 같은 "구체적 텍스트" 결. */
+/* a short real answer line — conveys meaning directly instead of a placeholder line.
+   Same "concrete text" texture as the other slides (03 chat bubble, 04 run label, 05 chip). */
 .cw-mock-answer-text {
   color: white;
   font-size: 12px;
@@ -2324,8 +2324,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   animation: cw-loop-rise 4s ease 0.45s infinite;
 }
 
-/* 출처 chip — 답변 안에서 살짝 들어가 있고, pop 모션 + breathe-ring으로
-   "여기 근거가 있다"를 강조한다. */
+/* source chip — sits slightly inset within the answer, and uses pop motion + breathe-ring
+   to emphasize "here is the evidence". */
 .cw-mock-source {
   align-self: flex-start;
   margin-top: 3px;
@@ -2362,8 +2362,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   display: grid;
   gap: 9px;
 }
-/* 메인 카드 뒤에 살짝 비스듬히 깔리는 그림자 카드 — "여러 산출물" 인상,
-   정적 깊이감(모션 예산 0). */
+/* a shadow card laid slightly askew behind the main card — gives a "multiple artifacts" impression,
+   static depth (zero motion budget). */
 .cw-mock-doc::before {
   content: '';
   position: absolute;
@@ -2374,7 +2374,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   z-index: -1;
   pointer-events: none;
 }
-/* 문서 카드 자체가 위아래로 살짝 떠다님 — 안쪽 line 채움이 끝나도 정적이지 않게 */
+/* the doc card itself drifts gently up and down — so it isn't static even after the inner line fill finishes */
 .cw-mock-artifact[data-active="true"] .cw-mock-doc {
   animation: cw-breathe-float 3.2s ease-in-out infinite;
 }
@@ -2455,7 +2455,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 }
 .cw-mock-share[data-active="true"] .cw-mock-mode.is-on { animation: cw-loop-pop 4s ease 0.6s infinite; }
 
-/* "함께 대화"의 결과로 팀에서 누군가 보낸 메시지 — share 슬라이드의 보조 요소 */
+/* a message sent by someone on the team as a result of "talking together" — a secondary element of the share slide */
 .cw-mock-chat-bubble {
   align-self: flex-end;
   margin-right: 6%;
@@ -2472,9 +2472,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   animation: cw-loop-rise 4s ease 0.9s infinite;
 }
 
-/* Automation mock — 트리거 칩 + 누적된 run rows.
-   상단에서 트리거가 등장(0s, 0.15s) → 그 결과로 run row가 왼쪽에서 차례로
-   들어옴(0.3s ~ 0.6s). 모션이 "트리거가 결과를 만든다"는 인과를 그린다. */
+/* Automation mock — trigger chip + accumulated run rows.
+   The trigger appears at the top (0s, 0.15s) → as a result, run rows enter from the left in sequence
+   (0.3s ~ 0.6s). The motion depicts the causality of "the trigger produces results". */
 .cw-mock-automation-inner {
   display: flex;
   flex-direction: column;
@@ -2551,8 +2551,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-mock-run-dot[data-status="running"] {
   background: white;
 }
-/* "실행 중" 점만 hold 구간 내내 호흡 — main loop의 opacity/transform과
-   충돌하지 않게 box-shadow에 모션을 깐다. */
+/* only the "running" dot breathes throughout the hold span — the motion is applied to box-shadow
+   so it doesn't conflict with the main loop's opacity/transform. */
 .cw-mock-automation[data-active="true"] .cw-mock-run[data-i="0"] .cw-mock-run-dot[data-status="running"] {
   animation: cw-breathe-ring 1.8s ease-in-out infinite;
 }
@@ -2597,7 +2597,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-size: 13px;
   flex: none;
 }
-/* 각 단계의 아이콘 — 순번 배지 옆에 글리프 추가해 한 행에 더 많은 정보 */
+/* icon for each step — a glyph added next to the sequence badge to pack more info into one row */
 .cw-mock-step-icon {
   width: 22px;
   height: 22px;
@@ -2608,13 +2608,13 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   color: white;
   flex: none;
 }
-/* step 이름이 너무 길어지면 chip이 밀려나지 않도록 — 타이틀이 chip 공간을
-   먹지 않고, chip은 항상 행 끝에서 ellipsis 처리된다. */
+/* keeps the chip from being pushed out when a step name gets too long — the title
+   doesn't eat into the chip's space, and the chip always gets ellipsis at the row end. */
 .cw-mock-step-title {
   flex: 0 1 auto;
   min-width: 0;
 }
-/* 각 step에 들어갈 예시 한 토막 — 03/04와 같은 구체성 결을 quickstart에도. */
+/* a small example snippet for each step — brings the same concreteness as 03/04 to the quickstart too. */
 .cw-mock-step-preview {
   margin-left: auto;
   font-size: 11px;
@@ -2630,10 +2630,10 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   flex: 0 1 auto;
 }
 
-/* 4초 사이클 안에 enter(10%) → hold(70%) → exit(10%) → dwell(10%)가 모두
-   들어가 있어, infinite로 돌면서 "잠깐 보이고 텀 두고 또 보이는" 짧은
-   영상처럼 자연스럽게 반복된다. AUTO_ADVANCE_MS(5s)보다 짧게 잡아 슬라이드
-   전환 직전에 한 번 더 들어가는 모습이 일부 비친다. */
+/* The 4-second cycle contains all of enter(10%) → hold(70%) → exit(10%) → dwell(10%),
+   so as it loops infinitely it repeats naturally like a short clip that "shows briefly, pauses,
+   then shows again". Kept shorter than AUTO_ADVANCE_MS(5s) so a glimpse of it entering once more
+   just before the slide transition is partially visible. */
 @keyframes cw-loop-fade {
   0%,  100% { opacity: 0; transform: translateY(-6px); }
   10%, 80%  { opacity: 1; transform: none; }
@@ -2660,9 +2660,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   90%       { transform: scaleX(0); }
 }
 
-/* 보조 호흡 — 메인 loop의 hold(70%) 동안에도 미세 모션을 깔아
-   "정지된 카드" 느낌을 없앤다. transform이 아닌 box-shadow / translateY를
-   써서 메인 loop의 transform/opacity와 충돌하지 않는다. */
+/* secondary breathing — adds subtle motion even during the main loop's hold(70%)
+   to remove the "frozen card" feeling. Uses box-shadow / translateY rather than transform,
+   so it doesn't conflict with the main loop's transform/opacity. */
 @keyframes cw-breathe-ring {
   0%, 100% { box-shadow: 0 0 0 0  color-mix(in oklch, white, transparent 80%); }
   50%      { box-shadow: 0 0 0 5px color-mix(in oklch, white, transparent 92%); }
@@ -2686,11 +2686,11 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
     opacity: 1 !important;
     transform: none !important;
   }
-  /* 모션 비선호 사용자에겐 활성 점을 풀로 채워 활성 위치를 명확히 한다
-     (자동전환은 꺼지므로 카운트다운이라는 정보가 무의미하므로). */
-  /* !important로 같은 블록의 transform: none을 이긴다 — 위 blanket rule이
-     active dot fill에도 transform: none을 강제하는데, 의도는 active 위치에선
-     scaleX(1)로 꽉 채워 위치 표시를 유지하는 것. */
+  /* for motion-averse users, fill the active dot fully to make the active position clear
+     (since auto-advance is off, the countdown information is meaningless). */
+  /* !important beats the transform: none in the same block — the blanket rule above forces
+     transform: none on the active dot fill too, but the intent is to keep the active position
+     filled to scaleX(1) so the position indicator is preserved. */
   .cw-welcome-dot[data-active="true"] .cw-welcome-dot-fill { transform: scaleX(1) !important; }
 }
 
@@ -2716,9 +2716,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   color: var(--cw-accent);
 }
 
-/* Session-expired toast — 카드 안 상단 inline (옵션 A). 5초 후 자동 dismiss 되거나
-   ✕ 버튼으로 수동 닫을 수 있다. floating banner와 달리 시각 위계가 카드 안에 묶여
-   "왜 다시 로그인해야 하는지" 컨텍스트가 brand/title보다 먼저 닿는다. */
+/* Session-expired toast — inline at the top inside the card (option A). Auto-dismisses after 5s, or
+   can be closed manually with the ✕ button. Unlike a floating banner, its visual hierarchy is bound
+   inside the card, so the "why you need to log in again" context reaches the user before the brand/title. */
 .cw-welcome-notice {
   display: flex;
   align-items: center;
@@ -2838,20 +2838,21 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   box-shadow: 0 0 0 3px var(--cw-paper-3);
 }
 
-/* Edge/IE의 built-in password reveal · clear 버튼 숨김 — 커스텀 토글
-   (.cw-input-toggle)과 나란히 두 번 보이는 걸 막고, 모든 브라우저에서
-   일관된 UI를 유지한다. password input에는 ::-ms-reveal이, text input에는
-   ::-ms-clear가 자동으로 붙는데, 후자는 보수적으로 함께 처리. */
+/* Hide Edge/IE's built-in password reveal · clear buttons — prevents them from showing
+   twice alongside the custom toggle (.cw-input-toggle), keeping a consistent UI across all
+   browsers. ::-ms-reveal is automatically attached to password inputs and ::-ms-clear to
+   text inputs; the latter is handled together as a conservative measure. */
 .cw-welcome-card input::-ms-reveal,
 .cw-welcome-card input::-ms-clear {
   display: none;
 }
 
-/* Chrome/Edge의 자동 채움 시 input 배경을 연한 파랑(rgb(232,240,254))으로
-   강제하는 동작을 덮어쓴다. CSS 명세상 background-color로는 override가 안 되어
-   inset box-shadow로 input 안쪽을 paper 색으로 덮고, text-fill-color로 글자
-   색을 ink로 강제한다 — 둘 다 -webkit-* prefix 한정이라 다른 브라우저에는
-   영향 없음. focus 시에도 같은 처리를 유지해 자동 채움 후 클릭해도 색이 안 튐. */
+/* Overrides Chrome/Edge's behavior of forcing the input background to light blue
+   (rgb(232,240,254)) on autofill. Since the CSS spec doesn't allow overriding it via
+   background-color, an inset box-shadow covers the inside of the input with the paper color,
+   and text-fill-color forces the text color to ink — both are limited to the -webkit-* prefix,
+   so they have no effect on other browsers. The same treatment is kept on focus too, so the
+   color doesn't jump even when clicking after autofill. */
 .cw-welcome-card input:-webkit-autofill,
 .cw-welcome-card input:-webkit-autofill:hover,
 .cw-welcome-card input:-webkit-autofill:focus,
@@ -2863,8 +2864,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   transition: background-color 5000s ease-in-out 0s;
 }
 
-/* Password 같이 보조 토글이 붙는 input의 래퍼. 토글 아이콘과 텍스트가
-   겹치지 않도록 input의 우측 padding을 토글 폭(30px + 여백)만큼 늘린다. */
+/* Wrapper for an input that has an auxiliary toggle, such as for a password. To keep the
+   toggle icon and the text from overlapping, the input's right padding is extended by the
+   toggle width (30px + margin). */
 .cw-input-with-toggle {
   position: relative;
   display: block;

@@ -76,7 +76,7 @@ async fn ensure_slug_not_retired_by_other(
 /// The server-generated path is always safe by construction; this guard mirrors
 /// the same rule for explicit slugs that arrive via the API contract, so seed
 /// scripts and any future rename UI cannot quietly stash a malformed slug in
-/// the database (`my/project`, `한글`, leading/trailing hyphens, etc.).
+/// the database (`my/project`, `Korean text`, leading/trailing hyphens, etc.).
 fn validate_explicit_slug(s: &str) -> ApiResult<()> {
     if s.is_empty() || s.len() > 64 {
         return Err(AppError::bad_request("slug must be 1-64 characters"));

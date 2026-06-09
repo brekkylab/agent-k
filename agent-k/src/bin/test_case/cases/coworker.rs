@@ -179,7 +179,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )],
             shared_files: Vec::new(),
         },
-        // Case 12 — xlsx create: 학생 성적 (skill is provided by the coworker agent; toggle via `--no-skill`)
+        // Case 12 — xlsx create: student grades (skill is provided by the coworker agent; toggle via `--no-skill`)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "학생 성적 관리용 엑셀 파일 하나 만들어줘. 학생 12명 정도 \
@@ -229,7 +229,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             files: vec![],
             shared_files: Vec::new(),
         },
-        // Case 14 — xlsx edit: sales_dashboard.xlsx with 수수료 column insert (skill from coworker agent)
+        // Case 14 — xlsx edit: sales_dashboard.xlsx with commission column insert (skill from coworker agent)
         Case {
             query: Message::new(Role::User).with_contents([Part::text(
                 "artifacts/sales_dashboard.xlsx 엑셀 파일을 수정해줘.\n\n\
