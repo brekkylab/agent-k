@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use ailoy::{
-    agent::{Agent, AgentSpec},
+    agent::{Agent, AgentSpec, default_provider},
     runenv::{FileEntry, RunEnv, SandboxConfig, VolumeMount},
 };
+
+use crate::agents::speedwagon::{register_corpus_tools, speedwagon_subagent_spec};
+use crate::knowledge_base::SharedStore;
 
 const XLSX_SKILL_DIR: &str = "/workspace/skills/xlsx";
 pub const GUEST_ATTACHED_DIR: &str = "/workspace/attached";
@@ -44,7 +47,7 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 - Current time: {{TIME}}
 - Always respond in the language the user used."#;
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone)]
 pub struct CoworkerSandboxOptions {
     pub sandbox_name: Option<String>,
     pub persist: bool,
@@ -53,6 +56,9 @@ pub struct CoworkerSandboxOptions {
     /// auto-rendered "Available Skills" table. Default `false`; the CLI
     /// wrappers (`run`, `test_case`) flip this on explicitly.
     pub with_skill: bool,
+    /// When set, a Speedwagon sub-agent (`subagent_speedwagon`) bound to this
+    /// document store is attached, letting Coworker delegate corpus questions.
+    pub corpus_store: Option<SharedStore>,
 }
 
 /// name: Identity of the model
@@ -186,5 +192,17 @@ pub async fn get_coworker_agent_with_opts(
                 ],
             );
     }
-    Agent::try_with_runenv(spec, RunEnv::sandbox(config).await?)
+    let runenv = RunEnv::sandbox(config).await?;
+    match opts.corpus_store {
+        // A corpus store lets Coworker delegate document questions to a
+        // Speedwagon sub-agent. The sub-agent's corpus tools resolve against
+        // this provider, so register them here alongside the default tools.
+        Some(store) => {
+            let mut provider = default_provider().clone();
+            register_corpus_tools(&mut provider.tools, store);
+            let spec = spec.subagent(speedwagon_subagent_spec(name.as_ref(), model.as_ref()));
+            Agent::try_with_provider_and_runenv(spec, &provider, runenv)
+        }
+        None => Agent::try_with_runenv(spec, runenv),
+    }
 }

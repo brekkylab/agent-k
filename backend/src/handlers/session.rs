@@ -99,9 +99,17 @@ pub async fn build_session_agent(
     use crate::model::AgentType;
     let agent = match agent_type {
         AgentType::DeepResearch => {
-            agent_k::agents::get_deep_research_agent(TOP_LEVEL_AGENT_NAME, &model, &artifacts)
-                .await
-                .map_err(|e| e.to_string())?
+            // Attach a Speedwagon sub-agent when the project's corpus store
+            // opens; on failure, run without it rather than failing the session.
+            let corpus = state.store_for(project_id).await.ok();
+            agent_k::agents::get_deep_research_agent(
+                TOP_LEVEL_AGENT_NAME,
+                &model,
+                &artifacts,
+                corpus,
+            )
+            .await
+            .map_err(|e| e.to_string())?
         }
         AgentType::Buddy => agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model)
             .map_err(|e| e.to_string())?,
@@ -119,10 +127,13 @@ pub async fn build_session_agent(
         }
         // Coworker runs the sandboxed coworker agent over the session's files.
         AgentType::Coworker => {
+            // Attach a Speedwagon sub-agent when the project's corpus store
+            // opens; on failure, run without it rather than failing the session.
             let opts = agent_k::agents::CoworkerSandboxOptions {
                 sandbox_name: Some(sandbox_name_for(&session_id)),
                 persist: true,
                 with_skill: true,
+                corpus_store: state.store_for(project_id).await.ok(),
             };
             agent_k::agents::get_coworker_agent_with_opts(
                 TOP_LEVEL_AGENT_NAME,

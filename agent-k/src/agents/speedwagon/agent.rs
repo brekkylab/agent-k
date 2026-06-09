@@ -129,6 +129,36 @@ impl Default for SpeedwagonSpec {
     }
 }
 
+/// Card name → the `subagent_speedwagon` tool a parent agent calls to delegate.
+pub const SPEEDWAGON_SUBAGENT_NAME: &str = "speedwagon";
+
+/// [`AgentCard`] a parent agent reads when deciding to delegate to Speedwagon.
+pub fn subagent_card() -> AgentCard {
+    AgentCard {
+        name: SPEEDWAGON_SUBAGENT_NAME.into(),
+        description: "Answers questions from this project's document corpus \
+            (the files in the project's knowledge folder). Delegate the full \
+            question for anything grounded in the uploaded files; it returns \
+            the answer with its source, or says when the corpus lacks it."
+            .into(),
+        skills: vec![],
+    }
+}
+
+/// Speedwagon [`AgentSpec`] for use as another agent's sub-agent: carries the
+/// [`subagent_card`] and drops web_search/shell (the parent owns those). Corpus
+/// tool functions resolve against the parent's provider, which must register
+/// them via [`build_tools`](super::tool::build_tools).
+pub fn speedwagon_subagent_spec(name: impl Into<String>, model: impl Into<String>) -> AgentSpec {
+    SpeedwagonSpec::new()
+        .name(name)
+        .model(model)
+        .card(subagent_card())
+        .with_web_search(false)
+        .with_shell(false)
+        .into_spec()
+}
+
 impl From<SpeedwagonSpec> for AgentSpec {
     fn from(value: SpeedwagonSpec) -> Self {
         value.into_spec()

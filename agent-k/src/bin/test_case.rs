@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
             .await?
         }
         AgentKind::DeepResearch => {
-            get_deep_research_agent(agent_kind.name(), agent_model, ARTIFACT_DIR).await?
+            get_deep_research_agent(agent_kind.name(), agent_model, ARTIFACT_DIR, None).await?
         }
     };
     println!(
