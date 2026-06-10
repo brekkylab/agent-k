@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
 import { isHiddenName, nameOf } from '@/domain/files';
+import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 import { FileTypeIcon } from './FileTypeIcon';
 import { Icon } from './Icon';
@@ -51,6 +52,8 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
 
   // current directory, relative to the shared root ('' = root)
   const [dir, setDir] = useState('');
+  // Double-clicked file shown in the in-app preview modal (global path).
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
 
   // Immediate children of `dir`: entries one level below the current path.
   const rows = useMemo<Row[]>(() => {
@@ -221,6 +224,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
               draggable
               onDragStart={(e) => handleRowDragStart(e, row.globalPath)}
               onClick={(e) => selectClick(e, row.globalPath)}
+              onDoubleClick={() => setPreviewPath(row.globalPath)}
               title={`${row.name}${row.bytes != null ? ` · ${formatBytes(row.bytes)}` : ''}`}
             >
               <span className="cw-sf-grip" aria-hidden="true">
@@ -265,6 +269,10 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
           }}
         />,
         document.body,
+      )}
+
+      {previewPath && (
+        <FilePreviewModal globalPath={previewPath} onClose={() => setPreviewPath(null)} />
       )}
     </div>
   );
