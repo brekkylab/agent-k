@@ -16,7 +16,7 @@ import { deleteDirent, downloadFile, listDirentsRaw, scopeRoot, uploadFiles, typ
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
-import { isHiddenName } from '@/domain/files';
+import { expandDirentPaths } from '@/domain/files';
 import { getModelCatalog, modelLabel } from '@/api/models';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
@@ -378,27 +378,8 @@ function SessionPage() {
           queryFn: () => listDirentsRaw(sharedScope, true),
         });
       } catch { /* fall back to treating each path as a file */ }
-      const items: SessionImportItem[] = [];
-      const seen = new Set<string>();
-      const add = (globalPath: string) => {
-        if (seen.has(globalPath)) return;
-        seen.add(globalPath);
-        items.push({ globalPath, filename: globalPath.split('/').pop() ?? globalPath });
-      };
-      for (const rel of rels) {
-        const gp = `${root}/${rel}`;
-        const entry = entries.find((e) => e.path === gp);
-        if (entry?.kind === 'dir') {
-          // Expand the folder into its descendant files (skip .keep/dotfiles).
-          for (const e of entries) {
-            if (e.kind !== 'file' || !e.path.startsWith(`${gp}/`)) continue;
-            if (isHiddenName(e.path.split('/').pop() ?? '')) continue;
-            add(e.path);
-          }
-        } else {
-          add(gp);
-        }
-      }
+      // Folders expand to their files (recursive, .keep/dotfiles skipped, deduped).
+      const items = expandDirentPaths(entries, rels.map((rel) => `${root}/${rel}`));
       if (items.length) importSharedFiles(items);
     })();
   }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate, queryClient]);

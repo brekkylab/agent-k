@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
-import { isHiddenName, nameOf } from '@/domain/files';
+import { expandDirentPaths, isHiddenName, nameOf } from '@/domain/files';
 import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -110,39 +110,13 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
     });
   }
 
-  // Resolve selected paths (files and/or folders) to a flat list of file items —
-  // a folder expands to the files it contains (recursive). Dedupe by global path.
-  function expandToFiles(paths: Iterable<string>): SessionImportItem[] {
-    const out: SessionImportItem[] = [];
-    const seen = new Set<string>();
-    const addFile = (gp: string, name: string) => {
-      if (seen.has(gp)) return;
-      seen.add(gp);
-      out.push({ globalPath: gp, filename: name });
-    };
-    for (const p of paths) {
-      const entry = rawEntries.find((e) => e.path === p);
-      if (entry?.kind === 'dir') {
-        const prefix = `${stripScopePrefix(scope, p)}/`;
-        for (const e of rawEntries) {
-          if (e.kind !== 'file') continue;
-          if (isHiddenName(nameOf(e))) continue; // don't attach .keep placeholders
-          if (stripScopePrefix(scope, e.path).startsWith(prefix)) addFile(e.path, nameOf(e));
-        }
-      } else {
-        addFile(p, p.split('/').pop() ?? p);
-      }
-    }
-    return out;
-  }
-
   // One drag handler for both file and folder rows. Dragging a selected row
   // carries the whole selection (folders expanded to their files); otherwise
   // just the dragged row.
   function handleRowDragStart(e: React.DragEvent, globalPath: string) {
     marquee.cancel(); // a native drag is starting — abort any pending marquee
     const sources = selected.has(globalPath) && selected.size > 1 ? [...selected] : [globalPath];
-    const items = expandToFiles(sources);
+    const items = expandDirentPaths(rawEntries, sources);
     // An empty folder still drags (drop is just a no-op) — don't block the gesture.
     // Custom MIME only — omit text/plain so external apps can't accept the drop.
     e.dataTransfer.effectAllowed = 'copy';

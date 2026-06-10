@@ -27,6 +27,36 @@ export function nameOf(entry: BackendDirent): string {
   return parts[parts.length - 1] ?? entry.path;
 }
 
+export interface ExpandedFile { globalPath: string; filename: string; }
+
+/**
+ * Expand dirent global paths to the files they cover: a folder yields its
+ * descendant files (recursive), a file yields itself. Hidden names (.keep and
+ * other dotfiles) are skipped and results are deduped by global path.
+ * `entries` must be the recursive listing the paths come from.
+ */
+export function expandDirentPaths(entries: BackendDirent[], globalPaths: Iterable<string>): ExpandedFile[] {
+  const out: ExpandedFile[] = [];
+  const seen = new Set<string>();
+  const add = (gp: string) => {
+    if (seen.has(gp)) return;
+    seen.add(gp);
+    out.push({ globalPath: gp, filename: gp.split('/').filter(Boolean).pop() ?? gp });
+  };
+  for (const p of globalPaths) {
+    const entry = entries.find((e) => e.path === p);
+    if (entry?.kind === 'dir') {
+      const prefix = `${p}/`;
+      for (const e of entries) {
+        if (e.kind === 'file' && e.path.startsWith(prefix) && !isHiddenName(nameOf(e))) add(e.path);
+      }
+    } else {
+      add(p);
+    }
+  }
+  return out;
+}
+
 // Returns entries that live one level directly under `pathSegments`.
 // Excludes the directory's own row and dotfiles (.keep etc.).
 export interface DirectChildren {
