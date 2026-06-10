@@ -198,3 +198,86 @@ pub async fn knowledge_status(
         document_count,
     }))
 }
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct KnowledgeFileStatus {
+    /// Scope-relative path under the knowledge folder, e.g. `knowledge/report.pdf`.
+    pub path: String,
+    /// True once this file's content is in the searchable corpus.
+    pub indexed: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct KnowledgeFilesResponse {
+    /// Indexable files in the knowledge folder, each with its corpus status.
+    pub files: Vec<KnowledgeFileStatus>,
+    /// A background resync is in flight; statuses may still be settling.
+    pub indexing: bool,
+}
+
+/// GET /projects/{project_ref}/knowledge/files — membership-gated per-file
+/// corpus status. Each file's id is the UUIDv5 of its bytes (as in `ingest`),
+/// so a store lookup tells whether it is indexed — no filename-to-id table.
+pub async fn knowledge_files(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(project_ref): Path<String>,
+) -> ApiResult<Json<KnowledgeFilesResponse>> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
+    let is_member = state
+        .repository
+        .user_in_project(auth_user.id, project_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !is_member {
+        return Err(AppError::forbidden("not a member of this project"));
+    }
+
+    let scope_dir = scope_root(&state, &DirentScope::Shared { project_id });
+    let root = scope_dir.join(KNOWLEDGE_PREFIX);
+    let store = state.store_for(project_id).await?;
+
+    // An unreadable file is reported as not-indexed rather than failing.
+    let mut files: Vec<KnowledgeFileStatus> = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let mut rd = match tokio::fs::read_dir(&dir).await {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(AppError::internal(e.to_string())),
+        };
+        while let Some(entry) = rd.next_entry().await.map_err(|e| AppError::internal(e.to_string()))? {
+            let ft = entry.file_type().await.map_err(|e| AppError::internal(e.to_string()))?;
+            if ft.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if ft.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if indexable_filetype(&name).is_none() {
+                continue;
+            }
+            let indexed = match tokio::fs::read(&path).await {
+                Ok(bytes) => {
+                    let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes);
+                    store.read().await.get(id).is_some()
+                }
+                Err(_) => false,
+            };
+            let rel = path
+                .strip_prefix(&scope_dir)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or(name);
+            files.push(KnowledgeFileStatus { path: rel, indexed });
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    Ok(Json(KnowledgeFilesResponse {
+        files,
+        indexing: state.is_indexing(project_id),
+    }))
+}

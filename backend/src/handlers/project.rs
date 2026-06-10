@@ -302,10 +302,10 @@ pub async fn update_project(
             .join("projects")
             .join(project_id.to_string())
             .join(".speedwagon");
-        if let Err(e) = tokio::fs::remove_dir_all(&speedwagon_dir).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(%project_id, "failed to clear corpus on engine change: {e}");
-            }
+        if let Err(e) = tokio::fs::remove_dir_all(&speedwagon_dir).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%project_id, "failed to clear corpus on engine change: {e}");
         }
         super::knowledge::maybe_trigger_resync(&state, project_id, true);
     }

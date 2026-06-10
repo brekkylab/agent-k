@@ -392,6 +392,12 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-file-row:focus-within .cw-file-more { opacity: 1; }
 .cw-file-row .cw-file-more:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
 .cw-file-row .cw-file-main { padding-right: 36px; }
+/* Per-file corpus status badge in the knowledge folder. */
+.cw-corpus-badge { display: inline-flex; align-items: center; gap: 3px; margin-right: 32px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.cw-corpus-badge.is-ready { background: var(--cw-paper-3); color: var(--cw-ink-3); }
+.cw-corpus-badge.is-pending { background: var(--cw-paper-3); color: var(--cw-ink-4); }
+.cw-corpus-badge.is-pending svg { animation: cw-spin 1.4s linear infinite; }
+@keyframes cw-spin { to { transform: rotate(-360deg); } }
 
 /* Tint the grid card's icon container by file type. The legacy
    .cw-file-pdf / -sheet / -image / -doc / -folder rules already set

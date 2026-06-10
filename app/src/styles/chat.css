@@ -23,6 +23,24 @@
 }
 .cw-md hr { border: 0; border-top: 1px solid var(--cw-line-soft); margin: 14px 0; }
 .cw-md a { color: var(--cw-accent); text-decoration: underline; text-underline-offset: 2px; }
+/* GFM footnotes — Speedwagon cites corpus/web sources as [^1]..[^N]. The marker
+   is a small superscript link; the Sources list at the bottom is set apart and
+   muted, like a references block. */
+.cw-md sup a[data-footnote-ref] {
+  text-decoration: none;
+  font-size: 0.72em;
+  font-weight: 600;
+  padding: 0 2px;
+}
+.cw-md .footnotes {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--cw-line-soft);
+  font-size: 12.5px;
+  color: var(--cw-ink-2);
+}
+.cw-md .footnotes ol { padding-left: 1.2em; }
+.cw-md .footnotes li { margin-top: 2px; }
 .cw-md-inline-code {
   font-family: var(--cw-font-mono);
   font-size: 12.5px;

@@ -89,6 +89,8 @@
   },
   "knowledge": {
     "banner": "Files here are read by the AI to answer questions about this project. New files become available shortly after upload.",
-    "indexing": "Indexing new files for the AI... this takes a moment."
+    "indexing": "Indexing new files for the AI... this takes a moment.",
+    "file_ready": "Ready",
+    "file_pending": "Preparing"
   }
 }

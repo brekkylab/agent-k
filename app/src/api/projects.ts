@@ -58,6 +58,22 @@ export async function getKnowledgeStatus(projectRef: string): Promise<KnowledgeS
   return { indexing: raw.indexing, documentCount: raw.document_count ?? null };
 }
 
+export interface KnowledgeFileStatus {
+  /** Scope-relative path, e.g. `knowledge/report.pdf`. */
+  path: string;
+  indexed: boolean;
+}
+
+export interface KnowledgeFiles {
+  files: KnowledgeFileStatus[];
+  indexing: boolean;
+}
+
+/** Per-file corpus status for the knowledge folder. */
+export async function getKnowledgeFiles(projectRef: string): Promise<KnowledgeFiles> {
+  return request<KnowledgeFiles>(`/projects/${projectRef}/knowledge/files`);
+}
+
 export async function deleteProject(projectRef: string): Promise<void> {
   await request(`/projects/${projectRef}`, { method: 'DELETE' });
 }

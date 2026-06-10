@@ -30,7 +30,7 @@ import {
   type DirentScope,
   stripScopePrefix,
 } from '@/api/dirents';
-import { getProject, getKnowledgeStatus } from '@/api/projects';
+import { getProject, getKnowledgeStatus, getKnowledgeFiles } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -92,6 +92,22 @@ function FilesPage() {
     enabled: inKnowledge && Boolean(project.data),
     refetchInterval: (q) => (q.state.data?.indexing ? 1500 : false),
   });
+
+  // Per-file corpus status, polled while indexing or while any file is still
+  // pending. Keyed by scope-relative path (e.g. `knowledge/foo.pdf`).
+  const knowledgeFiles = useQuery({
+    queryKey: ['knowledge-files', projectSlug],
+    queryFn: () => getKnowledgeFiles(projectSlug),
+    enabled: inKnowledge && Boolean(project.data),
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (!d) return false;
+      return d.indexing || d.files.some((f) => !f.indexed) ? 1500 : false;
+    },
+  });
+  const indexedByPath = new Map(
+    (knowledgeFiles.data?.files ?? []).map((f) => [f.path, f.indexed]),
+  );
 
   useEffect(() => {
     setExpanded((prev) => {
@@ -167,6 +183,7 @@ function FilesPage() {
       // Uploading into knowledge kicks off a background resync; refetch its
       // status so the banner flips to "indexing…" and then polls to done.
       queryClient.invalidateQueries({ queryKey: ['knowledge-status', projectSlug] });
+      queryClient.invalidateQueries({ queryKey: ['knowledge-files', projectSlug] });
       const ok = result.succeeded.length;
       const ko = result.failed.length;
       if (ko === 0) {
@@ -786,6 +803,11 @@ function FilesPage() {
                     onCopy={(e) => setPendingCopy([e])}
                     onMenuToggle={setOpenMenuPath}
                     onDragStart={handleDragStart}
+                    corpusState={
+                      inKnowledge && entry.kind !== 'dir'
+                        ? (indexedByPath.get(entry.path) ? 'ready' : 'pending')
+                        : undefined
+                    }
                   />
                 ))}
               </div>
@@ -1006,6 +1028,8 @@ interface RowProps {
   onCopy: (e: BackendDirent) => void;
   onMenuToggle: (path: string | null) => void;
   onDragStart: (ev: React.DragEvent, e: BackendDirent) => void;
+  /** Corpus status for a knowledge-folder file; undefined elsewhere (no badge). */
+  corpusState?: 'ready' | 'pending';
 }
 
 
@@ -1079,7 +1103,7 @@ function RowMenu({
   );
 }
 
-function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart }: RowProps) {
+function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart, corpusState }: RowProps) {
   const { t } = useTranslation('files');
   const isDir = entry.kind === 'dir';
   return (
@@ -1109,6 +1133,12 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
             : `${entry.modified_at ? new Date(entry.modified_at).toLocaleDateString() : '—'} · ${formatBytes(entry.bytes ?? 0)}`}
         </span>
       </span>
+      {corpusState && (
+        <span className={`cw-corpus-badge is-${corpusState}`}>
+          <Icon name={corpusState === 'ready' ? 'check' : 'rotate-ccw'} size={11} />
+          {t(corpusState === 'ready' ? 'knowledge.file_ready' : 'knowledge.file_pending')}
+        </span>
+      )}
       <RowMenu
         entry={entry}
         menuOpen={menuOpen}

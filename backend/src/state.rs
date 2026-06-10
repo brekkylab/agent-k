@@ -1,10 +1,24 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::Instant,
+};
 
 use agent_k::knowledge_base::{SharedStore, Store};
 use ailoy::{agent::Agent, message::MessageOutput};
 use dashmap::DashMap;
 use tokio::sync::{Mutex, RwLock, broadcast};
 use uuid::Uuid;
+
+/// Cap on simultaneously open per-project corpus stores. Each holds a tantivy
+/// index (open file handles); LRU eviction keeps the count bounded.
+const MAX_OPEN_STORES: usize = 64;
+
+/// A cached corpus store plus the last time it was handed out, for LRU eviction.
+struct StoreEntry {
+    store: SharedStore,
+    last_access: Instant,
+}
 
 use crate::{
     auth::JwtConfig,
@@ -24,10 +38,10 @@ pub struct AppState {
     agents: DashMap<Uuid, Arc<Mutex<Agent>>>,
     active_agent_runs: DashMap<Uuid, Arc<RwLock<ActiveAgentRun>>>,
     pub repository: AppRepository,
-    /// Per-project document corpora (Speedwagon). Each project gets its own
-    /// on-disk store under `data_root/projects/{project_id}/.speedwagon`,
-    /// opened lazily on first access via [`AppState::store_for`].
-    document_stores: DashMap<Uuid, SharedStore>,
+    /// Per-project document corpora (Speedwagon), opened lazily and capped at
+    /// [`MAX_OPEN_STORES`] with LRU eviction so a long-running server doesn't
+    /// hold an unbounded number of open tantivy indices.
+    document_stores: DashMap<Uuid, StoreEntry>,
     /// In-flight knowledge resync count per project (>0 means indexing).
     /// `Arc` so an [`IndexingGuard`] can decrement it on drop, surviving early
     /// returns and panics in the background resync task.
@@ -88,8 +102,9 @@ impl AppState {
     /// `data_root/projects/{project_id}/.speedwagon`; its directories are
     /// created if absent.
     pub async fn store_for(&self, project_id: Uuid) -> Result<SharedStore, ApiError> {
-        if let Some(store) = self.document_stores.get(&project_id) {
-            return Ok(store.clone());
+        if let Some(mut e) = self.document_stores.get_mut(&project_id) {
+            e.last_access = Instant::now();
+            return Ok(e.store.clone());
         }
         let root = self
             .data_root
@@ -102,12 +117,26 @@ impl AppState {
             .map_err(|e| AppError::internal(format!("store init join error: {e}")))?
             .map_err(|e| AppError::internal(format!("store init failed: {e}")))?;
         let shared: SharedStore = Arc::new(RwLock::new(store));
+        // Evict the least-recently-used entry once we're at capacity. A store
+        // still in use survives: it's an `Arc`, so removing it from the map only
+        // drops the cache's handle, and the on-disk index closes when the last
+        // live reference does.
+        if self.document_stores.len() >= MAX_OPEN_STORES
+            && let Some(oldest) = self
+                .document_stores
+                .iter()
+                .min_by_key(|e| e.last_access)
+                .map(|e| *e.key())
+        {
+            self.document_stores.remove(&oldest);
+        }
         // Race-safe: if another task opened it first between the get() above
         // and here, keep the existing entry.
         Ok(self
             .document_stores
             .entry(project_id)
-            .or_insert(shared)
+            .or_insert(StoreEntry { store: shared, last_access: Instant::now() })
+            .store
             .clone())
     }
 
