@@ -1053,7 +1053,11 @@ pub async fn send_message(
                 Some(o) if o.message.role == Role::Assistant
                     && matches!(o.finish_reason, FinishReason::Stop {})
             );
-            if !completed_naturally {
+            if completed_naturally {
+                // Cancel fired at the exact moment the model finished; treat as a normal
+                // completion so the client doesn't see a spurious "Run stopped" toast.
+                stopped = false;
+            } else {
                 // Mark the turn as cut short: append to the last assistant message, or
                 // add a paired one (via synthetic_msgs) if none was produced yet.
                 const INTERRUPT_NOTE: &str =
