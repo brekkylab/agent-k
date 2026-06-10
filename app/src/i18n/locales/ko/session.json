@@ -52,7 +52,8 @@
   "artifact": {
     "download": "다운로드",
     "copy_to_shared": "공유 디렉토리로 복사",
-    "delete": "삭제"
+    "delete": "삭제",
+    "preview": "미리보기"
   },
   "delete_artifact": {
     "title": "삭제 확인",

@@ -12,7 +12,7 @@ import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
 import { getProject, listMembers } from '@/api/projects';
-import { deleteDirent, downloadFile, uploadFiles, type DirentScope } from '@/api/dirents';
+import { deleteDirent, downloadFile, scopeRoot, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
@@ -29,6 +29,7 @@ import { ArtifactsPanel } from '@/components/ArtifactsPanel';
 import { CopyToSharedDialog } from '@/components/CopyToSharedDialog';
 import { AttachmentChip } from '@/components/AttachmentChip';
 import { AttachmentPreview } from '@/components/AttachmentPreview';
+import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { loadNs } from '@/i18n/loader';
@@ -499,9 +500,14 @@ function SessionPage() {
   }, [session.data, send, navigate]);
 
   // WS session subscription — subscribe/unsubscribe when sessionId changes.
+  // subscribeSession is ref-counted, so a session the sidebar already subscribes to
+  // won't send a fresh `subscribe` to the server (no catch-up). resyncSession forces
+  // that re-request on every entry, so we receive either the in-progress run
+  // (started + messages) or an idle sync.
   useEffect(() => {
     if (!sessionId) return;
     appWs.subscribeSession(sessionId);
+    appWs.resyncSession(sessionId);
     return () => {
       appWs.unsubscribeSession(sessionId);
     };
@@ -538,6 +544,9 @@ function SessionPage() {
 
         // Keep the optimistic user bubble if present; otherwise (another tab/user) add it from the event
         setLiveMessages((prev) => {
+          // Skip duplicate `started` for the run we're already rendering — replay can
+          // resend it (subscribe race, reconnect, resync) and would add a second bubble.
+          if (!isNewRun && prev.some((m) => m.id === `live-ai-${sessionId}`)) return prev;
           const hasOptimistic = optimisticUserIdRef.current &&
             prev.some((m) => m.id === optimisticUserIdRef.current);
           if (hasOptimistic) {
@@ -695,26 +704,24 @@ function SessionPage() {
 
       if (event.type === 'agent_run_idle') {
         // The server has no active run for this session (completed before we
-        // subscribed, or server restarted). If the client is currently in
-        // streaming mode, reset cleanly — refetch history once to surface any
-        // persisted messages.
-        if (streamingRef.current) {
-          if (wsInactivityTimerRef.current) {
-            clearTimeout(wsInactivityTimerRef.current);
-            wsInactivityTimerRef.current = null;
-          }
-          setRunDelayed(false);
-          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
-          setLiveMessages([]);
-          wsOutputsRef.current.clear();
-          maxSeqRef.current = -1;
-          optimisticUserIdRef.current = null;
-          currentRunIdRef.current = null;
-          setStreaming(false);
-          streamingRef.current = false;
-          setOwnedRunId(null);
-          setStopping(false);
+        // subscribed, or server restarted). resyncSession re-requests this on every
+        // entry, so refetch history once to surface any persisted messages and reset
+        // streaming state — covers navigating away mid-run and returning after done.
+        if (wsInactivityTimerRef.current) {
+          clearTimeout(wsInactivityTimerRef.current);
+          wsInactivityTimerRef.current = null;
         }
+        setRunDelayed(false);
+        void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+        setLiveMessages([]);
+        wsOutputsRef.current.clear();
+        maxSeqRef.current = -1;
+        optimisticUserIdRef.current = null;
+        currentRunIdRef.current = null;
+        setStreaming(false);
+        streamingRef.current = false;
+        setOwnedRunId(null);
+        setStopping(false);
       }
     });
 
@@ -991,6 +998,7 @@ function ArtifactChip({
   const showToast = useToastStore((s) => s.show);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const chipRef = useRef<HTMLDivElement>(null);
   const scope: DirentScope = { kind: 'artifacts', projectId, sessionId };
   const filename = path.split('/').pop() ?? path;
@@ -1034,6 +1042,11 @@ function ArtifactChip({
             onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
           >
             <li>
+              <button type="button" onClick={() => setPreviewing(true)}>
+                <Icon name="eye" size={13} /> {t('artifact.preview')}
+              </button>
+            </li>
+            <li>
               <button type="button" onClick={() => downloadFile(scope, path)}>
                 <Icon name="download" size={13} /> {t('artifact.download')}
               </button>
@@ -1065,6 +1078,9 @@ function ArtifactChip({
           onConfirm={() => deleteMutation.mutate()}
           onClose={() => setConfirmDelete(false)}
         />
+      )}
+      {previewing && (
+        <FilePreviewModal globalPath={`${scopeRoot(scope)}/${path}`} onClose={() => setPreviewing(false)} />
       )}
     </>
   );
