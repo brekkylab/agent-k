@@ -1002,17 +1002,24 @@ pub async fn send_message(
         drop(run);
 
         if let Some(err) = run_error {
-            tracing::error!(%session_id, "agent run failed: {err}");
-            // Truncate in-memory history to match DB state so the agent stays consistent.
-            agent.state.history.truncate(prev_len);
-            drop(agent);
-            state2.end_run(&session_id);
-            let _ = state2.ws_tx.send(WsEvent::AgentError {
-                session_id: session_id.to_string(),
-                run_id: run_id.to_string(),
-                message: err,
-            });
-            return;
+            if stopped {
+                // The error occurred during the grace period after the user requested a stop.
+                // Treat it as a clean stop rather than a hard failure: keep whatever partial
+                // outputs were already accumulated instead of rolling back the entire turn.
+                tracing::warn!(%session_id, "agent error during stop grace period (treating as stop): {err}");
+            } else {
+                tracing::error!(%session_id, "agent run failed: {err}");
+                // Truncate in-memory history to match DB state so the agent stays consistent.
+                agent.state.history.truncate(prev_len);
+                drop(agent);
+                state2.end_run(&session_id);
+                let _ = state2.ws_tx.send(WsEvent::AgentError {
+                    session_id: session_id.to_string(),
+                    run_id: run_id.to_string(),
+                    message: err,
+                });
+                return;
+            }
         }
 
         let mut new_msgs = agent.get_history()[prev_len..].to_vec();
