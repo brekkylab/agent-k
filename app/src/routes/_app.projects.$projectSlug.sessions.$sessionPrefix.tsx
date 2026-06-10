@@ -359,8 +359,9 @@ function SessionPage() {
 
   // (Re)arms the WS-silence timer for the given run. On fire, asks the server
   // whether the run is still active: if so, surface a delay hint and refetch;
-  // if not, reconcile the ended run.
-  const armWatchdog = useCallback((runId: string) => {
+  // if not, reconcile the ended run. `delayMs` is the silence window before the
+  // check; `suppressDelayHint` skips the delay hint (e.g. during a stop's grace).
+  const armWatchdog = useCallback((runId: string, delayMs = 10_000, suppressDelayHint = false) => {
     if (wsInactivityTimerRef.current) clearTimeout(wsInactivityTimerRef.current);
     setRunDelayed(false);
     const gen = ++wsWatchdogGenRef.current;
@@ -375,13 +376,13 @@ function SessionPage() {
         }
         if (gen !== wsWatchdogGenRef.current) return;
         if (active) {
-          setRunDelayed(true);
+          if (!suppressDelayHint) setRunDelayed(true);
           void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
         } else {
           resetEndedRun();
         }
       })();
-    }, 10_000);
+    }, delayMs);
   }, [sessionId, queryClient, resetEndedRun]);
 
   const send = useCallback(async (overrideText?: string) => {
@@ -449,6 +450,7 @@ function SessionPage() {
     setStopping(true);
     try {
       await stopRun(sessionId, ownedRunId);
+      armWatchdog(ownedRunId, 3_000, true);
     } catch (err) {
       // 404 means the run already ended — reconcile instead of surfacing an error.
       if (err instanceof ApiError && err.status === 404) {
@@ -459,7 +461,7 @@ function SessionPage() {
       showToast(t('toast.stop_failed', { message: msg }));
       setStopping(false);
     }
-  }, [ownedRunId, sessionId, stopping, showToast, t, resetEndedRun]);
+  }, [ownedRunId, sessionId, stopping, showToast, t, resetEndedRun, armWatchdog]);
 
   const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (resolveComposerKeyAction({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing }) === 'send') {
