@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { downloadFileByGlobalPath, parseGlobalPath, type DirentScope } from '@/api/dirents';
 import { Icon } from './Icon';
 import { FileTypeIcon } from './FileTypeIcon';
+import { FilePreviewModal } from './FilePreviewModal';
 
 interface Props {
   globalPath: string;
@@ -13,6 +14,7 @@ export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
   const { t } = useTranslation('session');
   const filename = globalPath.split('/').pop() ?? globalPath;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const chipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -58,6 +60,11 @@ export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
           onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
         >
           <li>
+            <button type="button" onClick={() => { setMenuOpen(false); setPreviewing(true); }}>
+              <Icon name="eye" size={13} /> {t('artifact.preview')}
+            </button>
+          </li>
+          <li>
             <button type="button" onClick={handleDownload}>
               <Icon name="download" size={13} /> {t('artifact.download')}
             </button>
@@ -70,6 +77,9 @@ export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
             </li>
           )}
         </ul>
+      )}
+      {previewing && (
+        <FilePreviewModal globalPath={globalPath} onClose={() => setPreviewing(false)} />
       )}
     </div>
   );

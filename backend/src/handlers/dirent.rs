@@ -397,7 +397,18 @@ pub async fn dirent_upload(
         }
         drop(tmp_file);
 
-        if let Err(e) = tokio::fs::rename(&tmp_path, &host_path).await {
+        // Resolve a collision-free destination so an existing file is never
+        // silently overwritten.  "report.pdf" → "report copy.pdf" → …
+        // Reuses the same helper that `copy_one` already uses, making upload
+        // consistent with copy behaviour.
+        let base_name = host_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&filename)
+            .to_owned();
+        let final_host = find_available_name(parent, &base_name).await;
+
+        if let Err(e) = tokio::fs::rename(&tmp_path, &final_host).await {
             if let Err(rm_e) = tokio::fs::remove_file(&tmp_path).await {
                 tracing::warn!(path = %tmp_path.display(), "failed to remove orphaned temp file: {rm_e}");
             }
@@ -408,13 +419,21 @@ pub async fn dirent_upload(
             continue;
         }
 
-        let modified_at = tokio::fs::metadata(&host_path)
+        // Return the *resolved* path so the client learns the actual name
+        // (which may differ from the requested name if a rename occurred).
+        let resolved_name = final_host
+            .strip_prefix(&root)
+            .ok()
+            .and_then(|p| p.to_str())
+            .map(|s| s.replace('\\', "/"))
+            .unwrap_or_else(|| filename.clone());
+        let modified_at = tokio::fs::metadata(&final_host)
             .await
             .ok()
             .and_then(|m| m.modified().ok())
             .map(DateTime::<Utc>::from);
         succeeded.push(Dirent {
-            path: format!("{scope_prefix}/{filename}"),
+            path: format!("{scope_prefix}/{resolved_name}"),
             kind: DirentKind::File,
             bytes: Some(byte_count),
             modified_at,

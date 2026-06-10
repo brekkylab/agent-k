@@ -2,6 +2,8 @@
   "toast": {
     "upload_success_one": "파일이 업로드되었습니다",
     "upload_success_other": "{{count}}개 파일이 업로드되었습니다",
+    "upload_renamed_one": "파일이 업로드되었습니다 (이름이 변경됨)",
+    "upload_renamed_other": "{{count}}개 파일이 업로드되었습니다 ({{renamed}}개 이름 변경됨)",
     "upload_partial": "{{ok}}개 업로드, {{ko}}개 실패",
     "upload_failed": "업로드 실패: {{message}}",
     "folder_created": "폴더가 생성되었습니다",
@@ -50,7 +52,8 @@
     "delete": "삭제",
     "new_folder": "새 폴더",
     "upload": "업로드",
-    "uploading": "업로드 중…"
+    "uploading": "업로드 중…",
+    "preview": "미리보기"
   },
   "page": {
     "title": "파일",

@@ -160,13 +160,13 @@ export async function downloadFileByGlobalPath(globalPath: string): Promise<void
   await _fetchAndTriggerDownload(globalPath);
 }
 
-/** Fetch a file by its full global path and return the blob (for thumbnails etc.). */
-export async function fetchFileBlob(globalPath: string): Promise<Blob> {
+/** Authenticated GET of a dirent file; throws ApiError on non-2xx. */
+async function _authedFileResponse(globalPath: string, signal?: AbortSignal): Promise<Response> {
   const url = `${BASE_URL}/dirents/${encodePath(globalPath)}`;
   const headers = new Headers();
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, { headers, signal });
   if (!response.ok) {
     const raw = await response.text().catch(() => '');
     let parsed: unknown;
@@ -174,7 +174,34 @@ export async function fetchFileBlob(globalPath: string): Promise<Blob> {
     notifyUnauthorized(response.status, parsed);
     throw new ApiError(response.status, raw || `${response.status} ${response.statusText}`);
   }
+  return response;
+}
+
+/** Fetch a file by its full global path and return the blob (for thumbnails etc.). */
+export async function fetchFileBlob(globalPath: string): Promise<Blob> {
+  const response = await _authedFileResponse(globalPath);
   return response.blob();
+}
+
+export type PreviewFetch = { tooLarge: true } | { tooLarge: false; blob: Blob };
+
+/** Fetch a file for preview, rejecting oversized files BEFORE downloading the
+ *  body. The backend sends Content-Length (its body is a fully-buffered Vec),
+ *  which arrives with the response headers — so we can check the size and abort
+ *  the in-flight body transfer instead of pulling a huge file into the browser.
+ *  Falls back to a post-read blob.size check when Content-Length is absent. */
+export async function fetchFileForPreview(globalPath: string, maxBytes: number): Promise<PreviewFetch> {
+  const controller = new AbortController();
+  const response = await _authedFileResponse(globalPath, controller.signal);
+  const lenHeader = response.headers.get('content-length');
+  const len = lenHeader ? Number(lenHeader) : Number.NaN;
+  if (Number.isFinite(len) && len > maxBytes) {
+    controller.abort();
+    return { tooLarge: true };
+  }
+  const blob = await response.blob();
+  if (blob.size > maxBytes) return { tooLarge: true };
+  return { tooLarge: false, blob };
 }
 
 async function _fetchAndTriggerDownload(globalPath: string): Promise<void> {
