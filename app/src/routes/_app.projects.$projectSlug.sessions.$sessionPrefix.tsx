@@ -16,6 +16,7 @@ import { deleteDirent, downloadFile, listDirentsRaw, scopeRoot, uploadFiles, typ
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
+import { isHiddenName } from '@/domain/files';
 import { getModelCatalog, modelLabel } from '@/api/models';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
@@ -388,9 +389,11 @@ function SessionPage() {
         const gp = `${root}/${rel}`;
         const entry = entries.find((e) => e.path === gp);
         if (entry?.kind === 'dir') {
-          // Expand the folder into its descendant files.
+          // Expand the folder into its descendant files (skip .keep/dotfiles).
           for (const e of entries) {
-            if (e.kind === 'file' && e.path.startsWith(`${gp}/`)) add(e.path);
+            if (e.kind !== 'file' || !e.path.startsWith(`${gp}/`)) continue;
+            if (isHiddenName(e.path.split('/').pop() ?? '')) continue;
+            add(e.path);
           }
         } else {
           add(gp);
