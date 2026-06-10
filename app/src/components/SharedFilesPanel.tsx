@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
 import { nameOf } from '@/domain/files';
+import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 import { FileTypeIcon } from './FileTypeIcon';
 import { Icon } from './Icon';
 import { EmptyState } from './uiPrimitives';
@@ -77,122 +78,41 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
   const segments = dir ? dir.split('/') : [];
 
   // ── multi-select (rubber-band marquee + click) ───────────────────
-  // Keyed global path → filename, so a multi-file drag has names even if the
-  // selection spans a folder we've since navigated out of.
-  const [selected, setSelected] = useState<Map<string, string>>(new Map());
-  const [dragRect, setDragRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-  const dragOriginRef = useRef<{ x: number; y: number; base: Map<string, string>; additive: boolean } | null>(null);
-  const didDragRef = useRef(false);
+  // Selected file global paths, per-view (cleared on folder change). Filenames
+  // for the drag payload are derived from each path's basename.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement>(null);
-  const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const lastScrollTopRef = useRef(0);
-  const DRAG_THRESHOLD = 4;
 
   // Selection is per-view — reset when changing folders.
-  useEffect(() => { setSelected(new Map()); }, [dir]);
+  useEffect(() => { setSelected(new Set()); }, [dir]);
 
-  function onListMouseDown(e: React.MouseEvent) {
-    if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest('.cw-sf-add')) return; // let the + button work
-    const rowEl = (e.target as HTMLElement).closest('[data-sf-path]');
-    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
-    dragOriginRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      base: rowEl || additive ? new Map(selected) : new Map(),
-      additive,
-    };
-    lastPointerRef.current = { x: e.clientX, y: e.clientY };
-    lastScrollTopRef.current = listRef.current?.scrollTop ?? 0;
-    didDragRef.current = false;
-    if (!rowEl && !additive) setSelected(new Map());
-  }
+  const marquee = useMarqueeSelection({
+    scrollRef: listRef,
+    itemSelector: '[data-sf-path]',
+    keyAttr: 'sfPath',
+    ignoreSelector: '.cw-sf-add', // let the inline + button work
+    getSelection: () => selected,
+    setSelection: setSelected,
+  });
 
-  // Global marquee tracking — draw a rectangle and select intersecting file rows.
-  useEffect(() => {
-    // Compute the rect (viewport coords) from the anchor to the pointer, draw it,
-    // and select every file row it intersects. Rows use getBoundingClientRect, so
-    // scrolled-off rows still test correctly once the anchor is scroll-adjusted.
-    function applyMarquee(clientX: number, clientY: number) {
-      const origin = dragOriginRef.current;
-      if (!origin) return;
-      const dx = clientX - origin.x;
-      const dy = clientY - origin.y;
-      if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD && !dragRect) return;
-      didDragRef.current = true;
-      const left = Math.min(origin.x, clientX);
-      const top = Math.min(origin.y, clientY);
-      const width = Math.abs(dx);
-      const height = Math.abs(dy);
-      setDragRect({ left, top, width, height });
-      const r = { left, top, right: left + width, bottom: top + height };
-      const next = new Map(origin.base);
-      for (const el of document.querySelectorAll<HTMLElement>('[data-sf-path]')) {
-        const rect = el.getBoundingClientRect();
-        if (rect.left < r.right && rect.right > r.left && rect.top < r.bottom && rect.bottom > r.top) {
-          const gp = el.dataset.sfPath;
-          if (gp) next.set(gp, el.dataset.sfName ?? gp);
-        }
-      }
-      setSelected(next);
-    }
-    function onMove(e: MouseEvent) {
-      lastPointerRef.current = { x: e.clientX, y: e.clientY };
-      applyMarquee(e.clientX, e.clientY);
-    }
-    // Scrolling the list while dragging: the anchor is pinned to content, so
-    // shift it by the scroll delta and re-test (mousemove may not fire on a wheel).
-    function onScroll() {
-      const origin = dragOriginRef.current;
-      const list = listRef.current;
-      if (!origin || !list) return;
-      const delta = list.scrollTop - lastScrollTopRef.current;
-      lastScrollTopRef.current = list.scrollTop;
-      origin.y -= delta;
-      const { x, y } = lastPointerRef.current;
-      applyMarquee(x, y);
-    }
-    function onUp() {
-      const dragged = didDragRef.current && dragOriginRef.current;
-      dragOriginRef.current = null;
-      setDragRect(null);
-      if (dragged) {
-        // Swallow the click that follows a marquee so it doesn't reset selection.
-        const swallow = (ev: Event) => { ev.stopPropagation(); ev.preventDefault(); window.removeEventListener('click', swallow, true); };
-        window.addEventListener('click', swallow, true);
-      }
-    }
-    const list = listRef.current;
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    list?.addEventListener('scroll', onScroll);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      list?.removeEventListener('scroll', onScroll);
-    };
-  }, [dragRect]);
-
-  function selectClick(e: React.MouseEvent, globalPath: string, filename: string) {
+  function selectClick(e: React.MouseEvent, globalPath: string) {
     const additive = e.shiftKey || e.metaKey || e.ctrlKey;
     setSelected((prev) => {
-      if (!additive) return new Map([[globalPath, filename]]);
-      const next = new Map(prev);
+      if (!additive) return new Set([globalPath]);
+      const next = new Set(prev);
       if (next.has(globalPath)) next.delete(globalPath);
-      else next.set(globalPath, filename);
+      else next.add(globalPath);
       return next;
     });
   }
 
   function handleDragStart(e: React.DragEvent, item: SessionImportItem) {
-    // A native drag is starting — cancel any pending marquee origin.
-    dragOriginRef.current = null;
-    setDragRect(null);
+    marquee.cancel(); // a native drag is starting — abort any pending marquee
     // Custom MIME only — omit text/plain so external apps can't accept the drop.
     e.dataTransfer.effectAllowed = 'copy';
     // Dragging a selected row carries the whole selection; otherwise just this file.
     const items: SessionImportItem[] = selected.has(item.globalPath) && selected.size > 1
-      ? [...selected].map(([globalPath, filename]) => ({ globalPath, filename }))
+      ? [...selected].map((globalPath) => ({ globalPath, filename: globalPath.split('/').pop() ?? globalPath }))
       : [item];
     e.dataTransfer.setData(SESSION_IMPORT_MIME, JSON.stringify(items));
 
@@ -236,7 +156,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       </div>
 
       {/* ── rows ─────────────────────────────────────────────────── */}
-      <div className="cw-files-browser-list" ref={listRef} onMouseDown={onListMouseDown}>
+      <div className="cw-files-browser-list" ref={listRef} onMouseDown={marquee.onMouseDown}>
         {rows.map((row) =>
           row.kind === 'dir' ? (
             <button
@@ -258,7 +178,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
               data-sf-name={row.name}
               draggable
               onDragStart={(e) => handleDragStart(e, { globalPath: row.globalPath, filename: row.name })}
-              onClick={(e) => selectClick(e, row.globalPath, row.name)}
+              onClick={(e) => selectClick(e, row.globalPath)}
               title={`${row.name}${row.bytes != null ? ` · ${formatBytes(row.bytes)}` : ''}`}
             >
               <span className="cw-sf-grip" aria-hidden="true">
@@ -290,10 +210,10 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
 
       {/* Portal to body: an ancestor's transform (the sliding sidebar track)
           would otherwise re-anchor this fixed overlay and overflow:hidden clip it. */}
-      {dragRect && createPortal(
+      {marquee.dragRect && createPortal(
         <div
           className="cw-marquee"
-          style={{ left: dragRect.left, top: dragRect.top, width: dragRect.width, height: dragRect.height }}
+          style={{ left: marquee.dragRect.left, top: marquee.dragRect.top, width: marquee.dragRect.width, height: marquee.dragRect.height }}
         />,
         document.body,
       )}

@@ -49,6 +49,7 @@ import {
   type FolderNode,
 } from '@/domain/files';
 import type { BackendDirent } from '@/api/backend-types';
+import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 
 type ViewMode = 'list' | 'grid';
 const VIEW_KEY = 'cowork.files.viewMode';
@@ -461,103 +462,15 @@ function FilesPage() {
 
   // ── Rubber-band selection ────────────────────────────────────────
   const bodyRef = useRef<HTMLDivElement>(null);
-  const dragOriginRef = useRef<{
-    x: number;
-    y: number;
-    basePaths: Set<string>;
-    startedOnRow: boolean;
-    additive: boolean;
-  } | null>(null);
-  const didDragRef = useRef(false);
-  const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const lastScrollTopRef = useRef(0);
-  const [dragRect, setDragRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-
-  const onBodyMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    const rowEl = (e.target as HTMLElement).closest('[data-row-index]');
-    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
-    dragOriginRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      basePaths: rowEl || additive ? new Set(selectedPaths) : new Set(),
-      startedOnRow: !!rowEl,
-      additive,
-    };
-    lastPointerRef.current = { x: e.clientX, y: e.clientY };
-    lastScrollTopRef.current = bodyRef.current?.scrollTop ?? 0;
-    didDragRef.current = false;
-    if (!rowEl && !additive) clearSelection();
-  }, [selectedPaths, clearSelection]);
-
-  useEffect(() => {
-    function applyMarquee(clientX: number, clientY: number) {
-      const origin = dragOriginRef.current;
-      if (!origin) return;
-      const dx = clientX - origin.x;
-      const dy = clientY - origin.y;
-      if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD && !dragRect) return;
-      didDragRef.current = true;
-
-      const left = Math.min(origin.x, clientX);
-      const top = Math.min(origin.y, clientY);
-      const width = Math.abs(dx);
-      const height = Math.abs(dy);
-      setDragRect({ left, top, width, height });
-
-      const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-row-index]'));
-      const next = new Set(origin.basePaths);
-      const r = { left, top, right: left + width, bottom: top + height };
-      for (const row of rows) {
-        const rect = row.getBoundingClientRect();
-        const inside = rect.left < r.right && rect.right > r.left && rect.top < r.bottom && rect.bottom > r.top;
-        if (inside) {
-          const path = row.dataset.rowPath;
-          if (path) next.add(path);
-        }
-      }
-      setSelectedPaths(next);
-    }
-    function onMove(e: MouseEvent) {
-      lastPointerRef.current = { x: e.clientX, y: e.clientY };
-      applyMarquee(e.clientX, e.clientY);
-    }
-    // Scrolling the file body while dragging: pin the anchor to content by
-    // shifting it by the scroll delta, then re-test (a wheel fires no mousemove).
-    function onScroll() {
-      const origin = dragOriginRef.current;
-      const body = bodyRef.current;
-      if (!origin || !body) return;
-      const delta = body.scrollTop - lastScrollTopRef.current;
-      lastScrollTopRef.current = body.scrollTop;
-      origin.y -= delta;
-      const { x, y } = lastPointerRef.current;
-      applyMarquee(x, y);
-    }
-    function onUp() {
-      const origin = dragOriginRef.current;
-      dragOriginRef.current = null;
-      setDragRect(null);
-      if (!origin) return;
-      if (didDragRef.current) {
-        const swallow = (ev: Event) => {
-          ev.stopPropagation();
-          ev.preventDefault();
-          window.removeEventListener('click', swallow, true);
-        };
-        window.addEventListener('click', swallow, true);
-      }
-    }
-    const body = bodyRef.current;
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    body?.addEventListener('scroll', onScroll);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      body?.removeEventListener('scroll', onScroll);
-    };
-  }, [dragRect]);
+  const marquee = useMarqueeSelection({
+    scrollRef: bodyRef,
+    itemSelector: '[data-row-index]',
+    keyAttr: 'rowPath',
+    getSelection: () => selectedPaths,
+    setSelection: setSelectedPaths,
+    onClear: clearSelection, // also resets the shift-select anchor
+    threshold: DRAG_THRESHOLD,
+  });
 
   // ── Intra-app drag (move/copy) ───────────────────────────────────
   useEffect(() => {
@@ -567,8 +480,7 @@ function FilesPage() {
   }, []);
 
   const handleDragStart = useCallback((e: React.DragEvent, entry: BackendDirent) => {
-    dragOriginRef.current = null;
-    setDragRect(null);
+    marquee.cancel();
     e.dataTransfer.effectAllowed = 'copyMove';
     const dragPaths = selectedPaths.has(entry.path)
       ? Array.from(selectedPaths)
@@ -735,7 +647,7 @@ function FilesPage() {
             ref={bodyRef}
             className={`cw-file-body cw-view-${viewMode}${isDraggingOver ? ' is-over' : ''}`}
             onClick={(e) => { if (e.target === e.currentTarget) clearSelection(); }}
-            onMouseDown={onBodyMouseDown}
+            onMouseDown={marquee.onMouseDown}
             onDragEnter={(e) => {
               if (e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
               e.preventDefault();
@@ -818,10 +730,10 @@ function FilesPage() {
         </section>
       </div>
 
-      {dragRect && createPortal(
+      {marquee.dragRect && createPortal(
         <div
           className="cw-marquee"
-          style={{ left: dragRect.left, top: dragRect.top, width: dragRect.width, height: dragRect.height }}
+          style={{ left: marquee.dragRect.left, top: marquee.dragRect.top, width: marquee.dragRect.width, height: marquee.dragRect.height }}
         />,
         document.body,
       )}
