@@ -19,7 +19,7 @@
     "tool_running": "Running…",
     "send_aria": "Send",
     "stop_generation": "Stop generating",
-    "stopping": "Stopping…",
+    "stopping": "Stopping… a final message may still arrive.",
     "composer_placeholder": "Message Cowork and the team…",
     "composer_hint": "Enter to send · Reference files with @filename",
     "new_message": "New message",

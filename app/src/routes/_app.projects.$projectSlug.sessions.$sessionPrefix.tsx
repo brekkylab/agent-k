@@ -357,11 +357,10 @@ function SessionPage() {
     if (sessionId) void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
   }, [sessionId, queryClient]);
 
-  // (Re)arms the WS-silence timer for the given run. On fire, asks the server
-  // whether the run is still active: if so, surface a delay hint and refetch;
-  // if not, reconcile the ended run. `delayMs` is the silence window before the
-  // check; `suppressDelayHint` skips the delay hint (e.g. during a stop's grace).
-  const armWatchdog = useCallback((runId: string, delayMs = 10_000, suppressDelayHint = false) => {
+  // After a stretch of WS silence, checks once whether the run is still active:
+  // if so, surface a delay hint and refetch; if not, reconcile the ended run.
+  // Continued re-checking (delayed / stopping) lives in the watchdog poll effect.
+  const armWatchdog = useCallback((runId: string) => {
     if (wsInactivityTimerRef.current) clearTimeout(wsInactivityTimerRef.current);
     setRunDelayed(false);
     const gen = ++wsWatchdogGenRef.current;
@@ -376,14 +375,33 @@ function SessionPage() {
         }
         if (gen !== wsWatchdogGenRef.current) return;
         if (active) {
-          if (!suppressDelayHint) setRunDelayed(true);
+          setRunDelayed(true);
           void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
         } else {
           resetEndedRun();
         }
       })();
-    }, delayMs);
+    }, 10_000);
   }, [sessionId, queryClient, resetEndedRun]);
+
+  // While the run waits without WS events (delayed, or stopping in its grace),
+  // poll the server so a lost terminal event still ends the run.
+  useEffect(() => {
+    if (!ownedRunId || !sessionId || (!runDelayed && !stopping)) return;
+    const interval = stopping ? 3_000 : 10_000;
+    const id = setInterval(() => {
+      void (async () => {
+        let active: boolean;
+        try {
+          active = await getRunActive(sessionId, ownedRunId);
+        } catch {
+          return;
+        }
+        if (!active) resetEndedRun();
+      })();
+    }, interval);
+    return () => clearInterval(id);
+  }, [runDelayed, stopping, ownedRunId, sessionId, resetEndedRun]);
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? composerText).trim();
@@ -448,20 +466,28 @@ function SessionPage() {
     }
     setRunDelayed(false);
     setStopping(true);
-    try {
-      await stopRun(sessionId, ownedRunId);
-      armWatchdog(ownedRunId, 3_000, true);
-    } catch (err) {
-      // 404 means the run already ended — reconcile instead of surfacing an error.
-      if (err instanceof ApiError && err.status === 404) {
-        resetEndedRun();
+    const STOP_ATTEMPTS = 2;
+    for (let attempt = 0; attempt < STOP_ATTEMPTS; attempt++) {
+      try {
+        await stopRun(sessionId, ownedRunId);
         return;
+      } catch (err) {
+        // 404 means the run already ended — reconcile instead of surfacing an error.
+        if (err instanceof ApiError && err.status === 404) {
+          resetEndedRun();
+          return;
+        }
+        // Non-404: wait briefly and retry while attempts remain; once exhausted, treat the run as lost and reconcile.
+        if (attempt < STOP_ATTEMPTS - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          continue;
+        }
+        const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'stop failed';
+        showToast(t('toast.stop_failed', { message: msg }));
+        resetEndedRun();
       }
-      const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'stop failed';
-      showToast(t('toast.stop_failed', { message: msg }));
-      setStopping(false);
     }
-  }, [ownedRunId, sessionId, stopping, showToast, t, resetEndedRun, armWatchdog]);
+  }, [ownedRunId, sessionId, stopping, showToast, t, resetEndedRun]);
 
   const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (resolveComposerKeyAction({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing }) === 'send') {
@@ -846,7 +872,7 @@ function SessionPage() {
             />
           ))}
           {streaming && (
-            <div className={runDelayed ? 'cw-live is-delayed' : 'cw-live'}><span />{runDelayed ? t('ui.response_delayed') : t('ui.ai_responding')}</div>
+            <div className={stopping ? 'cw-live is-stopping' : runDelayed ? 'cw-live is-delayed' : 'cw-live'}><span />{stopping ? t('ui.stopping') : runDelayed ? t('ui.response_delayed') : t('ui.ai_responding')}</div>
           )}
           <div ref={messagesEndRef} />
         </div>

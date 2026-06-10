@@ -19,7 +19,7 @@
     "tool_running": "실행 중…",
     "send_aria": "전송",
     "stop_generation": "응답 생성 중지",
-    "stopping": "중지 중…",
+    "stopping": "중지 중… 마지막 메시지가 도착할 수 있어요.",
     "composer_placeholder": "Cowork와 팀에 메시지 보내기…",
     "composer_hint": "Enter로 전송 · @파일명으로 파일 참조",
     "new_message": "새 메시지",
