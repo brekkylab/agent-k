@@ -380,3 +380,89 @@ async fn concurrent_send_returns_423() {
         "POST /messages while agent is locked must return 423"
     );
 }
+
+/// Stop-run endpoint lifecycle and authz. No LLM call is made — active runs are
+/// registered directly on AppState, mirroring what send_message does.
+#[tokio::test]
+async fn stop_run_authz_and_lifecycle() {
+    use agent_k_backend::events::RunUserMessage;
+
+    let (app, repo, state) = common::make_app_repo_state().await;
+
+    let username = format!("user_{}", uuid::Uuid::new_v4().simple());
+    let user_info = signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let project = get_personal_project(&app, &token).await;
+    let project_id = uuid::Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+    let user_id = uuid::Uuid::parse_str(user_info["id"].as_str().unwrap()).unwrap();
+
+    let session = repo.create_session(project_id, user_id).await.unwrap();
+
+    let fake_run_id = uuid::Uuid::new_v4();
+    let (status, _) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{}/runs/{}/stop", session.id, fake_run_id),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no active run must be 404");
+
+    let other_user_msg = RunUserMessage {
+        sender_user_id: uuid::Uuid::new_v4().to_string(),
+        content: "hi".into(),
+        attachments: vec![],
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let (other_run_id, _other_cancel) = state.start_run(session.id, other_user_msg);
+    let (status, _) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{}/runs/{}/stop", session.id, other_run_id),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "only the sender may stop their run"
+    );
+    state.end_run(&session.id);
+
+    let own_user_msg = RunUserMessage {
+        sender_user_id: user_id.to_string(),
+        content: "hi".into(),
+        attachments: vec![],
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let (own_run_id, own_cancel) = state.start_run(session.id, own_user_msg);
+    let (status, _) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{}/runs/{}/stop", session.id, fake_run_id),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "stale run_id must be 404");
+    assert!(
+        !own_cancel.is_cancelled(),
+        "a stale-run_id stop must not cancel the active run"
+    );
+
+    let (status, _) = common::authed(
+        &app,
+        "POST",
+        &format!("/sessions/{}/runs/{}/stop", session.id, own_run_id),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "sender stop must be 202");
+    assert!(
+        own_cancel.is_cancelled(),
+        "stop must trigger the run's cancellation token"
+    );
+}

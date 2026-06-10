@@ -344,6 +344,10 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-side-file small { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
 .cw-live { display: inline-flex; align-items: center; gap: 8px; color: var(--cw-ok); font-size: 13px; }
 .cw-live span { width: 8px; height: 8px; border-radius: 999px; background: var(--cw-ok); animation: cw-ping 1s steps(2, start) infinite; }
+.cw-live.is-delayed { color: var(--cw-ink); }
+.cw-live.is-delayed span { background: var(--cw-warn); }
+.cw-live.is-stopping { color: var(--cw-ink); }
+.cw-live.is-stopping span { background: var(--cw-destructive); }
 .cw-artifacts-panel { display: flex; flex-direction: column; gap: 2px; }
 .cw-artifacts-header { display: flex; align-items: center; gap: 5px; width: 100%; background: transparent; border: 0; padding: 3px 2px; border-radius: var(--cw-radius-sm); font-size: 12px; font-weight: 500; color: var(--cw-ink-2); cursor: pointer; text-align: left; transition: color 100ms; }
 .cw-artifacts-header:hover { color: var(--cw-ink); }
