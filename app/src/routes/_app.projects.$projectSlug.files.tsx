@@ -810,6 +810,7 @@ function FilesPage() {
                         ? (indexedByPath.get(entry.path) ? 'ready' : 'pending')
                         : undefined
                     }
+                    protectedEntry={currentPath.length === 0 && entry.kind === 'dir' && entry.path === 'knowledge'}
                   />
                 ))}
               </div>
@@ -833,6 +834,7 @@ function FilesPage() {
                     onCopy={(e) => setPendingCopy([e])}
                     onMenuToggle={setOpenMenuPath}
                     onDragStart={handleDragStart}
+                    protectedEntry={currentPath.length === 0 && entry.kind === 'dir' && entry.path === 'knowledge'}
                   />
                 ))}
               </div>
@@ -1032,6 +1034,8 @@ interface RowProps {
   onDragStart: (ev: React.DragEvent, e: BackendDirent) => void;
   /** Corpus status for a knowledge-folder file; undefined elsewhere (no badge). */
   corpusState?: 'ready' | 'pending';
+  /** True for the fixed knowledge folder, which has no row actions. */
+  protectedEntry?: boolean;
 }
 
 
@@ -1042,7 +1046,7 @@ function folderSubtitle(entry: BackendDirent, entries: BackendDirent[], t: TFunc
 }
 
 function RowMenu({
-  entry, menuOpen, onMenuToggle, onDownload, onRename, onMove, onCopy, onDelete,
+  entry, menuOpen, onMenuToggle, onDownload, onRename, onMove, onCopy, onDelete, protectedEntry,
 }: {
   entry: BackendDirent;
   menuOpen: boolean;
@@ -1052,8 +1056,13 @@ function RowMenu({
   onMove: () => void;
   onCopy: () => void;
   onDelete: () => void;
+  /** The fixed knowledge folder: rename/move/copy/delete are disallowed, so the
+   *  whole menu is hidden rather than offering actions the server will reject. */
+  protectedEntry?: boolean;
 }) {
   const { t } = useTranslation('files');
+  // A protected folder has no available actions (no download for a dir), so omit the menu entirely.
+  if (protectedEntry) return null;
   return (
     <div className="cw-file-menu-wrap">
       <button
@@ -1105,7 +1114,7 @@ function RowMenu({
   );
 }
 
-function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart, corpusState }: RowProps) {
+function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart, corpusState, protectedEntry }: RowProps) {
   const { t } = useTranslation('files');
   const isDir = entry.kind === 'dir';
   return (
@@ -1150,12 +1159,13 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
         onMove={() => onMove(entry)}
         onCopy={() => onCopy(entry)}
         onDelete={() => onDelete(entry)}
+        protectedEntry={protectedEntry}
       />
     </div>
   );
 }
 
-function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart }: RowProps) {
+function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart, protectedEntry }: RowProps) {
   const { t } = useTranslation('files');
   const isDir = entry.kind === 'dir';
   return (
@@ -1193,6 +1203,7 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
         onMove={() => onMove(entry)}
         onCopy={() => onCopy(entry)}
         onDelete={() => onDelete(entry)}
+        protectedEntry={protectedEntry}
       />
     </div>
   );
