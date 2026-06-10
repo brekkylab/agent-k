@@ -22,8 +22,9 @@ use crate::{
         DirentScope, copy_dir_recursive, enforce_scope_access, parse_dirent_path, scope_root,
     },
     model::{
-        CreateSessionRequest, MessageSender, RunAck, SendMessageRequest, SessionListResponse,
-        SessionMessageListResponse, SessionMessageResponse, SessionResponse, UpdateSessionRequest,
+        CreateSessionRequest, MessageSender, RunAck, RunActiveResponse, SendMessageRequest,
+        SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
+        UpdateSessionRequest,
     },
     repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, ShareMode},
     services::session_title::generate_session_title,
@@ -1178,4 +1179,27 @@ pub async fn stop_run(
     cancel.cancel();
     tracing::info!(%session_id, %run_id, user = %auth_user.id, "run cancellation requested");
     Ok(StatusCode::ACCEPTED)
+}
+
+/// GET /sessions/{session_id}/runs/{run_id}/active
+pub async fn run_active(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path((session_ref, run_id)): Path<(String, String)>,
+) -> ApiResult<Json<RunActiveResponse>> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    let run_id = Uuid::parse_str(&run_id).map_err(|_| AppError::not_found("no such run"))?;
+
+    let active = matches!(
+        state.run_cancel_info(&session_id).await,
+        Some((active_run_id, _, _)) if active_run_id == run_id
+    );
+    Ok(Json(RunActiveResponse { active }))
 }

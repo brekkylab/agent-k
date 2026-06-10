@@ -34,6 +34,11 @@ export async function stopRun(sessionId: string, runId: string): Promise<void> {
   await request<unknown>(`/sessions/${sessionId}/runs/${runId}/stop`, { method: 'POST' });
 }
 
+export async function getRunActive(sessionId: string, runId: string): Promise<boolean> {
+  const res = await request<{ active: boolean }>(`/sessions/${sessionId}/runs/${runId}/active`);
+  return res.active;
+}
+
 export interface StreamToolCall {
   id: string;
   name: string;

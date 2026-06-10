@@ -88,6 +88,11 @@ pub struct RunAck {
     pub run_id: String,
 }
 
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RunActiveResponse {
+    pub active: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MessageSender {
