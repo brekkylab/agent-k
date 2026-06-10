@@ -35,7 +35,7 @@ function formatBytes(bytes: number): string {
 }
 
 type Row =
-  | { kind: 'dir'; name: string; relPath: string }
+  | { kind: 'dir'; name: string; relPath: string; globalPath: string }
   | { kind: 'file'; name: string; relPath: string; globalPath: string; bytes?: number | null };
 
 export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedFilesBrowserProps) {
@@ -62,7 +62,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       const remainder = rel.slice(prefix.length);
       if (!remainder || remainder.includes('/')) continue; // not an immediate child
       if (e.kind === 'dir') {
-        out.push({ kind: 'dir', name: remainder, relPath: rel });
+        out.push({ kind: 'dir', name: remainder, relPath: rel, globalPath: e.path });
       } else {
         out.push({ kind: 'file', name: nameOf(e), relPath: rel, globalPath: e.path, bytes: e.bytes });
       }
@@ -106,19 +106,45 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
     });
   }
 
-  function handleDragStart(e: React.DragEvent, item: SessionImportItem) {
+  // Resolve selected paths (files and/or folders) to a flat list of file items —
+  // a folder expands to the files it contains (recursive). Dedupe by global path.
+  function expandToFiles(paths: Iterable<string>): SessionImportItem[] {
+    const out: SessionImportItem[] = [];
+    const seen = new Set<string>();
+    const addFile = (gp: string, name: string) => {
+      if (seen.has(gp)) return;
+      seen.add(gp);
+      out.push({ globalPath: gp, filename: name });
+    };
+    for (const p of paths) {
+      const entry = rawEntries.find((e) => e.path === p);
+      if (entry?.kind === 'dir') {
+        const prefix = `${stripScopePrefix(scope, p)}/`;
+        for (const e of rawEntries) {
+          if (e.kind === 'file' && stripScopePrefix(scope, e.path).startsWith(prefix)) addFile(e.path, nameOf(e));
+        }
+      } else {
+        addFile(p, p.split('/').pop() ?? p);
+      }
+    }
+    return out;
+  }
+
+  // One drag handler for both file and folder rows. Dragging a selected row
+  // carries the whole selection (folders expanded to their files); otherwise
+  // just the dragged row.
+  function handleRowDragStart(e: React.DragEvent, globalPath: string) {
     marquee.cancel(); // a native drag is starting — abort any pending marquee
+    const sources = selected.has(globalPath) && selected.size > 1 ? [...selected] : [globalPath];
+    const items = expandToFiles(sources);
+    if (items.length === 0) { e.preventDefault(); return; } // nothing to attach (e.g. empty folder)
     // Custom MIME only — omit text/plain so external apps can't accept the drop.
     e.dataTransfer.effectAllowed = 'copy';
-    // Dragging a selected row carries the whole selection; otherwise just this file.
-    const items: SessionImportItem[] = selected.has(item.globalPath) && selected.size > 1
-      ? [...selected].map((globalPath) => ({ globalPath, filename: globalPath.split('/').pop() ?? globalPath }))
-      : [item];
     e.dataTransfer.setData(SESSION_IMPORT_MIME, JSON.stringify(items));
 
     const ghost = document.createElement('div');
     ghost.className = 'cw-drag-ghost';
-    ghost.textContent = items.length === 1 ? item.filename : t('shared_files.drag_items', { count: items.length });
+    ghost.textContent = items.length === 1 ? items[0]!.filename : t('shared_files.drag_items', { count: items.length });
     document.body.appendChild(ghost);
     e.dataTransfer.setDragImage(ghost, 14, 14);
     requestAnimationFrame(() => ghost.remove());
@@ -159,17 +185,26 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       <div className="cw-files-browser-list" ref={listRef} onMouseDown={marquee.onMouseDown}>
         {rows.map((row) =>
           row.kind === 'dir' ? (
-            <button
-              type="button"
-              className="cw-sf-row cw-sf-dir"
+            <div
+              className={`cw-sf-row cw-sf-dir${selected.has(row.globalPath) ? ' is-selected' : ''}`}
               key={row.relPath}
+              data-sf-path={row.globalPath}
+              data-sf-name={row.name}
+              draggable
+              onDragStart={(e) => handleRowDragStart(e, row.globalPath)}
               onClick={() => setDir(row.relPath)}
             >
-              <span className="cw-sf-grip-spacer" aria-hidden="true" />
+              <span className="cw-sf-grip" aria-hidden="true">
+                <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+                  <circle cx="2" cy="2" r="1.2" /><circle cx="8" cy="2" r="1.2" />
+                  <circle cx="2" cy="7" r="1.2" /><circle cx="8" cy="7" r="1.2" />
+                  <circle cx="2" cy="12" r="1.2" /><circle cx="8" cy="12" r="1.2" />
+                </svg>
+              </span>
               <Icon name="folder" size={18} />
               <span className="cw-file-label">{row.name}</span>
               <Icon name="chevron-right" size={14} />
-            </button>
+            </div>
           ) : (
             <div
               className={`cw-sf-row${selected.has(row.globalPath) ? ' is-selected' : ''}`}
@@ -177,7 +212,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
               data-sf-path={row.globalPath}
               data-sf-name={row.name}
               draggable
-              onDragStart={(e) => handleDragStart(e, { globalPath: row.globalPath, filename: row.name })}
+              onDragStart={(e) => handleRowDragStart(e, row.globalPath)}
               onClick={(e) => selectClick(e, row.globalPath)}
               title={`${row.name}${row.bytes != null ? ` · ${formatBytes(row.bytes)}` : ''}`}
             >
