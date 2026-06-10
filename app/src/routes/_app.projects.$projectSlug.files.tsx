@@ -733,7 +733,14 @@ function FilesPage() {
       {marquee.dragRect && createPortal(
         <div
           className="cw-marquee"
-          style={{ left: marquee.dragRect.left, top: marquee.dragRect.top, width: marquee.dragRect.width, height: marquee.dragRect.height }}
+          style={{
+            left: marquee.dragRect.left, top: marquee.dragRect.top,
+            width: marquee.dragRect.width, height: marquee.dragRect.height,
+            borderTopWidth: marquee.dragRect.clampTop ? 0 : undefined,
+            borderBottomWidth: marquee.dragRect.clampBottom ? 0 : undefined,
+            borderLeftWidth: marquee.dragRect.clampLeft ? 0 : undefined,
+            borderRightWidth: marquee.dragRect.clampRight ? 0 : undefined,
+          }}
         />,
         document.body,
       )}

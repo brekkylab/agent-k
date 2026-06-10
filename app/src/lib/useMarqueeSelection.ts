@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 
-export interface MarqueeRect { left: number; top: number; width: number; height: number; }
+export interface MarqueeRect {
+  left: number; top: number; width: number; height: number;
+  /** Sides clamped to the scroll container — render with no border there so a
+   *  clamped edge doesn't draw a stray line at the list boundary. */
+  clampTop: boolean; clampRight: boolean; clampBottom: boolean; clampLeft: boolean;
+}
 
 interface UseMarqueeSelectionOpts {
   /** Scroll container. The anchor is pinned to its content, so scrolling mid-drag
@@ -80,8 +85,25 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
       const top = Math.min(origin.y, cy);
       const width = Math.abs(dx);
       const height = Math.abs(dy);
-      setDragRect({ left, top, width, height });
       const r = { left, top, right: left + width, bottom: top + height };
+      // Draw the box clamped to the scroll container so a scroll-extended anchor
+      // doesn't paint it over the breadcrumb/header outside the list. The
+      // hit-test below still uses the full rect so scrolled-off rows select.
+      const sc = o.scrollRef.current;
+      if (sc) {
+        const b = sc.getBoundingClientRect();
+        const vl = Math.max(r.left, b.left);
+        const vt = Math.max(r.top, b.top);
+        const vr = Math.min(r.right, b.right);
+        const vb = Math.min(r.bottom, b.bottom);
+        setDragRect({
+          left: vl, top: vt, width: Math.max(0, vr - vl), height: Math.max(0, vb - vt),
+          clampLeft: r.left < b.left, clampTop: r.top < b.top,
+          clampRight: r.right > b.right, clampBottom: r.bottom > b.bottom,
+        });
+      } else {
+        setDragRect({ left, top, width, height, clampLeft: false, clampTop: false, clampRight: false, clampBottom: false });
+      }
       const next = new Set(origin.base);
       for (const el of document.querySelectorAll<HTMLElement>(o.itemSelector)) {
         const rect = el.getBoundingClientRect();
