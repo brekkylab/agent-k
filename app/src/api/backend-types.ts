@@ -105,12 +105,20 @@ export type BackendMessageSender =
   | { kind: 'user'; user_id: string }
   | { kind: 'agent'; name: string };
 
+export interface BackendCitation {
+  index: number;
+  label: string;
+  kind: 'corpus' | 'web' | string;
+  verified: boolean;
+}
+
 export interface SessionMessageItem {
   message: AiloyMessage;
   sender: BackendMessageSender;
   created_at: string;
   attachments?: string[];
   artifacts?: string[];
+  citations?: BackendCitation[];
 }
 
 export interface SessionMessageList {

@@ -191,6 +191,7 @@ export function toMessageItem(
     toolCalls,
     attachments: item.attachments ?? undefined,
     artifacts: item.artifacts?.length ? item.artifacts : undefined,
+    citations: item.citations?.length ? item.citations : undefined,
     status: 'done',
   };
 }

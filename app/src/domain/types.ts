@@ -60,6 +60,13 @@ export interface ToolCallInvocation {
   result?: string;
 }
 
+export interface Citation {
+  index: number;
+  label: string;
+  kind: 'corpus' | 'web' | string;
+  verified: boolean;
+}
+
 export interface Message {
   id: string;
   sessionId: SessionId;
@@ -67,7 +74,7 @@ export interface Message {
   createdAt: string;
   body: string;
   toolCalls?: ToolCallInvocation[];
-  citations?: FileAsset['id'][];
+  citations?: Citation[];
   attachments?: string[];
   artifacts?: string[];
   status?: 'sent' | 'streaming' | 'done';

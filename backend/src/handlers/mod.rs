@@ -1,7 +1,7 @@
 mod auth;
 mod automation;
 mod dirent;
-mod knowledge;
+pub(crate) mod knowledge;
 mod models;
 mod project;
 pub(crate) mod session;

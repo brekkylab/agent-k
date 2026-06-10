@@ -782,7 +782,7 @@ pub async fn get_message_history(
     Path(session_ref): Path<String>,
 ) -> ApiResult<Json<SessionMessageListResponse>> {
     let session_id = resolve_session_id(&state, &session_ref).await?;
-    let (_session, _access) = state
+    let (session, _access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
         .await
@@ -794,6 +794,22 @@ pub async fn get_message_history(
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
+
+    // For a Speedwagon session, load the corpus titles once so each agent
+    // answer's footnote citations can be checked against real documents.
+    let corpus_titles: Vec<String> = if session.agent_type.as_deref() == Some("speedwagon") {
+        match state.store_for(session.project_id).await {
+            Ok(store) => store
+                .read()
+                .await
+                .list(false, 0, u32::MAX)
+                .map(|docs| docs.into_iter().map(|d| d.title).collect())
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
 
     let items = rows
         .into_iter()
@@ -810,12 +826,20 @@ pub async fn get_message_history(
                         .unwrap_or_else(|| TOP_LEVEL_AGENT_NAME.to_string()),
                 },
             };
+            // Only Speedwagon answers carry corpus citations to check.
+            let citations = if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_titles.is_empty() {
+                let text: String = r.message.contents.iter().filter_map(|p| p.as_text()).collect();
+                crate::handlers::knowledge::verify_citations(&text, &corpus_titles)
+            } else {
+                Vec::new()
+            };
             Ok(SessionMessageResponse {
                 message: r.message,
                 sender,
                 created_at: r.created_at,
                 attachments: r.attachments,
                 artifacts: r.artifacts,
+                citations,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;

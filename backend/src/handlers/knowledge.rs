@@ -306,3 +306,74 @@ pub async fn knowledge_files(
         indexing: state.is_indexing(project_id),
     }))
 }
+
+/// One citation parsed from a Speedwagon answer, with whether it could be
+/// matched back to the corpus.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct CitationCheck {
+    /// Footnote number, e.g. 1 for `[^1]`.
+    pub index: u32,
+    /// The footnote definition text after `[^N]:`.
+    pub label: String,
+    /// `corpus` (cites a document) or `web` (cites a URL).
+    pub kind: String,
+    /// For a corpus citation, whether the cited title matches a document in the
+    /// store. A web citation is `true` when it carries a URL (not cross-checked).
+    pub verified: bool,
+}
+
+/// Normalize a title for tolerant matching (case-fold, collapse whitespace).
+fn norm_title(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Parse `[^N]: ...` footnote definitions from a Speedwagon answer and check
+/// each against the corpus titles. A corpus citation (carrying `(lines …)`) is
+/// verified when its title matches a known document; a web citation (carrying a
+/// URL) is reported as verified without an external lookup.
+pub fn verify_citations(text: &str, titles: &[String]) -> Vec<CitationCheck> {
+    let known: HashSet<String> = titles.iter().map(|t| norm_title(t)).collect();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("[^") else { continue };
+        let Some((num, after)) = rest.split_once("]:") else { continue };
+        let Ok(index) = num.trim().parse::<u32>() else { continue };
+        let label = after.trim().to_string();
+        let is_web = label.contains("http://") || label.contains("https://");
+        let (kind, verified) = if is_web {
+            ("web", true)
+        } else {
+            // Corpus citation: title is the text before " (lines" / " (line".
+            let title = label
+                .split(" (line")
+                .next()
+                .unwrap_or(&label)
+                .trim_end_matches(['—', '-', ' ']);
+            ("corpus", known.contains(&norm_title(title)))
+        };
+        out.push(CitationCheck {
+            index,
+            label,
+            kind: kind.to_string(),
+            verified,
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_citations_matches_corpus_and_flags_unknown() {
+        let titles = vec!["Team Handbook".to_string()];
+        let text = "The mascot is Pibble.[^1]\n\n## Sources\n[^1]: Team Handbook (lines 1-3)\n[^2]: Nonexistent Report (lines 4-9)\n[^3]: Example — https://example.com";
+        let checks = verify_citations(text, &titles);
+        assert_eq!(checks.len(), 3);
+        assert!(checks[0].verified && checks[0].kind == "corpus");
+        assert!(!checks[1].verified, "unknown title must be unverified");
+        assert!(checks[2].verified && checks[2].kind == "web");
+    }
+}

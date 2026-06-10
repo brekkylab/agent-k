@@ -116,6 +116,16 @@
   font-weight: 600;
   color: var(--cw-accent);
 }
+/* Speedwagon citation chips: source verified against the corpus, or not found. */
+.cw-citations { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cw-citation-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11.5px; line-height: 1.4;
+  background: var(--cw-paper-3); color: var(--cw-ink-3);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cw-citation-chip.is-unverified { background: var(--cw-danger-bg, #fde8e8); color: var(--cw-danger, #b42318); }
 
 
 .cw-message-error {
