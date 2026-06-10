@@ -352,11 +352,11 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-session-side h3 { margin: 16px 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--cw-fg-3); font-weight: 500; }
 .cw-session-side p { color: var(--cw-fg-3); line-height: 1.55; }
 
-/* Two stacked sidebar views (info ↔ file browser) on a horizontal track. The
-   default info view sits on the right half; tapping "browse" slides the track
-   right so the file-browser view (left half) glides into place. */
-.cw-side-views { flex: 1; min-height: 0; display: flex; width: 200%; transform: translateX(-50%); transition: transform .28s cubic-bezier(.4, 0, .2, 1); }
-.cw-side-views.show-files { transform: translateX(0); }
+/* Two sidebar views (info | file browser) on a horizontal track, ordered to
+   match the bottom tabs: info on the left, files on the right. Switching to
+   Files slides the track left so the file browser glides in from the right. */
+.cw-side-views { flex: 1; min-height: 0; display: flex; width: 200%; transform: translateX(0); transition: transform .28s cubic-bezier(.4, 0, .2, 1); }
+.cw-side-views.show-files { transform: translateX(-50%); }
 .cw-side-view { width: 50%; flex: 0 0 50%; min-height: 0; display: flex; flex-direction: column; }
 .cw-side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 18px; }
 

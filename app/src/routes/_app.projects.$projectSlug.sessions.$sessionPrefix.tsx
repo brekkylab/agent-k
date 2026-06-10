@@ -949,12 +949,7 @@ function SessionPage() {
 
       <aside className="cw-session-side">
         <div className={`cw-side-views${sideView === 'files' ? ' show-files' : ''}`}>
-          {/* ── files browser view (slides in from the left) ──────── */}
-          <div className="cw-side-view">
-            <SharedFilesBrowser projectId={projectId} projectName={project.data?.name} onImport={importSharedFiles} />
-          </div>
-
-          {/* ── default info view ─────────────────────────────────── */}
+          {/* ── default info view (left) ──────────────────────────── */}
           <div className="cw-side-view">
             <div className="cw-side-scroll">
               <h3>{t('side.members')}</h3>
@@ -982,6 +977,11 @@ function SessionPage() {
                 onCopyToShared={(scope, paths) => setCopyToShared({ scope, paths })}
               />
             </div>
+          </div>
+
+          {/* ── files browser view (right) ────────────────────────── */}
+          <div className="cw-side-view">
+            <SharedFilesBrowser projectId={projectId} projectName={project.data?.name} onImport={importSharedFiles} />
           </div>
         </div>
 
