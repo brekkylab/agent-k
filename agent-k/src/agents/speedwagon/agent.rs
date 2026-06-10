@@ -149,16 +149,26 @@ pub fn subagent_card() -> AgentCard {
     }
 }
 
-/// Instruction snippet a parent agent appends to its own prompt when a
-/// Speedwagon sub-agent is attached, so it reliably delegates corpus questions
-/// rather than answering from its own knowledge or the web.
+/// Delegation note for a parent (like Coworker) that has no citation system of
+/// its own: it should preserve the sub-agent's footnotes verbatim.
 pub const SPEEDWAGON_DELEGATION_NOTE: &str = r#"
 
 ## Project documents
 This project has a document corpus (the files in its knowledge folder), reachable through the `subagent_speedwagon` tool.
 - For any question whose answer should come from the project's own documents — facts, figures, or quotes that live in the uploaded files — delegate to `subagent_speedwagon` with the full question, and answer from what it returns.
 - Prefer the corpus over web search and over your own prior knowledge for anything project-specific. Only fall back to other sources when the sub-agent reports the corpus does not cover it.
-- Keep the source it cites (document title and lines, or URL) in your answer."#;
+- The sub-agent answers with `[^N]` footnote markers and a `## Sources` section. Carry those through verbatim: keep each `[^N]` marker where it sits in the sentence it supports, and reproduce the matching `## Sources` lines unchanged. Do not renumber, paraphrase, or drop a source."#;
+
+/// Delegation note for Deep Research, which already runs its own citation system
+/// (`citations.json` + `[^N]`). Corpus sources from the sub-agent are folded
+/// into that single numbering space rather than kept as a separate block.
+pub const SPEEDWAGON_DELEGATION_NOTE_DEEP_RESEARCH: &str = r#"
+
+## Project documents
+This project has a document corpus (the files in its knowledge folder), reachable through the `subagent_speedwagon` tool.
+- When a section needs a fact from the project's own documents, delegate that question to `subagent_speedwagon` and use what it returns alongside your web research.
+- The sub-agent cites corpus facts as `<document title> (lines a-b)`. Fold each such source into your own `artifacts/citations.json` as a new entry with the next `[^N]` number, recording `{"title": ..., "lines": "a-b", "source": "corpus"}` and no `url`. Cite it in `report.md` with that `[^N]` like any other source.
+- In the verify phase, a corpus citation is exempt from the URL/fetch check: it is valid when the sub-agent returned that document and line range. Web citations still require a URL you fetched this session."#;
 
 /// Speedwagon [`AgentSpec`] for use as another agent's sub-agent: carries the
 /// [`subagent_card`] and drops web_search/shell (the parent owns those). Corpus

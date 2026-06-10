@@ -327,12 +327,35 @@ fn norm_title(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
+/// Parse the line range out of a citation label, e.g. `... (lines 3-12)` or
+/// `... (line 5)`, returning the inclusive `(start, end)` if present.
+fn parse_line_range(label: &str) -> Option<(usize, usize)> {
+    let open = label.rfind("(line")?;
+    let inner = &label[open..];
+    let inner = inner.trim_start_matches("(lines").trim_start_matches("(line");
+    let inner = inner.trim_start().trim_end_matches(')');
+    let digits: String = inner
+        .chars()
+        .map(|c| if c.is_ascii_digit() { c } else { ' ' })
+        .collect();
+    let mut nums = digits.split_whitespace().filter_map(|n| n.parse::<usize>().ok());
+    let start = nums.next()?;
+    let end = nums.next().unwrap_or(start);
+    Some((start.min(end), start.max(end)))
+}
+
 /// Parse `[^N]: ...` footnote definitions from a Speedwagon answer and check
-/// each against the corpus titles. A corpus citation (carrying `(lines …)`) is
-/// verified when its title matches a known document; a web citation (carrying a
-/// URL) is reported as verified without an external lookup.
-pub fn verify_citations(text: &str, titles: &[String]) -> Vec<CitationCheck> {
-    let known: HashSet<String> = titles.iter().map(|t| norm_title(t)).collect();
+/// each against the corpus. A corpus citation is verified when its title matches
+/// a known document AND, if it states a line range, that range lies within the
+/// document's line count. A web citation (carrying a URL) is reported as
+/// verified without an external lookup.
+///
+/// `docs` is `(title, line_count)` for each corpus document.
+pub fn verify_citations(text: &str, docs: &[(String, usize)]) -> Vec<CitationCheck> {
+    let by_title: std::collections::HashMap<String, usize> = docs
+        .iter()
+        .map(|(t, lines)| (norm_title(t), *lines))
+        .collect();
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.trim();
@@ -350,7 +373,15 @@ pub fn verify_citations(text: &str, titles: &[String]) -> Vec<CitationCheck> {
                 .next()
                 .unwrap_or(&label)
                 .trim_end_matches(['—', '-', ' ']);
-            ("corpus", known.contains(&norm_title(title)))
+            let verified = match by_title.get(&norm_title(title)) {
+                // Title matches; if a line range is stated, it must fit the doc.
+                Some(&line_count) => match parse_line_range(&label) {
+                    Some((start, end)) => start >= 1 && end <= line_count.max(1),
+                    None => true,
+                },
+                None => false,
+            };
+            ("corpus", verified)
         };
         out.push(CitationCheck {
             index,
@@ -368,12 +399,26 @@ mod tests {
 
     #[test]
     fn verify_citations_matches_corpus_and_flags_unknown() {
-        let titles = vec!["Team Handbook".to_string()];
+        let docs = vec![("Team Handbook".to_string(), 3usize)];
         let text = "The mascot is Pibble.[^1]\n\n## Sources\n[^1]: Team Handbook (lines 1-3)\n[^2]: Nonexistent Report (lines 4-9)\n[^3]: Example — https://example.com";
-        let checks = verify_citations(text, &titles);
+        let checks = verify_citations(text, &docs);
         assert_eq!(checks.len(), 3);
         assert!(checks[0].verified && checks[0].kind == "corpus");
         assert!(!checks[1].verified, "unknown title must be unverified");
         assert!(checks[2].verified && checks[2].kind == "web");
+    }
+
+    #[test]
+    fn verify_citations_rejects_out_of_range_lines() {
+        let docs = vec![("Team Handbook".to_string(), 3usize)];
+        // Title matches but the line range exceeds the document's 3 lines.
+        let text = "x[^1]\n\n## Sources\n[^1]: Team Handbook (lines 40-50)";
+        let checks = verify_citations(text, &docs);
+        assert_eq!(checks.len(), 1);
+        assert!(!checks[0].verified, "line range past the doc length must be unverified");
+
+        // A matching title with no line range stays verified.
+        let text2 = "x[^1]\n\n## Sources\n[^1]: Team Handbook";
+        assert!(verify_citations(text2, &docs)[0].verified);
     }
 }

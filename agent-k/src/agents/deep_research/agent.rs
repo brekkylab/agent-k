@@ -7,7 +7,7 @@ use ailoy::{
 
 use super::tool::{get_api_search_tool_desc, get_api_search_tool_factory};
 use crate::agents::speedwagon::{
-    SPEEDWAGON_DELEGATION_NOTE, register_corpus_tools, speedwagon_subagent_spec,
+    SPEEDWAGON_DELEGATION_NOTE_DEEP_RESEARCH, register_corpus_tools, speedwagon_subagent_spec,
 };
 use crate::knowledge_base::SharedStore;
 
@@ -127,7 +127,7 @@ pub async fn get_deep_research_agent(
             let mut provider = default_provider().clone();
             register_corpus_tools(&mut provider.tools, store);
             let spec = spec
-                .instruction(format!("{inst}{SPEEDWAGON_DELEGATION_NOTE}"))
+                .instruction(format!("{inst}{SPEEDWAGON_DELEGATION_NOTE_DEEP_RESEARCH}"))
                 .subagent(speedwagon_subagent_spec(name.as_ref(), model.as_ref()));
             Agent::try_with_provider_and_runenv(spec, &provider, runenv)
         }

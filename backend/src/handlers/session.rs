@@ -795,15 +795,23 @@ pub async fn get_message_history(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    // For a Speedwagon session, load the corpus titles once so each agent
-    // answer's footnote citations can be checked against real documents.
-    let corpus_titles: Vec<String> = if session.agent_type.as_deref() == Some("speedwagon") {
+    // For a Speedwagon session, load each corpus document's (title, line count)
+    // once so each agent answer's footnote citations can be checked against real
+    // documents (title match plus, when stated, an in-range line span).
+    let corpus_docs: Vec<(String, usize)> = if session.agent_type.as_deref() == Some("speedwagon") {
         match state.store_for(session.project_id).await {
             Ok(store) => store
                 .read()
                 .await
-                .list(false, 0, u32::MAX)
-                .map(|docs| docs.into_iter().map(|d| d.title).collect())
+                .list(true, 0, u32::MAX)
+                .map(|docs| {
+                    docs.into_iter()
+                        .map(|d| {
+                            let lines = d.content.as_deref().map(|c| c.lines().count()).unwrap_or(0);
+                            (d.title, lines)
+                        })
+                        .collect()
+                })
                 .unwrap_or_default(),
             Err(_) => Vec::new(),
         }
@@ -827,9 +835,9 @@ pub async fn get_message_history(
                 },
             };
             // Only Speedwagon answers carry corpus citations to check.
-            let citations = if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_titles.is_empty() {
+            let citations = if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_docs.is_empty() {
                 let text: String = r.message.contents.iter().filter_map(|p| p.as_text()).collect();
-                crate::handlers::knowledge::verify_citations(&text, &corpus_titles)
+                crate::handlers::knowledge::verify_citations(&text, &corpus_docs)
             } else {
                 Vec::new()
             };
