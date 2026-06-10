@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
-import { nameOf } from '@/domain/files';
+import { isHiddenName, nameOf } from '@/domain/files';
 import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 import { FileTypeIcon } from './FileTypeIcon';
 import { Icon } from './Icon';
@@ -61,6 +61,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       if (!rel.startsWith(prefix)) continue;
       const remainder = rel.slice(prefix.length);
       if (!remainder || remainder.includes('/')) continue; // not an immediate child
+      if (isHiddenName(remainder)) continue; // hide dotfiles (.keep placeholders, etc.)
       if (e.kind === 'dir') {
         out.push({ kind: 'dir', name: remainder, relPath: rel, globalPath: e.path });
       } else {
@@ -121,7 +122,9 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       if (entry?.kind === 'dir') {
         const prefix = `${stripScopePrefix(scope, p)}/`;
         for (const e of rawEntries) {
-          if (e.kind === 'file' && stripScopePrefix(scope, e.path).startsWith(prefix)) addFile(e.path, nameOf(e));
+          if (e.kind !== 'file') continue;
+          if (isHiddenName(nameOf(e))) continue; // don't attach .keep placeholders
+          if (stripScopePrefix(scope, e.path).startsWith(prefix)) addFile(e.path, nameOf(e));
         }
       } else {
         addFile(p, p.split('/').pop() ?? p);
