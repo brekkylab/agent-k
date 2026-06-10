@@ -140,14 +140,18 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
     marquee.cancel(); // a native drag is starting — abort any pending marquee
     const sources = selected.has(globalPath) && selected.size > 1 ? [...selected] : [globalPath];
     const items = expandToFiles(sources);
-    if (items.length === 0) { e.preventDefault(); return; } // nothing to attach (e.g. empty folder)
+    // An empty folder still drags (drop is just a no-op) — don't block the gesture.
     // Custom MIME only — omit text/plain so external apps can't accept the drop.
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData(SESSION_IMPORT_MIME, JSON.stringify(items));
 
     const ghost = document.createElement('div');
     ghost.className = 'cw-drag-ghost';
-    ghost.textContent = items.length === 1 ? items[0]!.filename : t('shared_files.drag_items', { count: items.length });
+    ghost.textContent = items.length === 1
+      ? items[0]!.filename
+      : items.length === 0
+        ? (globalPath.split('/').pop() ?? globalPath)
+        : t('shared_files.drag_items', { count: items.length });
     document.body.appendChild(ghost);
     e.dataTransfer.setDragImage(ghost, 14, 14);
     requestAnimationFrame(() => ghost.remove());
