@@ -541,6 +541,9 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-knowledge { margin-top: 28px; border: 1px dashed var(--cw-border-hover); border-radius: var(--cw-radius-lg); padding: 18px; background: var(--cw-bg); }
 .cw-knowledge h2 { margin: 0; display: flex; align-items: center; gap: 8px; }
 .cw-knowledge small { font-family: var(--cw-font-mono); font-size: 10px; border: 1px solid var(--cw-accent-line); color: var(--cw-accent-2); border-radius: var(--cw-radius-sm); padding: 1px 5px; text-transform: uppercase; }
+/* Knowledge-folder status banner (info / indexing / error). */
+.cw-knowledge-banner { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 8px 12px; border-radius: var(--cw-radius-md); background: var(--cw-paper-3); color: var(--cw-ink-2); font-size: 12.5px; }
+.cw-knowledge-banner.is-error { background: var(--cw-danger-bg, #fde8e8); color: var(--cw-danger, #b42318); }
 
 .cw-simple-page { max-width: 760px; }
 .cw-simple-stack { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }

@@ -149,6 +149,17 @@ pub fn subagent_card() -> AgentCard {
     }
 }
 
+/// Instruction snippet a parent agent appends to its own prompt when a
+/// Speedwagon sub-agent is attached, so it reliably delegates corpus questions
+/// rather than answering from its own knowledge or the web.
+pub const SPEEDWAGON_DELEGATION_NOTE: &str = r#"
+
+## Project documents
+This project has a document corpus (the files in its knowledge folder), reachable through the `subagent_speedwagon` tool.
+- For any question whose answer should come from the project's own documents — facts, figures, or quotes that live in the uploaded files — delegate to `subagent_speedwagon` with the full question, and answer from what it returns.
+- Prefer the corpus over web search and over your own prior knowledge for anything project-specific. Only fall back to other sources when the sub-agent reports the corpus does not cover it.
+- Keep the source it cites (document title and lines, or URL) in your answer."#;
+
 /// Speedwagon [`AgentSpec`] for use as another agent's sub-agent: carries the
 /// [`subagent_card`] and drops web_search/shell (the parent owns those). Corpus
 /// tool functions resolve against the parent's provider, which must register

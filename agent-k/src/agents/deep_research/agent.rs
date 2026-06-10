@@ -6,7 +6,9 @@ use ailoy::{
 };
 
 use super::tool::{get_api_search_tool_desc, get_api_search_tool_factory};
-use crate::agents::speedwagon::{register_corpus_tools, speedwagon_subagent_spec};
+use crate::agents::speedwagon::{
+    SPEEDWAGON_DELEGATION_NOTE, register_corpus_tools, speedwagon_subagent_spec,
+};
 use crate::knowledge_base::SharedStore;
 
 const DEEP_RESEARCH_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to produce long-form research reports grounded in multiple web sources with inline citations.
@@ -111,7 +113,7 @@ pub async fn get_deep_research_agent(
     ensure_api_search_registered();
 
     let spec = AgentSpec::new(model.as_ref())
-        .instruction(inst)
+        .instruction(inst.clone())
         .system_tools()
         .tool(get_api_search_tool_desc())
         .web_fetch_tool()
@@ -124,7 +126,9 @@ pub async fn get_deep_research_agent(
         Some(store) => {
             let mut provider = default_provider().clone();
             register_corpus_tools(&mut provider.tools, store);
-            let spec = spec.subagent(speedwagon_subagent_spec(name.as_ref(), model.as_ref()));
+            let spec = spec
+                .instruction(format!("{inst}{SPEEDWAGON_DELEGATION_NOTE}"))
+                .subagent(speedwagon_subagent_spec(name.as_ref(), model.as_ref()));
             Agent::try_with_provider_and_runenv(spec, &provider, runenv)
         }
         None => Agent::try_with_runenv(spec, runenv),

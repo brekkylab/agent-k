@@ -765,9 +765,11 @@ function FilesPage() {
             }}
           >
             {inKnowledge && !view.isSearch && (
-              <div className="cw-knowledge-banner">
+              <div className={`cw-knowledge-banner${!knowledge.data?.indexing && knowledge.data?.error ? ' is-error' : ''}`}>
                 {knowledge.data?.indexing ? (
                   <><Icon name="rotate-ccw" size={14} /> <span>{t('files:knowledge.indexing')}</span></>
+                ) : knowledge.data?.error ? (
+                  <><Icon name="x" size={14} /> <span>{t('files:knowledge.error')}</span></>
                 ) : (
                   <><Icon name="sparkles" size={14} /> <span>{t('files:knowledge.banner')}</span></>
                 )}

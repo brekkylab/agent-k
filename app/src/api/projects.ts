@@ -48,14 +48,16 @@ export interface KnowledgeStatus {
   indexing: boolean;
   /** Null while the store is locked by an in-flight resync (count unknown then). */
   documentCount: number | null;
+  /** Last resync error, if the most recent resync failed; null otherwise. */
+  error: string | null;
 }
 
 /** Knowledge-corpus indexing status — whether a background resync is in flight. */
 export async function getKnowledgeStatus(projectRef: string): Promise<KnowledgeStatus> {
-  const raw = await request<{ indexing: boolean; document_count: number | null }>(
+  const raw = await request<{ indexing: boolean; document_count: number | null; error: string | null }>(
     `/projects/${projectRef}/knowledge/status`,
   );
-  return { indexing: raw.indexing, documentCount: raw.document_count ?? null };
+  return { indexing: raw.indexing, documentCount: raw.document_count ?? null, error: raw.error ?? null };
 }
 
 export interface KnowledgeFileStatus {

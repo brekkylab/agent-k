@@ -50,6 +50,9 @@ pub struct AppState {
     /// validated against (mtime, size). Lets the per-file status endpoint skip
     /// re-reading and re-hashing files that haven't changed between polls.
     knowledge_file_ids: DashMap<(Uuid, PathBuf), (SystemTime, u64, Uuid)>,
+    /// Last knowledge-resync error per project, surfaced in the status endpoint.
+    /// Set when a background resync fails, cleared when one succeeds.
+    knowledge_resync_error: DashMap<Uuid, String>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -77,6 +80,7 @@ impl AppState {
             repository,
             document_stores: DashMap::new(),
             knowledge_file_ids: DashMap::new(),
+            knowledge_resync_error: DashMap::new(),
             knowledge_indexing: Arc::new(DashMap::new()),
             jwt,
             data_root,
@@ -100,6 +104,25 @@ impl AppState {
     /// Whether a knowledge resync is currently in flight for `project_id`.
     pub fn is_indexing(&self, project_id: Uuid) -> bool {
         self.knowledge_indexing.get(&project_id).map(|n| *n > 0).unwrap_or(false)
+    }
+
+    /// Record the outcome of a resync: `Some(msg)` on failure, `None` clears a
+    /// prior error after a success. The latest value is surfaced in the status.
+    pub fn set_resync_error(&self, project_id: Uuid, error: Option<String>) {
+        match error {
+            Some(e) => {
+                self.knowledge_resync_error.insert(project_id, e);
+            }
+            None => {
+                self.knowledge_resync_error.remove(&project_id);
+            }
+        }
+    }
+
+    /// The last knowledge-resync error for `project_id`, if the most recent
+    /// resync failed and none has succeeded since.
+    pub fn resync_error(&self, project_id: Uuid) -> Option<String> {
+        self.knowledge_resync_error.get(&project_id).map(|e| e.clone())
     }
 
     /// Cached content id for a knowledge file, valid only if `(mtime, size)`

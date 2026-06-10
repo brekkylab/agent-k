@@ -67,8 +67,12 @@ pub(crate) async fn resync_knowledge(state: Arc<AppState>, project_id: Uuid) {
     // Held for the whole resync; its Drop decrements the indexing count on any
     // exit path (return, error, or panic), so the UI never sticks on "indexing".
     let _guard = state.begin_indexing(project_id);
-    if let Err(e) = resync_inner(&state, project_id).await {
-        tracing::warn!(%project_id, "knowledge resync failed: {e}");
+    match resync_inner(&state, project_id).await {
+        Ok(()) => state.set_resync_error(project_id, None),
+        Err(e) => {
+            tracing::warn!(%project_id, "knowledge resync failed: {e}");
+            state.set_resync_error(project_id, Some(e));
+        }
     }
 }
 
@@ -170,6 +174,9 @@ pub struct KnowledgeStatusResponse {
     /// momentarily locked by an in-flight resync (the count is unknown right
     /// then; `indexing` will be true).
     pub document_count: Option<u32>,
+    /// The last resync error, if the most recent background resync failed and
+    /// none has succeeded since. Lets the UI surface a stuck/failed corpus.
+    pub error: Option<String>,
 }
 
 /// GET /projects/{project_ref}/knowledge/status — membership-gated. Lets the
@@ -196,6 +203,7 @@ pub async fn knowledge_status(
     Ok(Json(KnowledgeStatusResponse {
         indexing: state.is_indexing(project_id),
         document_count,
+        error: state.resync_error(project_id),
     }))
 }
 

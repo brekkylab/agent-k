@@ -5,7 +5,9 @@ use ailoy::{
     runenv::{FileEntry, RunEnv, SandboxConfig, VolumeMount},
 };
 
-use crate::agents::speedwagon::{register_corpus_tools, speedwagon_subagent_spec};
+use crate::agents::speedwagon::{
+    SPEEDWAGON_DELEGATION_NOTE, register_corpus_tools, speedwagon_subagent_spec,
+};
 use crate::knowledge_base::SharedStore;
 
 const XLSX_SKILL_DIR: &str = "/workspace/skills/xlsx";
@@ -157,7 +159,7 @@ pub async fn get_coworker_agent_with_opts(
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
     let mut spec = AgentSpec::new(model.as_ref())
-        .instruction(inst)
+        .instruction(inst.clone())
         .system_tools()
         .web_search_tool(vec![])
         .max_tokens(32_000);
@@ -200,7 +202,9 @@ pub async fn get_coworker_agent_with_opts(
         Some(store) => {
             let mut provider = default_provider().clone();
             register_corpus_tools(&mut provider.tools, store);
-            let spec = spec.subagent(speedwagon_subagent_spec(name.as_ref(), model.as_ref()));
+            let spec = spec
+                .instruction(format!("{inst}{SPEEDWAGON_DELEGATION_NOTE}"))
+                .subagent(speedwagon_subagent_spec(name.as_ref(), model.as_ref()));
             Agent::try_with_provider_and_runenv(spec, &provider, runenv)
         }
         None => Agent::try_with_runenv(spec, runenv),
