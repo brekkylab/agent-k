@@ -246,3 +246,39 @@ async fn knowledge_folder_cannot_be_copied() {
     let failed = json["failed"].as_array().expect("failed array");
     assert_eq!(failed.len(), 1, "copying knowledge root must be rejected: {json}");
 }
+
+#[tokio::test]
+async fn knowledge_files_reports_per_file_indexed_status() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+    let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
+
+    let status = upload_to_knowledge(
+        &app,
+        &token,
+        &pid.to_string(),
+        &[("note.md", b"# Freedonia\n\nThe capital is Glorkville." as &[u8])],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(wait_for_count(&state, pid, 1).await, 1, "doc should be indexed");
+
+    let (code, json) = authed(
+        &app,
+        "GET",
+        &format!("/projects/{pid}/knowledge/files"),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    let files = json["files"].as_array().expect("files array");
+    let note = files
+        .iter()
+        .find(|f| f["path"] == "knowledge/note.md")
+        .expect("note.md present in knowledge files");
+    assert_eq!(note["indexed"], true, "uploaded file should report indexed: {json}");
+}

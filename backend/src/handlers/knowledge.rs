@@ -260,12 +260,29 @@ pub async fn knowledge_files(
             if indexable_filetype(&name).is_none() {
                 continue;
             }
-            let indexed = match tokio::fs::read(&path).await {
-                Ok(bytes) => {
-                    let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes);
-                    store.read().await.get(id).is_some()
-                }
-                Err(_) => false,
+            // The content id is the UUIDv5 of the file bytes. Reuse the cached id
+            // when (mtime, size) are unchanged so an unchanged file isn't re-read
+            // and re-hashed on every poll; only a changed file pays that cost.
+            let meta = entry.metadata().await.ok();
+            let key = meta
+                .as_ref()
+                .and_then(|m| Some((m.modified().ok()?, m.len())));
+            let id = match key.and_then(|(mt, sz)| state.cached_file_id(project_id, &path, mt, sz)) {
+                Some(id) => Some(id),
+                None => match tokio::fs::read(&path).await {
+                    Ok(bytes) => {
+                        let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes);
+                        if let Some((mt, sz)) = key {
+                            state.cache_file_id(project_id, &path, mt, sz, id);
+                        }
+                        Some(id)
+                    }
+                    Err(_) => None,
+                },
+            };
+            let indexed = match id {
+                Some(id) => store.read().await.get(id).is_some(),
+                None => false,
             };
             let rel = path
                 .strip_prefix(&scope_dir)

@@ -1,7 +1,7 @@
 use std::{
     path::PathBuf,
     sync::Arc,
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 use agent_k::knowledge_base::{SharedStore, Store};
@@ -46,6 +46,10 @@ pub struct AppState {
     /// `Arc` so an [`IndexingGuard`] can decrement it on drop, surviving early
     /// returns and panics in the background resync task.
     knowledge_indexing: Arc<DashMap<Uuid, u32>>,
+    /// Cache of each knowledge file's content id, keyed by (project, path) and
+    /// validated against (mtime, size). Lets the per-file status endpoint skip
+    /// re-reading and re-hashing files that haven't changed between polls.
+    knowledge_file_ids: DashMap<(Uuid, PathBuf), (SystemTime, u64, Uuid)>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -72,6 +76,7 @@ impl AppState {
             active_agent_runs: DashMap::new(),
             repository,
             document_stores: DashMap::new(),
+            knowledge_file_ids: DashMap::new(),
             knowledge_indexing: Arc::new(DashMap::new()),
             jwt,
             data_root,
@@ -95,6 +100,24 @@ impl AppState {
     /// Whether a knowledge resync is currently in flight for `project_id`.
     pub fn is_indexing(&self, project_id: Uuid) -> bool {
         self.knowledge_indexing.get(&project_id).map(|n| *n > 0).unwrap_or(false)
+    }
+
+    /// Cached content id for a knowledge file, valid only if `(mtime, size)`
+    /// still match what was cached — otherwise `None` and the caller must
+    /// re-hash. Lets the per-file status poll avoid re-reading unchanged files.
+    pub fn cached_file_id(&self, project_id: Uuid, path: &std::path::Path, mtime: SystemTime, size: u64) -> Option<Uuid> {
+        self.knowledge_file_ids
+            .get(&(project_id, path.to_path_buf()))
+            .and_then(|e| {
+                let (m, s, id) = *e;
+                (m == mtime && s == size).then_some(id)
+            })
+    }
+
+    /// Record a knowledge file's content id alongside its `(mtime, size)`.
+    pub fn cache_file_id(&self, project_id: Uuid, path: &std::path::Path, mtime: SystemTime, size: u64, id: Uuid) {
+        self.knowledge_file_ids
+            .insert((project_id, path.to_path_buf()), (mtime, size, id));
     }
 
     /// Return the document corpus [`SharedStore`] for `project_id`, opening it
