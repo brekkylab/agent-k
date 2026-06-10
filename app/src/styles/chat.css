@@ -110,3 +110,171 @@
   font-size: 12px;
   font-family: var(--cw-font-mono);
 }
+
+/* ── File preview lightbox (Google-Drive style) ──────────────────── */
+.cw-preview-backdrop {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex;
+  background: rgb(0 0 0 / 0.82);
+  animation: cw-preview-fade .14s ease both;
+}
+@keyframes cw-preview-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Floating chrome over the dim — filename left, actions right. The bar itself
+   is click-through so clicking empty top area still dismisses; its children
+   (title, buttons) capture clicks. */
+.cw-preview-chrome {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 12px 16px;
+  background: linear-gradient(to bottom, rgb(0 0 0 / 0.5), transparent);
+  pointer-events: none;
+}
+.cw-preview-chrome > * { pointer-events: auto; }
+.cw-preview-title {
+  color: #fff; font-weight: 600; font-size: var(--cw-text-sm);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
+}
+.cw-preview-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.cw-preview-actions button {
+  display: grid; place-items: center; width: 34px; height: 34px;
+  border: none; appearance: none;   /* drop the UA outset border (raised look) */
+  border-radius: var(--cw-radius-full); color: #fff; background: transparent;
+}
+.cw-preview-actions button:hover { background: rgb(255 255 255 / 0.16); }
+
+.cw-preview-loading { margin: auto; color: rgb(255 255 255 / 0.85); }
+
+/* Media stage: full-bleed dark scroll area; content centers, pans when zoomed. */
+.cw-preview-stage {
+  flex: 1; width: 100%; height: 100%; overflow: auto;
+  /* `safe center` centers when content fits but aligns to start when it
+     overflows — without it, plain `center` (or margin:auto) pushes the top of
+     an oversized page above scrollTop:0 where it can never be scrolled into view. */
+  display: flex; align-items: safe center; justify-content: safe center;
+  padding: 64px 24px 88px;   /* clear chrome (top) and zoom pill (bottom) */
+}
+/* `flex-shrink: 0` keeps the JS-measured width honored — without it the flex
+   stage shrinks a zoomed-in image back to fit, collapsing every level ≥125%
+   to one clamped size. max-width/height:100% apply only pre-measure (no inline
+   width yet) to letterbox the first paint. */
+.cw-preview-img { display: block; user-select: none; flex-shrink: 0; max-width: 100%; max-height: 100%; object-fit: contain; }
+/* When the zoomed image overflows it's pannable by drag — show the 4-way move
+   affordance over the image, and keep it while dragging even as the pointer
+   crosses the dim margin (pointer capture is on the stage). */
+.cw-preview-img.is-pannable { cursor: move; }
+/* `cursor` is inherited, so setting it on the panning stage covers the image
+   (and the dim margin the pointer may cross mid-drag) without a second rule. */
+.cw-preview-img-stage.is-panning { cursor: move; }
+/* Panning replaces scrollbars for the image stage — keep overflow scrollable
+   (drag sets scrollLeft/Top) but hide the bars. PDF keeps its scrollbars. */
+.cw-preview-img-stage { scrollbar-width: none; }
+.cw-preview-img-stage::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+.cw-preview-pdf { flex-direction: column; }
+.cw-preview-pdf-doc { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.cw-preview-pdf .react-pdf__Page { box-shadow: 0 4px 16px rgb(0 0 0 / 0.4); }
+
+/* Floating zoom pill, bottom-center. */
+.cw-zoom-controls {
+  position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 3;
+  display: flex; align-items: center; gap: 2px;
+  padding: 4px; border-radius: var(--cw-radius-full);
+  background: rgb(32 32 32 / 0.92); box-shadow: var(--cw-shadow-lg);
+}
+.cw-zoom-controls button {
+  min-width: 32px; height: 32px; padding: 0 8px;
+  display: grid; place-items: center;
+  border: none; appearance: none;   /* drop the UA outset border (raised look) */
+  color: #fff; background: transparent; border-radius: var(--cw-radius-md);
+  font-size: 18px; line-height: 1;
+}
+.cw-zoom-controls button:hover:not(:disabled) { background: rgb(255 255 255 / 0.16); }
+.cw-zoom-controls button:disabled { opacity: 0.35; cursor: default; }
+.cw-zoom-controls .cw-zoom-pct { font-size: var(--cw-text-xs); min-width: 52px; font-variant-numeric: tabular-nums; }
+/* icon variant (image preview): drop the number's reserved width so the
+   magnifier sits in a balanced square like the −/+ buttons. */
+.cw-zoom-controls .cw-zoom-pct--icon { min-width: 32px; padding: 0; }
+
+/* Document sheet: readable light page centered on the dim. Width breathes with
+   the viewport via clamp() instead of a hard min() cap, so a wide window gives
+   the sheet room instead of pinning it narrow. `vw` is always ≤ viewport, so the
+   only overflow risk is the clamp floor on a tiny screen — kept low (320px). */
+.cw-preview-sheet {
+  margin: 64px auto 32px; width: clamp(320px, 84vw, 1000px);
+  max-height: calc(100vh - 96px); overflow: auto;
+  background: var(--cw-bg-elevated);
+  border-radius: var(--cw-radius-lg); box-shadow: var(--cw-shadow-lg);
+}
+/* HTML preview is a live page in an iframe (sheet stays fixed-height, the frame
+   scrolls internally). It's the most browser-like surface, so give its width the
+   most room — the page's own CSS handles its internal layout. Only width changes;
+   height/overflow keep the iframe behaviour. */
+.cw-preview-sheet--frame { width: clamp(320px, 92vw, 1360px); height: calc(100vh - 96px); overflow: hidden; }
+/* CSV/TSV table: cells don't wrap (the table-wrap scrolls horizontally), so like
+   code its width governs how many columns show before scroll — give it the same
+   wide cap as the HTML surface. */
+.cw-preview-sheet--wide { width: clamp(320px, 92vw, 1360px); }
+/* Code preview doesn't wrap, so width only governs how much shows before the
+   horizontal scroll kicks in — give it a wider cap than prose (whose width is a
+   reading measure that shouldn't grow unbounded). */
+.cw-preview-sheet--code { width: clamp(320px, 90vw, 1280px); }
+
+/* CSV/TSV table */
+/* Let the sheet own scrolling (both axes) instead of this wrap: a wrap-level
+   horizontal scrollbar would sit at the bottom of the full (tall) table, below
+   the fold. With the wrap visible, the table overflows to the sheet whose
+   scrollbar is at its fixed visible edge — and the sticky header now pins against
+   the sheet (the actual vertical scroller) instead of this never-scrolling wrap. */
+.cw-preview-table-wrap { overflow: visible; }
+.cw-preview-table { border-collapse: collapse; width: 100%; font-size: var(--cw-text-xs); color: var(--cw-fg-1); }
+.cw-preview-table th, .cw-preview-table td {
+  border: 1px solid var(--cw-border); padding: 6px 10px;
+  text-align: left; white-space: nowrap; vertical-align: top;
+}
+.cw-preview-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--cw-bg-subtle); font-weight: 600;
+}
+.cw-preview-table tbody tr:nth-child(even) { background: var(--cw-bg-subtle); }
+.cw-table-note { padding: 10px 12px; color: var(--cw-fg-3); font-size: var(--cw-text-xs); border-top: 1px solid var(--cw-border); }
+.cw-table-empty { color: var(--cw-fg-3); }
+.cw-preview-html { width: 100%; height: 100%; border: 0; background: var(--cw-bg-elevated); display: block; }
+.cw-preview-doc { padding: 24px 28px; }
+.cw-preview-text { white-space: pre-wrap; word-break: break-word; color: var(--cw-fg-1); font-family: var(--cw-font-mono); font-size: var(--cw-text-xs); margin: 0; padding: 24px 28px; }
+/* Full-file code preview: the lone <pre> IS the whole document, so strip the
+   chat-style code-card chrome (bg/border/radius/margin/padding) and let the code
+   sit flush on the sheet with only the doc's single inset — like the plain-text
+   preview. Scoped to .cw-preview-code so markdown previews and chat keep their
+   boxed code blocks. */
+.cw-preview-code .cw-md pre {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+/* Release the inner horizontal scroll so the SHEET owns it. highlight.js's theme
+   sets `.hljs { overflow-x: auto }` on the <code>, which would otherwise park the
+   horizontal scrollbar at the bottom of the whole (tall) code block — below the
+   fold, invisible until you scroll all the way down. With both visible, the long
+   line overflows up to the sheet, whose scrollbar sits at its fixed visible edge.
+   Code still must not soft-wrap (white-space: pre is kept). */
+.cw-preview-code .cw-md pre,
+.cw-preview-code .cw-md pre code { overflow: visible; }
+
+/* Fallback card centered on the dim. */
+.cw-preview-fallcard {
+  margin: auto; width: min(380px, 90%);
+  background: var(--cw-bg-elevated); border-radius: var(--cw-radius-xl);
+  box-shadow: var(--cw-shadow-lg);
+}
+.cw-preview-fallback {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 36px 28px; text-align: center;
+}
+.cw-preview-fallback-name { font-weight: 600; color: var(--cw-fg-1); }
+.cw-preview-fallback-title { color: var(--cw-fg-1); }
+.cw-preview-fallback-body { color: var(--cw-fg-3); font-size: var(--cw-text-xs); max-width: 320px; }
+.cw-preview-fallback .cw-btn-primary { margin-top: 8px; }

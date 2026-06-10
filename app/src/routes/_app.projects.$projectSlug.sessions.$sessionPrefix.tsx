@@ -30,6 +30,7 @@ import { SharedFilesBrowser, SESSION_IMPORT_MIME, type SessionImportItem } from 
 import { CopyToSharedDialog } from '@/components/CopyToSharedDialog';
 import { AttachmentChip } from '@/components/AttachmentChip';
 import { AttachmentPreview } from '@/components/AttachmentPreview';
+import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { loadNs } from '@/i18n/loader';
@@ -1044,6 +1045,7 @@ function ArtifactChip({
   const showToast = useToastStore((s) => s.show);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const chipRef = useRef<HTMLDivElement>(null);
   const scope: DirentScope = { kind: 'artifacts', projectId, sessionId };
   const filename = path.split('/').pop() ?? path;
@@ -1087,6 +1089,11 @@ function ArtifactChip({
             onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
           >
             <li>
+              <button type="button" onClick={() => setPreviewing(true)}>
+                <Icon name="eye" size={13} /> {t('artifact.preview')}
+              </button>
+            </li>
+            <li>
               <button type="button" onClick={() => downloadFile(scope, path)}>
                 <Icon name="download" size={13} /> {t('artifact.download')}
               </button>
@@ -1118,6 +1125,9 @@ function ArtifactChip({
           onConfirm={() => deleteMutation.mutate()}
           onClose={() => setConfirmDelete(false)}
         />
+      )}
+      {previewing && (
+        <FilePreviewModal globalPath={`${scopeRoot(scope)}/${path}`} onClose={() => setPreviewing(false)} />
       )}
     </>
   );

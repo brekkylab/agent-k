@@ -444,7 +444,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
    breadcrumb when selection is active. Same visual width and height as the
    breadcrumb so the header chrome doesn't jump. */
 .cw-bulk-toolbar { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; background: transparent; padding: 0; }
-.cw-bulk-toolbar-inline { animation: cw-enter .16s ease both; }
+.cw-bulk-toolbar-inline { animation: cw-enter .16s ease both; max-width: 100%; overflow-x: auto; }
 .cw-bulk-count { font-weight: 600; color: var(--cw-ink); font-size: 13px; margin-right: 4px; }
 .cw-bulk-toolbar .cw-btn-secondary { min-height: 28px; padding: 4px 10px; font-size: 12px; }
 .cw-bulk-toolbar .cw-btn-destructive { color: var(--cw-destructive); border-color: color-mix(in oklch, var(--cw-destructive), transparent 50%); }
