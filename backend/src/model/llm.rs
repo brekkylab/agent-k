@@ -197,6 +197,18 @@ pub fn resolve_model_in<S: AsRef<str>>(chain: &[S], pin: Option<&str>) -> String
         })
 }
 
+/// Model chain for session-title generation: Buddy's light chain, but with a
+/// cheaper Gemini lite variant. Resolved against runtime provider availability.
+pub fn resolve_title_model() -> String {
+    const TITLE_CHAIN: &[&str] = &[
+        "openai/gpt-5-nano",
+        "anthropic/claude-haiku-4-5",
+        "google/gemini-2.5-flash-lite",
+        "moonshotai/kimi-k2.6",
+    ];
+    resolve_model_in(TITLE_CHAIN, None)
+}
+
 /// Per-project recommendation-chain overrides, parsed from the
 /// `projects.recommended_chains` JSON column.
 #[derive(Debug, Default)]

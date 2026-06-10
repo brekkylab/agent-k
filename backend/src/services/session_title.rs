@@ -6,7 +6,6 @@ use ailoy::{
 };
 use futures_util::StreamExt;
 
-const TITLE_MODEL: &str = "openai/gpt-5.4-nano";
 pub const TITLE_MAX_LEN: usize = 60;
 const TITLE_TIMEOUT_SECS: u64 = 15;
 
@@ -21,12 +20,22 @@ pub async fn generate_session_title(first_user_text: &str) -> String {
 
     match result {
         Ok(Ok(title)) if !title.trim().is_empty() => sanitize_session_title(&title),
-        _ => sanitize_session_title(first_user_text),
+        Ok(Err(e)) => {
+            tracing::warn!("session title generation failed ({e}); using first message");
+            sanitize_session_title(first_user_text)
+        }
+        Err(_) => {
+            tracing::warn!(
+                "session title generation timed out after {TITLE_TIMEOUT_SECS}s; using first message"
+            );
+            sanitize_session_title(first_user_text)
+        }
+        Ok(Ok(_)) => sanitize_session_title(first_user_text),
     }
 }
 
 async fn call_llm_for_session_title(text: &str) -> Result<String, String> {
-    let mut agent = AgentBuilder::new(TITLE_MODEL)
+    let mut agent = AgentBuilder::new(&crate::model::resolve_title_model())
         .instruction(
             format!("You are a concise title generator. \
              Try to summarize user's question in a single short phrase (under {TITLE_MAX_LEN} characters). \
