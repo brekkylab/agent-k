@@ -1039,6 +1039,25 @@ pub async fn send_message(
                     }
                 }
             }
+            // Record that the user cut this turn short — for both the persisted
+            // transcript and the model's next turn. Append to the existing
+            // assistant message (rather than adding a new one) so the
+            // new_msgs/sender zip in attribute_messages stays aligned and no
+            // consecutive same-role messages are introduced. Both the persisted
+            // copy (new_msgs) and the warm in-memory history are updated so cold
+            // replay and the cached agent stay consistent.
+            const INTERRUPT_NOTE: &str =
+                "[Interrupted: the user manually stopped response generation here]";
+            if let Some(last) = new_msgs.iter_mut().rev().find(|m| m.role == Role::Assistant) {
+                last.contents.push(Part::text(INTERRUPT_NOTE));
+            }
+            if let Some(last) = agent.state.history[prev_len..]
+                .iter_mut()
+                .rev()
+                .find(|m| m.role == Role::Assistant)
+            {
+                last.contents.push(Part::text(INTERRUPT_NOTE));
+            }
             agent
                 .state
                 .history
