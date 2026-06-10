@@ -1017,7 +1017,7 @@ pub async fn send_message(
 
         let mut new_msgs = agent.get_history()[prev_len..].to_vec();
 
-        let mut synthetic_tool_msgs: Vec<Message> = Vec::new();
+        let mut synthetic_msgs: Vec<Message> = Vec::new();
         if stopped {
             let answered: HashSet<&str> = new_msgs
                 .iter()
@@ -1028,7 +1028,7 @@ pub async fn send_message(
                 for tc in m.tool_calls.iter().flatten() {
                     if let Some((call_id, _, _)) = tc.as_function() {
                         if !answered.contains(call_id) {
-                            synthetic_tool_msgs.push(
+                            synthetic_msgs.push(
                                 Message::new(Role::Tool).with_id(call_id).with_contents([
                                     Part::text(
                                         "[Interrupted: the user stopped response generation before this tool call completed]",
@@ -1039,29 +1039,36 @@ pub async fn send_message(
                     }
                 }
             }
-            // Record that the user cut this turn short — for both the persisted
-            // transcript and the model's next turn. Append to the existing
-            // assistant message (rather than adding a new one) so the
-            // new_msgs/sender zip in attribute_messages stays aligned and no
-            // consecutive same-role messages are introduced. Both the persisted
-            // copy (new_msgs) and the warm in-memory history are updated so cold
-            // replay and the cached agent stay consistent.
-            const INTERRUPT_NOTE: &str =
-                "[Interrupted: the user manually stopped response generation here]";
-            if let Some(last) = new_msgs.iter_mut().rev().find(|m| m.role == Role::Assistant) {
-                last.contents.push(Part::text(INTERRUPT_NOTE));
-            }
-            if let Some(last) = agent.state.history[prev_len..]
-                .iter_mut()
-                .rev()
-                .find(|m| m.role == Role::Assistant)
-            {
-                last.contents.push(Part::text(INTERRUPT_NOTE));
+            // Skip the note if the model finished its turn anyway (last output is an
+            // assistant message with FinishReason::Stop) — not truncated.
+            let completed_naturally = matches!(
+                depth0_outputs.last(),
+                Some(o) if o.message.role == Role::Assistant
+                    && matches!(o.finish_reason, FinishReason::Stop {})
+            );
+            if !completed_naturally {
+                // Mark the turn as cut short: append to the last assistant message, or
+                // add a paired one (via synthetic_msgs) if none was produced yet.
+                const INTERRUPT_NOTE: &str =
+                    "[Interrupted: the user manually stopped response generation here]";
+                if let Some(last) = new_msgs.iter_mut().rev().find(|m| m.role == Role::Assistant) {
+                    last.contents.push(Part::text(INTERRUPT_NOTE));
+                    if let Some(warm) = agent.state.history[prev_len..]
+                        .iter_mut()
+                        .rev()
+                        .find(|m| m.role == Role::Assistant)
+                    {
+                        warm.contents.push(Part::text(INTERRUPT_NOTE));
+                    }
+                } else {
+                    synthetic_msgs
+                        .push(Message::new(Role::Assistant).with_contents([Part::text(INTERRUPT_NOTE)]));
+                }
             }
             agent
                 .state
                 .history
-                .extend(synthetic_tool_msgs.iter().cloned());
+                .extend(synthetic_msgs.iter().cloned());
         }
 
         // Strip the attachment note before persisting — clean content is stored in DB and the
@@ -1091,7 +1098,7 @@ pub async fn send_message(
         }
 
         to_persist.extend(
-            synthetic_tool_msgs
+            synthetic_msgs
                 .into_iter()
                 .map(|message| NewSessionMessage {
                     message,
