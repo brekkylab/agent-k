@@ -366,7 +366,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-side-seg { display: flex; gap: 2px; width: 100%; padding: 3px; background: var(--cw-bg-muted); border-radius: var(--cw-radius-md); }
 .cw-side-seg-tab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 0; border-radius: calc(var(--cw-radius-md) - 3px); background: transparent; color: var(--cw-ink-3); font-size: 12.5px; font-weight: 500; cursor: pointer; transition: background 120ms, color 120ms, box-shadow 120ms; }
 .cw-side-seg-tab:hover { color: var(--cw-ink); }
-.cw-side-seg-tab[aria-selected="true"] { background: var(--cw-bg); color: var(--cw-ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.cw-side-seg-tab[aria-selected="true"] { background: var(--cw-accent-soft); color: var(--cw-accent-2); box-shadow: inset 0 0 0 1px var(--cw-accent-line); font-weight: 600; }
 
 /* File-browser view inside the sidebar — mirrors the Files page layout in the
    narrow column: fixed head + breadcrumb, scrolling row list. */
