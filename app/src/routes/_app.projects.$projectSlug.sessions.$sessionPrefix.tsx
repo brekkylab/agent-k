@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
 import { getSession, updateSessionShareMode } from '@/api/sessions';
-import { listMessages, sendMessage, stopRun, deriveStreamState } from '@/api/messages';
+import { listMessages, sendMessage, stopRun, getRunActive, deriveStreamState } from '@/api/messages';
 import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
@@ -123,8 +123,10 @@ function SessionPage() {
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
   // Optimistic user bubble ID (decides replacement when agent_run_started arrives)
   const optimisticUserIdRef = useRef<string | null>(null);
-  // Timeout ref for auto-recovery when agent_run_started never arrives
-  const runStartedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Fires after a stretch of WS silence to reconcile run state with the server.
+  const wsInactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped on every (re)arm so a stale in-flight check can't act on an old run.
+  const wsWatchdogGenRef = useRef(0);
   // Mirror of the `streaming` state, accessible from WS event handler closures
   // without adding `streaming` to the effect dependency array (which would
   // re-register the handler on every state transition).
@@ -149,6 +151,8 @@ function SessionPage() {
   const [streaming, setStreaming] = useState(false);
   const [ownedRunId, setOwnedRunId] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  // True when the server confirms the run is still alive despite WS silence.
+  const [runDelayed, setRunDelayed] = useState(false);
   // "New message arrived while scrolled up" pill above the composer.
   const [showNewMsgPill, setShowNewMsgPill] = useState(false);
   // Ghost scroll-to-bottom button — visible whenever scrolled past the
@@ -177,6 +181,11 @@ function SessionPage() {
     streamingRef.current = false;
     setOwnedRunId(null);
     setStopping(false);
+    setRunDelayed(false);
+    if (wsInactivityTimerRef.current) {
+      clearTimeout(wsInactivityTimerRef.current);
+      wsInactivityTimerRef.current = null;
+    }
     setPendingAttachments([]);
     setShowNewMsgPill(false);
     setShowScrollDown(false);
@@ -332,6 +341,48 @@ function SessionPage() {
     }
   }, [projectId, sessionId]);
 
+  // Clears all run/streaming state for a run that ended without a terminal WS event.
+  const resetEndedRun = useCallback(() => {
+    setRunDelayed(false);
+    setStreaming(false);
+    streamingRef.current = false;
+    setOwnedRunId(null);
+    setStopping(false);
+    setLiveMessages([]);
+    wsOutputsRef.current.clear();
+    maxSeqRef.current = -1;
+    currentRunIdRef.current = null;
+    optimisticUserIdRef.current = null;
+    if (sessionId) void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+  }, [sessionId, queryClient]);
+
+  // (Re)arms the WS-silence timer for the given run. On fire, asks the server
+  // whether the run is still active: if so, surface a delay hint and refetch;
+  // if not, reconcile the ended run.
+  const armWatchdog = useCallback((runId: string) => {
+    if (wsInactivityTimerRef.current) clearTimeout(wsInactivityTimerRef.current);
+    setRunDelayed(false);
+    const gen = ++wsWatchdogGenRef.current;
+    wsInactivityTimerRef.current = setTimeout(() => {
+      wsInactivityTimerRef.current = null;
+      void (async () => {
+        let active: boolean;
+        try {
+          active = await getRunActive(sessionId, runId);
+        } catch {
+          return;
+        }
+        if (gen !== wsWatchdogGenRef.current) return;
+        if (active) {
+          setRunDelayed(true);
+          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+        } else {
+          resetEndedRun();
+        }
+      })();
+    }, 10_000);
+  }, [sessionId, queryClient, resetEndedRun]);
+
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? composerText).trim();
     const uploading = pendingAttachments.some((a) => a.status === 'uploading');
@@ -367,25 +418,14 @@ function SessionPage() {
       if (!doneRunIdsRef.current.has(ack.run_id)) {
         setOwnedRunId(ack.run_id);
       }
-      // Auto-recover if agent_run_started does not arrive within 10 seconds
-      if (runStartedTimeoutRef.current) clearTimeout(runStartedTimeoutRef.current);
-      runStartedTimeoutRef.current = setTimeout(() => {
-        if (optimisticUserIdRef.current === optimisticUserId) {
-          // [G] agent_run_started never arrived — but the run may still be executing.
-          // Preserve the user bubble (liveMessages) so it doesn't disappear mid-run.
-          // Just stop the spinner and refetch once; if a late started arrives it resumes.
-          streamingRef.current = false;
-          setStreaming(false);
-          runStartedTimeoutRef.current = null;
-          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
-        }
-      }, 10_000);
+      armWatchdog(ack.run_id);
     } catch (err) {
       // Send failed (network, 403, 423, etc.) — recover immediately
-      if (runStartedTimeoutRef.current) {
-        clearTimeout(runStartedTimeoutRef.current);
-        runStartedTimeoutRef.current = null;
+      if (wsInactivityTimerRef.current) {
+        clearTimeout(wsInactivityTimerRef.current);
+        wsInactivityTimerRef.current = null;
       }
+      setRunDelayed(false);
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'send failed';
       showToast(t('toast.send_failed', { message: msg }));
       setStreaming(false);
@@ -396,19 +436,29 @@ function SessionPage() {
       optimisticUserIdRef.current = null;
     }
     // On success: the WS event (agent_run_done) handles completion. No finally block.
-  }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments, t]);
+  }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments, t, armWatchdog]);
 
   const stopGeneration = useCallback(async () => {
     if (!ownedRunId || !sessionId || stopping) return;
+    if (wsInactivityTimerRef.current) {
+      clearTimeout(wsInactivityTimerRef.current);
+      wsInactivityTimerRef.current = null;
+    }
+    setRunDelayed(false);
     setStopping(true);
     try {
       await stopRun(sessionId, ownedRunId);
     } catch (err) {
+      // 404 means the run already ended — reconcile instead of surfacing an error.
+      if (err instanceof ApiError && err.status === 404) {
+        resetEndedRun();
+        return;
+      }
       const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'stop failed';
       showToast(t('toast.stop_failed', { message: msg }));
       setStopping(false);
     }
-  }, [ownedRunId, sessionId, stopping, showToast, t]);
+  }, [ownedRunId, sessionId, stopping, showToast, t, resetEndedRun]);
 
   const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (resolveComposerKeyAction({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing }) === 'send') {
@@ -471,11 +521,7 @@ function SessionPage() {
         // [B] Sequence 1: if Done for this run already arrived, ignore the late Started.
         if (doneRunIdsRef.current.has(run_id)) return;
 
-        // agent_run_started arrived — cancel the recovery timeout
-        if (runStartedTimeoutRef.current) {
-          clearTimeout(runStartedTimeoutRef.current);
-          runStartedTimeoutRef.current = null;
-        }
+        armWatchdog(run_id);
 
         // [B] Sequence 2: only clear accumulated outputs when this is a genuinely new run.
         // If currentRunId already equals run_id, pre-start messages are already in
@@ -541,6 +587,7 @@ function SessionPage() {
         } else if (run_id !== currentRunIdRef.current) {
           return;
         }
+        armWatchdog(run_id);
         wsOutputsRef.current.set(seq, output);
 
         // Fast path: if seq is strictly greater than maxSeqRef (the common
@@ -592,11 +639,11 @@ function SessionPage() {
         const { run_id } = event;
         // [R2-3] Ignore stale errors from a previous run — same guard as agent_run_done.
         if (currentRunIdRef.current !== null && run_id !== currentRunIdRef.current) return;
-        // [G] Clear the run_started timeout — error is a terminal state.
-        if (runStartedTimeoutRef.current) {
-          clearTimeout(runStartedTimeoutRef.current);
-          runStartedTimeoutRef.current = null;
+        if (wsInactivityTimerRef.current) {
+          clearTimeout(wsInactivityTimerRef.current);
+          wsInactivityTimerRef.current = null;
         }
+        setRunDelayed(false);
         showToast(t('toast.agent_error', { message: event.message }));
         setStreaming(false);
         streamingRef.current = false;
@@ -616,11 +663,11 @@ function SessionPage() {
         // Ignore Done events for runs we're not currently tracking.
         if (currentRunIdRef.current !== null && run_id !== currentRunIdRef.current) return;
 
-        // [G] Clear the run_started timeout — done is a terminal state.
-        if (runStartedTimeoutRef.current) {
-          clearTimeout(runStartedTimeoutRef.current);
-          runStartedTimeoutRef.current = null;
+        if (wsInactivityTimerRef.current) {
+          clearTimeout(wsInactivityTimerRef.current);
+          wsInactivityTimerRef.current = null;
         }
+        setRunDelayed(false);
 
         if (event.stopped) {
           showToast(t('toast.run_stopped'));
@@ -652,10 +699,11 @@ function SessionPage() {
         // streaming mode, reset cleanly — refetch history once to surface any
         // persisted messages.
         if (streamingRef.current) {
-          if (runStartedTimeoutRef.current) {
-            clearTimeout(runStartedTimeoutRef.current);
-            runStartedTimeoutRef.current = null;
+          if (wsInactivityTimerRef.current) {
+            clearTimeout(wsInactivityTimerRef.current);
+            wsInactivityTimerRef.current = null;
           }
+          setRunDelayed(false);
           void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
           setLiveMessages([]);
           wsOutputsRef.current.clear();
@@ -670,8 +718,14 @@ function SessionPage() {
       }
     });
 
-    return unsubscribe;
-  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t]);
+    return () => {
+      unsubscribe();
+      if (wsInactivityTimerRef.current) {
+        clearTimeout(wsInactivityTimerRef.current);
+        wsInactivityTimerRef.current = null;
+      }
+    };
+  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t, armWatchdog]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
@@ -783,7 +837,7 @@ function SessionPage() {
             />
           ))}
           {streaming && (
-            <div className="cw-live"><span />{t('ui.ai_responding')}</div>
+            <div className={runDelayed ? 'cw-live is-delayed' : 'cw-live'}><span />{runDelayed ? t('ui.response_delayed') : t('ui.ai_responding')}</div>
           )}
           <div ref={messagesEndRef} />
         </div>

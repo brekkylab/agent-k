@@ -13,6 +13,7 @@
   },
   "ui": {
     "ai_responding": "AI is responding…",
+    "response_delayed": "Response is taking longer than usual… You can stop it anytime with Esc.",
     "attach_file": "Attach file",
     "self_label": "Me",
     "tool_running": "Running…",
