@@ -11,7 +11,7 @@
 //   drag empty area — rubber-band rectangle select
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { MarqueeOverlay } from '@/components/MarqueeOverlay';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -785,20 +785,7 @@ function FilesPage() {
         </section>
       </div>
 
-      {marquee.dragRect && createPortal(
-        <div
-          className="cw-marquee"
-          style={{
-            left: marquee.dragRect.left, top: marquee.dragRect.top,
-            width: marquee.dragRect.width, height: marquee.dragRect.height,
-            borderTopWidth: marquee.dragRect.clampTop ? 0 : undefined,
-            borderBottomWidth: marquee.dragRect.clampBottom ? 0 : undefined,
-            borderLeftWidth: marquee.dragRect.clampLeft ? 0 : undefined,
-            borderRightWidth: marquee.dragRect.clampRight ? 0 : undefined,
-          }}
-        />,
-        document.body,
-      )}
+      <MarqueeOverlay rect={marquee.dragRect} />
 
       {folderDialogOpen && (
         <NewFolderDialog

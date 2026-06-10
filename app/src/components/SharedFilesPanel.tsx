@@ -4,7 +4,7 @@
 // the next message (see SESSION_IMPORT_MIME consumer in the session route).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { MarqueeOverlay } from '@/components/MarqueeOverlay';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
@@ -228,22 +228,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
         )}
       </div>
 
-      {/* Portal to body: an ancestor's transform (the sliding sidebar track)
-          would otherwise re-anchor this fixed overlay and overflow:hidden clip it. */}
-      {marquee.dragRect && createPortal(
-        <div
-          className="cw-marquee"
-          style={{
-            left: marquee.dragRect.left, top: marquee.dragRect.top,
-            width: marquee.dragRect.width, height: marquee.dragRect.height,
-            borderTopWidth: marquee.dragRect.clampTop ? 0 : undefined,
-            borderBottomWidth: marquee.dragRect.clampBottom ? 0 : undefined,
-            borderLeftWidth: marquee.dragRect.clampLeft ? 0 : undefined,
-            borderRightWidth: marquee.dragRect.clampRight ? 0 : undefined,
-          }}
-        />,
-        document.body,
-      )}
+      <MarqueeOverlay rect={marquee.dragRect} />
 
       {previewPath && (
         <FilePreviewModal globalPath={previewPath} onClose={() => setPreviewPath(null)} />
