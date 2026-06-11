@@ -46,6 +46,7 @@
   "artifacts_header": "Artifacts",
   "menu": {
     "options": "Session options",
+    "mark_read": "Mark as read",
     "duplicate": "Duplicate session",
     "delete": "Delete session"
   },

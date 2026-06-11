@@ -6,11 +6,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
-import { listSessions } from '@/api/sessions';
+import { listSessions, markSessionRead } from '@/api/sessions';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconPocket } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
@@ -237,8 +237,8 @@ export function Sidebar() {
   const activeProject = (projectsQuery.data ?? []).find((p) => p.slug === activeProjectSlug);
 
   const sessionsQuery = useQuery({
-    queryKey: ['sessions', activeProjectSlug],
-    queryFn: () => listSessions(activeProjectSlug!),
+    queryKey: ['sessions', activeProjectSlug, 'user'],
+    queryFn: () => listSessions(activeProjectSlug!, 'user'),
     enabled: Boolean(activeProjectSlug),
   });
 
@@ -345,6 +345,18 @@ export function Sidebar() {
   });
 
   const duplicateMutation = useDuplicateSession(activeProjectSlug ?? '');
+
+  // Mark a session read from the ⋯ menu — zero its unread badge directly in
+  // every cached session list (mirrors the on-entry update in the session page).
+  const markReadMutation = useMutation({
+    mutationFn: (sessionId: string) => markSessionRead(sessionId),
+    onSuccess: (_data, sessionId) => {
+      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', activeProjectSlug] }, (old) => {
+        if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
+        return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
+      });
+    },
+  });
 
   function openProject(slug: string) {
     navigate({ to: '/projects/$projectSlug', params: { projectSlug: slug } });
@@ -476,7 +488,7 @@ export function Sidebar() {
               onViewAll={() => setSessionsOverlayOpen(true)}
             />
             <div className="cw-sessions-list" data-expanded={sessionsExpanded ? 'true' : 'false'}>
-              {(sessionsQuery.data ?? []).filter((s) => s.origin === 'user').map((session) => {
+              {(sessionsQuery.data ?? []).map((session) => {
                 const canDelete = canAdministerSession(session, activeProject, currentUser);
                 return (
                   <div
@@ -511,6 +523,8 @@ export function Sidebar() {
                     {session.isAutoAppend && <span className="auto-dot">●</span>}
                     <span className="cw-session-menu-wrap">
                       <SessionCardMenu
+                        onMarkRead={() => markReadMutation.mutate(session.id)}
+                        markReadDisabled={session.unreadCount === 0}
                         onDuplicate={() => setPendingDuplicate(session)}
                         duplicateDisabled={!session.lastMessageAt}
                         onDelete={canDelete ? () => setPendingDelete(session) : undefined}

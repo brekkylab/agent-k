@@ -26,7 +26,9 @@ use crate::{
         SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
         UpdateSessionRequest,
     },
-    repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, ShareMode},
+    repository::{
+        DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, SessionOrigin, ShareMode,
+    },
     services::session_title::generate_session_title,
     state::AppState,
 };
@@ -454,9 +456,11 @@ pub async fn create_session(
 pub struct ListSessionsQuery {
     /// Project UUID, active slug, or retired slug — backend resolves all three.
     pub project_ref: Option<String>,
+    /// Filter by session origin (`user` or `automation`). Omit to list all.
+    pub origin: Option<SessionOrigin>,
 }
 
-/// GET /sessions?project_ref=...
+/// GET /sessions?project_ref=...&origin=...
 /// `project_ref` is optional — omit to list all sessions across projects the user can access.
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
@@ -476,13 +480,13 @@ pub async fn list_sessions(
             }
             state
                 .repository
-                .list_sessions_in_project(project_id, auth_user.id)
+                .list_sessions_in_project(project_id, auth_user.id, q.origin)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?
         }
         None => state
             .repository
-            .list_sessions_for_user(auth_user.id)
+            .list_sessions_for_user(auth_user.id, q.origin)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?,
     };
@@ -791,6 +795,30 @@ pub async fn get_message_history(
         .await;
 
     Ok(Json(SessionMessageListResponse { items }))
+}
+
+/// POST /sessions/{session_id}/read — mark the session read without fetching
+/// history (e.g. the sidebar "Mark as read" action).
+pub async fn mark_session_read(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(session_ref): Path<String>,
+) -> ApiResult<StatusCode> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// DELETE /sessions/{session_id}/messages — creator or project owner

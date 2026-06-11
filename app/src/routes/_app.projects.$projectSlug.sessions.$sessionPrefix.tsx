@@ -22,7 +22,7 @@ import { useToastStore } from '@/components/Toast';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { AI_USER, SUBAGENT_PREFIX } from '@/api/transformers';
 import { formatMessageTime, formatMessageTimeFull } from '@/lib/formatMessageTime';
-import type { Message, ShareMode, User } from '@/domain/types';
+import type { Message, Session, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import { ArtifactsPanel } from '@/components/ArtifactsPanel';
@@ -199,12 +199,22 @@ function SessionPage() {
     prevMsgCountRef.current = 0;
   }
 
-  // After messages load, mark-read side effect has run on the backend — sync badge in session list.
+  // After messages load, mark-read side effect has run on the backend — zero this
+  // session's unread badge directly in every cached session list (any origin filter)
+  // instead of refetching whole lists on each session entry.
   useEffect(() => {
-    if (history.isSuccess) {
-      void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
+    if (history.isSuccess && sessionId) {
+      void queryClient.cancelQueries({ queryKey: ['sessions', projectSlug] });
+      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', projectSlug] }, (old) => {
+        if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
+        return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ['sessions', projectSlug],
+        refetchType: 'none',
+      });
     }
-  }, [history.isSuccess, history.dataUpdatedAt, projectSlug, queryClient]);
+  }, [history.isSuccess, history.dataUpdatedAt, projectSlug, sessionId, queryClient]);
 
   const allMessages = useMemo<Message[]>(() => [
     ...(history.data ?? []),
