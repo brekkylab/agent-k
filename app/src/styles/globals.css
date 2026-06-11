@@ -1680,6 +1680,11 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   transition: background 120ms, border-color 120ms;
 }
 .cw-attach-chip--file:hover { background: var(--cw-paper-4); border-color: var(--cw-border-hover); }
+/* Source marker on an attachment chip: folder = referenced from shared files
+   (accent), clip = uploaded via the composer (muted). */
+.cw-attach-source { display: inline-flex; align-items: center; flex-shrink: 0; }
+.cw-attach-source--shared { color: var(--cw-accent); }
+.cw-attach-source--upload { color: var(--cw-ink-2); }
 .cw-attach-name {
   flex: 1;
   min-width: 0;

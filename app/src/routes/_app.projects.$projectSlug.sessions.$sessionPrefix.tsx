@@ -12,7 +12,7 @@ import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
 import { getProject, listMembers } from '@/api/projects';
-import { deleteDirent, downloadFile, listDirentsRaw, scopeRoot, uploadFiles, type DirentScope } from '@/api/dirents';
+import { deleteDirent, downloadFile, listDirentsRaw, parseGlobalPath, scopeRoot, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
@@ -879,6 +879,7 @@ function SessionPage() {
                   key={a.tempId}
                   filename={a.filename}
                   status={a.status}
+                  shared={a.globalPath ? parseGlobalPath(a.globalPath)?.scope.kind === 'shared' : false}
                   error={a.error}
                   onRemove={() => setPendingAttachments((prev) => prev.filter((x) => x.tempId !== a.tempId))}
                 />
