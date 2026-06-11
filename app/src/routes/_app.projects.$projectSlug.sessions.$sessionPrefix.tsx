@@ -467,49 +467,10 @@ function SessionPage() {
     });
   }, [pendingAttachments, showToast, t]);
 
-  const handleImportDrop = useCallback((e: React.DragEvent) => {
-    const raw = e.dataTransfer.getData(SESSION_IMPORT_MIME);
-    if (!raw) return;
-    e.preventDefault();
-    setImportDragOver(false);
-    // Clear any selection the drag formed underneath the overlay, so it doesn't
-    // reappear once the overlay is gone.
-    window.getSelection()?.removeAllRanges();
-    let items: SessionImportItem[];
-    try { items = JSON.parse(raw); } catch { return; }
-    if (Array.isArray(items)) importSharedFiles(items);
-  }, [importSharedFiles]);
-
-  // Files dragged from the Files page onto this session's row arrive as
-  // scope-relative shared paths in router state. Attach them once session/project
-  // resolve, then clear the state so a refresh doesn't re-attach. A dropped folder
-  // is expanded into the files it contains (recursively).
-  useEffect(() => {
-    const rels = location.state.attachShared;
-    if (!rels?.length || !projectId || !sessionId) return;
-    void navigate({ replace: true, state: (prev) => ({ ...prev, attachShared: undefined }) });
-    void (async () => {
-      const sharedScope: DirentScope = { kind: 'shared', projectId };
-      const root = scopeRoot(sharedScope);
-      let entries: Awaited<ReturnType<typeof listDirentsRaw>> = [];
-      try {
-        entries = await queryClient.fetchQuery({
-          queryKey: ['dirents', 'shared', projectId],
-          queryFn: () => listDirentsRaw(sharedScope, true),
-        });
-      } catch { /* fall back to treating each path as a file */ }
-      // Folders expand to their files (recursive, .keep/dotfiles skipped, deduped).
-      const items = expandDirentPaths(entries, rels.map((rel) => `${root}/${rel}`));
-      if (items.length) importSharedFiles(items);
-    })();
-  }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate, queryClient]);
-
-  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    if (files.length === 0) return;
-    // Reset input so same file can be selected again
-    e.target.value = '';
-
+  // Upload local (computer) files to this session's inputs/ and track each as a
+  // pending attachment. Shared by the composer clip button and chat drag-drop.
+  const uploadLocalFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0 || !projectId || !sessionId) return;
     // Cap like the shared-import path: if this batch would push the total past
     // MAX_ATTACHMENTS, reject the whole batch (upload nothing) and toast — so the
     // UI can't reach the backend's hard 400 on >MAX attachments.
@@ -517,7 +478,6 @@ function SessionPage() {
       showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
       return;
     }
-
     for (const file of files) {
       const tempId = `${Date.now()}-${file.name}`;
       setPendingAttachments((prev) => [...prev, { tempId, filename: file.name, status: 'uploading' }]);
@@ -603,6 +563,52 @@ function SessionPage() {
     }, interval);
     return () => clearInterval(id);
   }, [runDelayed, stopping, ownedRunId, sessionId, resetEndedRun]);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = ''; // reset so the same file can be selected again
+    void uploadLocalFiles(files);
+  }, [uploadLocalFiles]);
+
+  const handleImportDrop = useCallback((e: React.DragEvent) => {
+    const osFiles = Array.from(e.dataTransfer.files ?? []);
+    const raw = e.dataTransfer.getData(SESSION_IMPORT_MIME);
+    if (osFiles.length === 0 && !raw) return; // not a drop we handle
+    e.preventDefault();
+    setImportDragOver(false);
+    // Clear any selection the drag formed underneath the overlay, so it doesn't
+    // reappear once the overlay is gone.
+    window.getSelection()?.removeAllRanges();
+    // Computer files → upload to inputs/. Shared-file references → attach by path.
+    if (osFiles.length > 0) { void uploadLocalFiles(osFiles); return; }
+    let items: SessionImportItem[];
+    try { items = JSON.parse(raw); } catch { return; }
+    if (Array.isArray(items)) importSharedFiles(items);
+  }, [importSharedFiles, uploadLocalFiles]);
+
+  // Files dragged from the Files page onto this session's row arrive as
+  // scope-relative shared paths in router state. Attach them once session/project
+  // resolve, then clear the state so a refresh doesn't re-attach. A dropped folder
+  // is expanded into the files it contains (recursively).
+  useEffect(() => {
+    const rels = location.state.attachShared;
+    if (!rels?.length || !projectId || !sessionId) return;
+    void navigate({ replace: true, state: (prev) => ({ ...prev, attachShared: undefined }) });
+    void (async () => {
+      const sharedScope: DirentScope = { kind: 'shared', projectId };
+      const root = scopeRoot(sharedScope);
+      let entries: Awaited<ReturnType<typeof listDirentsRaw>> = [];
+      try {
+        entries = await queryClient.fetchQuery({
+          queryKey: ['dirents', 'shared', projectId],
+          queryFn: () => listDirentsRaw(sharedScope, true),
+        });
+      } catch { /* fall back to treating each path as a file */ }
+      // Folders expand to their files (recursive, .keep/dotfiles skipped, deduped).
+      const items = expandDirentPaths(entries, rels.map((rel) => `${root}/${rel}`));
+      if (items.length) importSharedFiles(items);
+    })();
+  }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate, queryClient]);
 
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? composerText).trim();
@@ -1004,7 +1010,9 @@ function SessionPage() {
       <section
         className={`cw-chat-surface${importDragOver ? ' is-import-target' : ''}`}
         onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes(SESSION_IMPORT_MIME)) return;
+          // Accept both computer files (upload) and shared-file references.
+          const types = e.dataTransfer.types;
+          if (!types.includes('Files') && !types.includes(SESSION_IMPORT_MIME)) return;
           e.preventDefault();
           e.dataTransfer.dropEffect = 'copy';
           if (!importDragOver) setImportDragOver(true);
