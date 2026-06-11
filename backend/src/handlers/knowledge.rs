@@ -250,8 +250,9 @@ pub async fn knowledge_files(
     let root = scope_dir.join(KNOWLEDGE_PREFIX);
     let store = state.store_for(project_id).await?;
 
-    // An unreadable file is reported as not-indexed rather than failing.
-    let mut files: Vec<KnowledgeFileStatus> = Vec::new();
+    // Resolve each file's content id without holding the store lock; membership
+    // is checked afterwards under one non-blocking read.
+    let mut entries: Vec<(String, Option<Uuid>)> = Vec::new();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
         let mut rd = match tokio::fs::read_dir(&dir).await {
@@ -293,17 +294,26 @@ pub async fn knowledge_files(
                     Err(_) => None,
                 },
             };
-            let indexed = match id {
-                Some(id) => store.read().await.get(id).is_some(),
-                None => false,
-            };
             let rel = path
                 .strip_prefix(&scope_dir)
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or(name);
-            files.push(KnowledgeFileStatus { path: rel, indexed });
+            entries.push((rel, id));
         }
     }
+
+    // Don't block on the store write lock: a resync holds it across PDF parsing,
+    // so report not-indexed if it's held (the banner shows "indexing"). The
+    // guard spans only these synchronous lookups, never an await.
+    let guard = store.try_read().ok();
+    let mut files: Vec<KnowledgeFileStatus> = entries
+        .into_iter()
+        .map(|(path, id)| {
+            let indexed = matches!((&guard, id), (Some(s), Some(id)) if s.get(id).is_some());
+            KnowledgeFileStatus { path, indexed }
+        })
+        .collect();
+    drop(guard);
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     Ok(Json(KnowledgeFilesResponse {
