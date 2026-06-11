@@ -85,6 +85,12 @@ pub struct SendMessageRequest {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct RunAck {
     pub status: &'static str,
+    pub run_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RunActiveResponse {
+    pub active: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]

@@ -81,5 +81,22 @@
   },
   "errors": {
     "unknown": "오류가 발생했어요. 다시 시도해 주세요."
+  },
+  "preview": {
+    "loading": "불러오는 중…",
+    "download": "다운로드",
+    "unsupported_title": "미리보기를 지원하지 않는 형식입니다",
+    "unsupported_body": "이 파일은 다운로드해서 확인하세요.",
+    "too_large_title": "파일이 너무 큽니다",
+    "too_large_body": "이 파일은 미리보기에 너무 큽니다. 다운로드해서 확인하세요.",
+    "error_title": "미리보기를 불러오지 못했습니다",
+    "error_body": "다시 시도하거나 다운로드해서 확인하세요.",
+    "close": "닫기",
+    "zoom": "확대/축소",
+    "zoom_in": "확대",
+    "zoom_out": "축소",
+    "zoom_reset": "원래 크기로",
+    "table_truncated": "큰 표 — 처음 {{n}}행만 표시했습니다 (전체 {{total}}행)",
+    "table_empty": "표시할 행이 없습니다"
   }
 }

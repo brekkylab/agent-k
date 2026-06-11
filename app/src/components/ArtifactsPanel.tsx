@@ -4,13 +4,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { deleteDirent, downloadFile, listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
+import { deleteDirent, downloadFile, listDirentsRaw, scopeRoot, stripScopePrefix, type DirentScope } from '@/api/dirents';
 import { nameOf } from '@/domain/files';
 import { FileTypeIcon } from './FileTypeIcon';
 import { Icon } from './Icon';
 import { EmptyState } from './uiPrimitives';
 import { ConfirmDialog } from './ConfirmDialog';
 import { useToastStore } from './Toast';
+import { FilePreviewModal } from './FilePreviewModal';
 
 interface ArtifactsPanelProps {
   projectId: string;
@@ -47,6 +48,9 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // 'bulk' is the key for the selection-row menu; individual entries use their path
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+
+  const openPreview = (entryPath: string) => setPreviewPath(`${scopeRoot(scope)}/${entryPath}`);
   const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   const openMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -171,7 +175,9 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
 
           {/* ── file rows ─────────────────────────────────────────── */}
           {entries.map((entry) => (
-            <div className="cw-artifact-row" key={entry.path} style={{ cursor: 'pointer' }} onClick={() => toggleEntry(entry.path)}>
+            <div className="cw-artifact-row" key={entry.path} style={{ cursor: 'pointer' }}
+              onClick={() => toggleEntry(entry.path)}
+              onDoubleClick={() => openPreview(entry.path)}>
               <input
                 type="checkbox"
                 checked={selected.has(entry.path)}
@@ -194,6 +200,11 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
                 </button>
                 {menuOpen === entry.path && (
                   <ul className="cw-file-dropdown" onClick={() => setMenuOpen(null)}>
+                    <li>
+                      <button type="button" onClick={() => openPreview(entry.path)}>
+                        <Icon name="eye" size={13} /> {t('artifact.preview')}
+                      </button>
+                    </li>
                     <li>
                       <button type="button" onClick={() => downloadFile(scope, entry.path)}>
                         <Icon name="download" size={13} /> {t('artifact.download')}
@@ -233,6 +244,10 @@ export function ArtifactsPanel({ projectId, sessionId, onCopyToShared }: Artifac
           onConfirm={() => deleteMutation.mutate(confirmDelete)}
           onClose={() => setConfirmDelete(null)}
         />
+      )}
+
+      {previewPath && (
+        <FilePreviewModal globalPath={previewPath} onClose={() => setPreviewPath(null)} />
       )}
     </div>
   );

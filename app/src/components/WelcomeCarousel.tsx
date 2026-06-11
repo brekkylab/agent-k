@@ -10,13 +10,13 @@ interface Slide {
   blurb: string;
   detail: string;
   mock: MockKind;
-  // 실제 시연 영상을 넣으려면 app/public/welcome/<파일>.mp4 를 두고 경로를 적으면
-  // 목업 대신 자동으로 재생됩니다. 예: video: '/welcome/routing.mp4'
+  // To use a real demo video, drop app/public/welcome/<file>.mp4 and specify its path;
+  // it then plays automatically instead of the mockup. e.g. video: '/welcome/routing.mp4'
   video?: string;
   poster?: string;
 }
 
-// "많이 만든 다음 덜어내기" — 우선 풍부하게. 슬라이드를 빼거나 합치며 줄이면 됩니다.
+// "Make a lot, then trim" — start rich. You can pare down by removing or merging slides later.
 const SLIDES: Slide[] = [
   {
     key: 'agent',
@@ -82,11 +82,11 @@ export function WelcomeCarousel() {
   activeRef.current = active;
   const reduced = prefersReducedMotion();
 
-  // WCAG 2.2.2 (Pause, Stop, Hide) — 자동 전환은 다음 세 가지 중 하나라도
-  // 켜지면 멈춘다. hover는 사용자 요구로 제외 ("호버 시 진행바가 멈추면 안 됨").
-  //  · userPaused: 명시적 pause/play 토글
-  //  · focusedWithin: 키보드 사용자가 carousel 내부로 focus 진입 (mouse hover와 다른 시나리오)
-  //  · pageHidden: 탭이 background로 숨겨짐
+  // WCAG 2.2.2 (Pause, Stop, Hide) — auto-advance stops if any one of the following three
+  // is on. hover is excluded by user requirement ("the progress bar must not stop on hover").
+  //  · userPaused: explicit pause/play toggle
+  //  · focusedWithin: a keyboard user moves focus inside the carousel (a different scenario from mouse hover)
+  //  · pageHidden: the tab is hidden in the background
   const [userPaused, setUserPaused] = useState(false);
   const [focusedWithin, setFocusedWithin] = useState(false);
   const [pageHidden, setPageHidden] = useState(
@@ -99,7 +99,7 @@ export function WelcomeCarousel() {
     track.scrollTo({ left: i * track.clientWidth, behavior: reduced ? 'auto' : 'smooth' });
   }, [reduced]);
 
-  // activeIndex는 스크롤 위치에서 파생 — 스와이프/자동전환이 한 방향으로만 흐른다.
+  // activeIndex is derived from the scroll position — swipe/auto-advance flows in only one direction.
   useEffect(() => {
     const track = trackRef.current;
     if (!track) return;
@@ -118,8 +118,8 @@ export function WelcomeCarousel() {
     };
   }, []);
 
-  // page hidden 추적 — 탭이 background에 있으면 자동 전환이 시각 없는 사용자에게
-  // 의미 없는 변화를 만들지 않게 한다.
+  // page hidden tracking — when the tab is in the background, prevents auto-advance from
+  // making meaningless changes for users who aren't looking.
   useEffect(() => {
     const onVis = () => setPageHidden(document.hidden);
     document.addEventListener('visibilitychange', onVis);
@@ -128,7 +128,7 @@ export function WelcomeCarousel() {
 
   const isPaused = userPaused || focusedWithin || pageHidden;
 
-  // 자동 전환 — 슬라이드가 바뀌면 다음 카운트를 새로 시작. isPaused가 false인 동안에만.
+  // auto-advance — when the slide changes, restart the next countdown. Only while isPaused is false.
   useEffect(() => {
     if (reduced || isPaused) return;
     const t = window.setTimeout(() => {
@@ -146,7 +146,7 @@ export function WelcomeCarousel() {
     else if (e.key === 'ArrowLeft') { e.preventDefault(); go(active - 1); }
   };
 
-  // focus가 container 안에서 옮겨다닐 때(arrow → dot 등)는 blur로 보지 않는다.
+  // when focus moves around within the container(arrow → dot, etc.), don't treat it as a blur.
   const onBlurCapture = (e: React.FocusEvent) => {
     if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
     setFocusedWithin(false);
@@ -161,9 +161,9 @@ export function WelcomeCarousel() {
       tabIndex={0}
       onKeyDown={onKeyDown}
       onFocus={(e) => {
-        // 마우스 클릭으로 인한 focus는 무시. 키보드(Tab) 진입만 pause trigger —
-        // 사용자가 carousel을 "살펴보는" 시나리오는 키보드 사용자 한정이고, pause
-        // 버튼을 마우스로 누른 직후 그 button이 focus되는 false positive를 피한다.
+        // Ignore focus caused by a mouse click. Only keyboard(Tab) entry is a pause trigger —
+        // the "examining the carousel" scenario is limited to keyboard users, and this avoids
+        // the false positive of the pause button gaining focus right after a mouse click.
         if ((e.target as HTMLElement).matches(':focus-visible')) {
           setFocusedWithin(true);
         }
@@ -227,10 +227,10 @@ export function WelcomeCarousel() {
               onClick={() => go(i)}
             >
               <span className="cw-welcome-dot-track">
-                {/* key로 fill element를 강제 remount해 CSS animation을 새로
-                   시작시킨다. active 슬라이드가 바뀌거나 isPaused 토글이
-                   풀리면 자동 전환 setTimeout이 새 7초로 reset되는데, 진행바도
-                   같은 시점에 0부터 시작해야 둘이 동기화된다. */}
+                {/* The key forces the fill element to remount so the CSS animation restarts.
+                   When the active slide changes or the isPaused toggle is released, the
+                   auto-advance setTimeout resets to a fresh 7 seconds, and the progress bar
+                   must also start from 0 at the same moment so the two stay in sync. */}
                 <span
                   key={`${active}-${isPaused ? 'paused' : 'running'}`}
                   className="cw-welcome-dot-fill"
@@ -251,9 +251,9 @@ export function WelcomeCarousel() {
           <Icon name="chevron-right" size={18} />
         </button>
 
-        {/* WCAG 2.2.2 (Pause, Stop, Hide) — 5초 이상 자동 업데이트되는
-           콘텐츠는 명시적 pause 컨트롤이 필요. reduced motion일 때는
-           자동 전환 자체가 꺼져 있어 토글을 숨긴다. */}
+        {/* WCAG 2.2.2 (Pause, Stop, Hide) — content that auto-updates for more than 5 seconds
+           needs an explicit pause control. Under reduced motion, auto-advance is already
+           off, so the toggle is hidden. */}
         {!reduced && (
           <button
             type="button"
@@ -291,7 +291,7 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
               </div>
             ))}
           </div>
-          {/* 선택 후 펼쳐지는 composer — "고른 다음 무엇이 일어나는지" 이야기 완성 */}
+          {/* The composer that expands after selection — completes the "what happens after you pick" story */}
           <div className="cw-mock-composer">
             <span className="cw-mock-composer-chip">검색</span>
             <span className="cw-mock-composer-text">무엇을 도와드릴까요?</span>
@@ -301,7 +301,7 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
 
       {kind === 'knowledge' && (
         <div className="cw-mock-knowledge">
-          {/* 프로젝트에 업로드된 파일들 — 가장 위에서 "이 자료들이 답의 근거"임을 먼저 알린다 */}
+          {/* Files uploaded to the project — placed at the top to first signal "these sources back the answer" */}
           <div className="cw-mock-files">
             {KNOWLEDGE_FILES.map((f, i) => (
               <span className="cw-mock-file" data-i={i} key={f.name}>
@@ -310,7 +310,7 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
               </span>
             ))}
           </div>
-          {/* 사용자 질문 → 답변 + 출처. RAG의 핵심 가치는 출처가 보이는 것 */}
+          {/* User question → answer + source. The core value of RAG is that the source is visible */}
           <div className="cw-mock-question">Q3 매출 알려줘</div>
           <div className="cw-mock-answer">
             <span className="cw-mock-answer-text">전년 동기 대비 12% 성장했습니다.</span>
@@ -342,7 +342,7 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
             <span className="cw-mock-av" data-i="1">M</span>
             <span className="cw-mock-av" data-i="2">O</span>
           </div>
-          {/* "함께 대화" 모드의 결과 — 팀에서 누군가 AI에게 보낸 메시지 한 줄 */}
+          {/* Result of "converse together" mode — a single line someone on the team sent to the AI */}
           <div className="cw-mock-chat-bubble">오늘 미팅 정리해줘</div>
           <div className="cw-mock-modes">
             <span className="cw-mock-mode">비공개</span>
@@ -354,7 +354,7 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
 
       {kind === 'automation' && (
         <div className="cw-mock-automation-inner">
-          {/* 트리거 두 종(cron / webhook) — 자동화가 "어떻게 시작되는지" 한눈에 */}
+          {/* Two trigger types(cron / webhook) — shows at a glance "how automation starts" */}
           <div className="cw-mock-trigger-row">
             <span className="cw-mock-trigger" data-kind="cron">
               <Icon name="calendar" size={13} /> 매일 09:00
@@ -363,7 +363,7 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
               <Icon name="zap" size={13} /> Webhook
             </span>
           </div>
-          {/* 자동 실행된 run들 — 트리거가 누적해 만들어내는 결과를 시각화 */}
+          {/* Auto-executed runs — visualizes the results that triggers accumulate over time */}
           <div className="cw-mock-runs">
             {AUTOMATION_RUNS.map((r, i) => (
               <div className="cw-mock-run" data-i={i} key={`${r.time}-${i}`}>
@@ -383,8 +383,8 @@ function SlideMock({ kind, active }: { kind: MockKind; active: boolean }) {
               <span className="cw-mock-step-num">{q.step}</span>
               <span className="cw-mock-step-icon"><Icon name={q.icon} size={13} /></span>
               <span className="cw-mock-step-title">{q.title}</span>
-              {/* "이 단계에 들어갈 예시 한 토막" — 03/04와 같은 구체성을 마지막
-                 슬라이드에도 부여. 좁은 폭에서는 ellipsis로 안전하게 잘린다. */}
+              {/* "A snippet of example for this step" — gives the last slide the same
+                 concreteness as 03/04. At narrow widths it is safely truncated with an ellipsis. */}
               <span className="cw-mock-step-preview">{q.preview}</span>
             </li>
           ))}
@@ -407,15 +407,15 @@ const AGENTS: { name: string; icon: IconName; selected?: boolean }[] = [
   { name: '실행',     icon: 'zap' },
 ];
 
-// 자료(RAG) mock — 업로드된 파일 두 종과, 답변에 인용된 출처. "출처와 함께 답한다"는
-// 본질을 보여주기 위해 답변 라인 옆에 작은 source chip을 강조한다.
+// Knowledge(RAG) mock — two uploaded file types and the source cited in the answer. To convey
+// the essence of "answering with sources," a small source chip is emphasized next to the answer line.
 const KNOWLEDGE_FILES: { name: string; icon: IconName }[] = [
   { name: 'Q3-report.pdf', icon: 'file-pdf' },
   { name: 'market.docx',   icon: 'file-text' },
 ];
 
-// 자동화 mock — 가장 위가 "지금 실행 중", 아래로 갈수록 과거 실행.
-// "트리거가 누적해 만들어내는 결과"의 시각화이므로 시간 라벨은 상대값으로.
+// Automation mock — the top is "running now," and further down are past runs.
+// Since this visualizes "the results that triggers accumulate," the time labels are relative.
 type RunStatus = 'running' | 'success';
 const AUTOMATION_RUNS: { time: string; label: string; status: RunStatus }[] = [
   { time: '방금',       label: '데일리 리포트', status: 'running' },

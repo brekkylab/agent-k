@@ -149,6 +149,88 @@ async fn upload_and_list_files() {
 }
 
 #[tokio::test]
+async fn upload_collision_auto_renames() {
+    // Uploading a file whose name collides with an existing file must NOT
+    // overwrite it.  The handler resolves a collision-free name with a
+    // " copy" / " copy N" suffix (Finder-style) so both files survive.
+    let (state, _tmp) = make_state_with_dir().await;
+    let app = common::make_app_with_state(state);
+
+    common::signup(&app, "eve", "Password123!").await;
+    let token = common::login(&app, "eve", "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let pid = project["id"].as_str().unwrap();
+
+    // 1. First upload — no collision; must land at the requested name.
+    let (s1, r1) = upload_files(&app, &token, pid, &[("report.pdf", b"original")]).await;
+    assert_eq!(s1, axum::http::StatusCode::OK, "{r1}");
+    let first_path = r1["succeeded"][0]["path"].as_str().unwrap();
+    assert_eq!(
+        first_path,
+        format!("projects/{pid}/shared/report.pdf"),
+        "first upload path mismatch: {r1}"
+    );
+
+    // 2. Second upload with the same name — must not overwrite; becomes "report copy.pdf".
+    let (s2, r2) = upload_files(&app, &token, pid, &[("report.pdf", b"duplicate")]).await;
+    assert_eq!(s2, axum::http::StatusCode::OK, "{r2}");
+    assert_eq!(
+        r2["failed"].as_array().unwrap().len(),
+        0,
+        "duplicate upload must succeed (auto-rename), not fail: {r2}"
+    );
+    let second_path = r2["succeeded"][0]["path"].as_str().unwrap();
+    assert_eq!(
+        second_path,
+        format!("projects/{pid}/shared/report copy.pdf"),
+        "second upload should be auto-renamed to 'report copy.pdf': {r2}"
+    );
+
+    // 3. Third upload — "report copy.pdf" also exists, so must become "report copy 2.pdf".
+    let (s3, r3) = upload_files(&app, &token, pid, &[("report.pdf", b"triplicate")]).await;
+    assert_eq!(s3, axum::http::StatusCode::OK, "{r3}");
+    let third_path = r3["succeeded"][0]["path"].as_str().unwrap();
+    assert_eq!(
+        third_path,
+        format!("projects/{pid}/shared/report copy 2.pdf"),
+        "third upload should step to 'report copy 2.pdf': {r3}"
+    );
+
+    // 4. All three files must coexist — verify via list.
+    let list = list_dirents(&app, &token, pid, "").await;
+    let paths: Vec<&str> = list["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    for expected in [
+        format!("projects/{pid}/shared/report.pdf"),
+        format!("projects/{pid}/shared/report copy.pdf"),
+        format!("projects/{pid}/shared/report copy 2.pdf"),
+    ] {
+        assert!(
+            paths.contains(&expected.as_str()),
+            "missing {expected} — entries: {paths:?}"
+        );
+    }
+
+    // 5. Original content must be intact — verify via byte counts.
+    let bytes_for = |name: &str| -> u64 {
+        list["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["path"].as_str().unwrap().ends_with(name))
+            .and_then(|e| e["bytes"].as_u64())
+            .unwrap_or(0)
+    };
+    assert_eq!(bytes_for("report.pdf"), b"original".len() as u64);
+    assert_eq!(bytes_for("report copy.pdf"), b"duplicate".len() as u64);
+    assert_eq!(bytes_for("report copy 2.pdf"), b"triplicate".len() as u64);
+}
+
+#[tokio::test]
 async fn path_traversal_in_upload_goes_to_failed() {
     let (state, _tmp) = make_state_with_dir().await;
     let app = common::make_app_with_state(state);
