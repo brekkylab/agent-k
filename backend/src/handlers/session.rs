@@ -105,11 +105,7 @@ pub async fn build_session_agent(
         _ => crate::model::ProjectChains::default(),
     };
     let chain = project_chains.chain_for(agent_type);
-    // A pin this agent doesn't permit (e.g. a non-2.5 Gemini for Speedwagon)
-    // is dropped, falling through to the chain rather than being honored.
-    let pin = model_pin
-        .as_deref()
-        .filter(|p| agent_type.allows_model(p));
+    let pin = model_pin.as_deref();
     let model = crate::model::resolve_model_in(&chain, pin);
 
     use crate::model::AgentType;

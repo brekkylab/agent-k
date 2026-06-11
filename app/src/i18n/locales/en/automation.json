@@ -8,7 +8,7 @@
     "recommended": "Recommended model",
     "recommended_named": "Recommended · {{label}}",
     "unavailable_suffix": " (unavailable)",
-    "restricted_suffix": " (not for this agent)"
+    "not_recommended_suffix": " (Not Recommended)"
   },
   "list": {
     "title": "Automations",

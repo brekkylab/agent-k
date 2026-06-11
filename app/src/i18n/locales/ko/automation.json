@@ -8,7 +8,7 @@
     "recommended": "권장 모델",
     "recommended_named": "권장 · {{label}}",
     "unavailable_suffix": " (사용 불가)",
-    "restricted_suffix": " (지원 안 함)"
+    "not_recommended_suffix": " (권장되지 않음)"
   },
   "list": {
     "title": "자동화",

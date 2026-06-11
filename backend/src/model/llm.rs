@@ -65,17 +65,13 @@ impl AgentType {
         AgentType::Buddy,
     ];
 
-    /// Whether `model_id` may be selected for this agent (a product-level
-    /// restriction, separate from provider availability). Speedwagon allows
-    /// only `gemini-2.5-flash` among the Gemini family; others allow all.
-    pub fn allows_model(self, model_id: &str) -> bool {
-        match self {
-            AgentType::Speedwagon => {
-                !model_id.starts_with("google/gemini-")
-                    || model_id == "google/gemini-2.5-flash"
-            }
-            _ => true,
-        }
+    /// Selectable but not recommended for this agent — a soft picker hint, not a
+    /// block. Speedwagon discourages the slow / low-quality Gemini flashes.
+    pub fn discourages_model(self, model_id: &str) -> bool {
+        matches!(
+            (self, model_id),
+            (AgentType::Speedwagon, "google/gemini-3.5-flash" | "google/gemini-2.5-flash-lite")
+        )
     }
 
     /// Ordered, provider-diverse recommendation chain. The last entry is the
@@ -249,45 +245,30 @@ impl ProjectChains {
         Self { by_agent }
     }
 
-    /// Effective chain for an agent: the project override, else the default.
-    /// Models the agent forbids are dropped (defence in depth — `validate_chains`
-    /// rejects them at storage time, but an override stored before that check,
-    /// or by another path, must still not resolve to a forbidden model). If the
-    /// override is left empty after filtering, fall back to the built-in chain.
+    /// Effective chain for an agent: the project override (honored as-is), else
+    /// the built-in default. No per-agent model is blocked.
     pub fn chain_for(&self, agent: AgentType) -> Vec<String> {
-        let default = || agent.chain().iter().map(|s| s.to_string()).collect::<Vec<_>>();
         match self.by_agent.get(&agent) {
-            Some(ids) => {
-                let allowed: Vec<String> =
-                    ids.iter().filter(|id| agent.allows_model(id)).cloned().collect();
-                if allowed.is_empty() { default() } else { allowed }
-            }
-            None => default(),
+            Some(ids) => ids.clone(),
+            None => agent.chain().iter().map(|s| s.to_string()).collect(),
         }
     }
 }
 
-/// Validate project chain overrides for storage: known agent_type keys, non-empty
-/// lists of catalogued model ids that the agent is allowed to use. Provider
-/// availability is NOT required.
+/// Validate project chain overrides for storage: known agent_type keys and
+/// non-empty lists of catalogued model ids. Provider availability and per-agent
+/// recommendation are not enforced — any catalogued model may be chosen.
 pub fn validate_chains(chains: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
     for (key, ids) in chains {
-        let Some(agent) = AgentType::from_str(key) else {
+        if AgentType::from_str(key).is_none() {
             return Err(format!("unknown agent_type: {key}"));
-        };
+        }
         if ids.is_empty() {
             return Err(format!("chain for '{key}' must not be empty"));
         }
         for id in ids {
             if catalog_entry(id).is_none() {
                 return Err(format!("unknown model in '{key}' chain: {id}"));
-            }
-            // Enforce per-agent model restrictions at storage time so a chain
-            // override can't smuggle in a model the agent forbids (e.g. a
-            // non-2.5 Gemini for Speedwagon), which would otherwise bypass the
-            // pin-level filter at resolution.
-            if !agent.allows_model(id) {
-                return Err(format!("model '{id}' is not allowed for agent '{key}'"));
             }
         }
     }
@@ -314,9 +295,9 @@ pub struct AgentRecommendation {
     /// The model that resolution would pick right now given provider
     /// availability — the value the composer pre-selects for "recommended".
     pub resolved_model: String,
-    /// Catalog ids this agent permits (see [`AgentType::allows_model`]). The
-    /// picker disables every catalog model not in this list.
-    pub allowed: Vec<String>,
+    /// Catalog ids this agent discourages (see [`AgentType::discourages_model`]).
+    /// The picker tags these "(Not Recommended)" but still lets them be chosen.
+    pub not_recommended: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -346,9 +327,9 @@ pub fn catalog_response(chains: &ProjectChains) -> ModelCatalogResponse {
                 agent_type: agent,
                 resolved_model: resolve_model_in(&chain, None),
                 chain,
-                allowed: CATALOG
+                not_recommended: CATALOG
                     .iter()
-                    .filter(|m| agent.allows_model(m.id))
+                    .filter(|m| agent.discourages_model(m.id))
                     .map(|m| m.id.to_string())
                     .collect(),
             }
@@ -432,57 +413,53 @@ mod tests {
     }
 
     #[test]
-    fn speedwagon_allows_only_gemini_2_5_flash() {
+    fn speedwagon_discourages_slow_and_empty_models() {
         let sw = AgentType::Speedwagon;
-        assert!(sw.allows_model("google/gemini-2.5-flash"));
-        assert!(!sw.allows_model("google/gemini-3-flash"));
-        assert!(!sw.allows_model("google/gemini-3.5-flash"));
-        assert!(!sw.allows_model("google/gemini-3.1-flash-lite"));
-        // Non-Gemini providers are unrestricted.
-        assert!(sw.allows_model("openai/gpt-5.4-mini"));
-        assert!(sw.allows_model("anthropic/claude-sonnet-4-6"));
-        assert!(sw.allows_model("moonshotai/kimi-k2.6"));
-        // Other agents allow the whole catalog.
+        // Discouraged (hint only, still selectable).
+        assert!(sw.discourages_model("google/gemini-3.5-flash"));
+        assert!(sw.discourages_model("google/gemini-2.5-flash-lite"));
+        // Recommended / fine — not discouraged.
+        assert!(!sw.discourages_model("google/gemini-2.5-flash"));
+        assert!(!sw.discourages_model("google/gemini-3.1-flash-lite"));
+        assert!(!sw.discourages_model("openai/gpt-5.4-mini"));
+        // Other agents discourage nothing.
         for m in CATALOG {
-            assert!(AgentType::Coworker.allows_model(m.id), "coworker blocked {}", m.id);
+            assert!(!AgentType::Coworker.discourages_model(m.id), "coworker discouraged {}", m.id);
         }
     }
 
     #[test]
-    fn validate_chains_rejects_disallowed_model_for_agent() {
-        // A non-2.5 Gemini is catalogued but forbidden for Speedwagon, so a
-        // chain override carrying it must be rejected at storage time.
-        let mut chains = BTreeMap::new();
-        chains.insert("speedwagon".to_string(), vec!["google/gemini-3-flash".to_string()]);
-        assert!(validate_chains(&chains).is_err());
-
-        // The same model is fine for Coworker.
+    fn validate_chains_accepts_any_catalogued_model() {
+        // No per-agent blocking: a model that is merely discouraged for
+        // Speedwagon is still accepted in an override.
         let mut ok = BTreeMap::new();
-        ok.insert("coworker".to_string(), vec!["google/gemini-3-flash".to_string()]);
+        ok.insert("speedwagon".to_string(), vec!["google/gemini-3.5-flash".to_string()]);
         assert!(validate_chains(&ok).is_ok());
 
-        // 2.5 Flash is allowed for Speedwagon.
-        let mut ok2 = BTreeMap::new();
-        ok2.insert("speedwagon".to_string(), vec!["google/gemini-2.5-flash".to_string()]);
-        assert!(validate_chains(&ok2).is_ok());
+        // Unknown agent_type and uncatalogued model are still rejected.
+        let mut bad_agent = BTreeMap::new();
+        bad_agent.insert("nope".to_string(), vec!["openai/gpt-5.4-mini".to_string()]);
+        assert!(validate_chains(&bad_agent).is_err());
+        let mut bad_model = BTreeMap::new();
+        bad_model.insert("speedwagon".to_string(), vec!["openai/does-not-exist".to_string()]);
+        assert!(validate_chains(&bad_model).is_err());
     }
 
     #[test]
-    fn chain_for_filters_disallowed_models() {
-        // Defence in depth: even if a forbidden model is stored in an override,
-        // chain_for drops it; and if that empties the override, it falls back to
-        // the built-in chain rather than returning an empty (or forbidden) one.
-        let json = r#"{"speedwagon":["google/gemini-3-flash","openai/gpt-5.4-mini"]}"#;
+    fn chain_for_returns_override_verbatim() {
+        // A stored project override (projects.recommended_chains JSON) is returned
+        // as-is — a now-discouraged model is no longer filtered out.
+        let json = r#"{"speedwagon":["google/gemini-3.5-flash","openai/gpt-5.4-mini"]}"#;
         let chains = ProjectChains::parse(Some(json));
-        let resolved = chains.chain_for(AgentType::Speedwagon);
-        assert!(!resolved.iter().any(|m| m == "google/gemini-3-flash"));
-        assert!(resolved.iter().any(|m| m == "openai/gpt-5.4-mini"));
-
-        let only_bad = r#"{"speedwagon":["google/gemini-3-flash"]}"#;
-        let chains = ProjectChains::parse(Some(only_bad));
-        let resolved = chains.chain_for(AgentType::Speedwagon);
-        // Empty after filtering → built-in Speedwagon chain (which uses 2.5).
-        assert_eq!(resolved, AgentType::Speedwagon.chain());
+        assert_eq!(
+            chains.chain_for(AgentType::Speedwagon),
+            ["google/gemini-3.5-flash", "openai/gpt-5.4-mini"]
+        );
+        // No override → built-in chain.
+        assert_eq!(
+            ProjectChains::default().chain_for(AgentType::Speedwagon),
+            AgentType::Speedwagon.chain()
+        );
     }
 
     #[test]
