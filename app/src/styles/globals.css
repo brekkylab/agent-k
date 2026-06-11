@@ -1389,6 +1389,11 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-home-composer-box:focus-within {
   box-shadow: 0 0 0 2.5px color-mix(in oklch, var(--cw-agent-accent), transparent 90%);
 }
+/* Dragging computer files over the home composer — ring it as a drop target. */
+.cw-home-composer-box.is-drop-target {
+  border-color: var(--cw-agent-accent);
+  box-shadow: 0 0 0 2.5px color-mix(in oklch, var(--cw-agent-accent), transparent 80%);
+}
 .cw-home-composer-input {
   flex: 0 0 auto;
   min-width: 0;
