@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { asPlainObject, parseToolCallValue, classifyFieldValue } from './toolCallFormat';
+import {
+  asPlainObject,
+  parseToolCallValue,
+  classifyFieldValue,
+  inlineCode,
+  codeFence,
+  fieldToMarkdown,
+  valueToMarkdown,
+  toolCallToMarkdown,
+} from './toolCallFormat';
 
 describe('asPlainObject', () => {
   it('returns plain objects as-is', () => {
@@ -101,5 +110,100 @@ describe('classifyFieldValue', () => {
 
   it('null → inline null', () => {
     expect(classifyFieldValue(null)).toEqual({ kind: 'inline', text: 'null' });
+  });
+});
+
+describe('inlineCode', () => {
+  it('uses single backticks for plain content', () => {
+    expect(inlineCode('hello')).toBe('`hello`');
+  });
+
+  it('widens the fence past inner backtick runs', () => {
+    expect(inlineCode('a`b')).toBe('``a`b``');
+    expect(inlineCode('a``b')).toBe('```a``b```');
+  });
+
+  it('pads with a space when content starts/ends with a backtick', () => {
+    expect(inlineCode('`x')).toBe('`` `x ``');
+    expect(inlineCode('x`')).toBe('`` x` ``');
+  });
+});
+
+describe('codeFence', () => {
+  it('uses a triple fence by default', () => {
+    expect(codeFence('plain')).toBe('```\nplain\n```');
+  });
+
+  it('widens the fence past an inner triple-backtick run', () => {
+    expect(codeFence('a\n```\nb')).toBe('````\na\n```\nb\n````');
+  });
+});
+
+describe('fieldToMarkdown', () => {
+  it('wraps single-line strings in inline code', () => {
+    expect(fieldToMarkdown('path', '/a/b')).toBe('- **path**: `/a/b`');
+  });
+
+  it('keeps inline code intact when the value contains backticks', () => {
+    expect(fieldToMarkdown('cmd', 'use `ls`')).toBe('- **cmd**: `` use `ls` ``');
+  });
+
+  it('prints scalars bare', () => {
+    expect(fieldToMarkdown('limit', 5)).toBe('- **limit**: 5');
+  });
+
+  it('fences multi-line strings', () => {
+    expect(fieldToMarkdown('body', 'line1\nline2')).toBe('- **body**:\n\n```\nline1\nline2\n```');
+  });
+
+  it('fences nested objects with pretty JSON', () => {
+    expect(fieldToMarkdown('opts', { a: 1 })).toBe('- **opts**:\n\n```\n{\n  "a": 1\n}\n```');
+  });
+});
+
+describe('valueToMarkdown', () => {
+  it('renders fields as a bullet list', () => {
+    expect(valueToMarkdown({ path: '/a', limit: 5 })).toBe('- **path**: `/a`\n- **limit**: 5');
+  });
+
+  it('renders empty objects as a marker', () => {
+    expect(valueToMarkdown({})).toBe('_(empty)_');
+  });
+
+  it('renders raw fallback in a code block', () => {
+    expect(valueToMarkdown('plain text')).toBe('```\nplain text\n```');
+  });
+});
+
+describe('toolCallToMarkdown', () => {
+  it('includes only the name when there are no args/result', () => {
+    expect(toolCallToMarkdown({ name: 'ping' })).toBe('## 🔧 ping');
+  });
+
+  it('serializes name, inputs and results with section headers', () => {
+    const md = toolCallToMarkdown({
+      name: 'read',
+      arguments: { path: '/x' },
+      result: '{"error":"nope"}',
+    });
+    expect(md).toBe(
+      [
+        '## 🔧 read',
+        '',
+        '### Inputs',
+        '',
+        '- **path**: `/x`',
+        '',
+        '### Results',
+        '',
+        '- **error**: `nope`',
+      ].join('\n'),
+    );
+  });
+
+  it('omits a section when its value is undefined', () => {
+    const md = toolCallToMarkdown({ name: 'read', arguments: { a: 1 } });
+    expect(md).not.toContain('### Results');
+    expect(md).toContain('### Inputs');
   });
 });

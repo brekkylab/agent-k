@@ -9,6 +9,7 @@
     "share_change_failed": "공유 변경 실패: {{message}}",
     "artifact_deleted": "삭제되었습니다",
     "artifact_delete_failed": "삭제 실패",
+    "copied": "클립보드에 복사되었습니다",
     "unknown_error": "unknown"
   },
   "ui": {
@@ -25,6 +26,7 @@
     "composer_hint": "Enter로 전송 · @파일명으로 파일 참조",
     "new_message": "새 메시지",
     "scroll_to_bottom": "맨 아래로",
+    "copy": "복사",
     "title_fallback": "…"
   },
   "chat": {
