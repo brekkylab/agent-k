@@ -4514,4 +4514,14 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 }
 .cw-field-select__value { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .cw-field-select__value .cw-icon { color: var(--cw-ink-3); flex-shrink: 0; }
+/* `.cw-dialog .cw-field span`(라벨용 11px·uppercase·muted)이 Select 트리거 값
+   span까지 덮어쓰지 않게, 트리거 값은 입력 텍스트(14px·normal·ink)로 되돌린다.
+   (드롭다운 옵션은 body로 portal돼 영향 없음 → 트리거/옵션 표기를 일치시킨다.) */
+.cw-dialog .cw-field .cw-field-select__value {
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--cw-fg-1);
+}
 
