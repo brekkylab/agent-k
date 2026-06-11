@@ -16,7 +16,7 @@ import { deleteDirent, downloadFile, listDirentsRaw, scopeRoot, uploadFiles, typ
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
-import { expandDirentPaths } from '@/domain/files';
+import { expandDirentPaths, MAX_ATTACHMENTS } from '@/domain/files';
 import { getModelCatalog, modelLabel } from '@/api/models';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
@@ -43,11 +43,6 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sess
   loader: () => loadNs('session', 'dialogs'),
   component: SessionPage,
 });
-
-// Cap on how many files one action can attach (folder expand / multi-drag),
-// to keep messages, the agent context, and the chip tray manageable. Matches
-// the backend's server-side ceiling.
-const MAX_ATTACHMENTS = 30;
 
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
@@ -316,24 +311,23 @@ function SessionPage() {
   // Import shared files (dragged from SharedFilesBrowser, its inline button, or a
   // folder drop expanded to its files) as pending attachments. They already exist
   // in shared storage, so no upload is needed — we just carry the global path the
-  // send flow forwards. Dedupe against pending paths and cap the total at
-  // MAX_ATTACHMENTS, dropping the overflow with a toast.
+  // send flow forwards. Dedupe against pending paths; if the batch would push the
+  // total past MAX_ATTACHMENTS, reject the whole batch (attach nothing) and toast.
   const importSharedFiles = useCallback((items: SessionImportItem[]) => {
     if (items.length === 0) return;
-    // Best-effort overflow toast from the current state (accurate for a single drop).
     const curPaths = new Set(pendingAttachments.map((a) => a.globalPath).filter(Boolean));
-    const freshCount = items.filter((it) => !curPaths.has(it.globalPath)).length;
-    if (pendingAttachments.length + freshCount > MAX_ATTACHMENTS) {
+    const fresh = items.filter((it) => !curPaths.has(it.globalPath));
+    if (fresh.length === 0) return; // everything already attached
+    if (pendingAttachments.length + fresh.length > MAX_ATTACHMENTS) {
       showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+      return; // over the cap — don't attach any of them
     }
-    // Dedupe + cap against the authoritative `prev` inside the updater, so a
-    // repeated or concurrent call (e.g. StrictMode's double-invoked effect)
-    // can't append the same files twice.
+    // Dedupe against the authoritative `prev` inside the updater, so a repeated
+    // or concurrent call (e.g. StrictMode's double-invoked effect) can't append
+    // the same files twice.
     setPendingAttachments((prev) => {
       const existing = new Set(prev.map((a) => a.globalPath).filter(Boolean));
-      const toAdd = items
-        .filter((it) => !existing.has(it.globalPath))
-        .slice(0, Math.max(0, MAX_ATTACHMENTS - prev.length));
+      const toAdd = fresh.filter((it) => !existing.has(it.globalPath));
       if (toAdd.length === 0) return prev;
       return [
         ...prev,

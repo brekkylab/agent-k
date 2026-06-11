@@ -27,6 +27,11 @@ export function nameOf(entry: BackendDirent): string {
   return parts[parts.length - 1] ?? entry.path;
 }
 
+/** Max files attachable to one message. Mirrors the backend's server-side
+ *  ceiling in `validate_attachments`; an import that would exceed it is rejected
+ *  wholesale (frontend) and 400'd (backend). */
+export const MAX_ATTACHMENTS = 30;
+
 export interface ExpandedFile { globalPath: string; filename: string; }
 
 /**

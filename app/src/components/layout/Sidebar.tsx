@@ -11,8 +11,12 @@ import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
 import { listSessions } from '@/api/sessions';
+import { scopeRoot } from '@/api/dirents';
+import type { BackendDirent } from '@/api/backend-types';
+import { expandDirentPaths, MAX_ATTACHMENTS } from '@/domain/files';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconPocket } from '@/components/uiPrimitives';
+import { useToastStore } from '@/components/Toast';
 import { useAuthStore } from '@/stores/auth';
 import {
   getSidebarModeForDrag,
@@ -243,6 +247,7 @@ export function Sidebar() {
   });
 
   const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
   const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set());
   // Session row currently under a file drag (from the Files page) — highlights
   // the drop target. Dropping navigates to the session and attaches the file.
@@ -260,6 +265,24 @@ export function Sidebar() {
     let paths: string[];
     try { paths = JSON.parse(raw); } catch { return; }
     if (!Array.isArray(paths) || paths.length === 0) return;
+
+    // Pre-check the attachment cap so we don't navigate for an import the session
+    // would just reject. Folders expand to their files via the cached shared
+    // listing (raw/global paths). Skipped if the listing isn't cached — the
+    // session page still enforces the cap as a fallback.
+    const projectId = activeProject?.id;
+    if (projectId) {
+      const entries = queryClient.getQueryData<BackendDirent[]>(['dirents', 'shared', projectId]);
+      if (entries) {
+        const root = scopeRoot({ kind: 'shared', projectId });
+        const count = expandDirentPaths(entries, paths.map((rel) => `${root}/${rel}`)).length;
+        if (count > MAX_ATTACHMENTS) {
+          showToast(t('attach_limit', { max: MAX_ATTACHMENTS }));
+          return; // over the cap — stay on this page, attach nothing
+        }
+      }
+    }
+
     // A drag can leave a stray text selection highlighted; clear it before we
     // navigate away (otherwise it stays stuck on the next page). Folders are
     // expanded into their contained files by the session page.
