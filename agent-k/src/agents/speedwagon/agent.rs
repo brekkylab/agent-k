@@ -47,10 +47,9 @@ Stop as soon as you have the facts the question asks for, and answer. Continuing
 /// document [`SharedStore`](crate::knowledge_base::SharedStore).
 ///
 /// The default tool set is the four corpus tools (`search_document`,
-/// `find_in_document`, `read_document`, `calculate`) plus a `web_search`
-/// fallback. [`with_shell`](SpeedwagonSpec::with_shell) adds a `shell` tool
-/// (off by default — shell access is not part of the corpus-QA loop and is
-/// opt-in for callers that need it).
+/// `find_in_document`, `read_document`, `calculate`), a `web_search` fallback,
+/// and a `shell` tool. Use [`with_shell(false)`](SpeedwagonSpec::with_shell) for
+/// a corpus-only agent (the sub-agent spec does this).
 #[derive(Debug, Clone)]
 pub struct SpeedwagonSpec {
     name: String,
@@ -87,9 +86,8 @@ impl SpeedwagonSpec {
         self
     }
 
-    /// Add the `shell` tool. Disabled by default; corpus QA does not need
-    /// shell access, and enabling it tends to add latency without improving
-    /// answer accuracy.
+    /// Toggle the `shell` tool, exposed as a secondary tool. Enabled by default;
+    /// the corpus sub-agent turns it off to stay corpus-only.
     pub fn with_shell(mut self, enabled: bool) -> Self {
         self.shell = enabled;
         self
