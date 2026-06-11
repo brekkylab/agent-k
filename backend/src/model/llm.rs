@@ -85,12 +85,12 @@ impl AgentType {
                 "google/gemini-3-flash",
                 "moonshotai/kimi-k2.6",
             ],
-            // Speedwagon (corpus QA): its own chain, tuned independently of
-            // Coworker. The Gemini slot is 2.5 Flash rather than 3 Flash.
+            // Speedwagon (corpus QA): its own chain. Gemini slot is 3.1 Flash-Lite
+            // — fast with good accuracy in the corpus loop.
             AgentType::Speedwagon => &[
                 "openai/gpt-5.4-mini",
                 "anthropic/claude-sonnet-4-6",
-                "google/gemini-2.5-flash",
+                "google/gemini-3.1-flash-lite",
                 "moonshotai/kimi-k2.6",
             ],
             AgentType::DeepResearch => &[
@@ -388,15 +388,14 @@ mod tests {
     }
 
     #[test]
-    fn speedwagon_chain_uses_gemini_2_5_flash() {
+    fn speedwagon_chain_uses_gemini_3_1_flash_lite() {
         // Speedwagon's chain is independent of Coworker's: its Gemini slot is
-        // 2.5 Flash, and Coworker keeps 3 Flash. Guards the split from
-        // silently collapsing back to a shared chain.
+        // 3.1 Flash-Lite, Coworker keeps 3 Flash. Guards the split.
         let sw = AgentType::Speedwagon.chain();
         let cw = AgentType::Coworker.chain();
         assert!(
-            sw.contains(&"google/gemini-2.5-flash"),
-            "speedwagon chain should use gemini-2.5-flash: {sw:?}"
+            sw.contains(&"google/gemini-3.1-flash-lite"),
+            "speedwagon chain should use gemini-3.1-flash-lite: {sw:?}"
         );
         assert!(
             !sw.contains(&"google/gemini-3-flash"),
@@ -407,8 +406,8 @@ mod tests {
             "coworker chain should keep gemini-3-flash: {cw:?}"
         );
         assert!(
-            !cw.contains(&"google/gemini-2.5-flash"),
-            "coworker chain should not use gemini-2.5-flash: {cw:?}"
+            !cw.contains(&"google/gemini-3.1-flash-lite"),
+            "coworker chain should not use gemini-3.1-flash-lite: {cw:?}"
         );
     }
 
