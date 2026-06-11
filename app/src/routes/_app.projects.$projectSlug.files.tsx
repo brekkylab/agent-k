@@ -56,6 +56,11 @@ type ViewMode = 'list' | 'grid';
 const VIEW_KEY = 'cowork.files.viewMode';
 const DRAG_THRESHOLD = 5; // px — under this we treat mousedown as click
 
+// Extensions the corpus indexer accepts (mirrors backend `indexable_filetype`).
+const INDEXABLE_CORPUS_EXTS = new Set(['pdf', 'md', 'markdown', 'txt', 'html', 'htm']);
+const isIndexableCorpusFile = (path: string) =>
+  INDEXABLE_CORPUS_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
+
 export const Route = createFileRoute('/_app/projects/$projectSlug/files')({
   // Rename / NewFolder / CopyToShared / FolderPicker all live on this page → `dialogs`.
   loader: () => loadNs('files', 'dialogs'),
@@ -861,7 +866,7 @@ function FilesPage() {
                     onMenuToggle={setOpenMenuPath}
                     onDragStart={handleDragStart}
                     corpusState={
-                      inKnowledge && entry.kind !== 'dir'
+                      inKnowledge && entry.kind !== 'dir' && isIndexableCorpusFile(entry.path)
                         ? (indexedByPath.get(entry.path) ? 'ready' : 'pending')
                         : undefined
                     }
