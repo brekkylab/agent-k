@@ -36,6 +36,7 @@ import { loadNs } from '@/i18n/loader';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 import { resolveComposerKeyAction } from '@/lib/composerKeys';
+import { parseToolCallValue, classifyFieldValue } from '@/lib/toolCallFormat';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
@@ -1253,6 +1254,39 @@ function extractSubagentQuery(args: unknown): string {
   return '';
 }
 
+/// Renders a parsed tool-call value as React rows — values are shown verbatim (no
+/// markdown parsing), mirroring the structure `valueToMarkdown` uses for copy.
+function ToolCallValueView({ value }: { value: unknown }) {
+  // Memoized so the JSON.parse (in parseToolCallValue) and per-field JSON.stringify
+  // (in classifyFieldValue) run once per value, not on every re-render. String values
+  // compare by value, so an unchanged result string is a cache hit.
+  const view = useMemo(() => {
+    const parsed = parseToolCallValue(value);
+    if (parsed.kind !== 'fields') return parsed;
+    return {
+      kind: 'fields' as const,
+      fields: parsed.fields.map((f) => ({ key: f.key, display: classifyFieldValue(f.value) })),
+    };
+  }, [value]);
+
+  if (view.kind === 'empty') return <p className="cw-toolcall-empty">(empty)</p>;
+  if (view.kind === 'raw') return <pre className="cw-toolcall-raw">{view.text}</pre>;
+  return (
+    <dl className="cw-toolcall-fields">
+      {view.fields.map(({ key, display }) => (
+        <div key={key} className={`cw-toolcall-field${display.kind === 'block' ? ' is-block' : ''}`}>
+          <dt>{key}</dt>
+          <dd>{
+            display.kind === 'block' ? <pre className="cw-toolcall-raw">{display.text}</pre>
+            : display.kind === 'code' ? <pre className="cw-toolcall-inline">{display.text}</pre>
+            : display.text
+          }</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function MessageBubble({
   message,
   users,
@@ -1317,11 +1351,17 @@ function MessageBubble({
             <details key={tc.id} className="cw-toolcall">
               <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ` · ${t('ui.tool_running')}` : ''}</summary>
               {tc.arguments !== undefined && (
-                <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
-                  ? tc.arguments
-                  : JSON.stringify(tc.arguments, null, 2)}</pre>
+                <div className="cw-toolcall-section">
+                  <span className="cw-toolcall-section-label">Inputs</span>
+                  <ToolCallValueView value={tc.arguments} />
+                </div>
               )}
-              {tc.result !== undefined && <pre className="cw-toolcall-result">{tc.result}</pre>}
+              {tc.result !== undefined && (
+                <div className="cw-toolcall-section">
+                  <span className="cw-toolcall-section-label">Results</span>
+                  <ToolCallValueView value={tc.result} />
+                </div>
+              )}
             </details>
           )
         )}
