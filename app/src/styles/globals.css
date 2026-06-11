@@ -330,6 +330,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
    wide screens the bubble column can stay narrow without dragging the
    scrollbar inward with it. */
 .cw-messages-scroll { flex: 1; min-height: 0; overflow-y: auto; width: 100%; }
+.cw-history-loading { text-align: center; color: var(--cw-fg-4); font-size: 12px; padding: 6px 0 2px; }
 .cw-messages { padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
 .cw-message-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .cw-message-meta span { border: 1px solid var(--cw-border); color: var(--cw-fg-3); border-radius: var(--cw-radius-sm); padding: 1px 5px; font-size: 10px; }

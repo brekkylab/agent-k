@@ -1,5 +1,5 @@
 import { request } from './client';
-import type { AiloyMessage, AiloyPart, AiloyToolCall, MessageOutput, SessionMessageList } from './backend-types';
+import type { AiloyMessage, AiloyPart, AiloyToolCall, MessageOutput, SessionMessageItem, SessionMessageList } from './backend-types';
 import { aiMessageText, collapseToolMessages } from './transformers';
 import type { Message } from '@/domain/types';
 
@@ -8,9 +8,31 @@ export interface SubagentUpdate {
   text: string;
 }
 
-export async function listMessages(sessionId: string): Promise<Message[]> {
-  const raw = await request<SessionMessageList>(`/sessions/${sessionId}/messages`);
-  return collapseToolMessages(raw.items, sessionId);
+/**
+ * Keyset pagination in TURN units. `limit`+`beforeSeq` = newest turns below
+ * the cursor (immutable windows); `afterSeq` = tail catch-up. Omit all for
+ * full history; items are oldest→newest. Returns RAW items so callers can
+ * merge windows before collapsing tool messages.
+ */
+export async function listMessageItems(
+  sessionId: string,
+  opts?: { limit?: number; beforeSeq?: number; afterSeq?: number },
+): Promise<SessionMessageItem[]> {
+  const params = new URLSearchParams();
+  if (opts?.limit !== undefined) params.set('limit', String(opts.limit));
+  if (opts?.beforeSeq !== undefined) params.set('before_seq', String(opts.beforeSeq));
+  if (opts?.afterSeq !== undefined) params.set('after_seq', String(opts.afterSeq));
+  const qs = params.toString();
+  const raw = await request<SessionMessageList>(`/sessions/${sessionId}/messages${qs ? `?${qs}` : ''}`);
+  return raw.items;
+}
+
+/** Single-window convenience: fetch + collapse in one go (non-paginated callers). */
+export async function listMessages(
+  sessionId: string,
+  opts?: { limit?: number; beforeSeq?: number; afterSeq?: number },
+): Promise<Message[]> {
+  return collapseToolMessages(await listMessageItems(sessionId, opts), sessionId);
 }
 
 export interface RunAck {
