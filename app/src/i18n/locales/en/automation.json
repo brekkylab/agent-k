@@ -62,8 +62,8 @@
       "placeholder": "Describe a task to run…",
       "greeting": "Coworker helps you get it done",
       "prompts": [
-        { "label": "Sales dashboard", "seedText": "Read the sales data file I've attached and turn it into an Excel dashboard I can see at a glance, across three sheets. Put the original transactions on the first sheet, summarize sales by month and by region on the second, and on the third add a monthly sales chart, a top-5 regions chart, and a summary of total sales, average order value, and total orders." },
-        { "label": "Slide deck", "seedText": "Make a presentation deck based on the file I've attached. Make it 10 slides total including a title slide and a closing slide, and give it a clean, professional design in PowerPoint." },
+        { "label": "IRR calculation", "seedText": "Create an IRR calculation table in Excel for an AI startup investment. Include capital calls, exit payouts, and a year-by-year cash flow analysis, with the returns calculated automatically by formula." },
+        { "label": "Investor pitch deck", "seedText": "Make an investor pitch deck. Cover the business problem, our solution, the market opportunity, the business model, our competitive advantage, a team overview, and detailed financial projections, and make it persuasive and data-driven so it helps with fundraising. Make it about 10 slides including a title slide and a closing slide, in a clean, professional PowerPoint design." },
         { "label": "Tidy up meeting notes", "seedText": "Read the meeting notes file I've attached and turn it into a clean summary. Put a short overview at the top, list the key decisions that were made, and add an action-item table with columns for task, owner, and due date. List any open questions or unassigned items separately at the end." },
         { "label": "Email draft", "seedText": "Write a clear, professional email announcing an update to my team. Give it a subject line, a short friendly opening, the main points laid out clearly, and a clear next step at the end. Leave a spot for me to fill in the specific details, and write it in a ready-to-send email format." }
       ]
