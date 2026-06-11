@@ -795,25 +795,22 @@ pub async fn get_message_history(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    // For a Speedwagon session, load each corpus document's (title, line count)
-    // once so each agent answer's footnote citations can be checked against real
-    // documents (title match plus, when stated, an in-range line span).
+    // For a Speedwagon session, the corpus (title, line_count) summary backs the
+    // footnote citation checks. Read the cache (refreshed by resync); only on a
+    // cold cache compute it once from the store and warm it, so the message
+    // fetch doesn't load every document's content on every poll.
     let corpus_docs: Vec<(String, usize)> = if session.agent_type.as_deref() == Some("speedwagon") {
-        match state.store_for(session.project_id).await {
-            Ok(store) => store
-                .read()
-                .await
-                .list(true, 0, u32::MAX)
-                .map(|docs| {
-                    docs.into_iter()
-                        .map(|d| {
-                            let lines = d.content.as_deref().map(|c| c.lines().count()).unwrap_or(0);
-                            (d.title, lines)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
+        match state.corpus_summary(session.project_id) {
+            Some(summary) => (*summary).clone(),
+            None => match state.store_for(session.project_id).await {
+                Ok(store) => {
+                    let summary =
+                        crate::handlers::knowledge::corpus_summary(&*store.read().await);
+                    state.set_corpus_summary(session.project_id, summary.clone());
+                    summary
+                }
+                Err(_) => Vec::new(),
+            },
         }
     } else {
         Vec::new()

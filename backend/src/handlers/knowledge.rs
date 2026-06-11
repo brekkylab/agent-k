@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use agent_k::knowledge_base::{FileType, PdfEngine};
+use agent_k::knowledge_base::{FileType, PdfEngine, Store};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -148,7 +148,23 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
     }
 
     store.compact().map_err(|e| e.to_string())?;
+    // Refresh the cached (title, line_count) summary so message-fetch citation
+    // checks read it instead of loading every document's content (see #5).
+    state.set_corpus_summary(project_id, corpus_summary(&store));
     Ok(())
+}
+
+/// `(title, line_count)` for every corpus document — the input
+/// [`verify_citations`] reads. Computed off the message-fetch hot path.
+pub(crate) fn corpus_summary(store: &Store) -> Vec<(String, usize)> {
+    store
+        .list(true, 0, u32::MAX)
+        .map(|docs| {
+            docs.into_iter()
+                .map(|d| (d.title, d.content.as_deref().map(|c| c.lines().count()).unwrap_or(0)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn project_pdf_engine(state: &Arc<AppState>, project_id: Uuid) -> PdfEngine {

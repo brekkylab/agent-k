@@ -55,6 +55,9 @@ pub struct AppState {
     knowledge_resync_error: DashMap<Uuid, String>,
     /// Per-project lock serializing resyncs so two rescans never interleave.
     resync_locks: DashMap<Uuid, Arc<Mutex<()>>>,
+    /// Per-project (title, line_count) for citation checks; refreshed by resync,
+    /// read on message fetch so it never loads corpus content on that path.
+    corpus_summaries: DashMap<Uuid, Arc<Vec<(String, usize)>>>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -85,6 +88,7 @@ impl AppState {
             knowledge_resync_error: DashMap::new(),
             knowledge_indexing: Arc::new(DashMap::new()),
             resync_locks: DashMap::new(),
+            corpus_summaries: DashMap::new(),
             jwt,
             data_root,
             max_upload_bytes,
@@ -155,6 +159,16 @@ impl AppState {
             .insert((project_id, path.to_path_buf()), (mtime, size, id));
     }
 
+    /// Cached `(title, line_count)` summary of a project's corpus, if computed.
+    pub fn corpus_summary(&self, project_id: Uuid) -> Option<Arc<Vec<(String, usize)>>> {
+        self.corpus_summaries.get(&project_id).map(|e| e.clone())
+    }
+
+    /// Replace the cached corpus summary (called after a resync rebuilds it).
+    pub fn set_corpus_summary(&self, project_id: Uuid, summary: Vec<(String, usize)>) {
+        self.corpus_summaries.insert(project_id, Arc::new(summary));
+    }
+
     /// Return the document corpus [`SharedStore`] for `project_id`, opening it
     /// on first access. The store lives at
     /// `data_root/projects/{project_id}/.speedwagon`; its directories are
@@ -187,7 +201,7 @@ impl AppState {
                 .min_by_key(|e| e.last_access)
                 .map(|e| *e.key())
         {
-            self.document_stores.remove(&oldest);
+            self.evict_store(oldest);
         }
         // Race-safe: if another task opened it first between the get() above
         // and here, keep the existing entry.
@@ -199,12 +213,15 @@ impl AppState {
             .clone())
     }
 
-    /// Drop the cached corpus store handle for `project_id`, if any. The next
-    /// [`store_for`](Self::store_for) reopens it from disk. Used when the corpus
-    /// must be rebuilt (e.g. the project's PDF engine changed and existing
-    /// derivations are now stale).
+    /// Drop the cached corpus store handle for `project_id` and its derived
+    /// caches (summary, file-ids). The next [`store_for`](Self::store_for)
+    /// reopens from disk and the caches refill, so they stay bounded with the
+    /// LRU store cache rather than growing per project forever. Used on the
+    /// engine-change rebuild and on LRU eviction.
     pub fn evict_store(&self, project_id: Uuid) {
         self.document_stores.remove(&project_id);
+        self.corpus_summaries.remove(&project_id);
+        self.knowledge_file_ids.retain(|k, _| k.0 != project_id);
     }
 
     pub fn insert_agent(&self, id: Uuid, agent: Agent) {
