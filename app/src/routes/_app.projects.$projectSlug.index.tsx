@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getProject, listMembers } from '@/api/projects';
 import { createSession } from '@/api/sessions';
+import { uploadFiles } from '@/api/dirents';
 import { getModelCatalog, recommendationFor } from '@/api/models';
 import { AvatarStack } from '@/components/uiPrimitives';
 import { ProjectHomeComposer, type ProjectHomeComposerSubmission } from '@/components/chat/ProjectHomeComposer';
@@ -45,6 +46,8 @@ function ProjectHome() {
   });
 
   const [composerText, setComposerText] = useState('');
+  // Files staged on the home composer — uploaded to the new session's inputs/ on submit.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
   // Model selection is remembered per project + agent surface and persisted to
   // localStorage (see useModelPrefsStore): switching agents — or reloading —
@@ -99,22 +102,33 @@ function ProjectHome() {
   // Submit creates a session and hands the first message + selected agent to the
   // session page via router state, where it auto-streams on entry.
   const startSessionMutation = useMutation({
-    mutationFn: async (firstMessage: string) => {
+    mutationFn: async ({ firstMessage, files }: { firstMessage: string; files: File[] }) => {
       const session = await createSession(projectSlug, {
         agentType: selectedAgentId,
         model: selectedModel,
       });
-      return { session, firstMessage };
+      // Upload staged files into the new session's inputs/ and collect their paths.
+      let attachmentPaths: string[] = [];
+      const projectId = project.data?.id;
+      if (files.length > 0 && projectId) {
+        const scope = { kind: 'inputs' as const, projectId, sessionId: session.id };
+        const result = await uploadFiles(scope, files.map((file) => ({ file, targetPath: file.name })));
+        attachmentPaths = result.succeeded.map((s) => s.path);
+      }
+      return { session, firstMessage, attachmentPaths };
     },
-    onSuccess: async ({ session, firstMessage }) => {
+    onSuccess: async ({ session, firstMessage, attachmentPaths }) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       setComposerText('');
+      setPendingFiles([]);
       navigate({
         to: '/projects/$projectSlug/sessions/$sessionPrefix',
         params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
-        state: firstMessage
-          ? { initialMessage: firstMessage, initialAgentId: selectedAgentId }
-          : { initialAgentId: selectedAgentId },
+        state: {
+          ...(firstMessage ? { initialMessage: firstMessage } : {}),
+          initialAgentId: selectedAgentId,
+          ...(attachmentPaths.length > 0 ? { initialAttachments: attachmentPaths } : {}),
+        },
         // Morph the composer to its session position/shape (shared view-transition-name).
         viewTransition: true,
       });
@@ -127,7 +141,7 @@ function ProjectHome() {
 
   const handleSubmit = ({ text }: ProjectHomeComposerSubmission) => {
     if (startSessionMutation.isPending) return;
-    startSessionMutation.mutate(text);
+    startSessionMutation.mutate({ firstMessage: text, files: pendingFiles });
   };
 
   const memberList = members.data ?? [];
@@ -165,7 +179,9 @@ function ProjectHome() {
             sendBlockedHint={t('home.send_blocked_hint')}
             placeholder={agentPlaceholder}
             focusSignal={focusNonce}
-            onAttachClick={() => showToast(t('home.attach_coming_soon'))}
+            files={pendingFiles}
+            onAddFiles={(fs) => setPendingFiles((prev) => [...prev, ...fs])}
+            onRemoveFile={(i) => setPendingFiles((prev) => prev.filter((_, idx) => idx !== i))}
             modelPicker={
               <ComposerModelPicker
                 catalog={catalog.data}
