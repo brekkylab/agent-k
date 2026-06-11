@@ -73,7 +73,7 @@ impl AgentType {
             AgentType::Coworker | AgentType::Speedwagon => &[
                 "openai/gpt-5.4-mini",
                 "anthropic/claude-sonnet-4-6",
-                "google/gemini-3-flash",
+                "google/gemini-3-flash-preview",
                 "moonshotai/kimi-k2.6",
             ],
             AgentType::DeepResearch => &[
@@ -131,7 +131,9 @@ pub const CATALOG: &[ModelInfo] = &[
         tier: ModelTier::Standard,
     },
     ModelInfo {
-        id: "google/gemini-3-flash",
+        // Preview is the only callable Gemini 3 Flash id (bare `gemini-3-flash`
+        // 404s); label stays clean so users don't see "preview".
+        id: "google/gemini-3-flash-preview",
         label: "Gemini 3 Flash",
         tier: ModelTier::Standard,
     },

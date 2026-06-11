@@ -114,7 +114,7 @@ def main() -> None:
             AUTO_A2, PROJECT_KLIENT, "Weekly digest",
             "주간 핵심 결정 정리 (금요일 발송)",
             json.dumps(["이번 주 핵심 결정 사항을 정리해줘."], ensure_ascii=False),
-            1, "speedwagon", "google/gemini-3-flash", OLIVE_ID, ts(2), ts(2),
+            1, "speedwagon", "google/gemini-3-flash-preview", OLIVE_ID, ts(2), ts(2),
         ),
         (
             AUTO_A3, PROJECT_KLIENT, "On-call ping",
@@ -185,7 +185,7 @@ def main() -> None:
         (SESS_A2_1, PROJECT_KLIENT, OLIVE_ID, "private",
          f"Weekly digest · schedule · {title_ts(50)}",
          None, None, ts(50), ts(75), "automation",
-         "speedwagon", "google/gemini-3-flash"),
+         "speedwagon", "google/gemini-3-flash-preview"),
         (SESS_A3_1, PROJECT_KLIENT, OLIVE_ID, "private",
          f"On-call ping · webhook · {title_ts(40)}",
          None, None, ts(40), ts(60), "automation",
