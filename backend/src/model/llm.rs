@@ -66,12 +66,9 @@ impl AgentType {
     ];
 
     /// Selectable but not recommended for this agent — a soft picker hint, not a
-    /// block. Speedwagon discourages the slow / low-quality Gemini flashes.
+    /// block. Speedwagon discourages gemini-3.5-flash (slow in the corpus loop).
     pub fn discourages_model(self, model_id: &str) -> bool {
-        matches!(
-            (self, model_id),
-            (AgentType::Speedwagon, "google/gemini-3.5-flash" | "google/gemini-2.5-flash-lite")
-        )
+        matches!((self, model_id), (AgentType::Speedwagon, "google/gemini-3.5-flash"))
     }
 
     /// Ordered, provider-diverse recommendation chain. The last entry is the
@@ -412,11 +409,10 @@ mod tests {
     }
 
     #[test]
-    fn speedwagon_discourages_slow_and_empty_models() {
+    fn speedwagon_discourages_gemini_3_5_flash() {
         let sw = AgentType::Speedwagon;
         // Discouraged (hint only, still selectable).
         assert!(sw.discourages_model("google/gemini-3.5-flash"));
-        assert!(sw.discourages_model("google/gemini-2.5-flash-lite"));
         // Recommended / fine — not discouraged.
         assert!(!sw.discourages_model("google/gemini-2.5-flash"));
         assert!(!sw.discourages_model("google/gemini-3.1-flash-lite"));
