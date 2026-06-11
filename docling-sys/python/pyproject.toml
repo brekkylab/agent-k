@@ -5,7 +5,7 @@ description = "Convert PDF to markdown"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "docling>=2.91.0",
+    "docling>=2.99.0",
 ]
 
 # Install with `uv sync` for the default torch (platform-native: CUDA on Linux, MPS-capable on macOS).
