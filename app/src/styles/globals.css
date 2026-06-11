@@ -396,7 +396,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-sf-row.is-selected .cw-sf-grip, .cw-sf-row.is-selected .cw-sf-add { opacity: 1; }
 .cw-sf-row > svg { flex-shrink: 0; }
 .cw-sf-row .cw-file-label { flex: 1; }
-.cw-sf-grip, .cw-sf-grip-spacer { width: 12px; flex-shrink: 0; }
+.cw-sf-grip { width: 12px; flex-shrink: 0; }
 .cw-sf-grip { display: inline-flex; align-items: center; justify-content: center; color: var(--cw-ink-4); opacity: 0; cursor: grab; transition: opacity 100ms; }
 .cw-sf-row:hover .cw-sf-grip { opacity: 1; }
 .cw-sf-row[draggable="true"] { cursor: grab; }
