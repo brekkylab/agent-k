@@ -67,6 +67,11 @@ pub(crate) async fn resync_knowledge(state: Arc<AppState>, project_id: Uuid) {
     // Held for the whole resync; its Drop decrements the indexing count on any
     // exit path (return, error, or panic), so the UI never sticks on "indexing".
     let _guard = state.begin_indexing(project_id);
+    // Serialize per project: `resync_inner` scans the folder to build its
+    // desired-id set, so concurrent passes could let an older scan purge a
+    // newer one's additions. The last-queued pass scans last and wins.
+    let resync_lock = state.resync_lock_for(project_id);
+    let _serialized = resync_lock.lock().await;
     match resync_inner(&state, project_id).await {
         Ok(()) => state.set_resync_error(project_id, None),
         Err(e) => {

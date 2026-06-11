@@ -53,6 +53,8 @@ pub struct AppState {
     /// Last knowledge-resync error per project, surfaced in the status endpoint.
     /// Set when a background resync fails, cleared when one succeeds.
     knowledge_resync_error: DashMap<Uuid, String>,
+    /// Per-project lock serializing resyncs so two rescans never interleave.
+    resync_locks: DashMap<Uuid, Arc<Mutex<()>>>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -82,6 +84,7 @@ impl AppState {
             knowledge_file_ids: DashMap::new(),
             knowledge_resync_error: DashMap::new(),
             knowledge_indexing: Arc::new(DashMap::new()),
+            resync_locks: DashMap::new(),
             jwt,
             data_root,
             max_upload_bytes,
@@ -104,6 +107,15 @@ impl AppState {
     /// Whether a knowledge resync is currently in flight for `project_id`.
     pub fn is_indexing(&self, project_id: Uuid) -> bool {
         self.knowledge_indexing.get(&project_id).map(|n| *n > 0).unwrap_or(false)
+    }
+
+    /// Per-project resync lock; the caller holds it across the whole resync.
+    pub fn resync_lock_for(&self, project_id: Uuid) -> Arc<Mutex<()>> {
+        self.resync_locks
+            .entry(project_id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone()
     }
 
     /// Record the outcome of a resync: `Some(msg)` on failure, `None` clears a
@@ -163,14 +175,15 @@ impl AppState {
             .map_err(|e| AppError::internal(format!("store init join error: {e}")))?
             .map_err(|e| AppError::internal(format!("store init failed: {e}")))?;
         let shared: SharedStore = Arc::new(RwLock::new(store));
-        // Evict the least-recently-used entry once we're at capacity. A store
-        // still in use survives: it's an `Arc`, so removing it from the map only
-        // drops the cache's handle, and the on-disk index closes when the last
-        // live reference does.
+        // Evict the LRU entry at capacity, skipping projects that are indexing:
+        // a resync holds that store's write lock, and reopening it elsewhere
+        // would create a second handle fighting tantivy's per-dir writer lock.
+        // A non-indexing store in use still survives — it's an `Arc`.
         if self.document_stores.len() >= MAX_OPEN_STORES
             && let Some(oldest) = self
                 .document_stores
                 .iter()
+                .filter(|e| !self.is_indexing(*e.key()))
                 .min_by_key(|e| e.last_access)
                 .map(|e| *e.key())
         {
