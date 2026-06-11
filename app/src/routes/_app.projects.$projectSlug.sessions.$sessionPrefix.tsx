@@ -204,9 +204,14 @@ function SessionPage() {
   // instead of refetching whole lists on each session entry.
   useEffect(() => {
     if (history.isSuccess && sessionId) {
+      void queryClient.cancelQueries({ queryKey: ['sessions', projectSlug] });
       queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', projectSlug] }, (old) => {
         if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
         return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ['sessions', projectSlug],
+        refetchType: 'none',
       });
     }
   }, [history.isSuccess, history.dataUpdatedAt, projectSlug, sessionId, queryClient]);
