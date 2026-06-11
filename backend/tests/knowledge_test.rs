@@ -282,3 +282,43 @@ async fn knowledge_files_reports_per_file_indexed_status() {
         .expect("note.md present in knowledge files");
     assert_eq!(note["indexed"], true, "uploaded file should report indexed: {json}");
 }
+
+/// Overlapping rescans must converge: each upload spawns a background rescan and
+/// they run concurrently. Per-project serialization makes the last-queued one
+/// scan the final folder, so every uploaded file ends indexed — an unserialized
+/// rescan could let an older scan's set purge a file a newer scan just added.
+#[tokio::test]
+async fn concurrent_uploads_all_indexed() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+
+    // Create the knowledge folder and pre-open the store so the concurrent
+    // rescans reuse one cached handle (avoids the Store::new dir-creation race).
+    let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
+    let _ = state.store_for(pid).await.expect("store_for");
+
+    let n: u32 = 8;
+    let mut handles = Vec::new();
+    for i in 0..n {
+        let app = app.clone();
+        let token = token.clone();
+        let pid_s = pid.to_string();
+        handles.push(tokio::spawn(async move {
+            let name = format!("doc{i}.md");
+            let body = format!("# Doc {i}\n\nUnique body number {i}.");
+            upload_to_knowledge(&app, &token, &pid_s, &[(name.as_str(), body.as_bytes())]).await
+        }));
+    }
+    for h in handles {
+        assert_eq!(h.await.unwrap(), StatusCode::OK, "each upload should succeed");
+    }
+
+    assert_eq!(
+        wait_for_count(&state, pid, n).await,
+        n,
+        "every concurrently-uploaded file must end up indexed"
+    );
+}
