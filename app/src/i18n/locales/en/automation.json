@@ -81,9 +81,9 @@
       "placeholder": "What should I research?",
       "greeting": "Deep Research digs in deep",
       "prompts": [
-        { "label": "Market trend research", "seedText": "Research recent trends in the market where KlientCo operates" },
-        { "label": "Competitor analysis", "seedText": "Compare and analyze the strategies of three major competitors" },
-        { "label": "Prior research review", "seedText": "Summarize prior research in the relevant field" }
+        { "label": "Market sizing", "seedText": "Analyze the size of the EV charging infrastructure market from several angles. Estimate TAM/SAM/SOM, give a five-year growth forecast, identify the key drivers and headwinds shaping the market, break down the major customer segments, and map the competitive landscape and how the leading players are positioned." },
+        { "label": "Competitor benchmarking", "seedText": "Run an in-depth benchmarking study of the six leading companies in the cloud data warehouse space. Compare their core features, pricing, market share, customer satisfaction, and go-to-market strategy, then lay out each one's strengths, weaknesses, differentiation, and target segment, and draw out the implications for us." },
+        { "label": "Customer persona research", "seedText": "Research and map detailed customer personas and journey maps for a subscription-based online learning platform. Identify each persona's goals and motivations, their main pain points and decision criteria, analyze the touchpoints from awareness through sign-up and renewal, and pinpoint where users drop off along with concrete opportunities to improve conversion." }
       ]
     },
     "buddy": {
