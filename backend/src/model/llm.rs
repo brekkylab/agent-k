@@ -131,8 +131,6 @@ pub const CATALOG: &[ModelInfo] = &[
         tier: ModelTier::Standard,
     },
     ModelInfo {
-        // Preview is the only callable Gemini 3 Flash id (bare `gemini-3-flash`
-        // 404s); label stays clean so users don't see "preview".
         id: "google/gemini-3-flash-preview",
         label: "Gemini 3 Flash",
         tier: ModelTier::Standard,
