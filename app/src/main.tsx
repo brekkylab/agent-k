@@ -52,6 +52,9 @@ declare module '@tanstack/react-router' {
     // Shared-file paths (scope-relative) dragged from Files onto a session row,
     // attached to the next message once the target session resolves.
     attachShared?: string[];
+    // Global inputs/ paths for files uploaded on the home composer, attached to
+    // the auto-sent first message of the newly created session.
+    initialAttachments?: string[];
   }
 }
 

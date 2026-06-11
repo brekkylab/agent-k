@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
+import { AttachmentChip } from '@/components/AttachmentChip';
 
 export interface ProjectHomeComposerSubmission {
   text: string;
@@ -22,8 +23,12 @@ interface ProjectHomeComposerProps {
   sendBlocked?: boolean;
   sendBlockedHint?: string;
   placeholder?: string;
-  // Entry point for adding files (placeholder — to be wired up to PR #114's attachment tray).
+  // Fallback attach entry point when file handling isn't wired (no onAddFiles).
   onAttachClick?: () => void;
+  // Local files staged for upload (uploaded to the new session's inputs/ on submit).
+  files?: File[];
+  onAddFiles?: (files: File[]) => void;
+  onRemoveFile?: (index: number) => void;
   // Home-only model picker slot. Session composer owns its own compact controls.
   modelPicker?: ReactNode;
   // Focus request signal. Focuses the input whenever the value changes (it's a nonce, not a
@@ -45,10 +50,14 @@ export function ProjectHomeComposer({
   sendBlockedHint,
   placeholder = DEFAULT_PLACEHOLDER,
   onAttachClick,
+  files = [],
+  onAddFiles,
+  onRemoveFile,
   modelPicker,
   focusSignal,
 }: ProjectHomeComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const canSubmit = value.trim().length > 0 && !disabled && !sendBlocked;
 
   useEffect(() => {
@@ -80,11 +89,12 @@ export function ProjectHomeComposer({
     }
   };
 
-  const attachButton = onAttachClick && (
+  const canAttach = Boolean(onAddFiles || onAttachClick);
+  const attachButton = canAttach && (
     <button
       type="button"
       className="cw-attach-button"
-      onClick={onAttachClick}
+      onClick={() => (onAddFiles ? fileInputRef.current?.click() : onAttachClick?.())}
       disabled={disabled}
       aria-label="파일 추가"
       title="파일 추가"
@@ -108,6 +118,18 @@ export function ProjectHomeComposer({
       }}
     >
       <div className="cw-home-composer-box">
+        {files.length > 0 && (
+          <div className="cw-attach-tray" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 0 6px' }}>
+            {files.map((file, i) => (
+              <AttachmentChip
+                key={`${file.name}-${i}`}
+                filename={file.name}
+                status="uploaded"
+                onRemove={() => onRemoveFile?.(i)}
+              />
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           className="cw-home-composer-input"
@@ -118,6 +140,15 @@ export function ProjectHomeComposer({
           disabled={disabled}
           rows={3}
         />
+        {onAddFiles && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => { onAddFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+          />
+        )}
         <div className="cw-home-composer-actions">
           {modelPicker}
           <span className="cw-home-composer-actions-spacer" />

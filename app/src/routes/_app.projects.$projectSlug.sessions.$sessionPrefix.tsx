@@ -134,6 +134,7 @@ function SessionPage() {
   // Auto-send initial message refs — useRef instead of module-level Set so each
   // component instance tracks its own state (StrictMode-safe, no cross-session leak).
   const initialMessageRef = useRef<string | null>(location.state.initialMessage ?? null);
+  const initialAttachmentsRef = useRef<string[] | null>(location.state.initialAttachments ?? null);
   const consumedInitialMessageRef = useRef(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -610,12 +611,14 @@ function SessionPage() {
     })();
   }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate, queryClient]);
 
-  const send = useCallback(async (overrideText?: string) => {
+  const send = useCallback(async (overrideText?: string, overrideAttachments?: string[]) => {
     const text = (overrideText ?? composerText).trim();
     const uploading = pendingAttachments.some((a) => a.status === 'uploading');
     if (!text || !sessionId || streaming || uploading) return;
 
-    const attachmentPaths = pendingAttachments
+    // overrideAttachments: files uploaded on the home composer, handed over via
+    // router state for the auto-sent first message.
+    const attachmentPaths = overrideAttachments ?? pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
       .map((a) => a.globalPath!);
 
@@ -731,10 +734,12 @@ function SessionPage() {
     if (!initialMessageRef.current) return;
     consumedInitialMessageRef.current = true;
     const msg = initialMessageRef.current;
+    const atts = initialAttachmentsRef.current ?? undefined;
     initialMessageRef.current = null;
+    initialAttachmentsRef.current = null;
     // Clear router state so a hard refresh doesn't resend, but don't block send on it.
-    void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined }) });
-    void send(msg);
+    void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined, initialAttachments: undefined }) });
+    void send(msg, atts);
   }, [session.data, send, navigate]);
 
   // WS session subscription — subscribe/unsubscribe when sessionId changes.
