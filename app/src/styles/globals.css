@@ -261,7 +261,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-session-row.is-active { background: color-mix(in oklch, var(--cw-accent) 12%, var(--cw-bg-subtle)); color: var(--cw-fg-1); font-weight: 600; }
 .cw-session-row.is-unread { color: var(--cw-fg-1); font-weight: 600; }
 .auto-dot { margin-left: auto; color: var(--cw-accent); font-size: 10px; }
-.cw-sidebar-user { border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
+.cw-sidebar-user { border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
 .cw-sidebar-user-meta { min-width: 0; }
 .cw-sidebar-user-meta b { display: block; font-size: 13px; color: var(--cw-fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-sidebar-user-meta span { display: block; font-family: var(--cw-font-mono); font-size: 10px; color: var(--cw-fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4419,4 +4419,29 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   border-color: var(--cw-destructive);
   color: var(--cw-paper);
 }
+
+/* 언어 Select을 위 표시-이름 입력칸과 동일한 폼 컨트롤 박스로 (정렬·affordance).
+   기본 .cw-select 트리거는 테두리/배경 없는 맨 텍스트라 폼 안에서 붕 떠 보인다.
+   border/bg/radius/padding과 focus-visible을 .cw-dialog .cw-field input과 일치시켜
+   두 행이 "쌍둥이 필드"로 읽히게 한다. */
+.cw-field-select { display: block; width: 100%; }
+.cw-select.cw-field-select__trigger {
+  width: 100%;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-sm);
+  background: var(--cw-bg-subtle);
+  color: var(--cw-fg-1);
+  font-size: 14px;
+  cursor: pointer;
+}
+.cw-select.cw-field-select__trigger:focus-visible {
+  outline: 2px solid var(--cw-accent-line);
+  outline-offset: 0;
+  border-color: var(--cw-accent-line);
+}
+.cw-field-select__value { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.cw-field-select__value .cw-icon { color: var(--cw-ink-3); flex-shrink: 0; }
 

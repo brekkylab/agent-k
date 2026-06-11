@@ -30,7 +30,8 @@ import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { useSessionDelete } from '@/lib/useSessionDelete';
 import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
-import { LanguageToggle } from '@/components/LanguageToggle';
+import { UserMenu } from '@/components/UserMenu';
+import { useUserSettingsDialog } from '@/components/userSettings/useUserSettingsDialog';
 import type { Session } from '@/domain/types';
 import { appWs, type AppWsEvent } from '@/api/ws';
 
@@ -334,6 +335,7 @@ export function Sidebar() {
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
   const [pendingDuplicate, setPendingDuplicate] = useState<Session | null>(null);
   const projectCreator = useNewProjectDialog();
+  const userSettings = useUserSettingsDialog();
   const deleteMutation = useSessionDelete(activeProjectSlug ?? '', {
     onDeleted: (deletedId) => {
       // If the deleted session was the one being viewed, leave it for the project home.
@@ -531,14 +533,10 @@ export function Sidebar() {
             <div className="cw-sidebar-user-meta">
               <b>{currentUser.name.split(' ')[0]}</b>
             </div>
-            <LanguageToggle />
-            <button
-              aria-label={t('common:actions.logout')}
-              onClick={() => forceLogout({ reason: 'manual' })}
-              style={{ border: 0, background: 'transparent', padding: 0, color: 'var(--cw-ink-3)', cursor: 'pointer' }}
-            >
-              <Icon name="more" />
-            </button>
+            <UserMenu
+              onOpenSettings={userSettings.open}
+              onLogout={() => forceLogout({ reason: 'manual' })}
+            />
           </div>
         </div>
       )}
@@ -581,6 +579,7 @@ export function Sidebar() {
       )}
 
       {projectCreator.dialog}
+      {userSettings.dialog}
 
       {sessionsOverlayOpen && activeProject && (
         <SessionsOverlay
