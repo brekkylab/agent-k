@@ -53,6 +53,9 @@ pub struct AppState {
     /// Last knowledge-resync error per project, surfaced in the status endpoint.
     /// Set when a background resync fails, cleared when one succeeds.
     knowledge_resync_error: DashMap<Uuid, String>,
+    /// Scope-relative paths that failed to index in the latest resync, replaced
+    /// each resync. Lets the status endpoint mark a file failed, not "pending".
+    knowledge_failed_files: DashMap<Uuid, Arc<std::collections::HashSet<String>>>,
     /// Per-project lock serializing resyncs so two rescans never interleave.
     resync_locks: DashMap<Uuid, Arc<Mutex<()>>>,
     /// Per-project lock serializing first-time store creation. `Store::new`
@@ -92,6 +95,7 @@ impl AppState {
             document_stores: DashMap::new(),
             knowledge_file_ids: DashMap::new(),
             knowledge_resync_error: DashMap::new(),
+            knowledge_failed_files: DashMap::new(),
             knowledge_indexing: Arc::new(DashMap::new()),
             resync_locks: DashMap::new(),
             store_init_locks: DashMap::new(),
@@ -146,6 +150,22 @@ impl AppState {
     /// resync failed and none has succeeded since.
     pub fn resync_error(&self, project_id: Uuid) -> Option<String> {
         self.knowledge_resync_error.get(&project_id).map(|e| e.clone())
+    }
+
+    /// Replace the set of scope-relative paths that failed to index.
+    pub fn set_failed_files(&self, project_id: Uuid, paths: std::collections::HashSet<String>) {
+        if paths.is_empty() {
+            self.knowledge_failed_files.remove(&project_id);
+        } else {
+            self.knowledge_failed_files.insert(project_id, Arc::new(paths));
+        }
+    }
+
+    /// Whether `rel_path` (scope-relative) failed to index in the latest resync.
+    pub fn file_failed(&self, project_id: Uuid, rel_path: &str) -> bool {
+        self.knowledge_failed_files
+            .get(&project_id)
+            .is_some_and(|s| s.contains(rel_path))
     }
 
     /// Cached content id for a knowledge file, valid only if `(mtime, size)`
@@ -244,6 +264,7 @@ impl AppState {
     pub fn evict_store(&self, project_id: Uuid) {
         self.document_stores.remove(&project_id);
         self.corpus_summaries.remove(&project_id);
+        self.knowledge_failed_files.remove(&project_id);
         self.knowledge_file_ids.retain(|k, _| k.0 != project_id);
     }
 

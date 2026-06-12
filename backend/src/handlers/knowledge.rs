@@ -82,9 +82,13 @@ pub(crate) async fn resync_knowledge(state: Arc<AppState>, project_id: Uuid) {
 }
 
 async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), String> {
-    let root = scope_root(state, &DirentScope::Shared { project_id }).join(KNOWLEDGE_PREFIX);
+    let scope_dir = scope_root(state, &DirentScope::Shared { project_id });
+    let root = scope_dir.join(KNOWLEDGE_PREFIX);
 
     let mut items: Vec<(Vec<u8>, FileType)> = Vec::new();
+    // Scope-relative path of each item, parallel to `items`, so a failed
+    // ingest (reported by input index) can be mapped back to its file.
+    let mut item_paths: Vec<String> = Vec::new();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
         let mut rd = match tokio::fs::read_dir(&dir).await {
@@ -109,7 +113,14 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
                 // with a concurrent delete) would block the purge of files that
                 // really are gone, leaving stale entries in the corpus.
                 match tokio::fs::read(&path).await {
-                    Ok(bytes) => items.push((bytes, filetype)),
+                    Ok(bytes) => {
+                        let rel = path
+                            .strip_prefix(&scope_dir)
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_else(|_| name.clone());
+                        items.push((bytes, filetype));
+                        item_paths.push(rel);
+                    }
                     Err(e) => tracing::warn!(%project_id, ?path, "skipping unreadable knowledge file: {e}"),
                 }
             }
@@ -128,12 +139,17 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
         .ingest_many(items, pdf_engine)
         .await
         .map_err(|e| e.to_string())?;
-    // Surface per-file ingest failures (a bad PDF, a parse error). Without this
-    // they'd be silently dropped and the file would just be absent from the
-    // corpus with no trace.
+    // Record per-file ingest failures (a bad PDF, a parse error) so the status
+    // endpoint can mark those files failed instead of forever "pending".
+    let mut failed_paths: HashSet<String> = HashSet::new();
     for f in &result.failed {
-        tracing::warn!(%project_id, index = f.index, "knowledge file failed to index: {}", f.error);
+        let path = item_paths.get(f.index).cloned().unwrap_or_default();
+        tracing::warn!(%project_id, %path, "knowledge file failed to index: {}", f.error);
+        if !path.is_empty() {
+            failed_paths.insert(path);
+        }
     }
+    state.set_failed_files(project_id, failed_paths);
     let desired: HashSet<Uuid> = result.succeeded.into_iter().collect();
 
     let stale: Vec<Uuid> = store
@@ -234,6 +250,9 @@ pub struct KnowledgeFileStatus {
     pub path: String,
     /// True once this file's content is in the searchable corpus.
     pub indexed: bool,
+    /// True if the latest resync tried and failed to index this file (a bad
+    /// PDF, a parse error). Distinguishes a real failure from "still indexing".
+    pub failed: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -326,7 +345,10 @@ pub async fn knowledge_files(
         .into_iter()
         .map(|(path, id)| {
             let indexed = matches!((&guard, id), (Some(s), Some(id)) if s.get(id).is_some());
-            KnowledgeFileStatus { path, indexed }
+            // A file is "failed" only if it isn't indexed and the last resync
+            // recorded it as failed — an indexed file is never failed.
+            let failed = !indexed && state.file_failed(project_id, &path);
+            KnowledgeFileStatus { path, indexed, failed }
         })
         .collect();
     drop(guard);

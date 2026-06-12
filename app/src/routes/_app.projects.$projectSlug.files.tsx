@@ -101,7 +101,8 @@ function FilesPage() {
   });
 
   // Per-file corpus status, polled while indexing or while any file is still
-  // pending. Keyed by scope-relative path (e.g. `knowledge/foo.pdf`).
+  // settling. A file that failed to index is terminal, so it doesn't keep the
+  // poll alive. Keyed by scope-relative path (e.g. `knowledge/foo.pdf`).
   const knowledgeFiles = useQuery({
     queryKey: ['knowledge-files', projectSlug],
     queryFn: () => getKnowledgeFiles(projectSlug),
@@ -109,11 +110,14 @@ function FilesPage() {
     refetchInterval: (q) => {
       const d = q.state.data;
       if (!d) return false;
-      return d.indexing || d.files.some((f) => !f.indexed) ? 1500 : false;
+      return d.indexing || d.files.some((f) => !f.indexed && !f.failed) ? 1500 : false;
     },
   });
-  const indexedByPath = new Map(
-    (knowledgeFiles.data?.files ?? []).map((f) => [f.path, f.indexed]),
+  const corpusStateByPath = new Map<string, 'ready' | 'pending' | 'failed'>(
+    (knowledgeFiles.data?.files ?? []).map((f) => [
+      f.path,
+      f.indexed ? 'ready' : f.failed ? 'failed' : 'pending',
+    ]),
   );
 
   useEffect(() => {
@@ -867,7 +871,7 @@ function FilesPage() {
                     onDragStart={handleDragStart}
                     corpusState={
                       inKnowledge && entry.kind !== 'dir' && isIndexableCorpusFile(entry.path)
-                        ? (indexedByPath.get(entry.path) ? 'ready' : 'pending')
+                        ? (corpusStateByPath.get(entry.path) ?? 'pending')
                         : undefined
                     }
                     protectedEntry={currentPath.length === 0 && entry.kind === 'dir' && entry.path === 'knowledge'}
@@ -1097,7 +1101,7 @@ interface RowProps {
   onMenuToggle: (path: string | null) => void;
   onDragStart: (ev: React.DragEvent, e: BackendDirent) => void;
   /** Corpus status for a knowledge-folder file; undefined elsewhere (no badge). */
-  corpusState?: 'ready' | 'pending';
+  corpusState?: 'ready' | 'pending' | 'failed';
   /** True for the fixed knowledge folder, which has no row actions. */
   protectedEntry?: boolean;
 }
@@ -1217,9 +1221,21 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
         </span>
       </span>
       {corpusState && (
-        <span className={`cw-corpus-badge is-${corpusState}`}>
-          <Icon name={corpusState === 'ready' ? 'check' : 'rotate-ccw'} size={11} />
-          {t(corpusState === 'ready' ? 'knowledge.file_ready' : 'knowledge.file_pending')}
+        <span
+          className={`cw-corpus-badge is-${corpusState}`}
+          title={corpusState === 'failed' ? t('knowledge.file_failed_hint') : undefined}
+        >
+          <Icon
+            name={corpusState === 'ready' ? 'check' : corpusState === 'failed' ? 'x' : 'rotate-ccw'}
+            size={11}
+          />
+          {t(
+            corpusState === 'ready'
+              ? 'knowledge.file_ready'
+              : corpusState === 'failed'
+                ? 'knowledge.file_failed'
+                : 'knowledge.file_pending',
+          )}
         </span>
       )}
       <RowMenu

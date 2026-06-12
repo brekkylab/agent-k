@@ -64,6 +64,8 @@ export interface KnowledgeFileStatus {
   /** Scope-relative path, e.g. `knowledge/report.pdf`. */
   path: string;
   indexed: boolean;
+  /** The latest resync tried and failed to index this file. */
+  failed: boolean;
 }
 
 export interface KnowledgeFiles {

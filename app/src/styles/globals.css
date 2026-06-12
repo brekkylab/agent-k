@@ -397,6 +397,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-corpus-badge.is-ready { background: var(--cw-paper-3); color: var(--cw-ink-3); }
 .cw-corpus-badge.is-pending { background: var(--cw-paper-3); color: var(--cw-ink-4); }
 .cw-corpus-badge.is-pending svg { animation: cw-spin 1.4s linear infinite; }
+.cw-corpus-badge.is-failed { background: var(--cw-danger-bg, #fde8e8); color: var(--cw-danger, #b42318); cursor: help; }
 @keyframes cw-spin { to { transform: rotate(-360deg); } }
 
 /* Tint the grid card's icon container by file type. The legacy

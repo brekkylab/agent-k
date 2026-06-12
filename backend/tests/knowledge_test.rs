@@ -283,6 +283,59 @@ async fn knowledge_files_reports_per_file_indexed_status() {
     assert_eq!(note["indexed"], true, "uploaded file should report indexed: {json}");
 }
 
+/// A file that fails to index (here a corrupt PDF that the converter rejects)
+/// must be reported `failed: true`, not left `indexed: false` forever — that's
+/// what lets the UI show an error instead of a perpetual "pending" spinner.
+#[tokio::test]
+async fn knowledge_files_reports_failed_status_for_bad_file() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+    let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
+
+    // A .pdf whose bytes are not a valid PDF: the converter errors, so ingest
+    // records it as failed rather than adding it to the corpus.
+    let status = upload_to_knowledge(
+        &app,
+        &token,
+        &pid.to_string(),
+        &[("broken.pdf", b"not a real pdf" as &[u8])],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Wait for the background resync to settle, then for the file to be reported
+    // failed. It never gets indexed, so we can't wait on a corpus count.
+    let mut failed = false;
+    for _ in 0..100 {
+        let (code, json) = authed(
+            &app,
+            "GET",
+            &format!("/projects/{pid}/knowledge/files"),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        if json["indexing"] == false
+            && let Some(f) = json["files"]
+                .as_array()
+                .and_then(|fs| fs.iter().find(|f| f["path"] == "knowledge/broken.pdf"))
+        {
+            assert_eq!(f["indexed"], false, "a failed file must not be indexed: {json}");
+            if f["failed"] == true {
+                failed = true;
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(failed, "broken.pdf should be reported failed");
+    let _ = state;
+}
+
 /// Overlapping rescans must converge: each upload spawns a background rescan and
 /// they run concurrently. Per-project serialization makes the last-queued one
 /// scan the final folder, so every uploaded file ends indexed — an unserialized
