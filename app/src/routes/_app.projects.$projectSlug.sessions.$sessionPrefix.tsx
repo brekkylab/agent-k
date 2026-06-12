@@ -1138,7 +1138,7 @@ function SessionPage() {
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           {pendingAttachments.length > 0 && (
-            <div className="cw-attach-tray" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '6px 0', gridColumn: '1 / -1' }}>
+            <div className="cw-attach-tray">
               {pendingAttachments.map((a) => (
                 <AttachmentChip
                   key={a.tempId}
