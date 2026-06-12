@@ -8,7 +8,7 @@ import { MarqueeOverlay } from '@/components/MarqueeOverlay';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
-import { expandDirentPaths, isHiddenName, nameOf } from '@/domain/files';
+import { expandDirentPaths, isHiddenName, listDirectChildren, nameOf } from '@/domain/files';
 import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -36,7 +36,7 @@ function formatBytes(bytes: number): string {
 }
 
 type Row =
-  | { kind: 'dir'; name: string; relPath: string; globalPath: string }
+  | { kind: 'dir'; name: string; relPath: string; globalPath: string; count: number }
   | { kind: 'file'; name: string; relPath: string; globalPath: string; bytes?: number | null };
 
 export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedFilesBrowserProps) {
@@ -66,7 +66,9 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       if (!remainder || remainder.includes('/')) continue; // not an immediate child
       if (isHiddenName(remainder)) continue; // hide dotfiles (.keep placeholders, etc.)
       if (e.kind === 'dir') {
-        out.push({ kind: 'dir', name: remainder, relPath: rel, globalPath: e.path });
+        // Immediate children inside this folder (hidden/.keep excluded), shown on the row.
+        const { folders, files } = listDirectChildren(rawEntries, e.path.split('/').filter(Boolean));
+        out.push({ kind: 'dir', name: remainder, relPath: rel, globalPath: e.path, count: folders.length + files.length });
       } else {
         out.push({ kind: 'file', name: nameOf(e), relPath: rel, globalPath: e.path, bytes: e.bytes });
       }
@@ -165,6 +167,9 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
         })}
       </div>
 
+      {/* Drag affordance hint — rows can be dragged into the chat to attach. */}
+      <p className="cw-sf-drag-hint">{t('shared_files.drag_hint')}</p>
+
       {/* ── rows ─────────────────────────────────────────────────── */}
       <div className="cw-files-browser-list" ref={listRef} onMouseDown={marquee.onMouseDown}>
         {rows.map((row) =>
@@ -176,18 +181,25 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
               data-sf-name={row.name}
               draggable
               onDragStart={(e) => handleRowDragStart(e, row.globalPath)}
-              onClick={() => setDir(row.relPath)}
+              onClick={(e) => selectClick(e, row.globalPath)}
+              onDoubleClick={() => setDir(row.relPath)}
             >
-              <span className="cw-sf-grip" aria-hidden="true">
-                <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
-                  <circle cx="2" cy="2" r="1.2" /><circle cx="8" cy="2" r="1.2" />
-                  <circle cx="2" cy="7" r="1.2" /><circle cx="8" cy="7" r="1.2" />
-                  <circle cx="2" cy="12" r="1.2" /><circle cx="8" cy="12" r="1.2" />
-                </svg>
-              </span>
               <Icon name="folder" size={18} />
               <span className="cw-file-label">{row.name}</span>
-              <Icon name="chevron-right" size={14} />
+              {/* Right slot: child count by default, crossfades to + on hover. */}
+              <span className="cw-sf-right-slot">
+                <span className="cw-sf-count">{row.count > 99 ? '99+' : row.count}</span>
+                <button
+                  type="button"
+                  className="cw-sf-add"
+                  aria-label={t('shared_files.import')}
+                  title={t('shared_files.import')}
+                  onClick={(e) => { e.stopPropagation(); onImport(expandDirentPaths(rawEntries, [row.globalPath])); }}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <Icon name="plus" size={13} />
+                </button>
+              </span>
             </div>
           ) : (
             <div
@@ -201,13 +213,6 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
               onDoubleClick={() => setPreviewPath(row.globalPath)}
               title={`${row.name}${row.bytes != null ? ` · ${formatBytes(row.bytes)}` : ''}`}
             >
-              <span className="cw-sf-grip" aria-hidden="true">
-                <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
-                  <circle cx="2" cy="2" r="1.2" /><circle cx="8" cy="2" r="1.2" />
-                  <circle cx="2" cy="7" r="1.2" /><circle cx="8" cy="7" r="1.2" />
-                  <circle cx="2" cy="12" r="1.2" /><circle cx="8" cy="12" r="1.2" />
-                </svg>
-              </span>
               <FileTypeIcon filename={row.name} size={18} />
               <span className="cw-file-label">{row.name}</span>
               <button
