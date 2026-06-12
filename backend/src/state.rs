@@ -55,6 +55,12 @@ pub struct AppState {
     knowledge_resync_error: DashMap<Uuid, String>,
     /// Per-project lock serializing resyncs so two rescans never interleave.
     resync_locks: DashMap<Uuid, Arc<Mutex<()>>>,
+    /// Per-project lock serializing first-time store creation. `Store::new`
+    /// (tantivy `open_or_create`) is not safe to run twice concurrently on the
+    /// same directory — two racing opens hit a create/remove TOCTOU and one
+    /// fails with "No such file or directory". Holding this across the
+    /// open-and-cache step means only one task ever opens a given store.
+    store_init_locks: DashMap<Uuid, Arc<Mutex<()>>>,
     /// Per-project (title, line_count) for citation checks; refreshed by resync,
     /// read on message fetch so it never loads corpus content on that path.
     corpus_summaries: DashMap<Uuid, Arc<Vec<(String, usize)>>>,
@@ -88,6 +94,7 @@ impl AppState {
             knowledge_resync_error: DashMap::new(),
             knowledge_indexing: Arc::new(DashMap::new()),
             resync_locks: DashMap::new(),
+            store_init_locks: DashMap::new(),
             corpus_summaries: DashMap::new(),
             jwt,
             data_root,
@@ -178,6 +185,24 @@ impl AppState {
             e.last_access = Instant::now();
             return Ok(e.store.clone());
         }
+        // Cache miss: serialize first-time opens per project so `Store::new`
+        // never runs twice concurrently on the same directory (tantivy's
+        // open_or_create has a create/remove TOCTOU). The task that wins the
+        // lock opens and caches; tasks that waited fall through the re-check
+        // below and reuse that handle without opening a second one.
+        let init_lock = self
+            .store_init_locks
+            .entry(project_id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone();
+        let _init = init_lock.lock().await;
+        // Re-check under the lock: a concurrent caller may have opened it while
+        // we waited.
+        if let Some(mut e) = self.document_stores.get_mut(&project_id) {
+            e.last_access = Instant::now();
+            return Ok(e.store.clone());
+        }
         let root = self
             .data_root
             .join("projects")
@@ -203,8 +228,6 @@ impl AppState {
         {
             self.evict_store(oldest);
         }
-        // Race-safe: if another task opened it first between the get() above
-        // and here, keep the existing entry.
         Ok(self
             .document_stores
             .entry(project_id)
