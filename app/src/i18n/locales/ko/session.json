@@ -78,6 +78,8 @@
   },
   "citation": {
     "verified": "이 프로젝트 문서에서 확인됨",
-    "unverified": "프로젝트 문서에서 확인되지 않음"
+    "unverified": "프로젝트 문서에서 확인되지 않음",
+    "missing": "답변에서 인용했지만 출처가 표시되지 않음",
+    "missing_label": "출처 없음"
   }
 }

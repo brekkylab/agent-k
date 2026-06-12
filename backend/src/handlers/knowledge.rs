@@ -366,13 +366,19 @@ pub async fn knowledge_files(
 pub struct CitationCheck {
     /// Footnote number, e.g. 1 for `[^1]`.
     pub index: u32,
-    /// The footnote definition text after `[^N]:`.
+    /// The footnote definition text after `[^N]:`. Empty for a `missing` kind
+    /// (a marker used in the body with no matching definition).
     pub label: String,
-    /// `corpus` (cites a document) or `web` (cites a URL).
+    /// `corpus` (cites a document), `web` (cites a URL), or `missing` (a body
+    /// marker `[^N]` with no `[^N]:` definition in the Sources section).
     pub kind: String,
     /// For a corpus citation, whether the cited title matches a document in the
     /// store. A web citation is `true` when it carries a URL (not cross-checked).
+    /// Always `false` for a `missing` kind.
     pub verified: bool,
+    /// Whether a body marker `[^N]` actually uses this footnote. `false` marks an
+    /// orphan definition (listed in Sources but never cited in the answer).
+    pub referenced: bool,
 }
 
 /// Normalize a title for tolerant matching (case-fold, collapse whitespace).
@@ -397,11 +403,44 @@ fn parse_line_range(label: &str) -> Option<(usize, usize)> {
     Some((start.min(end), start.max(end)))
 }
 
+/// Footnote indices used as markers in the answer body, i.e. `[^N]` that is not
+/// a `[^N]:` definition line. Used to cross-check markers against the `## Sources`
+/// definitions: a body marker drives `referenced`, and a marker with no
+/// definition is reported as a `missing` citation.
+fn body_marker_indices(text: &str) -> std::collections::HashSet<u32> {
+    let mut out = std::collections::HashSet::new();
+    for line in text.lines() {
+        // A definition line (`[^N]: ...`) contributes a definition, not a marker.
+        if line.trim_start().starts_with("[^") && line.trim_start().trim_start_matches("[^").contains("]:") {
+            continue;
+        }
+        // Scan the line for `[^<digits>]` occurrences.
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while let Some(rel) = line[i..].find("[^") {
+            let start = i + rel + 2;
+            let mut j = start;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > start && j < bytes.len() && bytes[j] == b']' {
+                if let Ok(n) = line[start..j].parse::<u32>() {
+                    out.insert(n);
+                }
+            }
+            i = start;
+        }
+    }
+    out
+}
+
 /// Parse `[^N]: ...` footnote definitions from a Speedwagon answer and check
 /// each against the corpus. A corpus citation is verified when its title matches
 /// a known document AND, if it states a line range, that range lies within the
 /// document's line count. A web citation (carrying a URL) is reported as
-/// verified without an external lookup.
+/// verified without an external lookup. Each definition's `referenced` flag says
+/// whether a body marker `[^N]` actually cites it, and any body marker with no
+/// matching definition is appended as a `missing` citation.
 ///
 /// `docs` is `(title, line_count)` for each corpus document.
 pub fn verify_citations(text: &str, docs: &[(String, usize)]) -> Vec<CitationCheck> {
@@ -409,12 +448,15 @@ pub fn verify_citations(text: &str, docs: &[(String, usize)]) -> Vec<CitationChe
         .iter()
         .map(|(t, lines)| (norm_title(t), *lines))
         .collect();
+    let markers = body_marker_indices(text);
+    let mut defined: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.trim();
         let Some(rest) = line.strip_prefix("[^") else { continue };
         let Some((num, after)) = rest.split_once("]:") else { continue };
         let Ok(index) = num.trim().parse::<u32>() else { continue };
+        defined.insert(index);
         let label = after.trim().to_string();
         let is_web = label.contains("http://") || label.contains("https://");
         let (kind, verified) = if is_web {
@@ -441,6 +483,20 @@ pub fn verify_citations(text: &str, docs: &[(String, usize)]) -> Vec<CitationChe
             label,
             kind: kind.to_string(),
             verified,
+            referenced: markers.contains(&index),
+        });
+    }
+    // A body marker with no matching definition is an unverifiable dangling
+    // citation; surface it so the UI can flag it like an unknown source.
+    let mut dangling: Vec<u32> = markers.difference(&defined).copied().collect();
+    dangling.sort_unstable();
+    for index in dangling {
+        out.push(CitationCheck {
+            index,
+            label: String::new(),
+            kind: "missing".to_string(),
+            verified: false,
+            referenced: true,
         });
     }
     out
@@ -473,5 +529,33 @@ mod tests {
         // A matching title with no line range stays verified.
         let text2 = "x[^1]\n\n## Sources\n[^1]: Team Handbook";
         assert!(verify_citations(text2, &docs)[0].verified);
+    }
+
+    #[test]
+    fn verify_citations_flags_dangling_marker() {
+        let docs = vec![("Team Handbook".to_string(), 3usize)];
+        // Body cites [^1] and [^2], but Sources only defines [^1].
+        let text = "First.[^1] Second.[^2]\n\n## Sources\n[^1]: Team Handbook";
+        let checks = verify_citations(text, &docs);
+        let defined = checks.iter().find(|c| c.index == 1).unwrap();
+        assert!(defined.verified && defined.referenced, "defined+cited marker is fine");
+        let missing = checks.iter().find(|c| c.index == 2).unwrap();
+        assert_eq!(missing.kind, "missing");
+        assert!(!missing.verified, "a marker with no definition is unverifiable");
+    }
+
+    #[test]
+    fn verify_citations_flags_orphan_definition() {
+        let docs = vec![("Team Handbook".to_string(), 3usize)];
+        // Body cites only [^1]; [^2] is defined but never cited.
+        let text = "Only one.[^1]\n\n## Sources\n[^1]: Team Handbook\n[^2]: Team Handbook";
+        let checks = verify_citations(text, &docs);
+        assert!(checks.iter().find(|c| c.index == 1).unwrap().referenced);
+        assert!(
+            !checks.iter().find(|c| c.index == 2).unwrap().referenced,
+            "a definition no body marker cites must be flagged unreferenced"
+        );
+        // No dangling markers, so no `missing` entries.
+        assert!(checks.iter().all(|c| c.kind != "missing"));
     }
 }

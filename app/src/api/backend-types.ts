@@ -108,8 +108,11 @@ export type BackendMessageSender =
 export interface BackendCitation {
   index: number;
   label: string;
-  kind: 'corpus' | 'web' | string;
+  /** `missing` = a body marker `[^N]` with no `[^N]:` definition in Sources. */
+  kind: 'corpus' | 'web' | 'missing' | string;
   verified: boolean;
+  /** Whether a body marker cites this footnote (false = orphan definition). */
+  referenced: boolean;
 }
 
 export interface SessionMessageItem {

@@ -1306,10 +1306,16 @@ function MessageBubble({
               <span
                 key={c.index}
                 className={`cw-citation-chip${c.verified ? '' : ' is-unverified'}`}
-                title={c.verified ? t('session:citation.verified') : t('session:citation.unverified')}
+                title={
+                  c.kind === 'missing'
+                    ? t('session:citation.missing')
+                    : c.verified
+                      ? t('session:citation.verified')
+                      : t('session:citation.unverified')
+                }
               >
                 <Icon name={c.verified ? 'check' : 'x'} size={11} />
-                [{c.index}] {c.label}
+                [{c.index}]{c.kind === 'missing' ? ` ${t('session:citation.missing_label')}` : c.label ? ` ${c.label}` : ''}
               </span>
             ))}
           </div>
