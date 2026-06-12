@@ -110,10 +110,13 @@ function ProjectHome() {
         model: selectedModel,
       });
       // Upload staged files into the new session's inputs/ and collect their paths.
+      // Use the created session's own projectId (always present) rather than the
+      // project query, which may not have resolved yet — otherwise staged files
+      // would be silently dropped when project.data is still loading.
       let attachmentPaths: string[] = [];
       let failed: { name: string; reason: string }[] = [];
-      const projectId = project.data?.id;
-      if (files.length > 0 && projectId) {
+      const projectId = session.projectId;
+      if (files.length > 0) {
         const scope = { kind: 'inputs' as const, projectId, sessionId: session.id };
         try {
           const result = await uploadFiles(scope, files.map((file) => ({ file, targetPath: file.name })));
