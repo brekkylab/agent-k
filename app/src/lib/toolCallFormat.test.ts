@@ -84,4 +84,22 @@ describe('classifyFieldValue', () => {
   it('array → block with pretty-printed JSON', () => {
     expect(classifyFieldValue([1, 2])).toEqual({ kind: 'block', text: '[\n  1,\n  2\n]' });
   });
+
+  // Ambiguous empty values are rendered explicitly so they don't look like a
+  // blank/missing field.
+  it('empty string → explicit ""', () => {
+    expect(classifyFieldValue('')).toEqual({ kind: 'code', text: '""' });
+  });
+
+  it('empty object → inline {}', () => {
+    expect(classifyFieldValue({})).toEqual({ kind: 'inline', text: '{}' });
+  });
+
+  it('empty array → inline []', () => {
+    expect(classifyFieldValue([])).toEqual({ kind: 'inline', text: '[]' });
+  });
+
+  it('null → inline null', () => {
+    expect(classifyFieldValue(null)).toEqual({ kind: 'inline', text: 'null' });
+  });
 });

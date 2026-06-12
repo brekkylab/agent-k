@@ -50,10 +50,16 @@ export type FieldDisplay =
 
 export function classifyFieldValue(value: unknown): FieldDisplay {
   if (typeof value === 'string') {
+    // Empty string would render as a blank value (just "key:"), indistinguishable
+    // from a missing/unrendered field — show it explicitly as "".
+    if (value === '') return { kind: 'code', text: '""' };
     return value.includes('\n') ? { kind: 'block', text: value } : { kind: 'code', text: value };
   }
   if (value !== null && typeof value === 'object') {
+    // Render empty containers explicitly as {} / [] instead of an empty pretty block.
+    const isEmpty = Array.isArray(value) ? value.length === 0 : Object.keys(value).length === 0;
+    if (isEmpty) return { kind: 'inline', text: Array.isArray(value) ? '[]' : '{}' };
     return { kind: 'block', text: JSON.stringify(value, null, 2) };
   }
-  return { kind: 'inline', text: JSON.stringify(value) };
+  return { kind: 'inline', text: JSON.stringify(value) }; // null → "null", numbers, booleans
 }
