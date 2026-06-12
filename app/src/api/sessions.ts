@@ -1,10 +1,12 @@
 import { request } from './client';
 import type { BackendSession } from './backend-types';
 import { toSession } from './transformers';
-import type { Session, ShareMode } from '@/domain/types';
+import type { Session, SessionOrigin, ShareMode } from '@/domain/types';
 
-export async function listSessions(projectRef: string): Promise<Session[]> {
-  const res = await request<{ items: BackendSession[] }>(`/sessions?project_ref=${encodeURIComponent(projectRef)}`);
+export async function listSessions(projectRef: string, origin?: SessionOrigin): Promise<Session[]> {
+  const params = new URLSearchParams({ project_ref: projectRef });
+  if (origin) params.set('origin', origin);
+  const res = await request<{ items: BackendSession[] }>(`/sessions?${params.toString()}`);
   return res.items.map(toSession);
 }
 
@@ -45,6 +47,11 @@ export async function updateSessionShareMode(sessionId: string, shareMode: Share
 
 export async function deleteSession(sessionId: string): Promise<void> {
   await request(`/sessions/${sessionId}`, { method: 'DELETE' });
+}
+
+// Marks the session read without fetching its history (sidebar "Mark as read").
+export async function markSessionRead(sessionId: string): Promise<void> {
+  await request(`/sessions/${sessionId}/read`, { method: 'POST' });
 }
 
 // User-facing label is "Duplicate" (the action clones the entire session

@@ -8,6 +8,7 @@ use agent_k::knowledge_base::{SharedStore, Store};
 use ailoy::{agent::Agent, message::MessageOutput};
 use dashmap::DashMap;
 use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// Cap on simultaneously open per-project corpus stores. Each holds a tantivy
@@ -30,6 +31,7 @@ use crate::{
 pub struct ActiveAgentRun {
     pub run_id: Uuid,
     pub user_message: RunUserMessage,
+    pub cancel: CancellationToken,
     pub(crate) next_seq: u64,
     pub(crate) outputs: Vec<(u64, MessageOutput)>,
 }
@@ -280,15 +282,22 @@ impl AppState {
         self.agents.get(id).map(|entry| entry.value().clone())
     }
 
-    /// Registers an active run for `session_id` and returns the generated `run_id`.
+    /// Registers an active run for `session_id` and returns the generated `run_id`
+    /// plus the run's cancellation token.
     ///
     /// Caller holds the agent `OwnedMutexGuard`, proving no real active run exists.
     /// If a stale entry is found it is force-replaced and a warning is logged.
-    pub fn start_run(&self, session_id: Uuid, user_message: RunUserMessage) -> Uuid {
+    pub fn start_run(
+        &self,
+        session_id: Uuid,
+        user_message: RunUserMessage,
+    ) -> (Uuid, CancellationToken) {
         let run_id = Uuid::new_v4();
+        let cancel = CancellationToken::new();
         let fresh = Arc::new(RwLock::new(ActiveAgentRun {
             run_id,
             user_message,
+            cancel: cancel.clone(),
             next_seq: 0,
             outputs: vec![],
         }));
@@ -297,7 +306,22 @@ impl AppState {
             // A remaining entry is a leaked end_run — replace it and warn.
             tracing::warn!(%session_id, "start_run: replaced stale active-run entry (previous run leaked end_run)");
         }
-        run_id
+        (run_id, cancel)
+    }
+
+    pub async fn run_cancel_info(
+        &self,
+        session_id: &Uuid,
+    ) -> Option<(Uuid, String, CancellationToken)> {
+        let entry = self.active_agent_runs.get(session_id)?;
+        let run_arc = entry.value().clone();
+        drop(entry);
+        let run = run_arc.read().await;
+        Some((
+            run.run_id,
+            run.user_message.sender_user_id.clone(),
+            run.cancel.clone(),
+        ))
     }
 
     pub async fn push_output(&self, session_id: &Uuid, output: MessageOutput) -> Option<u64> {

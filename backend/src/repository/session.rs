@@ -94,6 +94,9 @@ impl DbSenderKind {
 
 #[derive(Debug, Clone)]
 pub struct DbSessionMessage {
+    /// Session-global insertion order — stable client identity (ailoy
+    /// `Message.id` is tool-call-only).
+    pub seq: i64,
     pub message: Message,
     pub sender_kind: DbSenderKind,
     pub sender_name: Option<String>,
@@ -320,6 +323,7 @@ impl SqliteRepository {
     pub async fn list_sessions_for_user(
         &self,
         requesting_user_id: Uuid,
+        origin: Option<SessionOrigin>,
     ) -> RepositoryResult<Vec<DbSession>> {
         let uid = requesting_user_id.to_string();
         let rows = sqlx::query(
@@ -327,15 +331,17 @@ impl SqliteRepository {
                     s.last_message_at, s.last_message_snippet, s.agent_type, s.model, s.created_at, s.updated_at
              FROM sessions s
              JOIN projects p ON p.id = s.project_id
-             WHERE p.owner_id = ?1
+             WHERE (p.owner_id = ?1
                 OR (
                     EXISTS (SELECT 1 FROM project_members pm
                             WHERE pm.project_id = s.project_id AND pm.user_id = ?1)
                     AND (s.creator_id = ?1 OR s.share_mode != 'private')
-                )
+                ))
+               AND (?2 IS NULL OR s.origin = ?2)
              ORDER BY s.created_at DESC",
         )
         .bind(&uid)
+        .bind(origin.map(|o| o.as_str()))
         .fetch_all(&self.pool)
         .await?;
 
@@ -346,6 +352,7 @@ impl SqliteRepository {
         &self,
         project_id: Uuid,
         requesting_user_id: Uuid,
+        origin: Option<SessionOrigin>,
     ) -> RepositoryResult<Vec<DbSession>> {
         let pid = project_id.to_string();
         let uid = requesting_user_id.to_string();
@@ -364,10 +371,12 @@ impl SqliteRepository {
                        AND (s.creator_id = ?2 OR s.share_mode != 'private')
                    )
                )
+               AND (?3 IS NULL OR s.origin = ?3)
              ORDER BY COALESCE(s.last_message_at, s.created_at) DESC",
         )
         .bind(&pid)
         .bind(&uid)
+        .bind(origin.map(|o| o.as_str()))
         .fetch_all(&self.pool)
         .await?;
 
@@ -600,61 +609,119 @@ impl SqliteRepository {
     }
 
     pub async fn get_messages(&self, session_id: Uuid) -> RepositoryResult<Vec<DbSessionMessage>> {
+        self.get_messages_window(session_id, None, None).await
+    }
+
+    /// Keyset window in TURN units (a user message + the agent/tool messages
+    /// after it): the newest `limit` turns with `seq < before_seq`, ascending.
+    /// `before_seq=None` = from the end; `limit=None` = everything below the
+    /// cursor. Windows are immutable under appends and never split a turn.
+    pub async fn get_messages_window(
+        &self,
+        session_id: Uuid,
+        limit: Option<u32>,
+        before_seq: Option<i64>,
+    ) -> RepositoryResult<Vec<DbSessionMessage>> {
+        // turn_id = cumulative user-message count. Rows before the first user
+        // message (turn_id 0) clamp into the oldest turn; `top` clamps the same
+        // way so a user-message-free history reads as one turn.
         let rows = sqlx::query(
-            "SELECT message_json, sender_kind, sender_name, sender_user_id, created_at, attachments, artifacts \
-             FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
+            "WITH numbered AS (
+                 SELECT seq, message_json, sender_kind, sender_name, sender_user_id, \
+                        created_at, attachments, artifacts, \
+                        SUM(CASE WHEN sender_kind = 'user' THEN 1 ELSE 0 END) \
+                            OVER (ORDER BY seq) AS turn_id
+                 FROM session_messages
+                 WHERE session_id = ?1 AND (?2 IS NULL OR seq < ?2)
+             ),
+             bounds AS (
+                 SELECT CASE WHEN COALESCE(MAX(turn_id), 0) < 1 THEN 1 ELSE MAX(turn_id) END AS top
+                 FROM numbered
+             )
+             SELECT seq, message_json, sender_kind, sender_name, sender_user_id, \
+                    created_at, attachments, artifacts
+             FROM numbered, bounds
+             WHERE ?3 IS NULL OR MAX(turn_id, 1) > top - ?3
+             ORDER BY seq ASC;",
         )
         .bind(session_id.to_string())
+        .bind(before_seq)
+        .bind(limit.map(i64::from))
         .fetch_all(&self.pool)
         .await?;
 
         rows.into_iter()
-            .map(|row| {
-                let json = row.get::<String, _>("message_json");
-                let message = serde_json::from_str::<Message>(&json)
-                    .map_err(crate::repository::RepositoryError::Serialization)?;
+            .map(Self::row_to_db_session_message)
+            .collect()
+    }
 
-                let kind_str: String = row.get("sender_kind");
-                let sender_kind = DbSenderKind::from_str(&kind_str).ok_or_else(|| {
+    /// Tail catch-up: every message with `seq > after_seq`, ascending.
+    /// Appends are whole turns, so no turn-window logic is needed.
+    pub async fn get_messages_after(
+        &self,
+        session_id: Uuid,
+        after_seq: i64,
+    ) -> RepositoryResult<Vec<DbSessionMessage>> {
+        let rows = sqlx::query(
+            "SELECT seq, message_json, sender_kind, sender_name, sender_user_id, \
+                    created_at, attachments, artifacts \
+             FROM session_messages WHERE session_id = ? AND seq > ? ORDER BY seq ASC;",
+        )
+        .bind(session_id.to_string())
+        .bind(after_seq)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(Self::row_to_db_session_message)
+            .collect()
+    }
+
+    fn row_to_db_session_message(
+        row: sqlx::sqlite::SqliteRow,
+    ) -> RepositoryResult<DbSessionMessage> {
+        let json = row.get::<String, _>("message_json");
+        let message = serde_json::from_str::<Message>(&json)
+            .map_err(crate::repository::RepositoryError::Serialization)?;
+
+        let kind_str: String = row.get("sender_kind");
+        let sender_kind = DbSenderKind::from_str(&kind_str).ok_or_else(|| {
+            crate::repository::RepositoryError::InvalidData(format!(
+                "invalid sender_kind: {kind_str}"
+            ))
+        })?;
+
+        let sender_name: Option<String> = row.get("sender_name");
+        let sender_user_id: Option<Uuid> = row
+            .try_get::<Option<String>, _>("sender_user_id")
+            .unwrap_or(None)
+            .map(|s| {
+                Uuid::parse_str(&s).map_err(|_| {
                     crate::repository::RepositoryError::InvalidData(format!(
-                        "invalid sender_kind: {kind_str}"
+                        "invalid sender_user_id uuid: {s}"
                     ))
-                })?;
-
-                let sender_name: Option<String> = row.get("sender_name");
-                let sender_user_id: Option<Uuid> = row
-                    .try_get::<Option<String>, _>("sender_user_id")
-                    .unwrap_or(None)
-                    .map(|s| {
-                        Uuid::parse_str(&s).map_err(|_| {
-                            crate::repository::RepositoryError::InvalidData(format!(
-                                "invalid sender_user_id uuid: {s}"
-                            ))
-                        })
-                    })
-                    .transpose()?;
-                let created_at =
-                    Self::parse_timestamp(row.get("created_at"), "session_messages.created_at")?;
-
-                let attachments_json: String = row.try_get("attachments").unwrap_or_default();
-                let attachments: Vec<String> =
-                    serde_json::from_str(&attachments_json).unwrap_or_default();
-
-                let artifacts_json: String = row.try_get("artifacts").unwrap_or_default();
-                let artifacts: Vec<String> =
-                    serde_json::from_str(&artifacts_json).unwrap_or_default();
-
-                Ok(DbSessionMessage {
-                    message,
-                    sender_kind,
-                    sender_name,
-                    sender_user_id,
-                    created_at,
-                    attachments,
-                    artifacts,
                 })
             })
-            .collect()
+            .transpose()?;
+        let created_at =
+            Self::parse_timestamp(row.get("created_at"), "session_messages.created_at")?;
+
+        let attachments_json: String = row.try_get("attachments").unwrap_or_default();
+        let attachments: Vec<String> = serde_json::from_str(&attachments_json).unwrap_or_default();
+
+        let artifacts_json: String = row.try_get("artifacts").unwrap_or_default();
+        let artifacts: Vec<String> = serde_json::from_str(&artifacts_json).unwrap_or_default();
+
+        Ok(DbSessionMessage {
+            seq: row.get::<i64, _>("seq"),
+            message,
+            sender_kind,
+            sender_name,
+            sender_user_id,
+            created_at,
+            attachments,
+            artifacts,
+        })
     }
 
     /// Remove an artifact path from all messages in a session.

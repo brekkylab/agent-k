@@ -6,11 +6,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
-import { listSessions } from '@/api/sessions';
+import { listSessions, markSessionRead } from '@/api/sessions';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconPocket } from '@/components/uiPrimitives';
 import { useAuthStore } from '@/stores/auth';
@@ -30,7 +30,8 @@ import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { useSessionDelete } from '@/lib/useSessionDelete';
 import { forceLogout } from '@/lib/forceLogout';
 import { SessionTitleText } from '@/components/SessionTitleText';
-import { LanguageToggle } from '@/components/LanguageToggle';
+import { UserMenu } from '@/components/UserMenu';
+import { useUserSettingsDialog } from '@/components/userSettings/useUserSettingsDialog';
 import type { Session } from '@/domain/types';
 import { appWs, type AppWsEvent } from '@/api/ws';
 
@@ -237,8 +238,8 @@ export function Sidebar() {
   const activeProject = (projectsQuery.data ?? []).find((p) => p.slug === activeProjectSlug);
 
   const sessionsQuery = useQuery({
-    queryKey: ['sessions', activeProjectSlug],
-    queryFn: () => listSessions(activeProjectSlug!),
+    queryKey: ['sessions', activeProjectSlug, 'user'],
+    queryFn: () => listSessions(activeProjectSlug!, 'user'),
     enabled: Boolean(activeProjectSlug),
   });
 
@@ -334,6 +335,7 @@ export function Sidebar() {
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
   const [pendingDuplicate, setPendingDuplicate] = useState<Session | null>(null);
   const projectCreator = useNewProjectDialog();
+  const userSettings = useUserSettingsDialog();
   const deleteMutation = useSessionDelete(activeProjectSlug ?? '', {
     onDeleted: (deletedId) => {
       // If the deleted session was the one being viewed, leave it for the project home.
@@ -345,6 +347,18 @@ export function Sidebar() {
   });
 
   const duplicateMutation = useDuplicateSession(activeProjectSlug ?? '');
+
+  // Mark a session read from the ⋯ menu — zero its unread badge directly in
+  // every cached session list (mirrors the on-entry update in the session page).
+  const markReadMutation = useMutation({
+    mutationFn: (sessionId: string) => markSessionRead(sessionId),
+    onSuccess: (_data, sessionId) => {
+      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', activeProjectSlug] }, (old) => {
+        if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
+        return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
+      });
+    },
+  });
 
   function openProject(slug: string) {
     navigate({ to: '/projects/$projectSlug', params: { projectSlug: slug } });
@@ -476,7 +490,7 @@ export function Sidebar() {
               onViewAll={() => setSessionsOverlayOpen(true)}
             />
             <div className="cw-sessions-list" data-expanded={sessionsExpanded ? 'true' : 'false'}>
-              {(sessionsQuery.data ?? []).filter((s) => s.origin === 'user').map((session) => {
+              {(sessionsQuery.data ?? []).map((session) => {
                 const canDelete = canAdministerSession(session, activeProject, currentUser);
                 return (
                   <div
@@ -511,6 +525,8 @@ export function Sidebar() {
                     {session.isAutoAppend && <span className="auto-dot">●</span>}
                     <span className="cw-session-menu-wrap">
                       <SessionCardMenu
+                        onMarkRead={() => markReadMutation.mutate(session.id)}
+                        markReadDisabled={session.unreadCount === 0}
                         onDuplicate={() => setPendingDuplicate(session)}
                         duplicateDisabled={!session.lastMessageAt}
                         onDelete={canDelete ? () => setPendingDelete(session) : undefined}
@@ -531,14 +547,10 @@ export function Sidebar() {
             <div className="cw-sidebar-user-meta">
               <b>{currentUser.name.split(' ')[0]}</b>
             </div>
-            <LanguageToggle />
-            <button
-              aria-label={t('common:actions.logout')}
-              onClick={() => forceLogout({ reason: 'manual' })}
-              style={{ border: 0, background: 'transparent', padding: 0, color: 'var(--cw-ink-3)', cursor: 'pointer' }}
-            >
-              <Icon name="more" />
-            </button>
+            <UserMenu
+              onOpenSettings={userSettings.open}
+              onLogout={() => forceLogout({ reason: 'manual' })}
+            />
           </div>
         </div>
       )}
@@ -581,6 +593,7 @@ export function Sidebar() {
       )}
 
       {projectCreator.dialog}
+      {userSettings.dialog}
 
       {sessionsOverlayOpen && activeProject && (
         <SessionsOverlay

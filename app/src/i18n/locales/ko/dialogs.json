@@ -1,4 +1,9 @@
 {
+  "user_settings": {
+    "title": "사용자 설정",
+    "fields": { "display_name": "표시 이름", "language": "언어" },
+    "errors": { "generic": "문제가 발생했습니다. 다시 시도해주세요." }
+  },
   "rename": {
     "title": "이름 변경",
     "current_name": "현재 이름",

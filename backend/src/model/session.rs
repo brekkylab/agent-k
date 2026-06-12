@@ -85,6 +85,12 @@ pub struct SendMessageRequest {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct RunAck {
     pub status: &'static str,
+    pub run_id: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RunActiveResponse {
+    pub active: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -96,6 +102,8 @@ pub enum MessageSender {
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct SessionMessageResponse {
+    /// Session-global insertion order — stable client identity across windows.
+    pub seq: i64,
     pub message: Message,
     pub sender: MessageSender,
     pub created_at: DateTime<Utc>,

@@ -286,6 +286,68 @@ async fn list_sessions_includes_metadata() {
     );
 }
 
+/// GET /sessions?origin=... filters by session origin; omitting it returns all.
+#[tokio::test]
+async fn list_sessions_filters_by_origin() {
+    let (app, repo, _state) = common::make_app_repo_state().await;
+
+    let alice_info = common::signup(&app, "alice_origin", "Password123!").await;
+    let alice_token = common::login(&app, "alice_origin", "Password123!").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+
+    let user_session = repo.create_session(project_id, alice_id).await.unwrap();
+    let automation_session = repo
+        .create_session_with_origin(
+            project_id,
+            alice_id,
+            agent_k_backend::repository::SessionOrigin::Automation,
+        )
+        .await
+        .unwrap();
+
+    for (query, expected_ids) in [
+        (
+            format!("/sessions?project_ref={project_slug}&origin=user"),
+            vec![user_session.id],
+        ),
+        (
+            format!("/sessions?project_ref={project_slug}&origin=automation"),
+            vec![automation_session.id],
+        ),
+        (
+            format!("/sessions?project_ref={project_slug}"),
+            vec![user_session.id, automation_session.id],
+        ),
+    ] {
+        let (status, body) = common::authed(&app, "GET", &query, &alice_token, None).await;
+        assert_eq!(status, StatusCode::OK, "list sessions failed ({query}): {body}");
+        let mut got: Vec<String> = body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_str().unwrap().to_string())
+            .collect();
+        got.sort();
+        let mut expected: Vec<String> = expected_ids.iter().map(|id| id.to_string()).collect();
+        expected.sort();
+        assert_eq!(got, expected, "unexpected sessions for {query}: {body}");
+    }
+
+    // Unknown origin values are rejected by query deserialization.
+    let (status, _) = common::authed(
+        &app,
+        "GET",
+        &format!("/sessions?project_ref={project_slug}&origin=bogus"),
+        &alice_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "bogus origin should be 400");
+}
+
 /// Forked session inherits the source title and starts with unread_count=0 for the forker.
 #[tokio::test]
 async fn fork_inherits_title_and_has_zero_unread() {
