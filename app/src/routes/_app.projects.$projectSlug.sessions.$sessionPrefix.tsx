@@ -1333,7 +1333,7 @@ function MessageBubble({
             ))}
           </div>
         )}
-        {isAi && message.status === 'done' && (
+        {isAi && message.status === 'done' && message.body.trim() !== '' && (
           <div className="cw-ai-actions">
             <IconButton
               icon="copy"
