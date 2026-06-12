@@ -50,6 +50,7 @@
   "shared_files_header": "Shared files",
   "shared_files": {
     "import": "Add to message",
+    "remove": "Remove",
     "up": "Back",
     "drag_hint": "Drag into the chat to attach",
     "attach_limit": "You can attach up to {{max}} files at once.",

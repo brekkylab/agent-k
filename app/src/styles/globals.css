@@ -393,22 +393,22 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
    that fades in on hover to signal the row is draggable. */
 .cw-sf-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 3px 6px 3px 3px; border: 0; border-radius: var(--cw-radius-sm); background: transparent; font-size: 13px; color: var(--cw-fg-1); text-align: left; transition: background 100ms; }
 .cw-sf-row:hover { background: var(--cw-bg-muted); }
-.cw-sf-row.is-selected { background: color-mix(in oklch, var(--cw-accent) 16%, transparent); }
-.cw-sf-row.is-selected .cw-sf-add { opacity: 1; }
-.cw-sf-row > svg { flex-shrink: 0; }
+.cw-sf-row.is-selected { background: var(--cw-selected-bg); }
+.cw-sf-row.is-selected:hover { background: var(--cw-selected-bg-2); }
 .cw-sf-row .cw-file-label { flex: 1; }
 .cw-sf-row[draggable="true"] { cursor: grab; }
-/* Folder right slot: child count (default) crossfades to the + button on hover/selected. */
-.cw-sf-right-slot { position: relative; width: 22px; height: 22px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: flex-end; }
-.cw-sf-count { font-family: var(--cw-font-mono); font-size: 10.5px; color: var(--cw-ink-4); transition: opacity 100ms; }
-.cw-sf-right-slot .cw-sf-add { position: absolute; inset: 0; }
-.cw-sf-row:hover .cw-sf-count, .cw-sf-row.is-selected .cw-sf-count { opacity: 0; }
+/* Left type-icon swaps to a quick-add (+) on hover. */
+.cw-sf-icon { position: relative; width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+.cw-sf-icon > :not(.cw-sf-icon-add) { transition: opacity 100ms; }
+.cw-sf-row:hover .cw-sf-icon > :not(.cw-sf-icon-add) { opacity: 0; }
+.cw-sf-icon-add { position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-accent); cursor: pointer; opacity: 0; transition: opacity 100ms, background 100ms, border-color 100ms; }
+/* Visible on row hover (or focus): a clear neutral border so the + reads as a button.
+   (--cw-border was too faint and also washed out on the accent-wash selected fill.) */
+.cw-sf-row:hover .cw-sf-icon-add, .cw-sf-icon-add:focus-visible { opacity: 1; border-color: var(--cw-ink-4); }
+/* Hovering the + itself deepens its fill and its border (neutral, a couple steps darker). */
+.cw-sf-row:hover .cw-sf-icon-add:hover, .cw-sf-icon-add:focus-visible:hover { background: color-mix(in oklch, var(--cw-ink) 12%, transparent); border-color: var(--cw-ink-2); }
 /* Drag affordance hint under the breadcrumb (replaces the old per-row grip). */
 .cw-sf-drag-hint { margin: 0; padding: 0 14px 6px; font-size: 10px; color: var(--cw-ink-4); flex-shrink: 0; user-select: none; }
-.cw-sf-add { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex-shrink: 0; border: 0; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-ink-3); cursor: pointer; opacity: 0; transition: opacity 100ms, background 100ms, color 100ms; }
-.cw-sf-row:hover .cw-sf-add { opacity: 1; }
-.cw-sf-add:hover { background: var(--cw-bg); color: var(--cw-ink); }
-.cw-sf-add:focus-visible { opacity: 1; }
 .cw-side-row, .cw-side-file { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; font-size: 13px; }
 .cw-side-file > span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-side-file small { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
@@ -1699,18 +1699,10 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cw-attach-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: transparent;
-  color: var(--cw-ink-4);
-  cursor: pointer;
-  padding: 0;
-  flex-shrink: 0;
-}
-.cw-attach-remove:hover { color: var(--cw-ink); }
+/* Pending composer chip: the whole chip is click-to-remove; hovering turns it red. */
+.cw-attach-chip--removable { cursor: pointer; transition: background 120ms, border-color 120ms, color 120ms; }
+.cw-attach-chip--removable:hover { background: color-mix(in oklch, var(--cw-destructive), white 90%); border-color: color-mix(in oklch, var(--cw-destructive), transparent 55%); color: var(--cw-destructive); }
+.cw-attach-chip--removable:focus-visible { outline: 2px solid color-mix(in oklch, var(--cw-destructive), transparent 40%); outline-offset: 1px; }
 .cw-attach-error { color: var(--cw-destructive); display: inline-flex; }
 .cw-attach-spinner { font-size: 10px; }
 

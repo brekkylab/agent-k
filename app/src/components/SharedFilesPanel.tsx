@@ -8,7 +8,7 @@ import { MarqueeOverlay } from '@/components/MarqueeOverlay';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listDirentsRaw, stripScopePrefix, type DirentScope } from '@/api/dirents';
-import { expandDirentPaths, isHiddenName, listDirectChildren, nameOf } from '@/domain/files';
+import { expandDirentPaths, isHiddenName, nameOf } from '@/domain/files';
 import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -36,7 +36,7 @@ function formatBytes(bytes: number): string {
 }
 
 type Row =
-  | { kind: 'dir'; name: string; relPath: string; globalPath: string; count: number }
+  | { kind: 'dir'; name: string; relPath: string; globalPath: string }
   | { kind: 'file'; name: string; relPath: string; globalPath: string; bytes?: number | null };
 
 export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedFilesBrowserProps) {
@@ -52,7 +52,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
 
   // current directory, relative to the shared root ('' = root)
   const [dir, setDir] = useState('');
-  // Double-clicked file shown in the in-app preview modal (global path).
+  // File shown in the in-app preview modal (global path), opened by double-clicking a file row.
   const [previewPath, setPreviewPath] = useState<string | null>(null);
 
   // Immediate children of `dir`: entries one level below the current path.
@@ -66,9 +66,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
       if (!remainder || remainder.includes('/')) continue; // not an immediate child
       if (isHiddenName(remainder)) continue; // hide dotfiles (.keep placeholders, etc.)
       if (e.kind === 'dir') {
-        // Immediate children inside this folder (hidden/.keep excluded), shown on the row.
-        const { folders, files } = listDirectChildren(rawEntries, e.path.split('/').filter(Boolean));
-        out.push({ kind: 'dir', name: remainder, relPath: rel, globalPath: e.path, count: folders.length + files.length });
+        out.push({ kind: 'dir', name: remainder, relPath: rel, globalPath: e.path });
       } else {
         out.push({ kind: 'file', name: nameOf(e), relPath: rel, globalPath: e.path, bytes: e.bytes });
       }
@@ -88,28 +86,46 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
   // for the drag payload are derived from each path's basename.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement>(null);
+  // Pivot for shift+click range selection (a global path in the current view).
+  const anchorRef = useRef<string | null>(null);
 
   // Selection is per-view — reset when changing folders.
-  useEffect(() => { setSelected(new Set()); }, [dir]);
+  useEffect(() => { setSelected(new Set()); anchorRef.current = null; }, [dir]);
 
   const marquee = useMarqueeSelection({
     scrollRef: listRef,
     itemSelector: '[data-sf-path]',
     keyAttr: 'sfPath',
-    ignoreSelector: '.cw-sf-add', // let the inline + button work
+    ignoreSelector: '.cw-sf-icon-add', // don't start a marquee on the row's + button
     getSelection: () => selected,
     setSelection: setSelected,
+    onClear: () => { setSelected(new Set()); anchorRef.current = null; },
   });
 
   function selectClick(e: React.MouseEvent, globalPath: string) {
-    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
-    setSelected((prev) => {
-      if (!additive) return new Set([globalPath]);
-      const next = new Set(prev);
-      if (next.has(globalPath)) next.delete(globalPath);
-      else next.add(globalPath);
-      return next;
-    });
+    // shift = range from the anchor; meta/ctrl = toggle one; plain = select one.
+    if (e.shiftKey && anchorRef.current) {
+      const order = rows.map((r) => r.globalPath);
+      const a = order.indexOf(anchorRef.current);
+      const b = order.indexOf(globalPath);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelected(new Set(order.slice(lo, hi + 1)));
+        return;
+      }
+    }
+    if (e.metaKey || e.ctrlKey) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (next.has(globalPath)) next.delete(globalPath);
+        else next.add(globalPath);
+        return next;
+      });
+      anchorRef.current = globalPath;
+      return;
+    }
+    setSelected(new Set([globalPath]));
+    anchorRef.current = globalPath;
   }
 
   // One drag handler for both file and folder rows. Dragging a selected row
@@ -184,22 +200,21 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
               onClick={(e) => selectClick(e, row.globalPath)}
               onDoubleClick={() => setDir(row.relPath)}
             >
-              <Icon name="folder" size={18} />
-              <span className="cw-file-label">{row.name}</span>
-              {/* Right slot: child count by default, crossfades to + on hover. */}
-              <span className="cw-sf-right-slot">
-                <span className="cw-sf-count">{row.count > 99 ? '99+' : row.count}</span>
+              {/* Type icon swaps to a quick-add (+) on hover; + attaches the folder's files. */}
+              <span className="cw-sf-icon">
+                <Icon name="folder" size={18} />
                 <button
                   type="button"
-                  className="cw-sf-add"
+                  className="cw-sf-icon-add"
                   aria-label={t('shared_files.import')}
                   title={t('shared_files.import')}
                   onClick={(e) => { e.stopPropagation(); onImport(expandDirentPaths(rawEntries, [row.globalPath])); }}
                   onDoubleClick={(e) => e.stopPropagation()}
                 >
-                  <Icon name="plus" size={13} />
+                  <Icon name="plus" size={14} />
                 </button>
               </span>
+              <span className="cw-file-label">{row.name}</span>
             </div>
           ) : (
             <div
@@ -213,17 +228,21 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
               onDoubleClick={() => setPreviewPath(row.globalPath)}
               title={`${row.name}${row.bytes != null ? ` · ${formatBytes(row.bytes)}` : ''}`}
             >
-              <FileTypeIcon filename={row.name} size={18} />
+              {/* Type icon swaps to a quick-add (+) on hover; double-click previews the file. */}
+              <span className="cw-sf-icon">
+                <FileTypeIcon filename={row.name} size={18} />
+                <button
+                  type="button"
+                  className="cw-sf-icon-add"
+                  aria-label={t('shared_files.import')}
+                  title={t('shared_files.import')}
+                  onClick={(e) => { e.stopPropagation(); onImport([{ globalPath: row.globalPath, filename: row.name }]); }}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <Icon name="plus" size={14} />
+                </button>
+              </span>
               <span className="cw-file-label">{row.name}</span>
-              <button
-                type="button"
-                className="cw-sf-add"
-                aria-label={t('shared_files.import')}
-                title={t('shared_files.import')}
-                onClick={(e) => { e.stopPropagation(); onImport([{ globalPath: row.globalPath, filename: row.name }]); }}
-              >
-                <Icon name="plus" size={13} />
-              </button>
             </div>
           ),
         )}

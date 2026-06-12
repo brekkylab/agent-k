@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { FileTypeIcon } from './FileTypeIcon';
 
@@ -12,8 +13,18 @@ interface Props {
 }
 
 export function AttachmentChip({ filename, status, shared, error, onRemove }: Props) {
+  const { t } = useTranslation('session');
+  // The whole chip is click-to-remove (hover turns it red); no separate × button.
   return (
-    <div className="cw-attach-chip" title={error}>
+    <div
+      className="cw-attach-chip cw-attach-chip--removable"
+      role="button"
+      tabIndex={0}
+      title={error ?? t('shared_files.remove')}
+      aria-label={t('shared_files.remove')}
+      onClick={onRemove}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRemove(); } }}
+    >
       {status === 'uploading' && <span className="cw-attach-spinner">⏳</span>}
       {status === 'error' && <span className="cw-attach-error"><Icon name="x" size={11} /></span>}
       {status === 'uploaded' && (
@@ -26,9 +37,6 @@ export function AttachmentChip({ filename, status, shared, error, onRemove }: Pr
         </>
       )}
       <span className="cw-attach-name">{filename}</span>
-      <button type="button" aria-label="remove" onClick={onRemove} className="cw-attach-remove">
-        <Icon name="x" size={11} />
-      </button>
     </div>
   );
 }
