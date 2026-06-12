@@ -23,8 +23,6 @@ interface ProjectHomeComposerProps {
   sendBlocked?: boolean;
   sendBlockedHint?: string;
   placeholder?: string;
-  // Fallback attach entry point when file handling isn't wired (no onAddFiles).
-  onAttachClick?: () => void;
   // Local files staged for upload (uploaded to the new session's inputs/ on submit).
   files?: File[];
   onAddFiles?: (files: File[]) => void;
@@ -49,7 +47,6 @@ export function ProjectHomeComposer({
   sendBlocked = false,
   sendBlockedHint,
   placeholder = DEFAULT_PLACEHOLDER,
-  onAttachClick,
   files = [],
   onAddFiles,
   onRemoveFile,
@@ -89,12 +86,11 @@ export function ProjectHomeComposer({
     }
   };
 
-  const canAttach = Boolean(onAddFiles || onAttachClick);
-  const attachButton = canAttach && (
+  const attachButton = onAddFiles && (
     <button
       type="button"
       className="cw-attach-button"
-      onClick={() => (onAddFiles ? fileInputRef.current?.click() : onAttachClick?.())}
+      onClick={() => fileInputRef.current?.click()}
       disabled={disabled}
       aria-label="파일 추가"
       title="파일 추가"
