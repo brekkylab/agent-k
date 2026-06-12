@@ -926,7 +926,7 @@ function SessionPage() {
       <aside className="cw-session-side">
         <div className={`cw-side-views${sideView === 'files' ? ' show-files' : ''}`}>
           {/* ── default info view (left) ──────────────────────────── */}
-          <div className="cw-side-view">
+          <div className="cw-side-view" inert={sideView !== 'info'}>
             <div className="cw-side-scroll">
               <h3>{t('side.members')}</h3>
               {userList.map((user) => (
@@ -956,7 +956,7 @@ function SessionPage() {
           </div>
 
           {/* ── files browser view (right) ────────────────────────── */}
-          <div className="cw-side-view">
+          <div className="cw-side-view" inert={sideView !== 'files'}>
             <SharedFilesBrowser projectId={projectId} projectName={project.data?.name} onImport={importSharedFiles} />
           </div>
         </div>
