@@ -297,6 +297,15 @@ pub async fn update_project(
     // trigger a resync that re-parses every PDF with the new engine.
     if engine_changed {
         state.evict_store(project_id);
+        // Drop cached session agents for this project so they rebuild against
+        // the new store. Their corpus tools captured the old SharedStore at
+        // build time; without this an active session keeps querying the
+        // now-deleted index. Agents reopen the store on the next message.
+        if let Ok(sessions) = state.repository.list_all_sessions_in_project(project_id).await {
+            for session in sessions {
+                state.remove_agent(&session.id);
+            }
+        }
         let speedwagon_dir = state
             .data_root
             .join("projects")

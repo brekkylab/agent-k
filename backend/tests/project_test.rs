@@ -290,6 +290,51 @@ async fn project_delete_cleans_up_agents_in_state() {
     );
 }
 
+/// Changing the PDF engine rebuilds the corpus, so cached session agents (whose
+/// corpus tools captured the old store) must be dropped from state and rebuilt
+/// on the next message — otherwise an active session keeps the stale store.
+#[tokio::test]
+async fn changing_pdf_engine_drops_cached_agents() {
+    dotenvy::dotenv().ok();
+    common::setup_provider().await;
+
+    let (app, _repo, state) = common::make_app_repo_state().await;
+
+    common::signup(&app, "alice", "password123").await;
+    let token = common::login(&app, "alice", "password123").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = project["id"].as_str().unwrap();
+
+    let session_id = common::post_session_authed(&app, &token, project_id).await;
+
+    let spec = ailoy::agent::AgentSpec::new("openai/gpt-4o-mini");
+    let agent = {
+        let provider = ailoy::agent::default_provider();
+        match ailoy::agent::Agent::try_with_provider(spec, &provider) {
+            Ok(a) => a,
+            Err(_) => return, // no LLM provider available — skip
+        }
+    };
+    state.insert_agent(session_id, agent);
+    assert!(state.get_agent(&session_id).is_some(), "agent must be in state");
+
+    // Switch the engine from the default (kreuzberg) to docling.
+    let (status, body) = common::authed(
+        &app,
+        "PATCH",
+        &format!("/projects/{project_id}"),
+        &token,
+        Some(serde_json::json!({ "pdf_engine": "docling" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "engine change failed: {body}");
+
+    assert!(
+        state.get_agent(&session_id).is_none(),
+        "agent must be dropped from state after a PDF engine change"
+    );
+}
+
 // ── member_sees_own_sessions_in_project_list_but_not_others ──────────────────
 
 #[tokio::test]
