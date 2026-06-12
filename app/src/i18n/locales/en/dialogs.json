@@ -1,4 +1,9 @@
 {
+  "user_settings": {
+    "title": "User Settings",
+    "fields": { "display_name": "Display name", "language": "Language" },
+    "errors": { "generic": "Something went wrong. Please try again." }
+  },
   "rename": {
     "title": "Rename",
     "current_name": "Current name",
