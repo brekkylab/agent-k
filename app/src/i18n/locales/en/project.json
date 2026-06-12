@@ -70,7 +70,8 @@
     "suggested_prompts_aria": "Suggested prompts (preview)",
     "send_blocked_hint": "No available model. Set a provider API key or pick another model.",
     "attach_limit": "You can attach up to {{max}} files at once.",
-    "upload_failed": "Couldn't upload (not attached): {{names}}"
+    "upload_failed": "Some files couldn't be uploaded and weren't attached:",
+    "upload_failed_more": "+{{count}} more"
   },
   "settings_page": {
     "section_label": "Project settings",

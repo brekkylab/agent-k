@@ -111,27 +111,38 @@ function ProjectHome() {
       });
       // Upload staged files into the new session's inputs/ and collect their paths.
       let attachmentPaths: string[] = [];
-      let failedNames: string[] = [];
+      let failed: { name: string; reason: string }[] = [];
       const projectId = project.data?.id;
       if (files.length > 0 && projectId) {
         const scope = { kind: 'inputs' as const, projectId, sessionId: session.id };
-        const result = await uploadFiles(scope, files.map((file) => ({ file, targetPath: file.name })));
-        attachmentPaths = result.succeeded.map((s) => s.path);
-        failedNames = result.failed.map((f) => f.path);
+        try {
+          const result = await uploadFiles(scope, files.map((file) => ({ file, targetPath: file.name })));
+          attachmentPaths = result.succeeded.map((s) => s.path);
+          // Per-file failures (e.g. over the size limit) carry their own reason.
+          failed = result.failed.map((f) => ({ name: f.path, reason: f.error }));
+        } catch (e) {
+          // Upload threw entirely (network / multipart / access). The session was
+          // already created, so rejecting the mutation would orphan it (and a retry
+          // would create a duplicate). Instead keep the session: send the message
+          // without attachments and report every file with the shared failure reason.
+          const reason = e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'upload failed';
+          failed = files.map((f) => ({ name: f.name, reason }));
+        }
       }
-      return { session, firstMessage, attachmentPaths, failedNames };
+      return { session, firstMessage, attachmentPaths, failed };
     },
-    onSuccess: async ({ session, firstMessage, attachmentPaths, failedNames }) => {
+    onSuccess: async ({ session, firstMessage, attachmentPaths, failed }) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       setComposerText('');
       setPendingFiles([]);
-      // Surface partial/total upload failures by name — the message still sends
-      // with whatever uploaded, but don't let failed files vanish silently. Cap
-      // the listed names so a large batch can't blow up the toast.
-      if (failedNames.length > 0) {
-        const shown = failedNames.slice(0, 3).join(', ');
-        const names = failedNames.length > 3 ? `${shown} +${failedNames.length - 3}` : shown;
-        showToast(t('home.upload_failed', { names }));
+      // Surface partial/total upload failures with the reason — the message still
+      // sends with whatever uploaded, but don't let failed files vanish silently.
+      // Each failure is a "name — reason" detail line; cap the list for a big batch.
+      if (failed.length > 0) {
+        const CAP = 5;
+        const lines = failed.slice(0, CAP).map((f) => `${f.name} — ${f.reason}`);
+        if (failed.length > CAP) lines.push(t('home.upload_failed_more', { count: failed.length - CAP }));
+        showToast(t('home.upload_failed'), lines);
       }
       navigate({
         to: '/projects/$projectSlug/sessions/$sessionPrefix',
