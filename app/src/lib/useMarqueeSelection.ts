@@ -140,12 +140,19 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       sc?.removeEventListener('scroll', onScroll);
-      if (swallowRef.current) {
-        window.removeEventListener('click', swallowRef.current, true);
-        swallowRef.current = null;
-      }
     };
   }, [dragRect]);
+
+  // Remove a still-pending post-marquee swallow listener on unmount only. The
+  // effect above re-runs on every dragRect change — including the setDragRect(null)
+  // in onUp — so its cleanup must NOT touch the swallow, or the listener gets torn
+  // down before the click it exists to swallow, and that click clears the selection.
+  useEffect(() => () => {
+    if (swallowRef.current) {
+      window.removeEventListener('click', swallowRef.current, true);
+      swallowRef.current = null;
+    }
+  }, []);
 
   return { onMouseDown, dragRect, cancel };
 }
