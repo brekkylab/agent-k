@@ -119,7 +119,7 @@ export function ProjectHomeComposer({
     >
       <div className="cw-home-composer-box">
         {files.length > 0 && (
-          <div className="cw-attach-tray" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 0 6px' }}>
+          <div className="cw-attach-tray">
             {files.map((file, i) => (
               <AttachmentChip
                 key={`${file.name}-${i}`}

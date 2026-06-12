@@ -1472,6 +1472,12 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   animation: cw-spin 0.6s linear infinite;
 }
 @keyframes cw-spin { to { transform: rotate(360deg); } }
+/* Staged-attachment chip tray. Shared layout here; the two composers differ only
+   in padding (and the session's grid needs the tray to span all columns). */
+.cw-attach-tray { display: flex; flex-wrap: wrap; gap: 6px; }
+.cw-home-composer-box .cw-attach-tray { padding: 0 0 6px; }
+.cw-composer .cw-attach-tray { padding: 6px 0; grid-column: 1 / -1; }
+
 .cw-attach-button {
   width: 30px;
   height: 30px;
