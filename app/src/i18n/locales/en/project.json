@@ -69,7 +69,8 @@
     "attach_coming_soon": "File attachment is coming soon.",
     "suggested_prompts_aria": "Suggested prompts (preview)",
     "send_blocked_hint": "No available model. Set a provider API key or pick another model.",
-    "attach_limit": "You can attach up to {{max}} files at once."
+    "attach_limit": "You can attach up to {{max}} files at once.",
+    "upload_failed": "Couldn't upload (not attached): {{names}}"
   },
   "settings_page": {
     "section_label": "Project settings",

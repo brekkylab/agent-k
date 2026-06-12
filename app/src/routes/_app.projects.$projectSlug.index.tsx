@@ -111,18 +111,28 @@ function ProjectHome() {
       });
       // Upload staged files into the new session's inputs/ and collect their paths.
       let attachmentPaths: string[] = [];
+      let failedNames: string[] = [];
       const projectId = project.data?.id;
       if (files.length > 0 && projectId) {
         const scope = { kind: 'inputs' as const, projectId, sessionId: session.id };
         const result = await uploadFiles(scope, files.map((file) => ({ file, targetPath: file.name })));
         attachmentPaths = result.succeeded.map((s) => s.path);
+        failedNames = result.failed.map((f) => f.path);
       }
-      return { session, firstMessage, attachmentPaths };
+      return { session, firstMessage, attachmentPaths, failedNames };
     },
-    onSuccess: async ({ session, firstMessage, attachmentPaths }) => {
+    onSuccess: async ({ session, firstMessage, attachmentPaths, failedNames }) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       setComposerText('');
       setPendingFiles([]);
+      // Surface partial/total upload failures by name — the message still sends
+      // with whatever uploaded, but don't let failed files vanish silently. Cap
+      // the listed names so a large batch can't blow up the toast.
+      if (failedNames.length > 0) {
+        const shown = failedNames.slice(0, 3).join(', ');
+        const names = failedNames.length > 3 ? `${shown} +${failedNames.length - 3}` : shown;
+        showToast(t('home.upload_failed', { names }));
+      }
       navigate({
         to: '/projects/$projectSlug/sessions/$sessionPrefix',
         params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
