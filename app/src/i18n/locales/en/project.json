@@ -68,7 +68,8 @@
     "preview_pill_aria": "Preview — not yet sent to the server",
     "attach_coming_soon": "File attachment is coming soon.",
     "suggested_prompts_aria": "Suggested prompts (preview)",
-    "send_blocked_hint": "No available model. Set a provider API key or pick another model."
+    "send_blocked_hint": "No available model. Set a provider API key or pick another model.",
+    "attach_limit": "You can attach up to {{max}} files at once."
   },
   "settings_page": {
     "section_label": "Project settings",

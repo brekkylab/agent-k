@@ -18,6 +18,7 @@ import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
 import { useFileDropzone } from '@/lib/useFileDropzone';
+import { MAX_ATTACHMENTS } from '@/domain/files';
 import { ApiError } from '@/api/client';
 import { loadNs } from '@/i18n/loader';
 
@@ -145,7 +146,17 @@ function ProjectHome() {
     startSessionMutation.mutate({ firstMessage: text, files: pendingFiles });
   };
 
-  const addFiles = (fs: File[]) => setPendingFiles((prev) => [...prev, ...fs]);
+  // Cap staged files at MAX_ATTACHMENTS (clip + drag both land here). Reject the
+  // whole batch if it would push over — mirrors the session's attach cap so the
+  // first message can't exceed the backend's hard limit.
+  const addFiles = (fs: File[]) => {
+    if (fs.length === 0) return;
+    if (pendingFiles.length + fs.length > MAX_ATTACHMENTS) {
+      showToast(t('home.attach_limit', { max: MAX_ATTACHMENTS }));
+      return;
+    }
+    setPendingFiles((prev) => [...prev, ...fs]);
+  };
   // Drop computer files anywhere on the home page, mirroring the session's
   // full-surface drop zone — the whole page highlights uniformly.
   const composerDropzone = useFileDropzone({
