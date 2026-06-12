@@ -510,6 +510,14 @@ function SessionPage() {
     // Reset input so same file can be selected again
     e.target.value = '';
 
+    // Cap like the shared-import path: if this batch would push the total past
+    // MAX_ATTACHMENTS, reject the whole batch (upload nothing) and toast — so the
+    // UI can't reach the backend's hard 400 on >MAX attachments.
+    if (pendingAttachments.length + files.length > MAX_ATTACHMENTS) {
+      showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+      return;
+    }
+
     for (const file of files) {
       const tempId = `${Date.now()}-${file.name}`;
       setPendingAttachments((prev) => [...prev, { tempId, filename: file.name, status: 'uploading' }]);
@@ -533,7 +541,7 @@ function SessionPage() {
         ));
       }
     }
-  }, [projectId, sessionId]);
+  }, [projectId, sessionId, pendingAttachments, showToast, t]);
 
   // Clears all run/streaming state for a run that ended without a terminal WS event.
   const resetEndedRun = useCallback(() => {
