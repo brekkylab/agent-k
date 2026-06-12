@@ -407,12 +407,12 @@ mod tests {
             "speedwagon chain should use gemini-3.1-flash-lite: {sw:?}"
         );
         assert!(
-            !sw.contains(&"google/gemini-3-flash"),
-            "speedwagon chain should not use gemini-3-flash: {sw:?}"
+            !sw.contains(&"google/gemini-3-flash-preview"),
+            "speedwagon chain should not use coworker's gemini-3-flash-preview: {sw:?}"
         );
         assert!(
-            cw.contains(&"google/gemini-3-flash"),
-            "coworker chain should keep gemini-3-flash: {cw:?}"
+            cw.contains(&"google/gemini-3-flash-preview"),
+            "coworker chain should keep gemini-3-flash-preview: {cw:?}"
         );
         assert!(
             !cw.contains(&"google/gemini-3.1-flash-lite"),
