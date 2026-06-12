@@ -52,9 +52,9 @@ export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
       onClick={() => setMenuOpen((prev) => !prev)}
       title={filename}
     >
-      {/* Source marker: folder = referenced from shared files, clip = uploaded. */}
+      {/* Source marker: cloud = referenced from shared files, clip = uploaded. */}
       <span className={`cw-attach-source cw-attach-source--${isShared ? 'shared' : 'upload'}`}>
-        <Icon name={isShared ? 'folder' : 'paperclip'} size={12} />
+        <Icon name={isShared ? 'cloud' : 'paperclip'} size={12} />
       </span>
       <FileTypeIcon filename={filename} size={16} />
       <span className="cw-attach-name">{filename}</span>

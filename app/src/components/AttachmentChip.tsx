@@ -18,9 +18,9 @@ export function AttachmentChip({ filename, status, shared, error, onRemove }: Pr
       {status === 'error' && <span className="cw-attach-error"><Icon name="x" size={11} /></span>}
       {status === 'uploaded' && (
         <>
-          {/* Source marker: folder = referenced from shared files, clip = uploaded. */}
+          {/* Source marker: cloud = referenced from shared files, clip = uploaded. */}
           <span className={`cw-attach-source cw-attach-source--${shared ? 'shared' : 'upload'}`}>
-            <Icon name={shared ? 'folder' : 'paperclip'} size={11} />
+            <Icon name={shared ? 'cloud' : 'paperclip'} size={11} />
           </span>
           <FileTypeIcon filename={filename} size={14} />
         </>
