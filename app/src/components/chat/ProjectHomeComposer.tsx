@@ -5,7 +5,6 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
 import { AttachmentChip } from '@/components/AttachmentChip';
-import { useFileDropzone } from '@/lib/useFileDropzone';
 
 export interface ProjectHomeComposerSubmission {
   text: string;
@@ -59,10 +58,6 @@ export function ProjectHomeComposer({
 }: ProjectHomeComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const dropzone = useFileDropzone({
-    onFiles: (fs) => onAddFiles?.(fs),
-    disabled: disabled || !onAddFiles,
-  });
   const canSubmit = value.trim().length > 0 && !disabled && !sendBlocked;
 
   useEffect(() => {
@@ -121,9 +116,8 @@ export function ProjectHomeComposer({
         event.preventDefault();
         submit();
       }}
-      {...dropzone.dropProps}
     >
-      <div className={`cw-home-composer-box${dropzone.isOver ? ' is-drop-target' : ''}`}>
+      <div className="cw-home-composer-box">
         {files.length > 0 && (
           <div className="cw-attach-tray" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 0 6px' }}>
             {files.map((file, i) => (
