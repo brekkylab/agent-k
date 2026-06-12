@@ -295,10 +295,8 @@ async fn concurrent_uploads_all_indexed() {
     let token = login(&app, &username, "Password123!").await;
     let (_slug, pid) = personal_project_uuid(&app, &token).await;
 
-    // Create the knowledge folder and pre-open the store so the concurrent
-    // rescans reuse one cached handle (avoids the Store::new dir-creation race).
+    // Create the knowledge folder; the concurrent rescans open the store themselves.
     let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
-    let _ = state.store_for(pid).await.expect("store_for");
 
     let n: u32 = 8;
     let mut handles = Vec::new();
