@@ -692,8 +692,27 @@ pub async fn fork_session(
         }
     }
 
+    let source_sandbox_name = sandbox_name_for(&source_session_id);
+
+    // Only fork the sandbox when the source session actually has one.
+    // If the source never had a sandbox (e.g. DeepResearch / Buddy / Speedwagon,
+    // or a Coworker session that was created but never run), skip the VM fork
+    // entirely — the forked session will create its own sandbox on first run.
+    if !Sandbox::exists(&source_sandbox_name).await {
+        tracing::info!(
+            source = %source_session_id,
+            fork = %new_id,
+            project = %source.project_id,
+            "session forked without sandbox (source has none)",
+        );
+        return Ok((
+            StatusCode::CREATED,
+            Json(SessionResponse::from_db(new_session, 0)),
+        ));
+    }
+
     let source_cfg = SandboxConfig {
-        name: Some(sandbox_name_for(&source_session_id)),
+        name: Some(source_sandbox_name),
         image: SANDBOX_IMAGE.into(),
         persist: true,
         ..Default::default()
