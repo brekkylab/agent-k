@@ -19,7 +19,7 @@ interface ProjectHomeComposerProps {
   disabled?: boolean;
   // While the send is being processed (waiting for session creation / stream start): show a spinner on the send button to indicate "sending".
   pending?: boolean;
-  // 현재 모델 선택이 실행 불가(가용 provider 없음)일 때 send 를 막고 힌트를 표시.
+  // Block send and show a hint when the current model selection can't run (no available provider).
   sendBlocked?: boolean;
   sendBlockedHint?: string;
   placeholder?: string;
