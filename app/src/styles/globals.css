@@ -4490,10 +4490,11 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   color: var(--cw-paper);
 }
 
-/* 언어 Select을 위 표시-이름 입력칸과 동일한 폼 컨트롤 박스로 (정렬·affordance).
-   기본 .cw-select 트리거는 테두리/배경 없는 맨 텍스트라 폼 안에서 붕 떠 보인다.
-   border/bg/radius/padding과 focus-visible을 .cw-dialog .cw-field input과 일치시켜
-   두 행이 "쌍둥이 필드"로 읽히게 한다. */
+/* Make the language Select read as the same form control as the display-name
+   input above it (alignment + affordance). The default .cw-select trigger is
+   bare text with no border/background, so it floats oddly inside a form. Match
+   border/bg/radius/padding and focus-visible to .cw-dialog .cw-field input so
+   the two rows read as twin fields. */
 .cw-field-select { display: block; width: 100%; }
 .cw-select.cw-field-select__trigger {
   width: 100%;
@@ -4514,9 +4515,10 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 }
 .cw-field-select__value { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .cw-field-select__value .cw-icon { color: var(--cw-ink-3); flex-shrink: 0; }
-/* `.cw-dialog .cw-field span`(라벨용 11px·uppercase·muted)이 Select 트리거 값
-   span까지 덮어쓰지 않게, 트리거 값은 입력 텍스트(14px·normal·ink)로 되돌린다.
-   (드롭다운 옵션은 body로 portal돼 영향 없음 → 트리거/옵션 표기를 일치시킨다.) */
+/* The broad `.cw-dialog .cw-field span` label rule (11px / uppercase / muted)
+   would otherwise bleed into the Select trigger's value span. Reset the trigger
+   value to input text (14px / normal-case / ink). (Dropdown options are portaled
+   to body and stay unaffected — keep trigger and options consistent.) */
 .cw-dialog .cw-field .cw-field-select__value {
   font-size: 14px;
   font-weight: 400;

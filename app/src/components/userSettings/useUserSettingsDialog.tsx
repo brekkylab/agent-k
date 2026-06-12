@@ -15,8 +15,9 @@ const MAX_NAME_LEN = 100;
 const TITLE_ID = 'cw-user-settings-title';
 const ERROR_ID = 'cw-user-settings-error';
 
-// 저위험 환경설정(표시 이름 + 언어)을 한 번의 PATCH /me로 저장하는 전역-Save 모달.
-// 비밀번호 같은 보안 액션은 의도적으로 제외 — 별도 보안 플로우로 다룬다.
+// Global-save modal for low-risk preferences (display name + language),
+// persisted in a single PATCH /me. Security actions like password change are
+// intentionally excluded — they belong in a dedicated, re-auth flow.
 function UserSettingsDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation('dialogs');
   const { t: tCommon } = useTranslation('common');
@@ -24,8 +25,9 @@ function UserSettingsDialog({ onClose }: { onClose: () => void }) {
   const currentUser = useAuthStore((s) => s.currentUser);
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser);
 
-  // 초기값은 "열린 시점"에 한 번만 캡처한다. 편집 중 백그라운드 ['me'] 리페치가
-  // setCurrentUser를 호출해도 dirty 기준선이 밀리지 않도록 lazy initializer 사용.
+  // Capture the initial values once, at open time, via a lazy initializer so a
+  // background ['me'] refetch calling setCurrentUser mid-edit can't shift the
+  // dirty baseline.
   const [initialName] = useState(() => currentUser?.name ?? '');
   const [initialLang] = useState<SupportedLanguage>(() => (currentUser?.preferredLanguage ?? 'en') as SupportedLanguage);
   const [name, setName] = useState(initialName);
@@ -44,10 +46,10 @@ function UserSettingsDialog({ onClose }: { onClose: () => void }) {
   const mutation = useMutation({
     mutationFn: () => updateMe({ displayName: trimmed, preferredLanguage: lang }),
     onSuccess: (user) => {
-      // setCurrentUser는 user.preferredLanguage가 바뀌었으면 i18n.changeLanguage까지 해준다.
+      // setCurrentUser also runs i18n.changeLanguage when user.preferredLanguage changed.
       setCurrentUser(user);
       queryClient.setQueryData(['me'], user);
-      try { localStorage.setItem(LANGUAGE_STORAGE_KEY, user.preferredLanguage); } catch { /* private mode 등 — UI는 이미 반영됨 */ }
+      try { localStorage.setItem(LANGUAGE_STORAGE_KEY, user.preferredLanguage); } catch { /* private mode etc. — the UI already reflects the change */ }
       onClose();
     },
     onError: (err) =>
@@ -139,7 +141,8 @@ function UserSettingsDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-// 여러 진입점이 상태/렌더링을 공유하도록 하는 훅 (useNewProjectDialog 패턴).
+// Hook so multiple entry points can share the open state + dialog rendering
+// (mirrors the useNewProjectDialog pattern).
 export function useUserSettingsDialog(): { open: () => void; dialog: ReactNode } {
   const [isOpen, setIsOpen] = useState(false);
   const open = useCallback(() => setIsOpen(true), []);

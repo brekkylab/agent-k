@@ -1,6 +1,7 @@
-// 사이드바 하단 유저 행의 ⋯ 메뉴. 화면 맨 아래에 있으므로 위로 열린다.
-// 팝오버는 body 포털로 렌더해 사이드바 overflow에 잘리지 않게 한다.
-// (SessionCardMenu의 패턴을 따르되, top 기준이 아니라 bottom 기준으로 배치.)
+// ⋯ menu on the sidebar footer's user row. It opens upward since it sits at the
+// bottom of the screen. The popover is rendered into a body portal so it isn't
+// clipped by the sidebar's overflow. (Follows SessionCardMenu, but positioned
+// from the bottom edge rather than the top.)
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -26,7 +27,7 @@ export function UserMenu({ onOpenSettings, onLogout }: UserMenuProps) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  // 위로 열리도록 bottom 기준 배치. 트리거 위쪽에 6px 띄운다.
+  // Position from the bottom edge so it opens upward, 6px above the trigger.
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return;
     function place() {

@@ -32,7 +32,7 @@ describe('UserMenu', () => {
   it('Log out item calls onLogout only after being selected from the menu', () => {
     const onLogout = vi.fn();
     render(<UserMenu onOpenSettings={vi.fn()} onLogout={onLogout} />);
-    // 트리거만 눌렀을 때는 로그아웃되지 않는다 (회귀: 예전엔 즉시 로그아웃)
+    // Clicking only the trigger must NOT log out (regression: it used to log out instantly).
     fireEvent.click(screen.getByRole('button', { name: 'actions.user_menu' }));
     expect(onLogout).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('menuitem', { name: 'actions.logout' }));

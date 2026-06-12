@@ -6,8 +6,8 @@ import { renderWithProviders } from '@/test-utils';
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k: string) => k, i18n: { language: 'en' } }),
 }));
-// useAuthStore가 transitively 끌어오는 @/i18n의 import-time init을 피하고,
-// 다이얼로그가 쓰는 SUPPORTED_LANGUAGES / LANGUAGE_STORAGE_KEY를 제공한다.
+// Stub @/i18n to avoid its import-time init (pulled in transitively via useAuthStore)
+// and to provide the SUPPORTED_LANGUAGES / LANGUAGE_STORAGE_KEY the dialog uses.
 vi.mock('@/i18n', () => ({
   SUPPORTED_LANGUAGES: ['en', 'ko'],
   LANGUAGE_STORAGE_KEY: 'cw-lang',
@@ -36,7 +36,7 @@ function Harness() {
 }
 
 beforeAll(() => {
-  // <Select>가 열릴 때 scrollIntoView 호출 → jsdom엔 레이아웃 없음 → no-op stub.
+  // <Select> calls scrollIntoView on open → jsdom has no layout engine → stub it as a no-op.
   Element.prototype.scrollIntoView = vi.fn();
 });
 beforeEach(() => { useAuthStore.setState({ currentUser: USER }); vi.mocked(updateMe).mockReset(); });
@@ -105,7 +105,7 @@ describe('useUserSettingsDialog', () => {
   });
 
   it('shows the saving state and blocks resubmit while the save is in flight', async () => {
-    // 미해결(pending) 프로미스로 묶어 두면 거부가 없어 unhandled-rejection 없이 pending 상태만 검증된다.
+    // A never-resolving promise never rejects, so we verify the pending state with no unhandled rejection.
     vi.mocked(updateMe).mockReturnValue(new Promise(() => {}) as never);
     renderWithProviders(<Harness />);
     fireEvent.click(screen.getByText('open'));

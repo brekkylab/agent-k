@@ -4,9 +4,10 @@ import { render } from '@testing-library/react';
 
 export function makeTestQueryClient(): QueryClient {
   return new QueryClient({
-    // 거부된 mutation을 테스트에서 다룰 때 React Query 내부 프로미스가
-    // unhandled rejection으로 새어 vitest가 테스트를 실패시키는 것을 막는다.
-    // 컴포넌트의 onError가 실제 처리를 담당하고, 이 noop은 cache 레벨 안전망이다.
+    // Prevent React Query's internal promise from surfacing as an unhandled
+    // rejection (which vitest fails the test on) when a test exercises a
+    // rejected mutation. The component's onError does the real handling; this
+    // noop is a cache-level safety net.
     mutationCache: new MutationCache({ onError: () => {} }),
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -17,6 +18,6 @@ export function renderWithProviders(ui: ReactElement) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  // client를 함께 반환해 테스트에서 ['me'] 등 쿼리 캐시를 단언할 수 있게 한다.
+  // Also return the client so tests can assert on the query cache (e.g. ['me']).
   return { client, ...render(ui, { wrapper }) };
 }
