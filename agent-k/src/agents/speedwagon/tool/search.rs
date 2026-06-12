@@ -29,7 +29,7 @@ pub fn get_search_document_tool_desc() -> ToolDesc {
         .description(concat!(
             "Search for relevant documents for a given query. ",
             "Results are ranked by relevance score. ",
-            "Use the returned document ID with find_in_document or open_document for detailed content.",
+            "Use the returned document ID with find_in_document or read_document for detailed content.",
         ))
         .parameters(to_value!({
             "type": "object",
