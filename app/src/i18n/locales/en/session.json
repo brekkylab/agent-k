@@ -2,6 +2,9 @@
   "toast": {
     "stream_failed": "Streaming failed: {{error}}",
     "send_failed": "Send failed: {{message}}",
+    "stop_failed": "Stop failed: {{message}}",
+    "agent_error": "Agent error: {{message}}",
+    "run_stopped": "Response generation stopped",
     "share_mode_changed": "Share mode changed",
     "share_change_failed": "Share change failed: {{message}}",
     "artifact_deleted": "Deleted",
@@ -10,10 +13,14 @@
   },
   "ui": {
     "ai_responding": "AI is responding…",
+    "response_delayed": "Response is taking longer than usual… You can stop it anytime with Esc.",
+    "loading_history": "Loading earlier messages…",
     "attach_file": "Attach file",
     "self_label": "Me",
     "tool_running": "Running…",
     "send_aria": "Send",
+    "stop_generation": "Stop generating",
+    "stopping": "Stopping… a final message may still arrive.",
     "composer_placeholder": "Message Cowork and the team…",
     "composer_hint": "Enter to send · Reference files with @filename",
     "new_message": "New message",
@@ -52,6 +59,7 @@
   },
   "menu": {
     "options": "Session options",
+    "mark_read": "Mark as read",
     "duplicate": "Duplicate session",
     "delete": "Delete session"
   },

@@ -263,7 +263,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 /* Dragging a file from the Files page over a session row — drop to attach it. */
 .cw-session-row.is-drop-target { background: color-mix(in oklch, var(--cw-accent) 18%, var(--cw-bg-subtle)); box-shadow: inset 0 0 0 1.5px var(--cw-accent); color: var(--cw-fg-1); }
 .auto-dot { margin-left: auto; color: var(--cw-accent); font-size: 10px; }
-.cw-sidebar-user { border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
+.cw-sidebar-user { border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
 .cw-sidebar-user-meta { min-width: 0; }
 .cw-sidebar-user-meta b { display: block; font-size: 13px; color: var(--cw-fg-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-sidebar-user-meta span { display: block; font-family: var(--cw-font-mono); font-size: 10px; color: var(--cw-fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -342,6 +342,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
    wide screens the bubble column can stay narrow without dragging the
    scrollbar inward with it. */
 .cw-messages-scroll { flex: 1; min-height: 0; overflow-y: auto; width: 100%; }
+.cw-history-loading { text-align: center; color: var(--cw-fg-4); font-size: 12px; padding: 6px 0 2px; }
 .cw-messages { padding: 24px 28px 24px; width: 100%; max-width: 860px; margin: 0 auto; }
 .cw-message-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .cw-message-meta span { border: 1px solid var(--cw-border); color: var(--cw-fg-3); border-radius: var(--cw-radius-sm); padding: 1px 5px; font-size: 10px; }
@@ -411,6 +412,10 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-side-file small { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
 .cw-live { display: inline-flex; align-items: center; gap: 8px; color: var(--cw-ok); font-size: 13px; }
 .cw-live span { width: 8px; height: 8px; border-radius: 999px; background: var(--cw-ok); animation: cw-ping 1s steps(2, start) infinite; }
+.cw-live.is-delayed { color: var(--cw-ink); }
+.cw-live.is-delayed span { background: var(--cw-warn); }
+.cw-live.is-stopping { color: var(--cw-ink); }
+.cw-live.is-stopping span { background: var(--cw-destructive); }
 .cw-artifacts-panel { display: flex; flex-direction: column; gap: 2px; }
 .cw-artifacts-header { display: flex; align-items: center; gap: 5px; width: 100%; background: transparent; border: 0; padding: 3px 2px; border-radius: var(--cw-radius-sm); font-size: 12px; font-weight: 500; color: var(--cw-ink-2); cursor: pointer; text-align: left; transition: color 100ms; }
 .cw-artifacts-header:hover { color: var(--cw-ink); }
@@ -4561,5 +4566,42 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   background: var(--cw-destructive);
   border-color: var(--cw-destructive);
   color: var(--cw-paper);
+}
+
+/* Make the language Select read as the same form control as the display-name
+   input above it (alignment + affordance). The default .cw-select trigger is
+   bare text with no border/background, so it floats oddly inside a form. Match
+   border/bg/radius/padding and focus-visible to .cw-dialog .cw-field input so
+   the two rows read as twin fields. */
+.cw-field-select { display: block; width: 100%; }
+.cw-select.cw-field-select__trigger {
+  width: 100%;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-sm);
+  background: var(--cw-bg-subtle);
+  color: var(--cw-fg-1);
+  font-size: 14px;
+  cursor: pointer;
+}
+.cw-select.cw-field-select__trigger:focus-visible {
+  outline: 2px solid var(--cw-accent-line);
+  outline-offset: 0;
+  border-color: var(--cw-accent-line);
+}
+.cw-field-select__value { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.cw-field-select__value .cw-icon { color: var(--cw-ink-3); flex-shrink: 0; }
+/* The broad `.cw-dialog .cw-field span` label rule (11px / uppercase / muted)
+   would otherwise bleed into the Select trigger's value span. Reset the trigger
+   value to input text (14px / normal-case / ink). (Dropdown options are portaled
+   to body and stay unaffected — keep trigger and options consistent.) */
+.cw-dialog .cw-field .cw-field-select__value {
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--cw-fg-1);
 }
 

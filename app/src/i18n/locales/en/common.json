@@ -12,7 +12,9 @@
     "copy": "Copy",
     "move": "Move",
     "retry": "Retry",
-    "logout": "Log out"
+    "logout": "Log out",
+    "user_menu": "Account menu",
+    "user_settings": "User Settings"
   },
   "state": {
     "loading": "Loading…",

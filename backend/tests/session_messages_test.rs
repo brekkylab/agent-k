@@ -811,6 +811,41 @@ fn inject_then_re_inject_is_idempotent_on_text_prefix() {
     );
 }
 
+
+// ── reverse-indexed pagination ────────────────────────────────────────────────
+
+fn history_texts(body: &serde_json::Value) -> Vec<String> {
+    body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            i["message"]["contents"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
+        .collect()
+}
+
+/// text → seq map from a full-history response, for building cursor queries.
+fn history_seqs(body: &serde_json::Value) -> std::collections::HashMap<String, i64> {
+    body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["message"]["contents"][0]["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                i["seq"].as_i64().unwrap(),
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn attachment_count_at_or_under_limit_is_ok() {
     assert!(ensure_attachment_count(0).is_ok());
@@ -820,4 +855,303 @@ fn attachment_count_at_or_under_limit_is_ok() {
 #[test]
 fn attachment_count_over_limit_is_rejected() {
     assert!(ensure_attachment_count(31).is_err());
+}
+
+/// GET messages?limit=&before_seq=/after_seq= pages by keyset cursor in TURN
+/// units, returning each window in ascending order. Omitting all params
+/// returns everything. (Every message here is a user message, so turns ==
+/// messages.)
+#[tokio::test]
+async fn get_message_history_supports_reverse_window() {
+    let (app, repo, _state) = common::make_app_repo_state().await;
+
+    let username = format!("user_{}", Uuid::new_v4().simple());
+    let user_info = signup(&app, &username, "Password123!").await;
+    let user_id = Uuid::parse_str(user_info["id"].as_str().unwrap()).unwrap();
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+
+    let session = repo.create_session(project_id, user_id).await.unwrap();
+    let msgs: Vec<Message> = (0..5)
+        .map(|i| Message::new(Role::User).with_contents([Part::text(format!("m{i}"))]))
+        .collect();
+    repo.append_messages(session.id, &common::to_new_msgs(&msgs, user_id))
+        .await
+        .unwrap();
+
+    // Full fetch first to learn each message's seq for cursor queries.
+    let (_, full) = authed(
+        &app,
+        "GET",
+        &format!("/sessions/{}/messages", session.id),
+        &token,
+        None,
+    )
+    .await;
+    let seqs = history_seqs(&full);
+
+    for (query, expected) in [
+        ("?limit=2".to_string(), vec!["m3", "m4"]),
+        (
+            format!("?limit=2&before_seq={}", seqs["m3"]),
+            vec!["m1", "m2"],
+        ),
+        (format!("?before_seq={}", seqs["m1"]), vec!["m0"]),
+        ("?limit=10".to_string(), vec!["m0", "m1", "m2", "m3", "m4"]),
+        (String::new(), vec!["m0", "m1", "m2", "m3", "m4"]),
+        (format!("?after_seq={}", seqs["m2"]), vec!["m3", "m4"]),
+    ] {
+        let (status, body) = authed(
+            &app,
+            "GET",
+            &format!("/sessions/{}/messages{query}", session.id),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "history failed ({query}): {body}"
+        );
+        assert_eq!(
+            history_texts(&body),
+            expected,
+            "unexpected window for {query}: {body}"
+        );
+    }
+
+    // before_seq and after_seq are mutually exclusive.
+    let (status, _) = authed(
+        &app,
+        "GET",
+        &format!(
+            "/sessions/{}/messages?before_seq={}&after_seq={}",
+            session.id, seqs["m3"], seqs["m1"]
+        ),
+        &token,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "both cursors must be rejected"
+    );
+}
+
+/// Turns are the pagination unit: a user message plus the agent messages that
+/// follow it never get split across windows, and messages preceding the first
+/// user message ride along with the oldest turn.
+#[tokio::test]
+async fn get_message_history_windows_are_whole_turns() {
+    let (app, repo, _state) = common::make_app_repo_state().await;
+
+    let username = format!("user_{}", Uuid::new_v4().simple());
+    let user_info = signup(&app, &username, "Password123!").await;
+    let user_id = Uuid::parse_str(user_info["id"].as_str().unwrap()).unwrap();
+    let token = login(&app, &username, "Password123!").await;
+    let project = common::get_personal_project(&app, &token).await;
+    let project_id = Uuid::parse_str(project["id"].as_str().unwrap()).unwrap();
+
+    // pre (agent) | u0 a0 a0b | u1 a1 | u2  →  3 turns, preamble rides with turn 1.
+    let session = repo.create_session(project_id, user_id).await.unwrap();
+    let msgs = vec![
+        Message::new(Role::Assistant).with_contents([Part::text("pre")]),
+        Message::new(Role::User).with_contents([Part::text("u0")]),
+        Message::new(Role::Assistant).with_contents([Part::text("a0")]),
+        Message::new(Role::Assistant).with_contents([Part::text("a0b")]),
+        Message::new(Role::User).with_contents([Part::text("u1")]),
+        Message::new(Role::Assistant).with_contents([Part::text("a1")]),
+        Message::new(Role::User).with_contents([Part::text("u2")]),
+    ];
+    repo.append_messages(session.id, &common::to_new_msgs(&msgs, user_id))
+        .await
+        .unwrap();
+
+    // Full fetch first to learn each message's seq for cursor queries.
+    let (_, full) = authed(
+        &app,
+        "GET",
+        &format!("/sessions/{}/messages", session.id),
+        &token,
+        None,
+    )
+    .await;
+    let seqs = history_seqs(&full);
+
+    for (query, expected) in [
+        ("?limit=1".to_string(), vec!["u2"]),
+        ("?limit=2".to_string(), vec!["u1", "a1", "u2"]),
+        (
+            format!("?limit=1&before_seq={}", seqs["u2"]),
+            vec!["u1", "a1"],
+        ),
+        (
+            format!("?limit=2&before_seq={}", seqs["u2"]),
+            vec!["pre", "u0", "a0", "a0b", "u1", "a1"],
+        ),
+        (
+            format!("?before_seq={}", seqs["u1"]),
+            vec!["pre", "u0", "a0", "a0b"],
+        ),
+        (
+            "?limit=9".to_string(),
+            vec!["pre", "u0", "a0", "a0b", "u1", "a1", "u2"],
+        ),
+        (format!("?before_seq={}", seqs["pre"]), vec![]),
+        // Tail catch-up: everything strictly after a0b, whole turns included.
+        (
+            format!("?after_seq={}", seqs["a0b"]),
+            vec!["u1", "a1", "u2"],
+        ),
+    ] {
+        let (status, body) = authed(
+            &app,
+            "GET",
+            &format!("/sessions/{}/messages{query}", session.id),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "history failed ({query}): {body}"
+        );
+        assert_eq!(
+            history_texts(&body),
+            expected,
+            "unexpected window for {query}: {body}"
+        );
+    }
+
+    // A history with no user message at all counts as a single turn.
+    let agent_only = repo.create_session(project_id, user_id).await.unwrap();
+    let msgs = vec![
+        Message::new(Role::Assistant).with_contents([Part::text("only-a")]),
+        Message::new(Role::Assistant).with_contents([Part::text("only-b")]),
+    ];
+    repo.append_messages(agent_only.id, &common::to_new_msgs(&msgs, user_id))
+        .await
+        .unwrap();
+    let (_, full) = authed(
+        &app,
+        "GET",
+        &format!("/sessions/{}/messages", agent_only.id),
+        &token,
+        None,
+    )
+    .await;
+    let seqs = history_seqs(&full);
+    for (query, expected) in [
+        ("?limit=3".to_string(), vec!["only-a", "only-b"]),
+        (format!("?before_seq={}", seqs["only-a"]), vec![]),
+    ] {
+        let (_, body) = authed(
+            &app,
+            "GET",
+            &format!("/sessions/{}/messages{query}", agent_only.id),
+            &token,
+            None,
+        )
+        .await;
+        assert_eq!(
+            history_texts(&body),
+            expected,
+            "unexpected agent-only window for {query}: {body}"
+        );
+    }
+}
+
+/// Paging through older history (before_seq) must NOT mark the session read;
+/// fetching the tail (no cursor, or after_seq) must.
+#[tokio::test]
+async fn reading_older_pages_does_not_mark_session_read() {
+    let (app, repo, _state) = common::make_app_repo_state().await;
+
+    let alice_info = signup(&app, "alice_page_read", "Password123!").await;
+    let alice_token = login(&app, "alice_page_read", "Password123!").await;
+    let alice_project = common::get_personal_project(&app, &alice_token).await;
+    let project_slug = alice_project["slug"].as_str().unwrap();
+    let project_id = Uuid::parse_str(alice_project["id"].as_str().unwrap()).unwrap();
+    let alice_id = Uuid::parse_str(alice_info["id"].as_str().unwrap()).unwrap();
+
+    signup(&app, "bob_page_read", "Password123!").await;
+    let bob_token = login(&app, "bob_page_read", "Password123!").await;
+    common::add_member(&app, &alice_token, project_slug, "bob_page_read").await;
+
+    let session = repo.create_session(project_id, alice_id).await.unwrap();
+    repo.update_session_share_mode(
+        session.id,
+        &agent_k_backend::repository::ShareMode::SharedChat,
+    )
+    .await
+    .unwrap();
+    let msgs: Vec<Message> = (0..3)
+        .map(|i| Message::new(Role::User).with_contents([Part::text(format!("m{i}"))]))
+        .collect();
+    repo.append_messages(session.id, &common::to_new_msgs(&msgs, alice_id))
+        .await
+        .unwrap();
+
+    let bob_unread = |app: axum::Router, token: String| async move {
+        let (_, body) = authed(
+            &app,
+            "GET",
+            &format!("/sessions/{}", session.id),
+            &token,
+            None,
+        )
+        .await;
+        body["unread_count"].as_i64().unwrap_or(-1)
+    };
+
+    assert!(
+        bob_unread(app.clone(), bob_token.clone()).await > 0,
+        "bob should start with unread messages"
+    );
+
+    // Older page (before_seq) — unread must survive. Read seqs via the repo,
+    // not GET (a cursorless GET would mark the session read).
+    let newest_seq = repo
+        .get_messages(session.id)
+        .await
+        .unwrap()
+        .last()
+        .unwrap()
+        .seq;
+    let (status, _) = authed(
+        &app,
+        "GET",
+        &format!(
+            "/sessions/{}/messages?limit=1&before_seq={newest_seq}",
+            session.id
+        ),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        bob_unread(app.clone(), bob_token.clone()).await > 0,
+        "before_seq page must not mark the session read"
+    );
+
+    // Newest window (no cursor) — marks read.
+    let (status, _) = authed(
+        &app,
+        "GET",
+        &format!("/sessions/{}/messages?limit=1", session.id),
+        &bob_token,
+        None,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        bob_unread(app.clone(), bob_token.clone()).await,
+        0,
+        "cursorless fetch must mark the session read"
+    );
 }

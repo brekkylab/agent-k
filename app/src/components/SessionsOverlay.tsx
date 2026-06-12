@@ -24,7 +24,7 @@ export function SessionsOverlay({ projectSlug, onClose }: { projectSlug: string;
   const currentUser = useAuthStore((s) => s.currentUser);
 
   const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
-  const sessions = useQuery({ queryKey: ['sessions', projectSlug], queryFn: () => listSessions(projectSlug) });
+  const sessions = useQuery({ queryKey: ['sessions', projectSlug, 'user'], queryFn: () => listSessions(projectSlug, 'user') });
 
   // Move focus to the close button on mount so keyboard users can dismiss immediately.
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -37,7 +37,7 @@ export function SessionsOverlay({ projectSlug, onClose }: { projectSlug: string;
   const [pendingDelete, setPendingDelete] = useState<Session | null>(null);
   const deleteMutation = useSessionDelete(projectSlug, { onDeleted: () => setPendingDelete(null) });
 
-  const sessionList = (sessions.data ?? []).filter((s) => s.origin === 'user');
+  const sessionList = sessions.data ?? [];
 
   // Render via portal to document.body so `position: fixed` is relative to the
   // viewport — not the sidebar (whose transform would otherwise trap it).

@@ -9,6 +9,7 @@ import { useLayoutStore } from '@/stores/layout';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { appWs } from '@/api/ws';
 import type { Session } from '@/domain/types';
+import { shortSessionId } from '@/lib/sessionId';
 
 export const Route = createFileRoute('/_app')({
   beforeLoad: async ({ context }) => {
@@ -59,14 +60,14 @@ function AppShell() {
     appWs.connect(token);
     const unsub = appWs.subscribe((event) => {
       if (event.type === 'session_title_updated') {
+        // Detail query is keyed by the URL prefix (shortSessionId of the UUID) —
+        // patch it directly so the active session page picks up the title without
+        // a refetch. Lists are keyed by ['sessions', slug] (slug unknown here) so
+        // invalidate those.
         queryClient.setQueryData<Session | undefined>(
-          ['session', event.session_id],
+          ['session', shortSessionId(event.session_id)],
           (old) => (old ? { ...old, title: event.title } : old),
         );
-        // Session lists are keyed by ['sessions', slug]. We don't know the slug
-        // from the event (only UUID is carried), and the projects cache may not
-        // be warm yet on cold load. Invalidate all session list queries with the
-        // ['sessions'] prefix — safe because title updates are rare.
         void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       }
     });

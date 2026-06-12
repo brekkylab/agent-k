@@ -104,6 +104,8 @@ export type BackendMessageSender =
   | { kind: 'agent'; name: string };
 
 export interface SessionMessageItem {
+  /** Session-global insertion order — stable identity across paginated windows. */
+  seq: number;
   message: AiloyMessage;
   sender: BackendMessageSender;
   created_at: string;

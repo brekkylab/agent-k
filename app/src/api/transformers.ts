@@ -163,7 +163,6 @@ export function aiMessageText(contents: AiloyPart[] | undefined): string {
 export function toMessageItem(
   item: SessionMessageItem,
   sessionId: string,
-  idx: number,
 ): Message {
   const a = item.message;
   const sender: MessageSender = item.sender.kind === 'user'
@@ -182,7 +181,8 @@ export function toMessageItem(
   const body = extractText(a.contents);
 
   return {
-    id: a.id || `${sessionId}-h-${idx}`,
+    // seq fallback (ailoy ids are tool-call-only) is stable across window changes.
+    id: a.id || `${sessionId}-h-${item.seq}`,
     sessionId,
     sender,
     createdAt: item.created_at,
@@ -218,7 +218,7 @@ export function collapseToolMessages(
 
   const messages: Message[] = [];
 
-  for (const [idx, it] of items.entries()) {
+  for (const it of items) {
     if (it.message.role === 'tool') {
       const toolCallId = it.message.id;
       const toolName = toolCallId ? toolCallNames.get(toolCallId) : undefined;
@@ -230,7 +230,7 @@ export function collapseToolMessages(
         ? it.sender.name
         : toolName ?? 'tool';
       messages.push({
-        id: toolCallId || `${sessionId}-tool-${idx}`,
+        id: toolCallId || `${sessionId}-tool-${it.seq}`,
         sessionId,
         sender: { kind: 'agent' as const, name: senderName },
         createdAt: it.created_at,
@@ -240,7 +240,7 @@ export function collapseToolMessages(
       continue;
     }
 
-    const baseMsg = toMessageItem(it, sessionId, idx);
+    const baseMsg = toMessageItem(it, sessionId);
     if (baseMsg.toolCalls) {
       messages.push({
         ...baseMsg,

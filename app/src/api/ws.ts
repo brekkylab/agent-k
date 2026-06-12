@@ -42,6 +42,7 @@ export interface AgentRunDoneEvent {
   type: 'agent_run_done';
   session_id: string;
   run_id: string;
+  stopped: boolean;
 }
 
 export interface AgentRunIdleEvent {
@@ -154,7 +155,8 @@ class AppWebSocketManager {
     const count = (this.sessionRefCounts.get(sessionId) ?? 0) + 1;
     this.sessionRefCounts.set(sessionId, count);
     if (count === 1) {
-      // Send to the server only on the first subscription; if the socket is closed it will be resent in onopen after reconnect.
+      // Send to the server only on first subscription; if the socket is closed,
+      // onopen resends after reconnect
       this.subscribedSessions.add(sessionId);
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify({ action: 'subscribe', session_id: sessionId }));

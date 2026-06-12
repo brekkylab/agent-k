@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use ailoy::{
     agent::Agent,
-    message::{Message, MessageOutput, Part, Role},
+    message::{FinishReason, Message, MessageOutput, Part, Role},
     runenv::{Sandbox, SandboxConfig},
 };
 use axum::{
@@ -22,16 +22,20 @@ use crate::{
         DirentScope, copy_dir_recursive, enforce_scope_access, parse_dirent_path, scope_root,
     },
     model::{
-        CreateSessionRequest, MessageSender, RunAck, SendMessageRequest, SessionListResponse,
-        SessionMessageListResponse, SessionMessageResponse, SessionResponse, UpdateSessionRequest,
+        CreateSessionRequest, MessageSender, RunAck, RunActiveResponse, SendMessageRequest,
+        SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
+        UpdateSessionRequest,
     },
-    repository::{DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, ShareMode},
+    repository::{
+        DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, SessionOrigin, ShareMode,
+    },
     services::session_title::generate_session_title,
     state::AppState,
 };
 
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
+const STOP_RUN_GRACE_SECS: u64 = 10;
 
 pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
@@ -468,9 +472,11 @@ pub async fn create_session(
 pub struct ListSessionsQuery {
     /// Project UUID, active slug, or retired slug — backend resolves all three.
     pub project_ref: Option<String>,
+    /// Filter by session origin (`user` or `automation`). Omit to list all.
+    pub origin: Option<SessionOrigin>,
 }
 
-/// GET /sessions?project_ref=...
+/// GET /sessions?project_ref=...&origin=...
 /// `project_ref` is optional — omit to list all sessions across projects the user can access.
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
@@ -490,13 +496,13 @@ pub async fn list_sessions(
             }
             state
                 .repository
-                .list_sessions_in_project(project_id, auth_user.id)
+                .list_sessions_in_project(project_id, auth_user.id, q.origin)
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))?
         }
         None => state
             .repository
-            .list_sessions_for_user(auth_user.id)
+            .list_sessions_for_user(auth_user.id, q.origin)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?,
     };
@@ -753,12 +759,31 @@ pub async fn fork_session(
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 
-/// GET /sessions/{session_id}/messages
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct MessageHistoryQuery {
+    /// Max TURNS below the cursor. Omit for everything; ignored with `after_seq`.
+    pub limit: Option<u32>,
+    /// Keyset cursor for older pages: only messages with `seq < before_seq`.
+    pub before_seq: Option<i64>,
+    /// Tail catch-up: messages with `seq > after_seq`. Exclusive with `before_seq`.
+    pub after_seq: Option<i64>,
+}
+
+/// GET /sessions/{session_id}/messages?limit=...&before_seq=...|after_seq=...
+/// Items are returned in ascending (oldest→newest) order within the window.
 pub async fn get_message_history(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Path(session_ref): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<MessageHistoryQuery>,
 ) -> ApiResult<Json<SessionMessageListResponse>> {
+    if q.before_seq.is_some() && q.after_seq.is_some() {
+        return Err(AppError::bad_request(
+            "before_seq and after_seq are mutually exclusive",
+        ));
+    }
+
     let session_id = resolve_session_id(&state, &session_ref).await?;
     let (_session, _access) = state
         .repository
@@ -767,11 +792,18 @@ pub async fn get_message_history(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    let rows = state
-        .repository
-        .get_messages(session_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let rows = match q.after_seq {
+        Some(after_seq) => state
+            .repository
+            .get_messages_after(session_id, after_seq)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+        None => state
+            .repository
+            .get_messages_window(session_id, q.limit, q.before_seq)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?,
+    };
 
     let items = rows
         .into_iter()
@@ -789,6 +821,7 @@ pub async fn get_message_history(
                 },
             };
             Ok(SessionMessageResponse {
+                seq: r.seq,
                 message: r.message,
                 sender,
                 created_at: r.created_at,
@@ -798,13 +831,40 @@ pub async fn get_message_history(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // Auto-mark all messages as read for this user
-    let _ = state
-        .repository
-        .mark_session_read(session_id, auth_user.id)
-        .await;
+    // Mark read only when the client is at the tail (no before_seq) —
+    // paging older history must not clear unread.
+    if q.before_seq.is_none() {
+        let _ = state
+            .repository
+            .mark_session_read(session_id, auth_user.id)
+            .await;
+    }
 
     Ok(Json(SessionMessageListResponse { items }))
+}
+
+/// POST /sessions/{session_id}/read — mark the session read without fetching
+/// history (e.g. the sidebar "Mark as read" action).
+pub async fn mark_session_read(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(session_ref): Path<String>,
+) -> ApiResult<StatusCode> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    state
+        .repository
+        .mark_session_read(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// DELETE /sessions/{session_id}/messages — creator or project owner
@@ -916,7 +976,7 @@ pub async fn send_message(
         attachments: attachments.clone(),
         created_at: now,
     };
-    let run_id = state.start_run(session_id, user_message.clone());
+    let (run_id, cancel) = state.start_run(session_id, user_message.clone());
     let _ = state.ws_tx.send(WsEvent::AgentRunStarted {
         session_id: session_id.to_string(),
         run_id: run_id.to_string(),
@@ -953,11 +1013,45 @@ pub async fn send_message(
         let mut run = agent.run(msg);
 
         let mut run_error: Option<String> = None;
+        let mut stopped = false;
         let mut depth0_outputs: Vec<MessageOutput> = Vec::new();
-        while let Some(item) = run.next().await {
+        let mut pending_tool_results: usize = 0;
+        loop {
+            let item = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    stopped = true;
+                    if pending_tool_results == 0 {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(STOP_RUN_GRACE_SECS),
+                            run.next(),
+                        )
+                        .await
+                        {
+                            Ok(item) => item,
+                            Err(_) => {
+                                tracing::warn!(
+                                    %session_id,
+                                    "stop: in-flight model call exceeded {STOP_RUN_GRACE_SECS}s grace period; discarding"
+                                );
+                                break;
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                item = run.next() => item,
+            };
             match item {
-                Ok(output) => {
+                Some(Ok(output)) => {
                     if matches!(output.depth, None | Some(0)) {
+                        if output.message.role == Role::Tool {
+                            pending_tool_results = pending_tool_results.saturating_sub(1);
+                        } else if matches!(output.finish_reason, FinishReason::ToolCall {}) {
+                            pending_tool_results =
+                                output.message.tool_calls.as_ref().map_or(0, |tc| tc.len());
+                        }
                         depth0_outputs.push(output.clone());
                     }
                     if let Some(seq) = state2.push_output(&session_id, output.clone()).await {
@@ -968,30 +1062,99 @@ pub async fn send_message(
                             output,
                         });
                     }
+                    if stopped {
+                        break;
+                    }
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     run_error = Some(e.to_string());
                     break; // Must break before accessing `agent` — `run` borrows it
                 }
+                None => break,
             }
         }
         drop(run);
 
         if let Some(err) = run_error {
-            tracing::error!(%session_id, "agent run failed: {err}");
-            // Truncate in-memory history to match DB state so the agent stays consistent.
-            agent.state.history.truncate(prev_len);
-            drop(agent);
-            state2.end_run(&session_id);
-            let _ = state2.ws_tx.send(WsEvent::AgentError {
-                session_id: session_id.to_string(),
-                run_id: run_id.to_string(),
-                message: err,
-            });
-            return;
+            if stopped {
+                // The error occurred during the grace period after the user requested a stop.
+                // Treat it as a clean stop rather than a hard failure: keep whatever partial
+                // outputs were already accumulated instead of rolling back the entire turn.
+                tracing::warn!(%session_id, "agent error during stop grace period (treating as stop): {err}");
+            } else {
+                tracing::error!(%session_id, "agent run failed: {err}");
+                // Truncate in-memory history to match DB state so the agent stays consistent.
+                agent.state.history.truncate(prev_len);
+                drop(agent);
+                state2.end_run(&session_id);
+                let _ = state2.ws_tx.send(WsEvent::AgentError {
+                    session_id: session_id.to_string(),
+                    run_id: run_id.to_string(),
+                    message: err,
+                });
+                return;
+            }
         }
 
         let mut new_msgs = agent.get_history()[prev_len..].to_vec();
+
+        let mut synthetic_msgs: Vec<Message> = Vec::new();
+        if stopped {
+            let answered: HashSet<&str> = new_msgs
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .filter_map(|m| m.id.as_deref())
+                .collect();
+            for m in new_msgs.iter().filter(|m| m.role == Role::Assistant) {
+                for tc in m.tool_calls.iter().flatten() {
+                    if let Some((call_id, _, _)) = tc.as_function() {
+                        if !answered.contains(call_id) {
+                            synthetic_msgs.push(
+                                Message::new(Role::Tool).with_id(call_id).with_contents([
+                                    Part::text(
+                                        "[Interrupted: the user stopped response generation before this tool call completed]",
+                                    ),
+                                ]),
+                            );
+                        }
+                    }
+                }
+            }
+            // Skip the note if the model finished its turn anyway (last output is an
+            // assistant message with FinishReason::Stop) — not truncated.
+            let completed_naturally = matches!(
+                depth0_outputs.last(),
+                Some(o) if o.message.role == Role::Assistant
+                    && matches!(o.finish_reason, FinishReason::Stop {})
+            );
+            if completed_naturally {
+                // Cancel fired at the exact moment the model finished; treat as a normal
+                // completion so the client doesn't see a spurious "Run stopped" toast.
+                stopped = false;
+            } else {
+                // Mark the turn as cut short: append to the last assistant message, or
+                // add a paired one (via synthetic_msgs) if none was produced yet.
+                const INTERRUPT_NOTE: &str =
+                    "[Interrupted: the user manually stopped response generation here]";
+                if let Some(last) = new_msgs.iter_mut().rev().find(|m| m.role == Role::Assistant) {
+                    last.contents.push(Part::text(INTERRUPT_NOTE));
+                    if let Some(warm) = agent.state.history[prev_len..]
+                        .iter_mut()
+                        .rev()
+                        .find(|m| m.role == Role::Assistant)
+                    {
+                        warm.contents.push(Part::text(INTERRUPT_NOTE));
+                    }
+                } else {
+                    synthetic_msgs
+                        .push(Message::new(Role::Assistant).with_contents([Part::text(INTERRUPT_NOTE)]));
+                }
+            }
+            agent
+                .state
+                .history
+                .extend(synthetic_msgs.iter().cloned());
+        }
 
         // Strip the attachment note before persisting — clean content is stored in DB and the
         // note is reconstructed from the `attachments` column when history is replayed.
@@ -1018,6 +1181,19 @@ pub async fn send_message(
                 last_agent.artifacts = new_artifacts;
             }
         }
+
+        to_persist.extend(
+            synthetic_msgs
+                .into_iter()
+                .map(|message| NewSessionMessage {
+                    message,
+                    sender_kind: crate::repository::DbSenderKind::Agent,
+                    sender_name: Some(TOP_LEVEL_AGENT_NAME.to_string()),
+                    sender_user_id: None,
+                    attachments: vec![],
+                    artifacts: vec![],
+                }),
+        );
 
         // [A] Persist before releasing the agent lock. On failure: roll back in-memory history,
         // send AgentError (not AgentRunDone), and return — the DB remains consistent.
@@ -1050,6 +1226,7 @@ pub async fn send_message(
         let _ = state2.ws_tx.send(WsEvent::AgentRunDone {
             session_id: session_id.to_string(),
             run_id: run_id.to_string(),
+            stopped,
         });
     });
 
@@ -1072,5 +1249,68 @@ pub async fn send_message(
         }
     });
 
-    Ok((StatusCode::ACCEPTED, Json(RunAck { status: "started" })))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RunAck {
+            status: "started",
+            run_id: run_id.to_string(),
+        }),
+    ))
+}
+
+/// POST /sessions/{session_id}/runs/{run_id}/stop
+pub async fn stop_run(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path((session_ref, run_id)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    let run_id = Uuid::parse_str(&run_id).map_err(|_| AppError::not_found("no such run"))?;
+
+    let Some((active_run_id, sender_user_id, cancel)) = state.run_cancel_info(&session_id).await
+    else {
+        return Err(AppError::not_found("no active run for this session"));
+    };
+    if active_run_id != run_id {
+        return Err(AppError::not_found("run is not active"));
+    }
+    if sender_user_id != auth_user.id.to_string() {
+        return Err(AppError::forbidden(
+            "only the user who started the run can stop it",
+        ));
+    }
+
+    cancel.cancel();
+    tracing::info!(%session_id, %run_id, user = %auth_user.id, "run cancellation requested");
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// GET /sessions/{session_id}/runs/{run_id}/active
+pub async fn run_active(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path((session_ref, run_id)): Path<(String, String)>,
+) -> ApiResult<Json<RunActiveResponse>> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    let run_id = Uuid::parse_str(&run_id).map_err(|_| AppError::not_found("no such run"))?;
+
+    let active = matches!(
+        state.run_cancel_info(&session_id).await,
+        Some((active_run_id, _, _)) if active_run_id == run_id
+    );
+    Ok(Json(RunActiveResponse { active }))
 }
