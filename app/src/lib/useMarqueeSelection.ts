@@ -2,9 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 
 export interface MarqueeRect {
   left: number; top: number; width: number; height: number;
-  /** Sides clamped to the scroll container — render with no border there so a
-   *  clamped edge doesn't draw a stray line at the list boundary. */
-  clampTop: boolean; clampRight: boolean; clampBottom: boolean; clampLeft: boolean;
 }
 
 interface UseMarqueeSelectionOpts {
@@ -44,6 +41,10 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
   const didDragRef = useRef(false);
   const lastPointerRef = useRef({ x: 0, y: 0 });
   const lastScrollTopRef = useRef(0);
+  // The capture-phase click listener onUp installs to swallow the post-marquee
+  // click. Tracked here so the effect cleanup can remove it if the component
+  // unmounts before that click arrives (otherwise it leaks on window).
+  const swallowRef = useRef<((ev: Event) => void) | null>(null);
 
   function onMouseDown(e: React.MouseEvent) {
     if (e.button !== 0) return;
@@ -86,24 +87,10 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
       const width = Math.abs(dx);
       const height = Math.abs(dy);
       const r = { left, top, right: left + width, bottom: top + height };
-      // Draw the box clamped to the scroll container so a scroll-extended anchor
-      // doesn't paint it over the breadcrumb/header outside the list. The
-      // hit-test below still uses the full rect so scrolled-off rows select.
-      const sc = o.scrollRef.current;
-      if (sc) {
-        const b = sc.getBoundingClientRect();
-        const vl = Math.max(r.left, b.left);
-        const vt = Math.max(r.top, b.top);
-        const vr = Math.min(r.right, b.right);
-        const vb = Math.min(r.bottom, b.bottom);
-        setDragRect({
-          left: vl, top: vt, width: Math.max(0, vr - vl), height: Math.max(0, vb - vt),
-          clampLeft: r.left < b.left, clampTop: r.top < b.top,
-          clampRight: r.right > b.right, clampBottom: r.bottom > b.bottom,
-        });
-      } else {
-        setDragRect({ left, top, width, height, clampLeft: false, clampTop: false, clampRight: false, clampBottom: false });
-      }
+      // Draw the full rect (portaled to <body>); it can roam the whole screen,
+      // matching the original Files-page behavior. The hit-test below uses the
+      // same rect, so rows scrolled out of the list still select.
+      setDragRect({ left, top, width, height });
       const next = new Set(origin.base);
       for (const el of document.querySelectorAll<HTMLElement>(o.itemSelector)) {
         const rect = el.getBoundingClientRect();
@@ -139,7 +126,9 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
           ev.stopPropagation();
           ev.preventDefault();
           window.removeEventListener('click', swallow, true);
+          swallowRef.current = null;
         };
+        swallowRef.current = swallow;
         window.addEventListener('click', swallow, true);
       }
     }
@@ -151,6 +140,10 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       sc?.removeEventListener('scroll', onScroll);
+      if (swallowRef.current) {
+        window.removeEventListener('click', swallowRef.current, true);
+        swallowRef.current = null;
+      }
     };
   }, [dragRect]);
 
