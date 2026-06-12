@@ -17,6 +17,7 @@ import { DEFAULT_AGENT_ID, type AgentId, type SuggestedPrompt } from '@/domain/a
 import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
+import { useFileDropzone } from '@/lib/useFileDropzone';
 import { ApiError } from '@/api/client';
 import { loadNs } from '@/i18n/loader';
 
@@ -144,9 +145,21 @@ function ProjectHome() {
     startSessionMutation.mutate({ firstMessage: text, files: pendingFiles });
   };
 
+  const addFiles = (fs: File[]) => setPendingFiles((prev) => [...prev, ...fs]);
+  // Drop computer files anywhere on the home page, mirroring the session's
+  // full-surface drop zone — the whole page highlights uniformly.
+  const composerDropzone = useFileDropzone({
+    onFiles: addFiles,
+    disabled: startSessionMutation.isPending,
+  });
+
   const memberList = members.data ?? [];
 
   return (
+    <div
+      className={`cw-home-drop${composerDropzone.isOver ? ' is-drop-target' : ''}`}
+      {...composerDropzone.dropProps}
+    >
     <section className="cw-page cw-page-enter">
       <div className="cw-project-hero is-slim">
         <div>
@@ -180,7 +193,7 @@ function ProjectHome() {
             placeholder={agentPlaceholder}
             focusSignal={focusNonce}
             files={pendingFiles}
-            onAddFiles={(fs) => setPendingFiles((prev) => [...prev, ...fs])}
+            onAddFiles={addFiles}
             onRemoveFile={(i) => setPendingFiles((prev) => prev.filter((_, idx) => idx !== i))}
             modelPicker={
               <ComposerModelPicker
@@ -214,5 +227,6 @@ function ProjectHome() {
         </div>
       </div>
     </section>
+    </div>
   );
 }
