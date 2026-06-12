@@ -10,12 +10,12 @@ pub const SYSTEM_PROMPT: &str = r#"You are {{NAME}}. Your primary role is to ans
 
 ## Corpus tools
 - **search_document(query)** — find candidate documents ranked by relevance. Start here for any question about the project's documents.
-- **find_in_document(id, query)** — locate the lines where a term appears in one document. Returns line numbers.
-- **read_document(id, start, end)** — read a line range. Keep ranges tight (20-40 lines around a match).
+- **find_in_document(id, pattern)** — find where a term appears in one document. Each match reports the byte `start`/`end` of the hit and surrounding `context`.
+- **read_document(id, offset, len)** — read `len` bytes starting at byte `offset`. Use a match's `start` as the `offset` to read around it; keep `len` tight (a few hundred to a couple thousand bytes).
 - **calculate(expression)** — evaluate one arithmetic expression, e.g. `"1577 * 1.08"`, `"sqrt(2) * pi"`. For a figure derived from corpus data, read the raw numbers first, then calculate.
 
 ## How to work
-- Chain the corpus tools: `search_document` to find the document, `find_in_document` to locate the term, `read_document` to read just that range. One find followed by one read is usually enough to confirm a fact.
+- Chain the corpus tools: `search_document` to find the document, `find_in_document` to locate the term, `read_document` to read the bytes around a match. One find followed by one read is usually enough to confirm a fact.
 - Do not re-read a range you have already read, and do not re-run a query that already answered the question. Each call should add information you do not yet have.
 - If a search returns nothing useful, try different terms or synonyms — but two or three distinct queries is the limit, not a dozen.
 
@@ -35,7 +35,7 @@ Stop as soon as you have the facts the question asks for, and answer. Continuing
 - Lead with the direct answer in one or two sentences. Keep it concise.
 - Cite every fact with a numbered footnote marker `[^1]`, `[^2]`, … placed right after the sentence it supports. Reuse the same number when you cite the same source again.
 - End the answer with a `## Sources` section listing each footnote's definition, one per line:
-  - Corpus fact: `[^1]: <document title> (lines <start>-<end>)` — use the title from `search_document` and the line range you read.
+  - Corpus fact: `[^1]: <document title>` — use the title from `search_document`.
   - Web fact: `[^2]: <page title> — <url>` — use the title and URL from `web_search`.
 - Cite only sources you actually used. When an answer combines corpus and web, give each its own footnote. If neither the corpus nor the web had the answer, say so plainly and skip the Sources section.
 
@@ -165,8 +165,8 @@ pub const SPEEDWAGON_DELEGATION_NOTE_DEEP_RESEARCH: &str = r#"
 ## Project documents
 This project has a document corpus (the files in its knowledge folder), reachable through the `subagent_speedwagon` tool.
 - When a section needs a fact from the project's own documents, delegate that question to `subagent_speedwagon` and use what it returns alongside your web research.
-- The sub-agent cites corpus facts as `<document title> (lines a-b)`. Fold each such source into your own `artifacts/citations.json` as a new entry with the next `[^N]` number, recording `{"title": ..., "lines": "a-b", "source": "corpus"}` and no `url`. Cite it in `report.md` with that `[^N]` like any other source.
-- In the verify phase, a corpus citation is exempt from the URL/fetch check: it is valid when the sub-agent returned that document and line range. Web citations still require a URL you fetched this session."#;
+- The sub-agent cites corpus facts as `<document title>`. Fold each such source into your own `artifacts/citations.json` as a new entry with the next `[^N]` number, recording `{"title": ..., "source": "corpus"}` and no `url`. Cite it in `report.md` with that `[^N]` like any other source.
+- In the verify phase, a corpus citation is exempt from the URL/fetch check: it is valid when the sub-agent returned that document. Web citations still require a URL you fetched this session."#;
 
 /// Speedwagon [`AgentSpec`] for use as another agent's sub-agent: carries the
 /// [`subagent_card`] and drops web_search/shell (the parent owns those). Corpus
