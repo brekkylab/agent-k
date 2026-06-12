@@ -347,8 +347,18 @@ function FilesPage() {
   function openFolderDialog() { setFolderDialogOpen(true); }
 
   // ── Selection handlers ───────────────────────────────────────────
+  // The fixed knowledge folder can't be renamed/moved/copied/deleted (the
+  // server rejects it), so keep it out of selection entirely — that also keeps
+  // it out of every selection-driven action (bulk bar, F2, drag). Navigating
+  // into it still works; only selecting it is blocked.
+  const isProtectedPath = useCallback(
+    (path: string) => currentPath.length === 0 && path === 'knowledge',
+    [currentPath.length],
+  );
+
   const handleSelect = useCallback((entry: BackendDirent, ev: React.MouseEvent | React.KeyboardEvent) => {
     const path = entry.path;
+    if (isProtectedPath(path)) return;
     const idx = rowIndex.get(path);
     const shift = 'shiftKey' in ev && ev.shiftKey;
     const meta = ('metaKey' in ev && ev.metaKey) || ('ctrlKey' in ev && ev.ctrlKey);
@@ -357,7 +367,7 @@ function FilesPage() {
       const aIdx = rowIndex.get(anchorRef.current);
       if (aIdx != null && idx != null) {
         const [lo, hi] = aIdx <= idx ? [aIdx, idx] : [idx, aIdx];
-        setSelectedPaths(new Set(allRows.slice(lo, hi + 1).map((r) => r.path)));
+        setSelectedPaths(new Set(allRows.slice(lo, hi + 1).map((r) => r.path).filter((p) => !isProtectedPath(p))));
         return;
       }
     }
@@ -373,7 +383,7 @@ function FilesPage() {
     }
     setSelectedPaths(new Set([path]));
     anchorRef.current = path;
-  }, [allRows, rowIndex]);
+  }, [allRows, rowIndex, isProtectedPath]);
 
   const openEntry = useCallback((entry: BackendDirent) => {
     if (entry.kind === 'dir') setCurrentPath(entry.path.split('/').filter(Boolean));
@@ -505,7 +515,7 @@ function FilesPage() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
         if (allRows.length === 0) return;
         e.preventDefault();
-        setSelectedPaths(new Set(allRows.map((r) => r.path)));
+        setSelectedPaths(new Set(allRows.map((r) => r.path).filter((p) => !isProtectedPath(p))));
         anchorRef.current = allRows[allRows.length - 1]?.path ?? null;
         return;
       }
@@ -535,7 +545,7 @@ function FilesPage() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [allRows, rowIndex, selectedPaths.size, clearSelection, requestBulkDelete]);
+  }, [allRows, rowIndex, selectedPaths.size, clearSelection, requestBulkDelete, isProtectedPath]);
 
   function toggleExpand(path: string) {
     setExpanded((prev) => {
@@ -596,7 +606,7 @@ function FilesPage() {
         const inside = rect.left < r.right && rect.right > r.left && rect.top < r.bottom && rect.bottom > r.top;
         if (inside) {
           const path = row.dataset.rowPath;
-          if (path) next.add(path);
+          if (path && !isProtectedPath(path)) next.add(path);
         }
       }
       setSelectedPaths(next);
@@ -621,7 +631,7 @@ function FilesPage() {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [dragRect]);
+  }, [dragRect, isProtectedPath]);
 
   // ── Intra-app drag (move/copy) ───────────────────────────────────
   useEffect(() => {
@@ -631,6 +641,10 @@ function FilesPage() {
   }, []);
 
   const handleDragStart = useCallback((e: React.DragEvent, entry: BackendDirent) => {
+    if (isProtectedPath(entry.path)) {
+      e.preventDefault();
+      return;
+    }
     dragOriginRef.current = null;
     setDragRect(null);
     e.dataTransfer.effectAllowed = 'copyMove';
@@ -648,7 +662,7 @@ function FilesPage() {
     document.body.appendChild(ghost);
     e.dataTransfer.setDragImage(ghost, 14, 14);
     requestAnimationFrame(() => ghost.remove());
-  }, [selectedPaths]);
+  }, [selectedPaths, isProtectedPath]);
 
   const handleDropOnFolder = useCallback((destination: string, e: React.DragEvent): boolean => {
     const raw = e.dataTransfer.getData('application/x-cowork-dirent-paths');
@@ -874,7 +888,7 @@ function FilesPage() {
                         ? (corpusStateByPath.get(entry.path) ?? 'pending')
                         : undefined
                     }
-                    protectedEntry={currentPath.length === 0 && entry.kind === 'dir' && entry.path === 'knowledge'}
+                    protectedEntry={isProtectedPath(entry.path)}
                   />
                 ))}
               </div>
@@ -898,7 +912,7 @@ function FilesPage() {
                     onCopy={(e) => setPendingCopy([e])}
                     onMenuToggle={setOpenMenuPath}
                     onDragStart={handleDragStart}
-                    protectedEntry={currentPath.length === 0 && entry.kind === 'dir' && entry.path === 'knowledge'}
+                    protectedEntry={isProtectedPath(entry.path)}
                   />
                 ))}
               </div>
@@ -1201,7 +1215,7 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
       aria-selected={selected}
       data-row-index={index}
       data-row-path={entry.path}
-      draggable
+      draggable={!protectedEntry}
       onDragStart={(e) => onDragStart(e, entry)}
       onClick={(e) => { e.stopPropagation(); onSelect(entry, e); }}
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
@@ -1265,7 +1279,7 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
       aria-selected={selected}
       data-row-index={index}
       data-row-path={entry.path}
-      draggable
+      draggable={!protectedEntry}
       onDragStart={(e) => onDragStart(e, entry)}
       onClick={(e) => { e.stopPropagation(); onSelect(entry, e); }}
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
