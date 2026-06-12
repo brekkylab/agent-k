@@ -4,7 +4,10 @@ import { FileTypeIcon } from './FileTypeIcon';
 
 interface Props {
   filename: string;
-  status: 'uploading' | 'uploaded' | 'error';
+  // 'staged' = picked locally but not uploaded yet (home composer, uploaded on
+  // send); rendered like 'uploaded'. 'uploading'/'uploaded'/'error' = live state
+  // of a file already being/been uploaded to a session (session composer).
+  status: 'staged' | 'uploading' | 'uploaded' | 'error';
   /** True for files referenced from the project's shared files (vs. uploaded
    *  via the clip). Shows a small marker next to the file-type icon. */
   shared?: boolean;
@@ -27,7 +30,7 @@ export function AttachmentChip({ filename, status, shared, error, onRemove }: Pr
     >
       {status === 'uploading' && <span className="cw-attach-spinner">⏳</span>}
       {status === 'error' && <span className="cw-attach-error"><Icon name="x" size={11} /></span>}
-      {status === 'uploaded' && (
+      {(status === 'uploaded' || status === 'staged') && (
         <>
           {/* Source marker: cloud = referenced from shared files, clip = uploaded. */}
           <span className={`cw-attach-source cw-attach-source--${shared ? 'shared' : 'upload'}`}>

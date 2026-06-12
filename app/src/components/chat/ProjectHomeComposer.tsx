@@ -124,7 +124,7 @@ export function ProjectHomeComposer({
               <AttachmentChip
                 key={`${file.name}-${i}`}
                 filename={file.name}
-                status="uploaded"
+                status="staged"
                 onRemove={() => onRemoveFile?.(i)}
               />
             ))}
