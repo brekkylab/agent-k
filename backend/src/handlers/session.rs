@@ -878,10 +878,20 @@ pub async fn get_message_history(
                         .unwrap_or_else(|| TOP_LEVEL_AGENT_NAME.to_string()),
                 },
             };
-            // Only Speedwagon answers carry corpus citations to check.
+            // Only Speedwagon answers carry corpus citations to check. Reuse a
+            // cached result when present; otherwise verify once and cache it.
+            // The cache is dropped per project whenever the corpus changes, so a
+            // hit always reflects the current corpus.
             let citations = if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_docs.is_empty() {
-                let text: String = r.message.contents.iter().filter_map(|p| p.as_text()).collect();
-                crate::handlers::knowledge::verify_citations(&text, &corpus_docs)
+                match state.citation_checks(session.project_id, session.id, r.seq) {
+                    Some(cached) => (*cached).clone(),
+                    None => {
+                        let text: String = r.message.contents.iter().filter_map(|p| p.as_text()).collect();
+                        let checks = crate::handlers::knowledge::verify_citations(&text, &corpus_docs);
+                        state.set_citation_checks(session.project_id, session.id, r.seq, checks.clone());
+                        checks
+                    }
+                }
             } else {
                 Vec::new()
             };

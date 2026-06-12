@@ -69,6 +69,10 @@ pub struct AppState {
     /// Per-project (title, line_count) for citation checks; refreshed by resync,
     /// read on message fetch so it never loads corpus content on that path.
     corpus_summaries: DashMap<Uuid, Arc<Vec<(String, usize)>>>,
+    /// Cached citation-verification results, keyed by `(project, session, seq)`.
+    /// Lets the message-fetch path reuse a check instead of recomputing it each
+    /// poll; dropped per project when the corpus changes so it never goes stale.
+    citation_checks: DashMap<(Uuid, Uuid, i64), Arc<Vec<crate::handlers::knowledge::CitationCheck>>>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -102,6 +106,7 @@ impl AppState {
             resync_locks: DashMap::new(),
             store_init_locks: DashMap::new(),
             corpus_summaries: DashMap::new(),
+            citation_checks: DashMap::new(),
             jwt,
             data_root,
             max_upload_bytes,
@@ -198,6 +203,36 @@ impl AppState {
         self.corpus_summaries.insert(project_id, Arc::new(summary));
     }
 
+    /// Cached citation checks for one message, if computed since the corpus last
+    /// changed.
+    pub fn citation_checks(
+        &self,
+        project_id: Uuid,
+        session_id: Uuid,
+        seq: i64,
+    ) -> Option<Arc<Vec<crate::handlers::knowledge::CitationCheck>>> {
+        self.citation_checks.get(&(project_id, session_id, seq)).map(|e| e.clone())
+    }
+
+    /// Cache the citation checks for one message.
+    pub fn set_citation_checks(
+        &self,
+        project_id: Uuid,
+        session_id: Uuid,
+        seq: i64,
+        checks: Vec<crate::handlers::knowledge::CitationCheck>,
+    ) {
+        self.citation_checks
+            .insert((project_id, session_id, seq), Arc::new(checks));
+    }
+
+    /// Drop all cached citation checks for a project. Called when its corpus
+    /// changes (resync, engine rebuild) so stale checks are recomputed on the
+    /// next read against the updated corpus.
+    pub fn clear_citation_checks(&self, project_id: Uuid) {
+        self.citation_checks.retain(|k, _| k.0 != project_id);
+    }
+
     /// Return the document corpus [`SharedStore`] for `project_id`, opening it
     /// on first access. The store lives at
     /// `data_root/projects/{project_id}/.speedwagon`; its directories are
@@ -268,6 +303,7 @@ impl AppState {
         self.corpus_summaries.remove(&project_id);
         self.knowledge_failed_files.remove(&project_id);
         self.knowledge_file_ids.retain(|k, _| k.0 != project_id);
+        self.clear_citation_checks(project_id);
     }
 
     pub fn insert_agent(&self, id: Uuid, agent: Agent) {

@@ -4,6 +4,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_k_backend::handlers::CitationCheck;
 use agent_k_backend::state::AppState;
 use axum::http::StatusCode;
 use common::{
@@ -334,6 +335,57 @@ async fn knowledge_files_reports_failed_status_for_bad_file() {
     }
     assert!(failed, "broken.pdf should be reported failed");
     let _ = state;
+}
+
+/// Cached citation checks must be dropped when the corpus changes, so a later
+/// read recomputes them against the new corpus instead of serving a stale result.
+#[tokio::test]
+async fn corpus_change_clears_cached_citation_checks() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+    let _ = authed(&app, "GET", &format!("/dirents?path=projects/{pid}/shared"), &token, None).await;
+
+    // Seed a cached citation check for some message in this project.
+    let session_id = Uuid::new_v4();
+    let seq = 1i64;
+    state.set_citation_checks(
+        pid,
+        session_id,
+        seq,
+        vec![CitationCheck {
+            index: 1,
+            label: "Old Doc".to_string(),
+            kind: "corpus".to_string(),
+            verified: true,
+            referenced: true,
+        }],
+    );
+    assert!(state.citation_checks(pid, session_id, seq).is_some(), "cache should be seeded");
+
+    // Uploading into knowledge triggers a resync, which must clear the cache.
+    let status = upload_to_knowledge(
+        &app,
+        &token,
+        &pid.to_string(),
+        &[("note.md", b"# Doc\n\nBody." as &[u8])],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(wait_for_count(&state, pid, 1).await, 1, "doc should index");
+
+    // Poll briefly: the resync clears the cache on completion.
+    let mut cleared = false;
+    for _ in 0..40 {
+        if state.citation_checks(pid, session_id, seq).is_none() {
+            cleared = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(cleared, "a corpus change must clear cached citation checks");
 }
 
 /// Overlapping rescans must converge: each upload spawns a background rescan and

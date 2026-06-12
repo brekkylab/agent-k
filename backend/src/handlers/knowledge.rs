@@ -167,6 +167,9 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
     // Refresh the cached (title, line_count) summary so message-fetch citation
     // checks read it instead of loading every document's content (see #5).
     state.set_corpus_summary(project_id, corpus_summary(&store));
+    // The corpus changed, so any cached citation checks for this project are
+    // stale; drop them so the next read recomputes against the new corpus.
+    state.clear_citation_checks(project_id);
     Ok(())
 }
 
