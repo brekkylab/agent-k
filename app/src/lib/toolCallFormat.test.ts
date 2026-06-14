@@ -141,29 +141,37 @@ describe('codeFence', () => {
 
 describe('fieldToMarkdown', () => {
   it('wraps single-line strings in inline code', () => {
-    expect(fieldToMarkdown('path', '/a/b')).toBe('- **path**: `/a/b`');
+    expect(fieldToMarkdown('path', '/a/b')).toBe('- **`path`**: `/a/b`');
   });
 
   it('keeps inline code intact when the value contains backticks', () => {
-    expect(fieldToMarkdown('cmd', 'use `ls`')).toBe('- **cmd**: `` use `ls` ``');
+    expect(fieldToMarkdown('cmd', 'use `ls`')).toBe('- **`cmd`**: `` use `ls` ``');
   });
 
   it('prints scalars bare', () => {
-    expect(fieldToMarkdown('limit', 5)).toBe('- **limit**: 5');
+    expect(fieldToMarkdown('limit', 5)).toBe('- **`limit`**: 5');
   });
 
   it('fences multi-line strings', () => {
-    expect(fieldToMarkdown('body', 'line1\nline2')).toBe('- **body**:\n\n```\nline1\nline2\n```');
+    expect(fieldToMarkdown('body', 'line1\nline2')).toBe('- **`body`**:\n\n```\nline1\nline2\n```');
   });
 
   it('fences nested objects with pretty JSON', () => {
-    expect(fieldToMarkdown('opts', { a: 1 })).toBe('- **opts**:\n\n```\n{\n  "a": 1\n}\n```');
+    expect(fieldToMarkdown('opts', { a: 1 })).toBe('- **`opts`**:\n\n```\n{\n  "a": 1\n}\n```');
+  });
+
+  it('renders the key as inline code so special characters stay inert', () => {
+    expect(fieldToMarkdown('a*b_c', 1)).toBe('- **`a*b_c`**: 1');
+  });
+
+  it('widens the key fence when the key contains a backtick', () => {
+    expect(fieldToMarkdown('a`b', 1)).toBe('- **``a`b``**: 1');
   });
 });
 
 describe('valueToMarkdown', () => {
   it('renders fields as a bullet list', () => {
-    expect(valueToMarkdown({ path: '/a', limit: 5 })).toBe('- **path**: `/a`\n- **limit**: 5');
+    expect(valueToMarkdown({ path: '/a', limit: 5 })).toBe('- **`path`**: `/a`\n- **`limit`**: 5');
   });
 
   it('renders empty objects as a marker', () => {
@@ -192,11 +200,11 @@ describe('toolCallToMarkdown', () => {
         '',
         '### Inputs',
         '',
-        '- **path**: `/x`',
+        '- **`path`**: `/x`',
         '',
         '### Results',
         '',
-        '- **error**: `nope`',
+        '- **`error`**: `nope`',
       ].join('\n'),
     );
   });

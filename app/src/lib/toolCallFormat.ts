@@ -89,13 +89,14 @@ export function codeFence(text: string): string {
 /// presents the same value (inline code / fenced block / bare scalar).
 export function fieldToMarkdown(key: string, value: unknown): string {
   const d = classifyFieldValue(value);
+  const k = `**${inlineCode(key)}**`;
   switch (d.kind) {
     case 'inline':
-      return `- **${key}**: ${d.text}`;
+      return `- ${k}: ${d.text}`;
     case 'code':
-      return `- **${key}**: ${inlineCode(d.text)}`;
+      return `- ${k}: ${inlineCode(d.text)}`;
     case 'block':
-      return `- **${key}**:\n\n${codeFence(d.text)}`;
+      return `- ${k}:\n\n${codeFence(d.text)}`;
   }
 }
 
