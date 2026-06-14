@@ -9,10 +9,14 @@ import { IconButton } from '@/components/uiPrimitives';
 import { Select } from '@/components/Select';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { ArtifactsPanel } from '@/components/ArtifactsPanel';
+import { CopyToSharedDialog } from '@/components/CopyToSharedDialog';
 import { summarizeCron } from '@/components/SchedulePicker';
 import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, listRuns, listTriggers } from '@/api/automations';
 import { listMessages } from '@/api/messages';
 import { getModelCatalog, modelLabel } from '@/api/models';
+import { getProject } from '@/api/projects';
+import type { DirentScope } from '@/api/dirents';
 import { getAgentSurface } from '@/domain/agentSurfaces';
 import { formatMessageTime } from '@/lib/formatMessageTime';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
@@ -21,7 +25,8 @@ import { loadNs } from '@/i18n/loader';
 import type { Automation, Message, Run, Trigger } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')({
-  loader: () => loadNs('automation'),
+  // 'session'/'dialogs' cover the artifacts panel + copy-to-shared dialog.
+  loader: () => loadNs('automation', 'session', 'dialogs', 'common'),
   component: AutomationsPage,
 });
 
@@ -152,6 +157,10 @@ function AutomationsPage() {
     [automations],
   );
   const queryClient = useQueryClient();
+  const project = useQuery({ queryKey: ['project', projectSlug], queryFn: () => getProject(projectSlug) });
+  const projectId = project.data?.id ?? '';
+  // Source scope + paths for the "copy artifact to shared" dialog (null = closed).
+  const [copyToShared, setCopyToShared] = useState<{ scope: DirentScope; paths: string[] } | null>(null);
   const runQueries = useQueries({
     queries: automations.map((a) => ({
       queryKey: ['runs', a.id],
@@ -294,21 +303,41 @@ function AutomationsPage() {
   const selectedRun: Run | null = selectedRunId
     ? displayRuns.find((r) => r.id === selectedRunId) ?? null
     : null;
+  const selectedRunLive = selectedRun
+    ? selectedRun.status === 'queued' || selectedRun.status === 'running'
+    : false;
   const messagesQuery = useQuery({
     queryKey: ['messages', selectedRun?.sessionId],
     queryFn: () => listMessages(selectedRun!.sessionId),
     enabled: Boolean(selectedRun),
   });
-  const selectedRunLive = selectedRun
-    ? selectedRun.status === 'queued' || selectedRun.status === 'running'
-    : false;
   const eventsQuery = useQuery({
     queryKey: ['runEvents', selectedRun?.automationId, selectedRun?.id],
     queryFn: () => listRunEvents(selectedRun!.automationId, selectedRun!.id),
     enabled: Boolean(selectedRun),
-    // Poll the audit log while the selected run is still in-flight.
-    refetchInterval: selectedRunLive ? 4000 : false,
   });
+  // Single poller for the selected in-flight run: one 4s timer refreshes the
+  // session preview, the event log, and the artifacts panel together (rather
+  // than three independent intervals). On the live→done transition it fires
+  // once more for that run so the final snapshot lands.
+  const liveRun = selectedRunLive && selectedRun && projectId
+    ? { sessionId: selectedRun.sessionId, runId: selectedRun.id, automationId: selectedRun.automationId }
+    : null;
+  const prevLiveRef = useRef<typeof liveRun>(null);
+  useEffect(() => {
+    const refresh = (r: NonNullable<typeof liveRun>) => {
+      void queryClient.invalidateQueries({ queryKey: ['messages', r.sessionId] });
+      void queryClient.invalidateQueries({ queryKey: ['runEvents', r.automationId, r.runId] });
+      void queryClient.invalidateQueries({ queryKey: ['dirents', 'artifacts', projectId, r.sessionId] });
+    };
+    const prev = prevLiveRef.current;
+    if (prev && prev.runId !== liveRun?.runId) refresh(prev); // final snapshot
+    prevLiveRef.current = liveRun;
+    if (!liveRun) return;
+    const id = setInterval(() => refresh(liveRun), 4000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRun?.runId, projectId, queryClient]);
   const previewMessages: Message[] = messagesQuery.data ?? [];
   const runEvents: RunEventLike[] = useMemo(
     () => (eventsQuery.data ?? []).map((e) => ({
@@ -469,6 +498,14 @@ function AutomationsPage() {
           })
         )}
       </div>
+
+      {projectId && (
+        <ArtifactsPanel
+          projectId={projectId}
+          sessionId={run.sessionId}
+          onCopyToShared={(scope, paths) => setCopyToShared({ scope, paths })}
+        />
+      )}
 
       <details className="cw-event-logs">
         <summary>
@@ -733,6 +770,20 @@ function AutomationsPage() {
           onConfirm={confirmManualRun}
           onClose={() => setPendingManualRun(null)}
           confirmOnEnter
+        />
+      )}
+
+      {copyToShared !== null && (
+        <CopyToSharedDialog
+          open
+          projectId={projectId}
+          sourceScope={copyToShared.scope}
+          sourcePaths={copyToShared.paths}
+          onClose={() => setCopyToShared(null)}
+          onDone={() => {
+            setCopyToShared(null);
+            void queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
+          }}
         />
       )}
     </section>
