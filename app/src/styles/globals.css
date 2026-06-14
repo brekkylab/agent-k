@@ -3539,6 +3539,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-trigger-badge {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: 11px;
   font-weight: 500;
   padding: 2px 8px;
@@ -4114,28 +4116,6 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   outline: 2px solid var(--cw-accent-line);
   outline-offset: 2px;
 }
-.cw-trigger-action {
-  border: 0;
-  background: transparent;
-  color: var(--cw-ink-3);
-  width: 28px;
-  height: 28px;
-  border-radius: var(--cw-radius-sm);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.cw-trigger-action:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
-.cw-trigger-action.is-armed,
-.cw-trigger-action.is-armed:hover {
-  width: auto;
-  padding: 0 10px;
-  background: var(--cw-destructive);
-  color: var(--cw-paper);
-  font-size: 11px;
-  font-weight: 600;
-}
 
 .cw-trigger-picker {
   display: grid;
@@ -4227,13 +4207,58 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-weight: 500;
   flex: 0 0 80px;
 }
-.cw-sched-num { width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
 .cw-sched-unit { min-width: 200px; flex: 1 1 200px; }
 .cw-sched-unit-narrow { min-width: 110px; flex: 0 0 auto; }
+.cw-sched-unit-tiny { min-width: 64px; flex: 0 0 auto; }
 .cw-sched-time { width: 120px; }
 .cw-sched-text { flex: 1 1 200px; min-width: 0; }
 .cw-sched-suffix { font-size: 13px; color: var(--cw-ink-2); }
-.cw-weekday-row { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Segmented control for repeat-frequency / mode (mirrors cw-side-seg). */
+.cw-segmented {
+  display: flex;
+  gap: 2px;
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 3px;
+  background: var(--cw-bg-muted);
+  border-radius: var(--cw-radius-md);
+}
+.cw-segmented-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--cw-radius-md) - 3px);
+  background: transparent;
+  color: var(--cw-ink-3);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, box-shadow 120ms;
+}
+.cw-segmented-tab:hover { color: var(--cw-ink); }
+.cw-segmented-tab[aria-selected="true"] {
+  background: var(--cw-accent-soft);
+  color: var(--cw-accent-2);
+  box-shadow: inset 0 0 0 1px var(--cw-accent-line);
+  font-weight: 600;
+}
+.cw-weekday-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
 .cw-weekday-chip {
   display: inline-flex;
   align-items: center;
@@ -4256,6 +4281,14 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   background: var(--cw-ink);
   border-color: var(--cw-ink);
   color: var(--cw-paper);
+}
+/* Implied default: no chip is explicitly selected, so the fallback value shows
+   as "selected, but not a deliberate choice" — a muted, dashed half-state. */
+.cw-weekday-chip.is-implied {
+  background: color-mix(in srgb, var(--cw-ink) 18%, var(--cw-paper));
+  border-color: color-mix(in srgb, var(--cw-ink) 40%, var(--cw-paper));
+  border-style: dashed;
+  color: var(--cw-ink-1);
 }
 .cw-schedule-summary {
   display: flex;
@@ -4309,8 +4342,6 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   box-shadow: 0 0 0 3px var(--cw-selected-ring);
 }
 .cw-trigger-row.is-editing {
-  background: var(--cw-selected-bg);
-  border-color: var(--cw-accent);
   flex-direction: column;
   align-items: stretch;
   gap: 12px;
@@ -4330,7 +4361,6 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   color: var(--cw-ink);
   font-weight: 500;
 }
-.cw-trigger-action:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* Webhook token reveal dialog (one-shot bearer token) */
 .cw-webhook-dialog {

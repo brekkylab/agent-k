@@ -4,26 +4,42 @@
 // intentionally not surfaced. croner is used backend-side, so we lean on
 // its `W#N` syntax for "the nth weekday of the month".
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Icon } from '@/components/Icon';
 import { Select } from '@/components/Select';
+import { SegmentedControl } from '@/components/SegmentedControl';
 
 export type SchedulePickerValue = { expr: string; tz: string };
 
-type Unit = 'hour' | 'day' | 'week' | 'month' | 'custom';
+type Unit = 'minute' | 'hour' | 'day' | 'week' | 'month' | 'custom';
 type MonthlyMode = 'day' | 'weekday';
+
+// cron's minute field is 0-59, so only divisors of 60 give an evenly-spaced
+// "every N minutes" — other steps drift across the hour boundary.
+const MINUTE_INTERVALS = [5, 10, 15, 20, 30];
+
+// cron's hour field is 0-23, so only divisors of 24 give an evenly-spaced
+// "every N hours" — other steps drift across the midnight boundary.
+const HOUR_INTERVALS = [1, 2, 3, 4, 6, 8, 12];
+
+// When the user clears every weekday chip, the schedule falls back to a single
+// implied weekday (shown in the UI with a distinct "implied" style).
+const WEEKDAY_FALLBACK = 1;  // Monday (0=Sun)
 
 interface State {
   unit: Unit;
-  interval: number;          // hour only
+  minuteInterval: number;    // for unit==='minute' (divisor of 60)
+  interval: number;          // for unit==='hour' (divisor of 24)
   hour: number;              // 0-23
   minute: number;            // 0-59
   weekdays: Set<number>;     // 0=Sun..6=Sat (for week)
   monthlyMode: MonthlyMode;  // for month
   dayOfMonth: number;        // for monthlyMode==='day'
+  lastDay: boolean;          // monthlyMode==='day' + last day of month (cron `L`)
   nth: number;               // 1..5 (for weekday mode)
+  nthLast: boolean;          // weekday mode + last occurrence in month (cron `<dow>L`)
   nthWeekday: number;        // 0..6 (for weekday mode)
   customExpr: string;
   tz: string;
@@ -33,30 +49,38 @@ function pad(n: number): string { return n.toString().padStart(2, '0'); }
 
 function defaultState(tz: string, expr: string): State {
   return {
-    unit: 'day', interval: 1, hour: 9, minute: 0,
+    unit: 'day', minuteInterval: 5, interval: 1,
+    hour: 9, minute: 0,
     weekdays: new Set([1, 2, 3, 4, 5]),
-    monthlyMode: 'day', dayOfMonth: 1, nth: 1, nthWeekday: 1,
+    monthlyMode: 'day', dayOfMonth: 1, lastDay: false, nth: 1, nthLast: false, nthWeekday: 1,
     customExpr: expr || '0 9 * * *', tz,
   };
 }
 
 export function specToCron(s: State): string {
   switch (s.unit) {
+    case 'minute':
+      return `*/${Math.max(1, s.minuteInterval)} * * * *`;
     case 'hour':
       return `0 */${Math.max(1, s.interval)} * * *`;
     case 'day':
       return `${s.minute} ${s.hour} * * *`;
     case 'week': {
+      // Empty selection is allowed in the UI; fall back to a single weekday
+      // (Monday) rather than "every day".
       const days = [...s.weekdays].sort((a, b) => a - b);
-      const list = days.length ? days.join(',') : '*';
+      const list = days.length ? days.join(',') : String(WEEKDAY_FALLBACK);
       return `${s.minute} ${s.hour} * * ${list}`;
     }
     case 'month':
       if (s.monthlyMode === 'day') {
-        return `${s.minute} ${s.hour} ${s.dayOfMonth} * *`;
+        return `${s.minute} ${s.hour} ${s.lastDay ? 'L' : s.dayOfMonth} * *`;
       }
-      // croner supports `<weekday>#<n>` for "nth weekday of month"
-      return `${s.minute} ${s.hour} * * ${s.nthWeekday}#${Math.max(1, Math.min(5, s.nth))}`;
+      // croner supports `<weekday>#<n>` for "nth weekday" and `<weekday>L` for
+      // "last weekday of month".
+      return s.nthLast
+        ? `${s.minute} ${s.hour} * * ${s.nthWeekday}L`
+        : `${s.minute} ${s.hour} * * ${s.nthWeekday}#${Math.max(1, Math.min(5, s.nth))}`;
     case 'custom':
       return s.customExpr;
   }
@@ -68,6 +92,15 @@ function parseCron(expr: string, tz: string): State {
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) return { ...fallback, unit: 'custom', customExpr: expr };
   const [m, h, dom, mon, dow] = parts;
+
+  // "*/N * * * *" → every N minutes; "* * * * *" → every minute
+  const minutely = /^\*\/(\d+)$/.exec(m);
+  if (minutely && h === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return { ...fallback, unit: 'minute', minuteInterval: parseInt(minutely[1], 10) };
+  }
+  if (m === '*' && h === '*' && dom === '*' && mon === '*' && dow === '*') {
+    return { ...fallback, unit: 'minute', minuteInterval: 1 };
+  }
 
   // "0 */N * * *" → every N hours; "0 * * * *" → every 1 hour
   const hourly = /^\*\/(\d+)$/.exec(h);
@@ -96,6 +129,18 @@ function parseCron(expr: string, tz: string): State {
     };
   }
 
+  // "M H * * <dow>L" → the last <weekday> of the month.
+  const lastDow = /^(\d+)L$/.exec(dow);
+  if (mNum !== null && hNum !== null && dom === '*' && mon === '*' && lastDow) {
+    return {
+      ...fallback, unit: 'month',
+      hour: hNum, minute: mNum,
+      monthlyMode: 'weekday',
+      nthWeekday: parseInt(lastDow[1], 10),
+      nthLast: true,
+    };
+  }
+
   if (mNum !== null && hNum !== null && dom === '*' && mon === '*' && /^[\d,]+$/.test(dow)) {
     const set = new Set(dow.split(',').map(Number).filter((n) => n >= 0 && n <= 6));
     return { ...fallback, unit: 'week', hour: hNum, minute: mNum, weekdays: set };
@@ -110,15 +155,32 @@ function parseCron(expr: string, tz: string): State {
     };
   }
 
+  // "M H L * *" → the last day of the month.
+  if (mNum !== null && hNum !== null && dom === 'L' && mon === '*' && dow === '*') {
+    return {
+      ...fallback, unit: 'month',
+      hour: hNum, minute: mNum,
+      monthlyMode: 'day',
+      lastDay: true,
+    };
+  }
+
   return { ...fallback, unit: 'custom', customExpr: expr };
 }
 
 export function summarizeCron(expr: string, t: TFunction<'automation'>): string {
   const s = parseCron(expr, '');
-  const time = `${pad(s.hour)}:${pad(s.minute)}`;
-  const weekdayArr = t('sched.weekdays', { returnObjects: true }) as string[];
+  // On the hour → "9시" / "9 o'clock"; otherwise "09:30".
+  const fmtTime = (h: number, m: number) =>
+    (m === 0 ? t('sched.summary.oclock', { h }) : `${pad(h)}:${pad(m)}`);
+  const time = fmtTime(s.hour, s.minute);
+  const weekdayArr = t('sched.weekdays_short', { returnObjects: true }) as string[];
   const nthArr = t('sched.nth', { returnObjects: true }) as string[];
   switch (s.unit) {
+    case 'minute':
+      return s.minuteInterval === 1
+        ? t('sched.summary.every_minute')
+        : t('sched.summary.every_n_minutes', { n: s.minuteInterval });
     case 'hour':
       return s.interval === 1
         ? t('sched.summary.every_hour')
@@ -132,7 +194,15 @@ export function summarizeCron(expr: string, t: TFunction<'automation'>): string 
     }
     case 'month':
       if (s.monthlyMode === 'day') {
-        return t('sched.summary.monthly_day', { day: s.dayOfMonth, time });
+        return s.lastDay
+          ? t('sched.summary.monthly_last', { time })
+          : t('sched.summary.monthly_day', { day: s.dayOfMonth, time });
+      }
+      if (s.nthLast) {
+        return t('sched.summary.monthly_weekday_last', {
+          weekday: weekdayArr[s.nthWeekday],
+          time,
+        });
       }
       return t('sched.summary.monthly_weekday', {
         nth: nthArr[s.nth - 1] ?? String(s.nth),
@@ -151,7 +221,8 @@ export function SchedulePicker({
   onChange: (next: SchedulePickerValue) => void;
 }) {
   const { t } = useTranslation('automation');
-  const weekdayArr = t('sched.weekdays', { returnObjects: true }) as string[];
+  const weekdayArr = t('sched.weekdays_short', { returnObjects: true }) as string[];
+  const weekdayLongArr = t('sched.weekdays', { returnObjects: true }) as string[];
   const nthArr = t('sched.nth', { returnObjects: true }) as string[];
   const [state, setState] = useState<State>(() => parseCron(value.expr, value.tz));
 
@@ -172,6 +243,54 @@ export function SchedulePicker({
       return { ...prev, weekdays: next };
     });
   };
+
+  // Drag-to-select for the weekday chips: pointerdown decides
+  // the paint mode from the first chip's state (add if it was off, remove if it
+  // was on); every chip the pointer then travels over is forced to that state.
+  // elementFromPoint keeps it working for touch, where the pressed chip
+  // implicitly captures the pointer.
+  const dragMode = useRef<'add' | 'remove' | null>(null);
+  useEffect(() => {
+    const end = () => { dragMode.current = null; };
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    return () => {
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    };
+  }, []);
+  const paintWeekday = (v: number, mode: 'add' | 'remove') => {
+    setState((prev) => {
+      const has = prev.weekdays.has(v);
+      if (mode === 'add' ? has : !has) return prev;
+      const next = new Set(prev.weekdays);
+      if (mode === 'add') next.add(v);
+      else next.delete(v);
+      return { ...prev, weekdays: next };
+    });
+  };
+  const readWeekdayEl = (x: number, y: number): HTMLElement | null =>
+    document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-weekday]') ?? null;
+  const weekdaysDrag = {
+    onPointerDown: (e: ReactPointerEvent) => {
+      const el = readWeekdayEl(e.clientX, e.clientY);
+      if (!el) return;
+      const v = Number(el.dataset.weekday);
+      // preventDefault stops text selection / a spurious synthetic click, but
+      // also suppresses the button's implicit focus — restore it explicitly so
+      // keyboard users can keep operating the chip after a click.
+      e.preventDefault();
+      el.focus();
+      const mode: 'add' | 'remove' = state.weekdays.has(v) ? 'remove' : 'add';
+      dragMode.current = mode;
+      paintWeekday(v, mode);
+    },
+    onPointerMove: (e: ReactPointerEvent) => {
+      if (!dragMode.current) return;
+      const el = readWeekdayEl(e.clientX, e.clientY);
+      if (el) paintWeekday(Number(el.dataset.weekday), dragMode.current);
+    },
+  };
   const setTime = (v: string) => {
     const [h, m] = v.split(':').map(Number);
     if (Number.isFinite(h) && Number.isFinite(m)) update({ hour: h, minute: m });
@@ -179,66 +298,79 @@ export function SchedulePicker({
 
   const previewCron = specToCron(state);
   const summary = summarizeCron(previewCron, t);
-  const intervalDisabled = state.unit !== 'hour';
 
   return (
     <div className="cw-schedule-picker">
-      {/* Row 1: Repeat every [N] [unit] */}
+      {/* Row 1: Repeat every [unit] */}
       <div className="cw-sched-row">
         <span className="cw-sched-label">{t('sched.repeat_every')}</span>
-        <input
-          type="number"
-          className="cw-sched-num"
-          min={1}
-          max={24}
-          value={state.interval}
-          disabled={intervalDisabled}
-          aria-disabled={intervalDisabled}
-          onChange={(e) => update({ interval: Math.max(1, Math.min(24, parseInt(e.target.value, 10) || 1)) })}
-          title={intervalDisabled ? t('sched.interval_hint') : ''}
-        />
-        <Select<Unit>
+        <SegmentedControl<Unit>
           value={state.unit}
           onChange={(unit) => update({ unit })}
           options={[
+            { value: 'minute', label: t('sched.opt.minutely') },
             { value: 'hour', label: t('sched.opt.hourly') },
             { value: 'day', label: t('sched.opt.daily') },
             { value: 'week', label: t('sched.opt.weekly') },
             { value: 'month', label: t('sched.opt.monthly') },
             { value: 'custom', label: t('sched.opt.custom') },
           ]}
-          className="cw-sched-unit"
-          triggerClassName="cw-sched-select"
           ariaLabel={t('sched.repeat_every')}
         />
       </div>
+
+      {/* every-N-minutes (divisors of 60 only) */}
+      {state.unit === 'minute' && (
+        <div className="cw-sched-row">
+          <span className="cw-sched-label">{t('sched.interval_label')}</span>
+          <Select<number>
+            value={state.minuteInterval}
+            onChange={(minuteInterval) => update({ minuteInterval })}
+            // Keep a legacy non-divisor value visible until a preset is picked.
+            options={(MINUTE_INTERVALS.includes(state.minuteInterval)
+              ? MINUTE_INTERVALS
+              : [...MINUTE_INTERVALS, state.minuteInterval].sort((a, b) => a - b)
+            ).map((n) => ({ value: n, label: String(n) }))}
+            className="cw-sched-unit-tiny"
+            triggerClassName="cw-sched-select"
+            ariaLabel={t('sched.interval_label')}
+          />
+          <span className="cw-sched-suffix">{t('sched.minute_suffix')}</span>
+        </div>
+      )}
+
+      {/* every-N-hours (divisors of 24 only) */}
+      {state.unit === 'hour' && (
+        <div className="cw-sched-row">
+          <span className="cw-sched-label">{t('sched.interval_label')}</span>
+          <Select<number>
+            value={state.interval}
+            onChange={(interval) => update({ interval })}
+            // Keep a legacy non-divisor value (e.g. parsed `*/5`) visible until
+            // the user picks a divisor, instead of rendering a blank trigger.
+            options={(HOUR_INTERVALS.includes(state.interval)
+              ? HOUR_INTERVALS
+              : [...HOUR_INTERVALS, state.interval].sort((a, b) => a - b)
+            ).map((n) => ({ value: n, label: String(n) }))}
+            className="cw-sched-unit-tiny"
+            triggerClassName="cw-sched-select"
+            ariaLabel={t('sched.interval_label')}
+          />
+          <span className="cw-sched-suffix">{t('sched.interval_suffix')}</span>
+        </div>
+      )}
 
       {/* Row 2: Monthly mode dropdown */}
       {state.unit === 'month' && (
         <div className="cw-sched-row">
           <span className="cw-sched-label">{t('sched.repeat_mode')}</span>
-          <Select
-            value={state.monthlyMode === 'day' ? `day-${state.dayOfMonth}` : `wk-${state.nth}-${state.nthWeekday}`}
-            onChange={(v) => {
-              if (v.startsWith('day-')) {
-                update({ monthlyMode: 'day', dayOfMonth: parseInt(v.slice(4), 10) });
-              } else if (v.startsWith('wk-')) {
-                const [, nthStr, wdStr] = v.split('-');
-                update({ monthlyMode: 'weekday', nth: parseInt(nthStr, 10), nthWeekday: parseInt(wdStr, 10) });
-              }
-            }}
+          <SegmentedControl<MonthlyMode>
+            value={state.monthlyMode}
+            onChange={(monthlyMode) => update({ monthlyMode })}
             options={[
-              { value: `day-${state.dayOfMonth}`, label: t('sched.monthly_day_opt', { day: state.dayOfMonth }) },
-              {
-                value: `wk-${state.nth}-${state.nthWeekday}`,
-                label: t('sched.monthly_weekday_opt', {
-                  nth: nthArr[state.nth - 1] ?? String(state.nth),
-                  weekday: weekdayArr[state.nthWeekday],
-                }),
-              },
+              { value: 'day', label: t('sched.monthly_mode.day') },
+              { value: 'weekday', label: t('sched.monthly_mode.weekday') },
             ]}
-            className="cw-sched-unit"
-            triggerClassName="cw-sched-select"
             ariaLabel={t('sched.repeat_mode')}
           />
         </div>
@@ -248,34 +380,46 @@ export function SchedulePicker({
       {state.unit === 'month' && state.monthlyMode === 'day' && (
         <div className="cw-sched-row">
           <span className="cw-sched-label">{t('sched.day_of_month')}</span>
-          <input
-            type="number"
-            className="cw-sched-num"
-            min={1}
-            max={31}
-            value={state.dayOfMonth}
-            onChange={(e) => update({ dayOfMonth: Math.max(1, Math.min(31, parseInt(e.target.value, 10) || 1)) })}
+          <Select<string>
+            value={state.lastDay ? 'L' : String(state.dayOfMonth)}
+            onChange={(v) => {
+              if (v === 'L') update({ lastDay: true });
+              else update({ lastDay: false, dayOfMonth: parseInt(v, 10) });
+            }}
+            options={[
+              ...Array.from({ length: 31 }, (_, i) => ({
+                value: String(i + 1),
+                label: t('sched.day_label', { day: i + 1 }),
+              })),
+              { value: 'L', label: t('sched.last_day') },
+            ]}
+            className="cw-sched-unit-tiny"
+            triggerClassName="cw-sched-select"
+            ariaLabel={t('sched.day_of_month')}
           />
-          {t('sched.day_suffix') !== 'sched.day_suffix' && (
-            <span className="cw-sched-suffix">{t('sched.day_suffix')}</span>
-          )}
         </div>
       )}
       {state.unit === 'month' && state.monthlyMode === 'weekday' && (
         <div className="cw-sched-row">
           <span className="cw-sched-label">{t('sched.detail')}</span>
-          <Select<number>
-            value={state.nth}
-            onChange={(nth) => update({ nth })}
-            options={nthArr.map((n, i) => ({ value: i + 1, label: n }))}
-            className="cw-sched-unit cw-sched-unit-narrow"
+          <Select<string>
+            value={state.nthLast ? 'L' : String(state.nth)}
+            onChange={(v) => {
+              if (v === 'L') update({ nthLast: true });
+              else update({ nthLast: false, nth: parseInt(v, 10) });
+            }}
+            options={[
+              ...nthArr.map((n, i) => ({ value: String(i + 1), label: n })),
+              { value: 'L', label: t('sched.nth_last') },
+            ]}
+            className="cw-sched-unit-tiny"
             triggerClassName="cw-sched-select"
             ariaLabel={t('sched.detail')}
           />
           <Select<number>
             value={state.nthWeekday}
             onChange={(nthWeekday) => update({ nthWeekday })}
-            options={weekdayArr.map((d, i) => ({ value: i, label: t('sched.weekday_option', { day: d }) }))}
+            options={weekdayLongArr.map((d, i) => ({ value: i, label: d }))}
             className="cw-sched-unit cw-sched-unit-narrow"
             triggerClassName="cw-sched-select"
             ariaLabel={t('sched.weekday_label')}
@@ -287,18 +431,39 @@ export function SchedulePicker({
       {state.unit === 'week' && (
         <div className="cw-sched-row cw-sched-row-stack">
           <span className="cw-sched-label">{t('sched.weekday_label')}</span>
-          <div className="cw-weekday-row" role="group" aria-label={t('sched.weekday_label')}>
-            {weekdayArr.map((label, i) => (
-              <button
-                key={i}
-                type="button"
-                className={`cw-weekday-chip ${state.weekdays.has(i) ? 'is-active' : ''}`}
-                aria-pressed={state.weekdays.has(i)}
-                onClick={() => toggleDay(i)}
-              >
-                {label}
-              </button>
-            ))}
+          <div
+            className="cw-weekday-row"
+            role="group"
+            aria-label={t('sched.weekday_label')}
+            onPointerDown={weekdaysDrag.onPointerDown}
+            onPointerMove={weekdaysDrag.onPointerMove}
+          >
+            {weekdayArr.map((label, i) => {
+              const implied = state.weekdays.size === 0 && i === WEEKDAY_FALLBACK;
+              // The implied fallback day actually runs, so report it as pressed
+              // (with a hint that it's the implicit default) rather than leaving
+              // assistive tech to announce "no day selected".
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  data-weekday={i}
+                  className={`cw-weekday-chip ${
+                    state.weekdays.has(i) ? 'is-active' : implied ? 'is-implied' : ''
+                  }`}
+                  aria-pressed={state.weekdays.has(i) || implied}
+                  aria-label={implied ? t('sched.weekday_implied', { day: label }) : undefined}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleDay(i);
+                    }
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}

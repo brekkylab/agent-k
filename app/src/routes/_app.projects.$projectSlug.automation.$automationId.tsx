@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
+import { IconButton } from '@/components/uiPrimitives';
 import { SchedulePicker, summarizeCron, type SchedulePickerValue } from '@/components/SchedulePicker';
 import { WebhookTokenDialog } from '@/components/WebhookTokenDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -199,17 +200,16 @@ function AutomationSettingsPage() {
   const removePrompt = (i: number) => setPrompts((p) => p.filter((_, idx) => idx !== i));
 
   // ── Trigger row actions ─────────────────────────────────────────────────
-  const [pendingTriggerDeleteId, setPendingTriggerDeleteId] = useState<string | null>(null);
-  const removeTrigger = (id: string) => {
-    if (pendingTriggerDeleteId !== id) {
-      setPendingTriggerDeleteId(id);
-      return;
-    }
-    setPendingTriggerDeleteId(null);
-    deleteTriggerMutation.mutate(id);
-  };
   const toggleTriggerEnabled = (t: Trigger) =>
     updateTriggerMutation.mutate({ triggerId: t.id, patch: { enabled: !t.enabled } });
+  // Clone a trigger's spec into a new trigger (e.g. same schedule at a different
+  // time). The clone is created disabled so an exact duplicate doesn't double-
+  // fire alongside the original until the user edits and enables it.
+  const duplicateTrigger = (trig: Trigger) =>
+    createTriggerMutation.mutate(trig.spec, {
+      onSuccess: (created) =>
+        updateTriggerMutation.mutate({ triggerId: created.trigger.id, patch: { enabled: false } }),
+    });
 
   // ── Add-trigger draft ───────────────────────────────────────────────────
   const [showAddForm, setShowAddForm] = useState(false);
@@ -737,25 +737,19 @@ function AutomationSettingsPage() {
                               <span className="cw-switch-track" aria-hidden />
                             </span>
                           </label>
-                          <button
-                            className="cw-trigger-action"
-                            type="button"
-                            aria-label={t('detail.save_aria')}
+                          <IconButton
+                            icon="check"
+                            label={t('detail.save_aria')}
                             onClick={saveEdit}
-                            title={t('detail.save_aria')}
                             disabled={updateTriggerMutation.isPending}
-                          >
-                            <Icon name="check" size={14} />
-                          </button>
-                          <button
-                            className="cw-trigger-action"
-                            type="button"
-                            aria-label={t('detail.cancel_aria')}
+                            iconSize={14}
+                          />
+                          <IconButton
+                            icon="x"
+                            label={t('detail.cancel_aria')}
                             onClick={cancelEdit}
-                            title={t('detail.cancel_aria')}
-                          >
-                            <Icon name="x" size={14} />
-                          </button>
+                            iconSize={14}
+                          />
                         </header>
                         <div className="cw-trigger-edit-body">
                           <SchedulePicker value={editSchedule} onChange={setEditSchedule} />
@@ -788,26 +782,28 @@ function AutomationSettingsPage() {
                             <span className="cw-switch-track" aria-hidden />
                           </span>
                         </label>
-                        <button
-                          className="cw-trigger-action"
-                          type="button"
-                          aria-label={t('detail.edit_trigger_aria')}
+                        <IconButton
+                          icon="copy"
+                          label={t('detail.duplicate_trigger_aria')}
+                          onClick={() => duplicateTrigger(trigger)}
+                          disabled={!isCron || createTriggerMutation.isPending}
+                          iconSize={14}
+                        />
+                        <IconButton
+                          icon="settings"
+                          label={t('detail.edit_trigger_aria')}
+                          title={!isCron ? t('detail.webhook_not_editable') : t('detail.edit')}
                           onClick={() => startEdit(trigger)}
                           disabled={!isCron}
-                          title={!isCron ? t('detail.webhook_not_editable') : t('detail.edit')}
-                        >
-                          <Icon name="settings" size={14} />
-                        </button>
-                        <button
-                          className={`cw-trigger-action${pendingTriggerDeleteId === trigger.id ? ' is-armed' : ''}`}
-                          type="button"
-                          aria-label={pendingTriggerDeleteId === trigger.id ? t('detail.delete_again') : t('detail.delete_trigger_aria')}
-                          onClick={() => removeTrigger(trigger.id)}
-                        >
-                          {pendingTriggerDeleteId === trigger.id
-                            ? t('detail.delete_again')
-                            : <Icon name="trash" size={14} />}
-                        </button>
+                          iconSize={14}
+                        />
+                        <IconButton
+                          icon="trash"
+                          label={t('detail.delete_trigger_aria')}
+                          confirmText={t('detail.delete_again')}
+                          onClick={() => deleteTriggerMutation.mutate(trigger.id)}
+                          iconSize={14}
+                        />
                       </>
                     )}
                   </li>

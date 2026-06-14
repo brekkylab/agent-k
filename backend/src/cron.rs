@@ -110,6 +110,21 @@ mod tests {
     }
 
     #[test]
+    fn last_day_of_month_resolves_next_fire() {
+        // "0 9 L * *" → 09:00 on the last day of the month (croner `L`).
+        let now = at("2026-06-10T00:00:00Z");
+        let next = next_fire_after("0 9 L * *", "UTC", now).unwrap();
+        assert_eq!(next, at("2026-06-30T09:00:00Z"));
+    }
+
+    #[test]
+    fn last_weekday_of_month_is_supported() {
+        let now = at("2026-08-01T00:00:00Z");
+        // "5L" in the day-of-week field = last Friday of the month.
+        assert!(next_fire_after("0 9 * * 5L", "UTC", now).is_ok(), "5L should parse");
+    }
+
+    #[test]
     fn invalid_cron_returns_error() {
         let now = at("2026-06-01T08:30:00Z");
         assert!(next_fire_after("not a cron", "UTC", now).is_err());
