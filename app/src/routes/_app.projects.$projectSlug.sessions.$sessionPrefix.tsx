@@ -36,6 +36,7 @@ import { loadNs } from '@/i18n/loader';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 import { resolveComposerKeyAction } from '@/lib/composerKeys';
+import { ToolCallDetails } from '@/components/chat/ToolCallDetails';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
@@ -1314,15 +1315,7 @@ function MessageBubble({
               {' '}{extractSubagentQuery(tc.arguments)}
             </div>
           ) : (
-            <details key={tc.id} className="cw-toolcall">
-              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ` · ${t('ui.tool_running')}` : ''}</summary>
-              {tc.arguments !== undefined && (
-                <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
-                  ? tc.arguments
-                  : JSON.stringify(tc.arguments, null, 2)}</pre>
-              )}
-              {tc.result !== undefined && <pre className="cw-toolcall-result">{tc.result}</pre>}
-            </details>
+            <ToolCallDetails key={tc.id} tc={tc} isStreaming={isStreaming} />
           )
         )}
         {isAi && artifactPaths && artifactPaths.length > 0 && projectId && sessionId && onCopyToShared && onArtifactDeleted && (
