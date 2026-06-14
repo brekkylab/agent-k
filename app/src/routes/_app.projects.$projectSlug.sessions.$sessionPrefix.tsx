@@ -1274,6 +1274,7 @@ function MessageBubble({
   onArtifactDeleted?: (path: string) => void;
 }) {
   const { t } = useTranslation('session');
+  const showToast = useToastStore((s) => s.show);
   const isAi = message.sender.kind === 'agent';
   const isSelf = message.sender.kind === 'user' && message.sender.userId === currentUserId;
 
@@ -1332,11 +1333,19 @@ function MessageBubble({
             ))}
           </div>
         )}
-        {isAi && message.status === 'done' && (
+        {isAi && message.status === 'done' && message.body.trim() !== '' && (
           <div className="cw-ai-actions">
-            <button>Copy</button>
-            <button>Regenerate</button>
-            <button>Good</button>
+            <IconButton
+              icon="copy"
+              label={t('ui.copy')}
+              expandedText={t('ui.copy')}
+              onClick={() => {
+                void navigator.clipboard?.writeText(message.body).then(
+                  () => showToast(t('toast.copied')),
+                  () => {},
+                );
+              }}
+            />
           </div>
         )}
       </div>

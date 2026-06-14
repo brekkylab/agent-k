@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { parseToolCallValue, classifyFieldValue } from '@/lib/toolCallFormat';
+import { IconButton } from '@/components/uiPrimitives';
+import { useToastStore } from '@/components/Toast';
+import { parseToolCallValue, classifyFieldValue, toolCallToMarkdown } from '@/lib/toolCallFormat';
 import type { ToolCallInvocation } from '@/domain/types';
 
 /// Renders a parsed tool-call value as React rows — values are shown verbatim (no
@@ -36,11 +38,13 @@ function ToolCallValueView({ value }: { value: unknown }) {
   );
 }
 
-/// A collapsible tool-call. Inputs/results (and their parsing) are rendered lazily —
-/// only while expanded — so collapsed tool calls cost nothing to parse.
+/// A collapsible tool-call. Inputs/results (and their parsing) and the copy button are
+/// rendered lazily — only while expanded — so collapsed tool calls cost nothing to parse.
 export function ToolCallDetails({ tc, isStreaming }: { tc: ToolCallInvocation; isStreaming: boolean }) {
   const { t } = useTranslation('session');
+  const showToast = useToastStore((s) => s.show);
   const [open, setOpen] = useState(false);
+  const hasContent = tc.arguments !== undefined || tc.result !== undefined;
   return (
     <details
       className="cw-toolcall"
@@ -49,6 +53,19 @@ export function ToolCallDetails({ tc, isStreaming }: { tc: ToolCallInvocation; i
       <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ` · ${t('ui.tool_running')}` : ''}</summary>
       {open && (
         <>
+          {hasContent && (
+            <IconButton
+              className="cw-toolcall-copy"
+              icon="copy"
+              label={t('ui.copy')}
+              onClick={() => {
+                void navigator.clipboard?.writeText(toolCallToMarkdown(tc)).then(
+                  () => showToast(t('toast.copied')),
+                  () => {},
+                );
+              }}
+            />
+          )}
           {tc.arguments !== undefined && (
             <div className="cw-toolcall-section">
               <span className="cw-toolcall-section-label">Inputs</span>

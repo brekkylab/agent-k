@@ -1193,16 +1193,6 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   gap: 4px;
   color: var(--cw-ink-4);
 }
-.cw-ai-actions button {
-  height: 26px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--cw-ink-3);
-  font-size: 11px;
-}
-.cw-ai-actions button:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
 
 .cw-composer {
   position: sticky;

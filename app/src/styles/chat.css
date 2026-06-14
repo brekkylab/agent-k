@@ -57,6 +57,7 @@
 
 /* Tool call collapsible — collapsed chip under the parent assistant message. */
 .cw-toolcall {
+  position: relative;
   /* Collapsed: wrap the summary as a compact chip. Expanded: fill the bubble
      (see [open] + the .cw-message-body:has() rule) so open tool calls line up. */
   width: fit-content;
@@ -81,7 +82,14 @@
 }
 .cw-toolcall > summary::-webkit-details-marker { display: none; }
 .cw-toolcall > summary::marker { display: none; }
-.cw-toolcall[open] > summary { color: var(--cw-ink); margin-bottom: 6px; }
+.cw-toolcall[open] > summary {
+  color: var(--cw-ink);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding-right: 34px;
+}
 .cw-toolcall-section { margin: 4px 0; }
 .cw-toolcall-section-label {
   display: block;
@@ -130,6 +138,14 @@
 .cw-toolcall-field.is-block { flex-direction: column; gap: 2px; align-items: stretch; }
 .cw-toolcall-field.is-block dd { width: 100%; }
 .cw-toolcall-field.is-block dd .cw-toolcall-raw { margin: 0; }
+.cw-toolcall .cw-toolcall-copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: var(--cw-paper-2);
+  opacity: 0.6;
+}
+.cw-toolcall:hover .cw-toolcall-copy { opacity: 1; }
 
 /* Subagent mention — "@math <query>" inline line under parent assistant message. */
 .cw-subagent-call {
