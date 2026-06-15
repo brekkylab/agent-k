@@ -24,7 +24,8 @@ import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/')({
   // Home composer + toasts live on `project`; `common` comes from parents.
-  loader: () => loadNs('project', 'automation'),
+  // `session` is needed by AttachmentChip (its remove label lives there).
+  loader: () => loadNs('project', 'automation', 'session'),
   component: ProjectHome,
 });
 
