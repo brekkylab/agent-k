@@ -401,10 +401,14 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-sf-icon { position: relative; width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
 .cw-sf-icon > :not(.cw-sf-icon-add) { transition: opacity 100ms; }
 .cw-sf-row:hover .cw-sf-icon > :not(.cw-sf-icon-add) { opacity: 0; }
-.cw-sf-icon-add { position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-accent); cursor: pointer; opacity: 0; transition: opacity 100ms, background 100ms, border-color 100ms; }
-/* Visible on row hover (or focus): a clear neutral border so the + reads as a button.
-   (--cw-border was too faint and also washed out on the accent-wash selected fill.) */
-.cw-sf-row:hover .cw-sf-icon-add, .cw-sf-icon-add:focus-visible { opacity: 1; border-color: var(--cw-ink-4); }
+/* pointer-events:none while hidden — an opacity:0 button still takes clicks, so
+   without this a tap on the icon (touch, where there's no hover to reveal the +)
+   would import the file instead of selecting the row. */
+.cw-sf-icon-add { position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-accent); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity 100ms, background 100ms, border-color 100ms; }
+/* Visible (and clickable) on row hover (or focus): a clear neutral border so the
+   + reads as a button. (--cw-border was too faint and washed out on the
+   accent-wash selected fill.) */
+.cw-sf-row:hover .cw-sf-icon-add, .cw-sf-icon-add:focus-visible { opacity: 1; pointer-events: auto; border-color: var(--cw-ink-4); }
 /* Hovering the + itself deepens its fill and its border (neutral, a couple steps darker). */
 .cw-sf-row:hover .cw-sf-icon-add:hover, .cw-sf-icon-add:focus-visible:hover { background: color-mix(in oklch, var(--cw-ink) 12%, transparent); border-color: var(--cw-ink-2); }
 /* Drag affordance hint under the breadcrumb (replaces the old per-row grip). */
