@@ -198,6 +198,14 @@ impl AppState {
             .insert((project_id, path.to_path_buf()), (mtime, size, id));
     }
 
+    /// Drop cached file ids for `project_id` whose path is no longer in `keep`.
+    /// Called from a resync (which already walked the folder) so entries for
+    /// deleted files don't linger until the store is evicted.
+    pub fn retain_file_ids(&self, project_id: Uuid, keep: &std::collections::HashSet<PathBuf>) {
+        self.knowledge_file_ids
+            .retain(|(pid, path), _| *pid != project_id || keep.contains(path));
+    }
+
     /// Cached `(title, line_count)` summary of a project's corpus, if computed.
     pub fn corpus_summary(&self, project_id: Uuid) -> Option<Arc<Vec<(String, usize)>>> {
         self.corpus_summaries.get(&project_id).map(|e| e.clone())

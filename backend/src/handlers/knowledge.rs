@@ -89,6 +89,9 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
     // Scope-relative path of each item, parallel to `items`, so a failed
     // ingest (reported by input index) can be mapped back to its file.
     let mut item_paths: Vec<String> = Vec::new();
+    // Absolute paths of indexable files currently on disk — used to prune the
+    // file-id cache of entries for files that have since been deleted.
+    let mut seen_paths: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
         let mut rd = match tokio::fs::read_dir(&dir).await {
@@ -108,6 +111,7 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             if let Some(filetype) = indexable_filetype(&name) {
+                seen_paths.insert(path.clone());
                 // Skip a file we can't read rather than aborting the whole
                 // resync — otherwise one unreadable file (transient I/O, a race
                 // with a concurrent delete) would block the purge of files that
@@ -170,6 +174,9 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
     // The corpus changed, so any cached citation checks for this project are
     // stale; drop them so the next read recomputes against the new corpus.
     state.clear_citation_checks(project_id);
+    // Drop file-id cache entries for files no longer on disk (the scan above is
+    // the source of truth), so deleted files don't linger until store eviction.
+    state.retain_file_ids(project_id, &seen_paths);
     Ok(())
 }
 
