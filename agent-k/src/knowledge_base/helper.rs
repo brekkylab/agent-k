@@ -28,8 +28,9 @@ const RESULT_FIELD: &str = "result";
 /// falls back without making an LLM call.
 const DEFAULT_HELPER_MODELS: &[&str] = &[
     "openai/gpt-5.4-mini",
-    "anthropic/claude-haiku-4-5-20251001",
-    "google/gemini-2.5-flash",
+    "anthropic/claude-haiku-4-5",
+    "google/gemini-3.1-flash-lite",
+    "moonshotai/kimi-k2.6",
 ];
 
 /// Per-helper definition. Implement this on a unit struct, then call

@@ -278,9 +278,9 @@ mod tests {
     #[test]
     fn model_override_is_applied() {
         let spec = SpeedwagonSpec::new()
-            .model("anthropic/claude-haiku-4-5-20251001")
+            .model("anthropic/claude-haiku-4-5")
             .into_spec();
-        assert_eq!(spec.model, "anthropic/claude-haiku-4-5-20251001");
+        assert_eq!(spec.model, "anthropic/claude-haiku-4-5");
     }
 
     #[test]
