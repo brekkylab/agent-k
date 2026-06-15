@@ -44,9 +44,22 @@
     "no_pinned_files": "고정된 파일이 아직 없어요.",
     "access": "접근",
     "session": "세션",
-    "project_label": "프로젝트 · {{name}}"
+    "project_label": "프로젝트 · {{name}}",
+    "info_tab": "정보",
+    "files_tab": "파일"
   },
   "artifacts_header": "산출물",
+  "shared_files_header": "공유 파일",
+  "shared_files": {
+    "import": "메시지에 추가",
+    "remove": "제거",
+    "up": "뒤로가기",
+    "drag_hint": "채팅으로 끌어다 놓으면 첨부돼요",
+    "attach_limit": "한 번에 최대 {{max}}개까지 첨부할 수 있어요.",
+    "drag_items": "파일 {{count}}개",
+    "empty_title": "공유 파일이 없어요",
+    "empty_body": "프로젝트 공유 파일이 여기에 표시돼요. 채팅으로 끌어다 놓으면 첨부돼요."
+  },
   "menu": {
     "options": "세션 옵션",
     "mark_read": "읽음으로 표시",

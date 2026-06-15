@@ -10,9 +10,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import logoMark from '@/assets/logo-mark.svg';
 import { listProjects } from '@/api/projects';
+import { scopeRoot } from '@/api/dirents';
+import type { BackendDirent } from '@/api/backend-types';
+import { expandDirentPaths, MAX_ATTACHMENTS } from '@/domain/files';
 import { listSessions, markSessionRead } from '@/api/sessions';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconPocket } from '@/components/uiPrimitives';
+import { useToastStore } from '@/components/Toast';
 import { useAuthStore } from '@/stores/auth';
 import {
   getSidebarModeForDrag,
@@ -244,7 +248,52 @@ export function Sidebar() {
   });
 
   const queryClient = useQueryClient();
+  const showToast = useToastStore((s) => s.show);
   const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set());
+  // Session row currently under a file drag (from the Files page) — highlights
+  // the drop target. Dropping navigates to the session and attaches the file.
+  const [dropSessionId, setDropSessionId] = useState<string | null>(null);
+
+  // Accept files dragged from the Files page onto a session row: navigate to
+  // that session, handing the (scope-relative) shared paths via router state so
+  // the session page attaches them to the next message.
+  const FILE_DRAG_MIME = 'application/x-cowork-dirent-paths';
+  function handleSessionDrop(e: React.DragEvent, projectSlug: string, sessionId: string) {
+    setDropSessionId(null);
+    const raw = e.dataTransfer.getData(FILE_DRAG_MIME);
+    if (!raw) return;
+    e.preventDefault();
+    let paths: string[];
+    try { paths = JSON.parse(raw); } catch { return; }
+    if (!Array.isArray(paths) || paths.length === 0) return;
+
+    // Pre-check the attachment cap so we don't navigate for an import the session
+    // would just reject. Folders expand to their files via the cached shared
+    // listing (raw/global paths). Skipped if the listing isn't cached — the
+    // session page still enforces the cap as a fallback.
+    const projectId = activeProject?.id;
+    if (projectId) {
+      const entries = queryClient.getQueryData<BackendDirent[]>(['dirents', 'shared', projectId]);
+      if (entries) {
+        const root = scopeRoot({ kind: 'shared', projectId });
+        const count = expandDirentPaths(entries, paths.map((rel) => `${root}/${rel}`)).length;
+        if (count > MAX_ATTACHMENTS) {
+          showToast(t('attach_limit', { max: MAX_ATTACHMENTS }));
+          return; // over the cap — stay on this page, attach nothing
+        }
+      }
+    }
+
+    // A drag can leave a stray text selection highlighted; clear it before we
+    // navigate away (otherwise it stays stuck on the next page). Folders are
+    // expanded into their contained files by the session page.
+    window.getSelection()?.removeAllRanges();
+    navigate({
+      to: '/projects/$projectSlug/sessions/$sessionPrefix',
+      params: { projectSlug, sessionPrefix: shortSessionId(sessionId) },
+      state: { attachShared: paths },
+    });
+  }
   const activeProjectSlugRef = useRef<string | null>(null);
   useEffect(() => {
     activeProjectSlugRef.current = activeProjectSlug;
@@ -500,11 +549,23 @@ export function Sidebar() {
                       shortSessionId(session.id) === activeSessionId ? 'is-active' : '',
                       session.unreadCount > 0 ? 'is-unread' : '',
                       streamingIds.has(session.id) ? 'is-streaming' : '',
+                      dropSessionId === session.id ? 'is-drop-target' : '',
                     ].filter(Boolean).join(' ')}
                     onClick={() => openSession(activeProject.slug, shortSessionId(session.id))}
                     role="button"
                     tabIndex={0}
                     style={{ cursor: 'pointer' }}
+                    onDragOver={(e) => {
+                      if (!e.dataTransfer.types.includes(FILE_DRAG_MIME)) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'copy';
+                      if (dropSessionId !== session.id) setDropSessionId(session.id);
+                    }}
+                    onDragLeave={(e) => {
+                      if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                      setDropSessionId((cur) => (cur === session.id ? null : cur));
+                    }}
+                    onDrop={(e) => handleSessionDrop(e, activeProject.slug, session.id)}
                   >
                     {streamingIds.has(session.id) ? (
                       <span className="cw-typing-dots" aria-label="agent responding">

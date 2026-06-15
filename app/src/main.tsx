@@ -49,6 +49,9 @@ declare module '@tanstack/react-router' {
     focusComposer?: boolean;
     // Agent selected in the home composer, carried to the session header chip.
     initialAgentId?: import('@/domain/agentSurfaces').AgentId;
+    // Shared-file paths (scope-relative) dragged from Files onto a session row,
+    // attached to the next message once the target session resolves.
+    attachShared?: string[];
   }
 }
 
