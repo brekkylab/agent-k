@@ -291,19 +291,29 @@ impl AppState {
             .map_err(|e| AppError::internal(format!("store init join error: {e}")))?
             .map_err(|e| AppError::internal(format!("store init failed: {e}")))?;
         let shared: SharedStore = Arc::new(RwLock::new(store));
-        // Evict the LRU entry at capacity, skipping projects that are indexing:
+        // At capacity, evict the LRU entry — but skip projects that are indexing:
         // a resync holds that store's write lock, and reopening it elsewhere
         // would create a second handle fighting tantivy's per-dir writer lock.
-        // A non-indexing store in use still survives — it's an `Arc`.
-        if self.document_stores.len() >= MAX_OPEN_STORES
-            && let Some(oldest) = self
+        // A non-indexing store in use still survives eviction — it's an `Arc`.
+        if self.document_stores.len() >= MAX_OPEN_STORES {
+            match self
                 .document_stores
                 .iter()
                 .filter(|e| !self.is_indexing(*e.key()))
                 .min_by_key(|e| e.last_access)
                 .map(|e| *e.key())
-        {
-            self.evict_store(oldest);
+            {
+                Some(oldest) => self.evict_store(oldest),
+                // Every cached store is mid-resync, so none can be safely evicted.
+                // Treat MAX as a soft cap and open over it rather than evicting an
+                // indexing store; the next open after any resync finishes reclaims
+                // the slot. Expected to be rare — log it so it stays observable.
+                None => tracing::warn!(
+                    open = self.document_stores.len(),
+                    cap = MAX_OPEN_STORES,
+                    "all cached corpus stores are indexing; opening over the soft cap"
+                ),
+            }
         }
         Ok(self
             .document_stores
