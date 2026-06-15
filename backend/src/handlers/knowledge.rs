@@ -413,21 +413,30 @@ fn parse_line_range(label: &str) -> Option<(usize, usize)> {
 fn body_marker_indices(text: &str) -> std::collections::HashSet<u32> {
     let mut out = std::collections::HashSet::new();
     for line in text.lines() {
-        // A definition line (`[^N]: ...`) contributes a definition, not a marker.
-        if line.trim_start().starts_with("[^") && line.trim_start().trim_start_matches("[^").contains("]:") {
-            continue;
-        }
-        // Scan the line for `[^<digits>]` occurrences.
-        let bytes = line.as_bytes();
+        // On a definition line (`[^N]: ...`) the leading `[^N]:` is the
+        // definition, not a marker — scan only the text after it, so a marker
+        // later on the same line (e.g. `[^1]: see also [^2]`) still counts as a
+        // body reference. Other lines are scanned whole.
+        let trimmed = line.trim_start();
+        let scan = if trimmed.starts_with("[^") {
+            match trimmed.find("]:") {
+                Some(end) => &trimmed[end + 2..],
+                None => line,
+            }
+        } else {
+            line
+        };
+        // Scan `scan` for `[^<digits>]` occurrences.
+        let bytes = scan.as_bytes();
         let mut i = 0;
-        while let Some(rel) = line[i..].find("[^") {
+        while let Some(rel) = scan[i..].find("[^") {
             let start = i + rel + 2;
             let mut j = start;
             while j < bytes.len() && bytes[j].is_ascii_digit() {
                 j += 1;
             }
             if j > start && j < bytes.len() && bytes[j] == b']' {
-                if let Ok(n) = line[start..j].parse::<u32>() {
+                if let Ok(n) = scan[start..j].parse::<u32>() {
                     out.insert(n);
                 }
             }
@@ -560,5 +569,19 @@ mod tests {
         );
         // No dangling markers, so no `missing` entries.
         assert!(checks.iter().all(|c| c.kind != "missing"));
+    }
+
+    #[test]
+    fn verify_citations_counts_marker_inside_a_definition_line() {
+        let docs = vec![("Team Handbook".to_string(), 3usize)];
+        // [^2] appears only inside [^1]'s definition line. It is still a body
+        // reference, so [^2] must not be flagged as an orphan, and not be
+        // reported missing (it is defined too).
+        let text = "Fact.[^1]\n\n## Sources\n[^1]: Team Handbook — see also [^2]\n[^2]: Team Handbook";
+        let checks = verify_citations(text, &docs);
+        assert!(checks.iter().find(|c| c.index == 2).unwrap().referenced,
+            "a marker that appears in another definition's line counts as referenced");
+        assert!(checks.iter().all(|c| c.kind != "missing"),
+            "[^2] is defined, so it is not missing");
     }
 }
