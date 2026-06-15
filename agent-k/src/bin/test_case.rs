@@ -9,14 +9,16 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use agent_k::agents::{get_coworker_agent, get_deep_research_agent};
+use agent_k::agents::{
+    get_coworker_agent_runenv, get_coworker_agent_spec, get_deep_research_agent_runenv,
+    get_deep_research_agent_spec,
+};
 use ailoy::{
-    agent::Agent,
-    lang_model::LangModelAPISchema,
+    agent::{Agent, AgentState},
     message::{Message, Part, Role},
+    runenv::SharedMachine,
 };
 use futures::StreamExt;
-use url::Url;
 
 #[path = "test_case/cases/mod.rs"]
 mod cases;
@@ -27,7 +29,7 @@ const DEEP_RESEARCH_AGENT_NAME: &str = "vegapunk";
 const OPENAI_MODEL: &str = "openai/gpt-5.5";
 const CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
 const GEMINI_MODEL: &str = "google/gemini-3.5-flash";
-const KIMI_MODEL: &str = "moonshot/kimi-k2.6";
+const KIMI_MODEL: &str = "moonshotai/kimi-k2.6";
 const ARTIFACT_DIR: &str = "./test/artifacts";
 const DATA_DIR: &str = "./test/data";
 const SHARED_DATA_DIR: &str = "./test/shared_data";
@@ -70,16 +72,6 @@ enum InputSource {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-
-    if let Ok(key) = std::env::var("KIMI_API_KEY") {
-        let mut provider = ailoy::agent::default_provider_mut();
-        provider.models.insert_api(
-            "moonshot/kimi-*".into(),
-            LangModelAPISchema::ChatCompletion,
-            Url::parse("https://api.moonshot.ai/v1/chat/completions")?,
-            Some(key),
-        );
-    }
 
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut positional: Vec<&str> = Vec::new();
@@ -158,18 +150,16 @@ async fn main() -> anyhow::Result<()> {
 
     let mut agent = match agent_kind {
         AgentKind::Coworker => {
-            get_coworker_agent(
-                agent_kind.name(),
-                agent_model,
-                DATA_DIR,
-                SHARED_DATA_DIR,
-                ARTIFACT_DIR,
-                !no_skill,
-            )
-            .await?
+            let spec = get_coworker_agent_spec(agent_kind.name(), agent_model, !no_skill);
+            let runenv = get_coworker_agent_runenv(DATA_DIR, SHARED_DATA_DIR, ARTIFACT_DIR).await?;
+            let state = AgentState::new().with_runenv(SharedMachine::new(runenv));
+            Agent::try_with_state(spec, state)?
         }
         AgentKind::DeepResearch => {
-            get_deep_research_agent(agent_kind.name(), agent_model, ARTIFACT_DIR).await?
+            let spec = get_deep_research_agent_spec(agent_kind.name(), agent_model);
+            let runenv = get_deep_research_agent_runenv(ARTIFACT_DIR).await?;
+            let state = AgentState::new().with_runenv(SharedMachine::new(runenv));
+            Agent::try_with_state(spec, state)?
         }
     };
     println!(

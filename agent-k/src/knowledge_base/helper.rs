@@ -81,11 +81,12 @@ pub(super) trait HelperAgent {
         Self::Output: From<String>,
     {
         let chosen_model = {
-            let provider = ailoy::agent::default_provider();
+            let providers = ailoy::lang_model::get_lm_providers();
+            let provider = providers.get("default");
             Self::MODELS
                 .iter()
                 .copied()
-                .find(|m| provider.models.get(m).is_some())
+                .find(|m| provider.map(|p| p.get(m).is_some()).unwrap_or(false))
         };
 
         let model = match chosen_model {

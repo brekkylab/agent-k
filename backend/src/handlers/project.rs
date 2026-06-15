@@ -11,10 +11,9 @@ use crate::{
     auth::AuthUser,
     error::{ApiResult, AppError},
     events::WsEvent,
-    handlers::session::cleanup_session_resources,
     model::{
-        AddMemberRequest, CreateProjectRequest, ProjectListResponse, ProjectMemberListResponse,
-        ProjectMemberResponse, ProjectResponse, UpdateProjectRequest,
+        AddMemberRequest, CreateProjectRequest, DirentBatchResult, ProjectListResponse,
+        ProjectMemberListResponse, ProjectMemberResponse, ProjectResponse, UpdateProjectRequest,
     },
     repository::{RepositoryError, RepositoryResult, SqliteRepository},
     state::AppState,
@@ -156,6 +155,7 @@ pub async fn create_project(
             .map_err(|e| AppError::internal(e.to_string()))?,
     };
 
+    // Update database
     let project = state
         .repository
         .create_project(payload.name, payload.description, auth_user.id, slug)
@@ -164,6 +164,13 @@ pub async fn create_project(
             RepositoryError::UniqueViolation(_) => AppError::conflict("slug already in use"),
             other => AppError::internal(other.to_string()),
         })?;
+
+    // Update storage
+    state
+        .storage
+        .create_project(project.id.to_string())
+        .await
+        .map_err(|e| AppError::internal(format!("failed to create project storage: {e}")))?;
 
     tracing::info!(id = %project.id, slug = %project.slug, owner = %auth_user.id, "project created");
     Ok((StatusCode::CREATED, Json(ProjectResponse::from(project))))
@@ -277,36 +284,28 @@ pub async fn delete_project(
     let project_id = resolve_project_id(&state, &project_ref).await?;
     require_owner(&state, auth_user.id, project_id).await?;
 
-    // Clean up agent + sandbox for every session before the DB cascade removes them.
-    let sessions = state
-        .repository
-        .list_all_sessions_in_project(project_id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-
-    for session in sessions {
-        cleanup_session_resources(&state, session.project_id, session.id).await;
-    }
-
     state
         .repository
         .delete_project(project_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    // Best-effort cleanup after DB delete; ignore NotFound (project may never have had uploads)
-    let project_dir = state
-        .data_root
-        .join("projects")
-        .join(project_id.to_string());
-    if let Err(e) = tokio::fs::remove_dir_all(&project_dir).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(id = %project_id, "failed to remove project dir: {e}");
-        }
+    if let Err(e) = state.storage.remove_project(project_id.to_string()).await {
+        tracing::warn!(id = %project_id, "failed to remove project dir: {e}");
     }
 
     tracing::info!(id = %project_id, "project deleted");
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /projects/{project_ref}/files/?path=<scope_root>
+pub async fn upload_files(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    // Query(scope_q): Query<DirentScopeQuery>,
+    // NoApi(mut multipart): NoApi<Multipart>,
+) -> ApiResult<Json<DirentBatchResult>> {
+    todo!()
 }
 
 /// GET /projects/{project_ref}/members

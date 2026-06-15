@@ -1,10 +1,13 @@
 use std::{collections::HashSet, sync::Arc};
 
-use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
+use agent_k::agents::{
+    GUEST_ATTACHED_DIR, GUEST_SHARED_DIR, get_coworker_agent_runenv, get_coworker_agent_spec,
+    get_deep_research_agent_runenv, get_deep_research_agent_spec,
+};
 use ailoy::{
-    agent::Agent,
+    agent::{Agent, AgentState},
     message::{Message, MessageOutput, Part, Role},
-    runenv::{Sandbox, SandboxConfig},
+    runenv::{Sandbox, SharedMachine},
 };
 use axum::{
     Json,
@@ -94,9 +97,12 @@ pub async fn build_session_agent(
     use crate::model::AgentType;
     let agent = match agent_type {
         AgentType::DeepResearch => {
-            agent_k::agents::get_deep_research_agent(TOP_LEVEL_AGENT_NAME, &model, &artifacts)
+            let spec = get_deep_research_agent_spec(TOP_LEVEL_AGENT_NAME, &model);
+            let runenv = get_deep_research_agent_runenv(&artifacts)
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+            let state = AgentState::new().with_runenv(SharedMachine::new(runenv));
+            Agent::try_with_state(spec, state).map_err(|e| e.to_string())?
         }
         AgentType::Buddy => agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model)
             .map_err(|e| e.to_string())?,
@@ -110,21 +116,12 @@ pub async fn build_session_agent(
         }
         // Coworker runs the sandboxed coworker agent over the session's files.
         AgentType::Coworker => {
-            let opts = agent_k::agents::CoworkerSandboxOptions {
-                sandbox_name: Some(sandbox_name_for(&session_id)),
-                persist: true,
-                with_skill: true,
-            };
-            agent_k::agents::get_coworker_agent_with_opts(
-                TOP_LEVEL_AGENT_NAME,
-                &model,
-                &inputs,
-                &shared,
-                &artifacts,
-                opts,
-            )
-            .await
-            .map_err(|e| e.to_string())?
+            let spec = get_coworker_agent_spec(TOP_LEVEL_AGENT_NAME, &model, true);
+            let runenv = get_coworker_agent_runenv(&inputs, &shared, &artifacts)
+                .await
+                .map_err(|e| e.to_string())?;
+            let state = AgentState::new().with_runenv(SharedMachine::new(runenv));
+            Agent::try_with_state(spec, state).map_err(|e| e.to_string())?
         }
     };
 
@@ -579,24 +576,6 @@ pub async fn update_session(
     Ok(Json(SessionResponse::from_db(updated, unread)))
 }
 
-pub(crate) async fn cleanup_session_resources(
-    state: &Arc<AppState>,
-    project_id: Uuid,
-    session_id: Uuid,
-) {
-    state.remove_agent(&session_id);
-    let sandbox_name = sandbox_name_for(&session_id);
-    if let Err(e) = Sandbox::remove_persisted(&sandbox_name).await {
-        tracing::warn!(%session_id, "failed to remove persisted sandbox: {e}");
-    }
-    let session_rt = session_root(state, project_id, session_id);
-    if let Err(e) = tokio::fs::remove_dir_all(&session_rt).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(%session_id, "failed to remove session dir: {e}");
-        }
-    }
-}
-
 /// DELETE /sessions/{session_id} — creator or project owner
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
@@ -621,7 +600,13 @@ pub async fn delete_session(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    cleanup_session_resources(&state, session.project_id, session_id).await;
+    if let Err(e) = state
+        .storage
+        .remove_session(session.project_id.to_string(), session_id.to_string())
+        .await
+    {
+        tracing::warn!(%session_id, "failed to remove session dir: {e}");
+    }
 
     tracing::info!(%session_id, "session deleted");
     Ok(StatusCode::NO_CONTENT)
@@ -633,106 +618,107 @@ pub async fn fork_session(
     Extension(auth_user): Extension<AuthUser>,
     Path(source_session_ref): Path<String>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
-    let source_session_id = resolve_session_id(&state, &source_session_ref).await?;
-    let (source, _access) = state
-        .repository
-        .get_session_with_authz(source_session_id, auth_user.id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?
-        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+    todo!()
+    // let source_session_id = resolve_session_id(&state, &source_session_ref).await?;
+    // let (source, _access) = state
+    //     .repository
+    //     .get_session_with_authz(source_session_id, auth_user.id)
+    //     .await
+    //     .map_err(|e| AppError::internal(e.to_string()))?
+    //     .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    // Hold agent lock for entire fork — prevents send_message from running concurrently.
-    // If agent is absent from cache, sandbox is already stopped.
-    let _agent_guard = if let Some(arc) = state.get_agent(&source_session_id) {
-        Some(
-            arc.try_lock_owned()
-                .map_err(|_| AppError::locked("session is currently in use"))?,
-        )
-    } else {
-        None
-    };
+    // // Hold agent lock for entire fork — prevents send_message from running concurrently.
+    // // If agent is absent from cache, sandbox is already stopped.
+    // let _agent_guard = if let Some(arc) = state.get_agent(&source_session_id) {
+    //     Some(
+    //         arc.try_lock_owned()
+    //             .map_err(|_| AppError::locked("session is currently in use"))?,
+    //     )
+    // } else {
+    //     None
+    // };
 
-    let new_id = Uuid::new_v4();
+    // let new_id = Uuid::new_v4();
 
-    let new_session = state
-        .repository
-        .fork_session(source_session_id, new_id, auth_user.id)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    // let new_session = state
+    //     .repository
+    //     .fork_session(source_session_id, new_id, auth_user.id)
+    //     .await
+    //     .map_err(|e| AppError::internal(e.to_string()))?;
 
-    // Mark the forked session as fully read for the creator
-    let _ = state
-        .repository
-        .mark_session_read(new_id, auth_user.id)
-        .await;
+    // // Mark the forked session as fully read for the creator
+    // let _ = state
+    //     .repository
+    //     .mark_session_read(new_id, auth_user.id)
+    //     .await;
 
-    // Mirror the source session's host files into the fork so the snapshot matches
-    // the VM upper.ext4 clone. shared/ is project-level and intentionally excluded.
-    let (src_inputs, _, src_artifacts) = session_dirs(&state, source.project_id, source_session_id);
-    let (new_inputs, _, new_artifacts) = session_dirs(&state, source.project_id, new_id);
-    for (src, dst) in [(&src_inputs, &new_inputs), (&src_artifacts, &new_artifacts)] {
-        let res = if tokio::fs::try_exists(src).await.unwrap_or(false) {
-            copy_dir_recursive(src, dst).await
-        } else {
-            tokio::fs::create_dir_all(dst).await
-        };
-        if let Err(e) = res {
-            tracing::warn!(
-                source = %source_session_id,
-                fork = %new_id,
-                dir = ?dst,
-                "failed to copy session dir on fork: {e}",
-            );
-        }
-    }
+    // // Mirror the source session's host files into the fork so the snapshot matches
+    // // the VM upper.ext4 clone. shared/ is project-level and intentionally excluded.
+    // let (src_inputs, _, src_artifacts) = session_dirs(&state, source.project_id, source_session_id);
+    // let (new_inputs, _, new_artifacts) = session_dirs(&state, source.project_id, new_id);
+    // for (src, dst) in [(&src_inputs, &new_inputs), (&src_artifacts, &new_artifacts)] {
+    //     let res = if tokio::fs::try_exists(src).await.unwrap_or(false) {
+    //         copy_dir_recursive(src, dst).await
+    //     } else {
+    //         tokio::fs::create_dir_all(dst).await
+    //     };
+    //     if let Err(e) = res {
+    //         tracing::warn!(
+    //             source = %source_session_id,
+    //             fork = %new_id,
+    //             dir = ?dst,
+    //             "failed to copy session dir on fork: {e}",
+    //         );
+    //     }
+    // }
 
-    let source_cfg = SandboxConfig {
-        name: Some(sandbox_name_for(&source_session_id)),
-        image: SANDBOX_IMAGE.into(),
-        persist: true,
-        ..Default::default()
-    };
-    let source_sandbox = match Sandbox::new(source_cfg).await {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = state.repository.delete_session(new_id).await;
-            // Clean up pre-created session dirs
-            let session_rt = session_root(&state, source.project_id, new_id);
-            let _ = tokio::fs::remove_dir_all(&session_rt).await;
-            return Err(AppError::internal(e.to_string()));
-        }
-    };
+    // let source_cfg = SandboxConfig {
+    //     name: Some(sandbox_name_for(&source_session_id)),
+    //     image: SANDBOX_IMAGE.into(),
+    //     persist: true,
+    //     ..Default::default()
+    // };
+    // let source_sandbox = match Sandbox::new(source_cfg).await {
+    //     Ok(s) => s,
+    //     Err(e) => {
+    //         let _ = state.repository.delete_session(new_id).await;
+    //         // Clean up pre-created session dirs
+    //         let session_rt = session_root(&state, source.project_id, new_id);
+    //         let _ = tokio::fs::remove_dir_all(&session_rt).await;
+    //         return Err(AppError::internal(e.to_string()));
+    //     }
+    // };
 
-    let new_sandbox_name = sandbox_name_for(&new_id);
-    let new_cfg = SandboxConfig {
-        name: Some(new_sandbox_name.clone()),
-        image: SANDBOX_IMAGE.into(),
-        persist: true,
-        ..Default::default()
-    };
+    // let new_sandbox_name = sandbox_name_for(&new_id);
+    // let new_cfg = SandboxConfig {
+    //     name: Some(new_sandbox_name.clone()),
+    //     image: SANDBOX_IMAGE.into(),
+    //     persist: true,
+    //     ..Default::default()
+    // };
 
-    match source_sandbox.fork(new_cfg).await {
-        Ok(_) => {
-            tracing::info!(
-                source = %source_session_id,
-                fork = %new_id,
-                sandbox = %new_sandbox_name,
-                project = %source.project_id,
-                "session forked",
-            );
-            Ok((
-                StatusCode::CREATED,
-                Json(SessionResponse::from_db(new_session, 0)),
-            ))
-        }
-        Err(e) => {
-            let _ = state.repository.delete_session(new_id).await;
-            let _ = Sandbox::remove_persisted(&new_sandbox_name).await;
-            let session_rt = session_root(&state, source.project_id, new_id);
-            let _ = tokio::fs::remove_dir_all(&session_rt).await;
-            Err(AppError::internal(format!("sandbox fork failed: {e}")))
-        }
-    }
+    // match source_sandbox.fork(new_cfg).await {
+    //     Ok(_) => {
+    //         tracing::info!(
+    //             source = %source_session_id,
+    //             fork = %new_id,
+    //             sandbox = %new_sandbox_name,
+    //             project = %source.project_id,
+    //             "session forked",
+    //         );
+    //         Ok((
+    //             StatusCode::CREATED,
+    //             Json(SessionResponse::from_db(new_session, 0)),
+    //         ))
+    //     }
+    //     Err(e) => {
+    //         let _ = state.repository.delete_session(new_id).await;
+    //         let _ = Sandbox::remove_persisted(&new_sandbox_name).await;
+    //         let session_rt = session_root(&state, source.project_id, new_id);
+    //         let _ = tokio::fs::remove_dir_all(&session_rt).await;
+    //         Err(AppError::internal(format!("sandbox fork failed: {e}")))
+    //     }
+    // }
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────────

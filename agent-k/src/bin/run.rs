@@ -8,10 +8,11 @@
 
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 
-use agent_k::agents::get_coworker_agent;
+use agent_k::agents::{get_coworker_agent_runenv, get_coworker_agent_spec};
 use ailoy::{
-    agent::Agent,
+    agent::{Agent, AgentState},
     message::{Message, Part, Role},
+    runenv::SharedMachine,
 };
 use futures::StreamExt;
 
@@ -90,15 +91,10 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let mut agent = get_coworker_agent(
-        COWORKER_AGENT_NAME,
-        coworker_agent_model,
-        DATA_DIR,
-        SHARED_DATA_DIR,
-        ARTIFACT_DIR,
-        true,
-    )
-    .await?;
+    let spec = get_coworker_agent_spec(COWORKER_AGENT_NAME, coworker_agent_model, true);
+    let runenv = get_coworker_agent_runenv(DATA_DIR, SHARED_DATA_DIR, ARTIFACT_DIR).await?;
+    let state = AgentState::new().with_runenv(SharedMachine::new(runenv));
+    let mut agent = Agent::try_with_state(spec, state)?;
     println!(
         "[coworker] starting as '{}' ({})",
         COWORKER_AGENT_NAME, coworker_agent_model

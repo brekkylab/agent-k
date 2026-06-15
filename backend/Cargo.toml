@@ -15,6 +15,7 @@ edition = "2024"
 agent-k = { workspace = true }
 aide = { version = "0.14", features = ["axum", "axum-json", "axum-query", "axum-extra", "macros", "redoc", "swagger", "scalar"] }
 ailoy = { workspace = true }
+anyhow = "1"
 argon2 = { version = "0.5", features = ["std"] }
 async-trait = "0.1.89"
 axum = { version = "0.8", features = ["multipart", "ws"] }
