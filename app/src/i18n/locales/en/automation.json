@@ -61,6 +61,7 @@
     "coworker": {
       "placeholder": "Describe a task to run…",
       "greeting": "Coworker helps you get it done",
+      "description": "Makes the documents and files you need.",
       "prompts": [
         { "label": "This week's progress summary", "seedText": "Summarize this week's progress and draft a report" },
         { "label": "Tidy up meeting notes", "seedText": "Organize today's meeting notes around action items" },
@@ -70,6 +71,7 @@
     "speedwagon": {
       "placeholder": "What are you curious about?",
       "greeting": "Speedwagon finds answers in your files",
+      "description": "Answers your questions using your project's files and the web.",
       "prompts": [
         { "label": "Summarize project files", "seedText": "Summarize the key contents of the project files" },
         { "label": "Find a specific fact", "seedText": "Find all the revenue-related figures across the documents" },
@@ -79,6 +81,7 @@
     "deep-research": {
       "placeholder": "What should I research?",
       "greeting": "Deep Research digs in deep",
+      "description": "Researches a topic in depth across the web and writes you a report.",
       "prompts": [
         { "label": "Market trend research", "seedText": "Research recent trends in the market where KlientCo operates" },
         { "label": "Competitor analysis", "seedText": "Compare and analyze the strategies of three major competitors" },
@@ -88,6 +91,7 @@
     "buddy": {
       "placeholder": "Talk to me freely…",
       "greeting": "Chat freely with Buddy",
+      "description": "A general chat for anything else, from quick questions to ideas.",
       "prompts": [
         { "label": "Brainstorm ideas", "seedText": "Throw out 10 quick ideas for the Q3 campaign" },
         { "label": "Explain terms", "seedText": "Explain these domain terms in simple language" },
