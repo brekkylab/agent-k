@@ -41,6 +41,32 @@
     "manual_confirm_body": "Run the '{{name}}' automation once now?",
     "manual_confirm_label": "Run"
   },
+  "view": {
+    "aria": "View mode",
+    "list": "List",
+    "calendar": "Calendar"
+  },
+  "calendar": {
+    "prev_month": "Previous month",
+    "next_month": "Next month",
+    "today": "Today",
+    "fires_count": "{{count}} in view",
+    "more": "+{{count}} more",
+    "truncated": "Some schedules have more fires than shown in this window.",
+    "empty_title": "No scheduled fires",
+    "empty_hint": "No enabled schedule triggers fire in this month.",
+    "tz_note": "Times shown in your local timezone."
+  },
+  "occ_detail": {
+    "close_aria": "Close",
+    "fires_at": "Fires at",
+    "schedule": "Schedule",
+    "tz": "Timezone",
+    "view_runs": "View runs",
+    "settings": "Settings",
+    "empty_title": "Select a run",
+    "empty_hint": "Click an item in the calendar to see its details here."
+  },
   "status": {
     "queued": "Queued",
     "running": "Running",

@@ -41,6 +41,32 @@
     "manual_confirm_body": "'{{name}}' 자동화를 지금 한 번 실행할까요?",
     "manual_confirm_label": "실행"
   },
+  "view": {
+    "aria": "보기 방식",
+    "list": "목록",
+    "calendar": "캘린더"
+  },
+  "calendar": {
+    "prev_month": "이전 달",
+    "next_month": "다음 달",
+    "today": "오늘",
+    "fires_count": "총 {{count}}건",
+    "more": "+{{count}}건 더",
+    "truncated": "이 구간에 표시된 것보다 더 많이 실행되는 일정이 있습니다.",
+    "empty_title": "예정된 실행이 없습니다",
+    "empty_hint": "이번 달에 실행되는 활성 schedule 트리거가 없습니다.",
+    "tz_note": "시간은 사용자의 로컬 시간대로 표시됩니다."
+  },
+  "occ_detail": {
+    "close_aria": "닫기",
+    "fires_at": "실행 시각",
+    "schedule": "일정",
+    "tz": "시간대",
+    "view_runs": "실행 보기",
+    "settings": "설정",
+    "empty_title": "Run을 선택하세요",
+    "empty_hint": "캘린더에서 항목을 클릭하면 상세 정보가 여기에 표시됩니다."
+  },
   "status": {
     "queued": "대기 중",
     "running": "실행 중",

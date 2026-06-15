@@ -202,6 +202,19 @@ export interface BackendTriggerList {
   items: BackendTrigger[];
 }
 
+export interface BackendOccurrence {
+  trigger_id: string;
+  automation_id: string;
+  automation_name: string;
+  fire_at: string;
+  tz: string | null;
+}
+
+export interface BackendOccurrenceList {
+  items: BackendOccurrence[];
+  truncated: boolean;
+}
+
 /** POST body is the spec directly (no wrapper). */
 export type CreateTriggerRequest = BackendTriggerSpec;
 
