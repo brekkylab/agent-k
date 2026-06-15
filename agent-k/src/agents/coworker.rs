@@ -61,6 +61,10 @@ pub struct CoworkerSandboxOptions {
     /// When set, a Speedwagon sub-agent (`subagent_speedwagon`) bound to this
     /// document store is attached, letting Coworker delegate corpus questions.
     pub corpus_store: Option<SharedStore>,
+    /// Model for the Speedwagon sub-agent. `None` inherits Coworker's own model;
+    /// set it to the corpus-recommended model so a parent on a model that is
+    /// poor for the corpus loop doesn't drag the sub-agent down.
+    pub corpus_model: Option<String>,
 }
 
 /// name: Identity of the model
@@ -202,9 +206,10 @@ pub async fn get_coworker_agent_with_opts(
         Some(store) => {
             let mut provider = default_provider().clone();
             register_corpus_tools(&mut provider.tools, store);
+            let sub_model = opts.corpus_model.as_deref().unwrap_or(model.as_ref());
             let spec = spec
                 .instruction(format!("{inst}{SPEEDWAGON_DELEGATION_NOTE}"))
-                .subagent(speedwagon_subagent_spec(name.as_ref(), model.as_ref()));
+                .subagent(speedwagon_subagent_spec(name.as_ref(), sub_model));
             Agent::try_with_provider_and_runenv(spec, &provider, runenv)
         }
         None => Agent::try_with_runenv(spec, runenv),

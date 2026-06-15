@@ -106,6 +106,21 @@ impl AgentType {
     }
 }
 
+/// The Speedwagon model to use when a parent (Coworker / DeepResearch)
+/// delegates to it: the same-provider slot from Speedwagon's own chain, so a
+/// parent on a model that is poor for the corpus loop (e.g. the discouraged
+/// `google/gemini-3.5-flash`) doesn't drag the sub-agent down with it. Falls
+/// back to the parent's model when the provider has no Speedwagon slot.
+pub fn speedwagon_model_for_parent(parent_model: &str) -> String {
+    let provider = parent_model.split('/').next().unwrap_or("");
+    AgentType::Speedwagon
+        .chain()
+        .iter()
+        .find(|m| m.split('/').next() == Some(provider))
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| parent_model.to_string())
+}
+
 /// A catalogued model. `id` is the full ailoy `provider/model-id`
 /// (e.g. `"anthropic/claude-sonnet-4-6"`).
 pub struct ModelInfo {
@@ -485,5 +500,28 @@ mod tests {
         // resolves via the provider glob and would be honored as-is.
         let bogus = resolve_model(Some("buddy"), Some("nonexistent/model"));
         assert!(catalog_entry(&bogus).is_some());
+    }
+
+    #[test]
+    fn speedwagon_model_for_parent_maps_within_provider() {
+        // A parent on the discouraged Gemini maps to Speedwagon's Gemini slot.
+        assert_eq!(
+            speedwagon_model_for_parent("google/gemini-3.5-flash"),
+            "google/gemini-3.1-flash-lite"
+        );
+        // Anthropic / OpenAI parents map to the same-provider Speedwagon slot.
+        assert_eq!(
+            speedwagon_model_for_parent("anthropic/claude-opus-4-7"),
+            "anthropic/claude-sonnet-4-6"
+        );
+        assert_eq!(
+            speedwagon_model_for_parent("openai/gpt-5.5"),
+            "openai/gpt-5.4-mini"
+        );
+        // A provider with no Speedwagon slot falls back to the parent model.
+        assert_eq!(
+            speedwagon_model_for_parent("someprovider/whatever"),
+            "someprovider/whatever"
+        );
     }
 }

@@ -119,11 +119,17 @@ pub async fn build_session_agent(
             // opens; on failure, run without it rather than failing the session
             // (but log it — a broken store silently drops corpus access).
             let corpus = corpus_store_or_log(&*state, project_id).await;
+            // Run the Speedwagon sub-agent on the corpus-recommended model of the
+            // same provider, not necessarily Deep Research's own model.
+            let corpus_model = corpus
+                .is_some()
+                .then(|| crate::model::speedwagon_model_for_parent(&model));
             agent_k::agents::get_deep_research_agent(
                 TOP_LEVEL_AGENT_NAME,
                 &model,
                 &artifacts,
                 corpus,
+                corpus_model,
             )
             .await
             .map_err(|e| e.to_string())?
@@ -147,11 +153,18 @@ pub async fn build_session_agent(
             // Attach a Speedwagon sub-agent when the project's corpus store
             // opens; on failure, run without it rather than failing the session
             // (but log it — a broken store silently drops corpus access).
+            let corpus_store = corpus_store_or_log(&*state, project_id).await;
+            // Run the Speedwagon sub-agent on the corpus-recommended model of the
+            // same provider, not necessarily Coworker's own model.
+            let corpus_model = corpus_store
+                .is_some()
+                .then(|| crate::model::speedwagon_model_for_parent(&model));
             let opts = agent_k::agents::CoworkerSandboxOptions {
                 sandbox_name: Some(sandbox_name_for(&session_id)),
                 persist: true,
                 with_skill: true,
-                corpus_store: corpus_store_or_log(&*state, project_id).await,
+                corpus_store,
+                corpus_model,
             };
             agent_k::agents::get_coworker_agent_with_opts(
                 TOP_LEVEL_AGENT_NAME,

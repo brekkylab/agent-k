@@ -179,6 +179,12 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Some(build_corpus_store(&case.corpus_files).await?)
     };
+    // For delegation, run the Speedwagon sub-agent on the corpus-recommended
+    // model of the parent's provider (not the parent's own, which may be a
+    // model that fares poorly in the corpus loop, e.g. gemini-3.5-flash).
+    let corpus_model: Option<String> = corpus_store
+        .as_ref()
+        .map(|_| speedwagon_model_for(agent_model).to_string());
 
     let mut agent = match agent_kind {
         AgentKind::Coworker => {
@@ -187,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
                 persist: false,
                 with_skill: !no_skill,
                 corpus_store: corpus_store.clone(),
+                corpus_model: corpus_model.clone(),
             };
             get_coworker_agent_with_opts(
                 agent_kind.name(),
@@ -204,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
                 agent_model,
                 ARTIFACT_DIR,
                 corpus_store.clone(),
+                corpus_model.clone(),
             )
             .await?
         }
@@ -323,6 +331,20 @@ fn write_files(dir: &str, files: &[(Vec<u8>, std::path::PathBuf)]) -> anyhow::Re
         println!("[case] wrote {}", dst.display());
     }
     Ok(())
+}
+
+/// The Speedwagon sub-agent model for a parent model's provider, mirroring the
+/// backend's `speedwagon_model_for_parent` (which the backend derives from
+/// `AgentType::Speedwagon.chain()`). Keeps a delegated corpus question off a
+/// model that is poor for the corpus loop while staying on the same provider.
+fn speedwagon_model_for(parent_model: &str) -> &'static str {
+    match parent_model.split('/').next().unwrap_or("") {
+        "openai" => "openai/gpt-5.4-mini",
+        "anthropic" => "anthropic/claude-sonnet-4-6",
+        "google" => "google/gemini-3.1-flash-lite",
+        "moonshot" | "moonshotai" => "moonshotai/kimi-k2.6",
+        _ => "openai/gpt-5.4-mini",
+    }
 }
 
 /// Map a corpus file's extension to a `FileType`, matching the backend's

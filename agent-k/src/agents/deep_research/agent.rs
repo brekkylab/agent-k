@@ -93,6 +93,10 @@ pub async fn get_deep_research_agent(
     model: impl AsRef<str>,
     artifacts_dir: impl AsRef<Path>,
     corpus_store: Option<SharedStore>,
+    // Model for the Speedwagon sub-agent; `None` inherits Deep Research's model.
+    // Set to the corpus-recommended model so a parent on a model that fares
+    // poorly in the corpus loop doesn't drag the sub-agent down.
+    corpus_model: Option<String>,
 ) -> anyhow::Result<Agent> {
     let mut config = SandboxConfig::default();
     config.image = "brekkylab/agent-k:latest".into();
@@ -126,9 +130,10 @@ pub async fn get_deep_research_agent(
         Some(store) => {
             let mut provider = default_provider().clone();
             register_corpus_tools(&mut provider.tools, store);
+            let sub_model = corpus_model.as_deref().unwrap_or(model.as_ref());
             let spec = spec
                 .instruction(format!("{inst}{SPEEDWAGON_DELEGATION_NOTE_DEEP_RESEARCH}"))
-                .subagent(speedwagon_subagent_spec(name.as_ref(), model.as_ref()));
+                .subagent(speedwagon_subagent_spec(name.as_ref(), sub_model));
             Agent::try_with_provider_and_runenv(spec, &provider, runenv)
         }
         None => Agent::try_with_runenv(spec, runenv),
