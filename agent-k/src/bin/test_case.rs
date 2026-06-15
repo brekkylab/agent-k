@@ -9,21 +9,29 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use agent_k::agents::{get_coworker_agent, get_deep_research_agent};
+use std::sync::Arc;
+
+use agent_k::agents::{
+    CoworkerSandboxOptions, get_coworker_agent_with_opts, get_deep_research_agent,
+    get_speedwagon_agent,
+};
+use agent_k::knowledge_base::{FileType, PdfEngine, SharedStore, Store};
 use ailoy::{
     agent::Agent,
     lang_model::LangModelAPISchema,
     message::{Message, Part, Role},
 };
 use futures::StreamExt;
+use tokio::sync::RwLock;
 use url::Url;
 
 #[path = "test_case/cases/mod.rs"]
 mod cases;
-use cases::{Case, get_coworker_cases, get_deep_research_cases};
+use cases::{Case, get_coworker_cases, get_deep_research_cases, get_speedwagon_cases};
 
 const COWORKER_AGENT_NAME: &str = "minerva";
 const DEEP_RESEARCH_AGENT_NAME: &str = "vegapunk";
+const SPEEDWAGON_AGENT_NAME: &str = "jonathan";
 const OPENAI_MODEL: &str = "openai/gpt-5.5";
 const CLAUDE_MODEL: &str = "anthropic/claude-opus-4-7";
 const GEMINI_MODEL: &str = "google/gemini-3.5-flash";
@@ -31,10 +39,12 @@ const KIMI_MODEL: &str = "moonshot/kimi-k2.6";
 const ARTIFACT_DIR: &str = "./test/artifacts";
 const DATA_DIR: &str = "./test/data";
 const SHARED_DATA_DIR: &str = "./test/shared_data";
+const CORPUS_DIR: &str = "./test/corpus";
 
 enum AgentKind {
     Coworker,
     DeepResearch,
+    Speedwagon,
 }
 
 impl AgentKind {
@@ -42,8 +52,9 @@ impl AgentKind {
         match s {
             "coworker" => Ok(Self::Coworker),
             "deep-research" | "deep_research" => Ok(Self::DeepResearch),
+            "speedwagon" => Ok(Self::Speedwagon),
             other => anyhow::bail!(
-                "invalid agent '{}', expected 'coworker' or 'deep-research'",
+                "invalid agent '{}', expected 'coworker', 'deep-research', or 'speedwagon'",
                 other
             ),
         }
@@ -52,12 +63,14 @@ impl AgentKind {
         match self {
             Self::Coworker => COWORKER_AGENT_NAME,
             Self::DeepResearch => DEEP_RESEARCH_AGENT_NAME,
+            Self::Speedwagon => SPEEDWAGON_AGENT_NAME,
         }
     }
     fn log_prefix(&self) -> &'static str {
         match self {
             Self::Coworker => "coworker",
             Self::DeepResearch => "deep-research",
+            Self::Speedwagon => "speedwagon",
         }
     }
 }
@@ -114,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
     if positional.len() != 2 {
         eprintln!(
             "usage: test_case <agent> <case_no> [--model openai|claude|gemini|kimi] [--no-skill]\n\
-             agents: coworker, deep-research"
+             agents: coworker, deep-research, speedwagon"
         );
         std::process::exit(2);
     }
@@ -140,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
     let mut cases = match agent_kind {
         AgentKind::Coworker => get_coworker_cases(),
         AgentKind::DeepResearch => get_deep_research_cases(),
+        AgentKind::Speedwagon => get_speedwagon_cases(),
     };
     if case_no >= cases.len() {
         anyhow::bail!(
@@ -154,22 +168,62 @@ async fn main() -> anyhow::Result<()> {
     prepare_dir(ARTIFACT_DIR);
     prepare_dir(DATA_DIR);
     prepare_dir(SHARED_DATA_DIR);
+    prepare_dir(CORPUS_DIR);
     write_case_files(&case)?;
+
+    // Build the Speedwagon corpus store when the case ships documents. Coworker
+    // and DeepResearch only get a store (and thus the `subagent_speedwagon`
+    // sub-agent) when one is present; Speedwagon always needs one.
+    let corpus_store: Option<SharedStore> = if case.corpus_files.is_empty() {
+        None
+    } else {
+        Some(build_corpus_store(&case.corpus_files).await?)
+    };
+    // For delegation, run the Speedwagon sub-agent on the corpus-recommended
+    // model of the parent's provider (not the parent's own, which may be a
+    // model that fares poorly in the corpus loop, e.g. gemini-3.5-flash).
+    let corpus_model: Option<String> = corpus_store
+        .as_ref()
+        .map(|_| speedwagon_model_for(agent_model).to_string());
 
     let mut agent = match agent_kind {
         AgentKind::Coworker => {
-            get_coworker_agent(
+            let opts = CoworkerSandboxOptions {
+                sandbox_name: None,
+                persist: false,
+                with_skill: !no_skill,
+                corpus_store: corpus_store.clone(),
+                corpus_model: corpus_model.clone(),
+            };
+            get_coworker_agent_with_opts(
                 agent_kind.name(),
                 agent_model,
                 DATA_DIR,
                 SHARED_DATA_DIR,
                 ARTIFACT_DIR,
-                !no_skill,
+                opts,
             )
             .await?
         }
         AgentKind::DeepResearch => {
-            get_deep_research_agent(agent_kind.name(), agent_model, ARTIFACT_DIR).await?
+            get_deep_research_agent(
+                agent_kind.name(),
+                agent_model,
+                ARTIFACT_DIR,
+                corpus_store.clone(),
+                corpus_model.clone(),
+            )
+            .await?
+        }
+        AgentKind::Speedwagon => {
+            let store = corpus_store.clone().ok_or_else(|| {
+                anyhow::anyhow!("speedwagon case must define corpus_files")
+            })?;
+            // Speedwagon is corpus-QA only; run it on the corpus-recommended
+            // (lightweight) model for the chosen provider, not the heavier shared
+            // default (e.g. gemini-3.5-flash, which is slow in the corpus loop).
+            let sw_model = speedwagon_model_for(agent_model);
+            get_speedwagon_agent(agent_kind.name(), sw_model, store, true).await?
         }
     };
     println!(
@@ -281,6 +335,57 @@ fn write_files(dir: &str, files: &[(Vec<u8>, std::path::PathBuf)]) -> anyhow::Re
         println!("[case] wrote {}", dst.display());
     }
     Ok(())
+}
+
+/// The Speedwagon sub-agent model for a parent model's provider, mirroring the
+/// backend's `speedwagon_model_for_parent` (which the backend derives from
+/// `AgentType::Speedwagon.chain()`). Keeps a delegated corpus question off a
+/// model that is poor for the corpus loop while staying on the same provider.
+fn speedwagon_model_for(parent_model: &str) -> &'static str {
+    match parent_model.split('/').next().unwrap_or("") {
+        "openai" => "openai/gpt-5.4-mini",
+        "anthropic" => "anthropic/claude-sonnet-4-6",
+        "google" => "google/gemini-3.1-flash-lite",
+        "moonshot" | "moonshotai" => "moonshotai/kimi-k2.6",
+        _ => "openai/gpt-5.4-mini",
+    }
+}
+
+/// Map a corpus file's extension to a `FileType`, matching the backend's
+/// `indexable_filetype` (so `.txt`/`.markdown` index as Markdown, unlike
+/// `FileType::from_path` which only knows pdf/md/html).
+fn corpus_filetype(path: &std::path::Path) -> Option<FileType> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "pdf" => Some(FileType::PDF),
+        "md" | "markdown" | "txt" => Some(FileType::MD),
+        "html" | "htm" => Some(FileType::HTML),
+        _ => None,
+    }
+}
+
+/// Build a Speedwagon corpus store from the case's `corpus_files`, indexing each
+/// into a fresh store under `CORPUS_DIR`. The file's extension picks its
+/// `FileType`; unsupported files are skipped. Mirrors what the backend's
+/// knowledge resync does, minus the per-project plumbing.
+async fn build_corpus_store(
+    corpus_files: &[(Vec<u8>, std::path::PathBuf)],
+) -> anyhow::Result<SharedStore> {
+    let mut store = Store::new(format!("{CORPUS_DIR}/.speedwagon"))?;
+    let items: Vec<(Vec<u8>, FileType)> = corpus_files
+        .iter()
+        .filter_map(|(bytes, path)| corpus_filetype(path).map(|ft| (bytes.clone(), ft)))
+        .collect();
+    let result = store.ingest_many(items, PdfEngine::default()).await?;
+    println!(
+        "[corpus] indexed {} document(s), {} failed",
+        result.succeeded.len(),
+        result.failed.len()
+    );
+    for f in &result.failed {
+        println!("[corpus] failed to index item {}: {}", f.index, f.error);
+    }
+    Ok(Arc::new(RwLock::new(store)))
 }
 
 async fn stream_turn(agent: &mut Agent, query: Message, log_prefix: &str) -> anyhow::Result<()> {

@@ -1,7 +1,7 @@
 mod auth;
 mod automation;
 mod dirent;
-mod document;
+pub(crate) mod knowledge;
 mod models;
 mod project;
 pub(crate) mod session;
@@ -11,7 +11,7 @@ mod ws;
 pub use auth::*;
 pub use automation::*;
 pub use dirent::*;
-pub use document::*;
+pub use knowledge::*;
 pub use models::*;
 pub use project::*;
 pub use session::*;

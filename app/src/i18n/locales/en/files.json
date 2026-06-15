@@ -89,5 +89,14 @@
     "move_confirm": "Move",
     "copy_title": "Copy",
     "copy_confirm": "Copy"
+  },
+  "knowledge": {
+    "banner": "Files here are read by the AI to answer questions about this project. New files become available shortly after upload.",
+    "indexing": "Indexing new files for the AI... this takes a moment.",
+    "file_ready": "Ready",
+    "file_pending": "Preparing",
+    "file_failed": "Indexing failed",
+    "file_failed_hint": "This file could not be indexed. Check the file or try re-uploading it.",
+    "error": "Some files could not be indexed. Try re-uploading them."
   }
 }

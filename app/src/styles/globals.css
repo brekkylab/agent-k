@@ -397,6 +397,13 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-file-row:focus-within .cw-file-more { opacity: 1; }
 .cw-file-row .cw-file-more:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
 .cw-file-row .cw-file-main { padding-right: 36px; }
+/* Per-file corpus status badge in the knowledge folder. */
+.cw-corpus-badge { display: inline-flex; align-items: center; gap: 3px; margin-right: 32px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.cw-corpus-badge.is-ready { background: var(--cw-paper-3); color: var(--cw-ink-3); }
+.cw-corpus-badge.is-pending { background: var(--cw-paper-3); color: var(--cw-ink-4); }
+.cw-corpus-badge.is-pending svg { animation: cw-spin 1.4s linear infinite; }
+.cw-corpus-badge.is-failed { background: var(--cw-danger-bg, #fde8e8); color: var(--cw-danger, #b42318); cursor: help; }
+@keyframes cw-spin { to { transform: rotate(-360deg); } }
 
 /* Tint the grid card's icon container by file type. The legacy
    .cw-file-pdf / -sheet / -image / -doc / -folder rules already set
@@ -540,6 +547,9 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-knowledge { margin-top: 28px; border: 1px dashed var(--cw-border-hover); border-radius: var(--cw-radius-lg); padding: 18px; background: var(--cw-bg); }
 .cw-knowledge h2 { margin: 0; display: flex; align-items: center; gap: 8px; }
 .cw-knowledge small { font-family: var(--cw-font-mono); font-size: 10px; border: 1px solid var(--cw-accent-line); color: var(--cw-accent-2); border-radius: var(--cw-radius-sm); padding: 1px 5px; text-transform: uppercase; }
+/* Knowledge-folder status banner (info / indexing / error). */
+.cw-knowledge-banner { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 8px 12px; border-radius: var(--cw-radius-md); background: var(--cw-paper-3); color: var(--cw-ink-2); font-size: 12.5px; }
+.cw-knowledge-banner.is-error { background: var(--cw-danger-bg, #fde8e8); color: var(--cw-danger, #b42318); }
 
 .cw-simple-page { max-width: 760px; }
 .cw-simple-stack { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }

@@ -3,7 +3,7 @@ use std::io::Write as _;
 use anyhow::Result;
 use knowledge_base_examples::{Cached, DocSet as _, FinanceBench};
 
-use super::{FileType, Store};
+use super::{FileType, PdfEngine, Store};
 
 #[derive(Debug, Clone, strum::Display)]
 #[strum(serialize_all = "kebab-case")]
@@ -33,7 +33,7 @@ pub async fn setup_docset(store: &mut Store, preset: &PresetKind) -> Result<()> 
             }
 
             println!("Ingesting corpus FinanceBench...");
-            let result = store.ingest_many(items).await?;
+            let result = store.ingest_many(items, PdfEngine::default()).await?;
             println!(
                 "Done. {} documents ingested, {} failed.",
                 result.succeeded.len(),

@@ -72,65 +72,59 @@ pub(super) trait HelperAgent {
     /// provider is registered for any of `MODELS`.
     fn fallback(input: &Self::Input<'_>) -> Self::Output;
 
-    /// Dispatch a single LLM call against ailoy's process-global default
-    /// provider, run the response through `process`, and substitute
-    /// `fallback` (with a warning log) if `process` returns `None` or no
-    /// provider is registered for any of `MODELS`.
+    /// Try each registered model in `MODELS` order, returning the first usable
+    /// response. A model is skipped if no provider is registered for it, and
+    /// the next is tried if its call errors or returns an empty/malformed
+    /// response. `fallback` (with a warning) is used only when no model
+    /// produces a result, so a failed metadata call never blocks ingest.
     async fn generate(input: Self::Input<'_>) -> Result<Self::Output>
     where
         Self::Output: From<String>,
     {
-        let chosen_model = {
+        let name = std::any::type_name::<Self>().rsplit("::").next().unwrap_or("?");
+        let registered: Vec<&'static str> = {
             let provider = ailoy::agent::default_provider();
             Self::MODELS
                 .iter()
                 .copied()
-                .find(|m| provider.models.get(m).is_some())
+                .filter(|m| provider.models.get(m).is_some())
+                .collect()
         };
 
-        let model = match chosen_model {
-            Some(m) => m,
-            None => {
-                let name = std::any::type_name::<Self>()
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or("?");
-                log::warn!(
-                    "{name}: no provider registered for any of {:?}; using fallback",
-                    Self::MODELS
-                );
-                return Ok(Self::fallback(&input));
-            }
-        };
-
-        let spec = AgentSpec::new(model).instruction(Self::INSTRUCTION);
-        let mut agent = Agent::try_new(spec)?;
-        let query = Self::build_query(&input);
-
-        let mut text_parts: Vec<String> = Vec::new();
-        {
-            let mut stream = agent.run(query);
-            while let Some(result) = stream.next().await {
-                let output = result?;
-                for part in &output.message.contents {
-                    if let Some(text) = part.as_text() {
-                        text_parts.push(text.to_string());
+        for model in &registered {
+            // The stream borrows `agent`; scope both so neither is held across
+            // the result handling below (keeps this future `Send`).
+            let outcome: Result<String> = async {
+                let spec = AgentSpec::new(*model).instruction(Self::INSTRUCTION);
+                let mut agent = Agent::try_new(spec)?;
+                let mut text_parts: Vec<String> = Vec::new();
+                let mut stream = agent.run(Self::build_query(&input));
+                while let Some(result) = stream.next().await {
+                    for part in &result?.message.contents {
+                        if let Some(text) = part.as_text() {
+                            text_parts.push(text.to_string());
+                        }
                     }
                 }
+                Ok(text_parts.join(""))
+            }
+            .await;
+
+            match outcome {
+                Ok(resp) => match Self::process(&resp) {
+                    Some(v) => return Ok(v),
+                    None => log::warn!("{name}: {model} returned empty/malformed response; trying next"),
+                },
+                Err(e) => log::warn!("{name}: {model} call failed ({e}); trying next"),
             }
         }
-        let llm_resp = text_parts.join("");
-        match Self::process(&llm_resp) {
-            Some(v) => Ok(v),
-            None => {
-                let name = std::any::type_name::<Self>()
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or("?");
-                log::warn!("{name} returned empty/malformed response; using fallback");
-                Ok(Self::fallback(&input))
-            }
+
+        if registered.is_empty() {
+            log::warn!("{name}: no provider registered for any of {:?}; using fallback", Self::MODELS);
+        } else {
+            log::warn!("{name}: all {} registered model(s) failed; using fallback", registered.len());
         }
+        Ok(Self::fallback(&input))
     }
 }
 

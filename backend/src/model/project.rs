@@ -17,6 +17,8 @@ pub struct ProjectResponse {
     /// Per-agent_type recommendation-chain overrides (only the agent types this
     /// project customized; missing ones use the built-in default chain).
     pub recommended_chains: BTreeMap<String, Vec<String>>,
+    /// Knowledge-corpus PDF engine: "kreuzberg" (default) | "docling".
+    pub pdf_engine: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -34,6 +36,9 @@ impl From<DbProject> for ProjectResponse {
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default(),
+            pdf_engine: p
+                .pdf_engine
+                .unwrap_or_else(|| agent_k::knowledge_base::PdfEngine::default().as_str().to_string()),
             created_at: p.created_at,
             updated_at: p.updated_at,
         }
@@ -58,6 +63,9 @@ pub struct UpdateProjectRequest {
     /// by agent_type). Omit to leave unchanged; send `{}` to reset all to default.
     #[serde(default)]
     pub recommended_chains: Option<BTreeMap<String, Vec<String>>>,
+    /// Knowledge-corpus PDF engine: "kreuzberg" | "docling". Omit to leave unchanged.
+    #[serde(default)]
+    pub pdf_engine: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

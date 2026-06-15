@@ -3,7 +3,9 @@
 // headers — never selected directly. The first option is "recommended"
 // (value = null), which resolves dynamically per agent type at agent-build
 // time. Models in the active agent's recommendation chain are marked with ★;
-// models whose provider has no API key on this server are disabled.
+// models whose provider has no API key are disabled. Models the active agent
+// discourages (e.g. slow ones for Speedwagon) get a "(Not Recommended)" hint
+// but stay selectable.
 
 import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
@@ -33,6 +35,10 @@ export function ComposerModelPicker({
   const { t } = useTranslation('automation');
   const rec = recommendationFor(catalog, agentType);
   const recommendedSet = new Set(rec?.chain ?? []);
+  // Models this agent discourages — hinted "(Not Recommended)" but still
+  // selectable. Absent `notRecommended` (older backend) → none.
+  const notRecommendedSet = rec?.notRecommended ? new Set(rec.notRecommended) : null;
+  const isNotRecommended = (id: string) => notRecommendedSet?.has(id) ?? false;
   // Name the resolved model in the "recommended" label only when it can run;
   // otherwise stay generic.
   const resolvedAvailable = rec
@@ -56,15 +62,20 @@ export function ComposerModelPicker({
       if (models.length === 0) return [];
       return [{
         label: t(`tier.${tier}`),
-        options: models.map((model) => ({
-          value: model.id,
-          label: model.label + (
-            !model.available
-              ? t('model_picker.unavailable_suffix')
-              : recommendedSet.has(model.id) ? ' ★' : ''
-          ),
-          disabled: !model.available,
-        })),
+        options: models.map((model) => {
+          const notRecommended = isNotRecommended(model.id);
+          return {
+            value: model.id,
+            label: model.label + (
+              !model.available
+                ? t('model_picker.unavailable_suffix')
+                : notRecommended
+                  ? t('model_picker.not_recommended_suffix')
+                  : recommendedSet.has(model.id) ? ' ★' : ''
+            ),
+            disabled: !model.available,
+          };
+        }),
       }];
     }),
   ];

@@ -102,6 +102,15 @@ function SettingsPage() {
     onError: (err) => setSubmitError(messageOf(err, t)),
   });
 
+  const pdfEngineMutation = useMutation({
+    mutationFn: (engine: string) => updateProject(projectSlug, { pdfEngine: engine }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['project', projectSlug] });
+      showToast(t('settings_page.toasts.pdf_engine_success'));
+    },
+    onError: (err) => setSubmitError(messageOf(err, t)),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => deleteProject(projectSlug),
     onSuccess: async () => {
@@ -366,6 +375,31 @@ function SettingsPage() {
           overrides={project.data.recommendedChains}
           editable={editable}
         />
+      )}
+
+      {project.data && (
+        <div style={{ marginTop: 24 }}>
+          <SectionLabel>{t('settings_page.pdf_engine.heading')}</SectionLabel>
+          <p style={{ margin: '4px 0 12px', color: 'var(--cw-ink-3)', fontSize: 12, lineHeight: 1.55 }}>
+            {t('settings_page.pdf_engine.help')}
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {(['kreuzberg', 'docling'] as const).map((engine) => {
+              const active = project.data!.pdfEngine === engine;
+              return (
+                <button
+                  key={engine}
+                  type="button"
+                  className={active ? 'cw-btn-primary' : 'cw-btn-secondary'}
+                  disabled={!editable || active || pdfEngineMutation.isPending}
+                  onClick={() => pdfEngineMutation.mutate(engine)}
+                >
+                  {t(`settings_page.pdf_engine.option_${engine}`)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {submitError && (

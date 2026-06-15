@@ -42,6 +42,22 @@ pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     format!("session-{}", &s[..12])
 }
 
+/// Open the project's corpus store for use as a sub-agent, logging (not
+/// swallowing) a failure. A `None` here means Coworker/Deep Research run without
+/// corpus access; logging makes that visible instead of a silent capability loss.
+async fn corpus_store_or_log(
+    state: &AppState,
+    project_id: Uuid,
+) -> Option<agent_k::knowledge_base::SharedStore> {
+    match state.store_for(project_id).await {
+        Ok(store) => Some(store),
+        Err((status, _)) => {
+            tracing::warn!(%project_id, "corpus store unavailable ({status}); sub-agent will run without corpus access");
+            None
+        }
+    }
+}
+
 fn session_root(state: &AppState, project_id: Uuid, session_id: Uuid) -> std::path::PathBuf {
     state
         .data_root
@@ -93,31 +109,62 @@ pub async fn build_session_agent(
         _ => crate::model::ProjectChains::default(),
     };
     let chain = project_chains.chain_for(agent_type);
-    let model = crate::model::resolve_model_in(&chain, model_pin.as_deref());
+    let pin = model_pin.as_deref();
+    let model = crate::model::resolve_model_in(&chain, pin);
 
     use crate::model::AgentType;
     let agent = match agent_type {
         AgentType::DeepResearch => {
-            agent_k::agents::get_deep_research_agent(TOP_LEVEL_AGENT_NAME, &model, &artifacts)
-                .await
-                .map_err(|e| e.to_string())?
+            // Attach a Speedwagon sub-agent when the project's corpus store
+            // opens; on failure, run without it rather than failing the session
+            // (but log it — a broken store silently drops corpus access).
+            let corpus = corpus_store_or_log(&*state, project_id).await;
+            // Run the Speedwagon sub-agent on the corpus-recommended model of the
+            // same provider, not necessarily Deep Research's own model.
+            let corpus_model = corpus
+                .is_some()
+                .then(|| crate::model::speedwagon_model_for_parent(&model));
+            agent_k::agents::get_deep_research_agent(
+                TOP_LEVEL_AGENT_NAME,
+                &model,
+                &artifacts,
+                corpus,
+                corpus_model,
+            )
+            .await
+            .map_err(|e| e.to_string())?
         }
         AgentType::Buddy => agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model)
             .map_err(|e| e.to_string())?,
-        // Speedwagon: Q&A over the global document corpus (not the session
-        // sandbox); non-sandboxed. Interim until it moves to a sandbox agent.
+        // Speedwagon answers questions over this project's document corpus.
+        // Tools bind to the project-scoped store; runs on a local RunEnv (not
+        // the session sandbox). Shell is exposed as a secondary tool.
         AgentType::Speedwagon => {
-            let spec = agent_k::agents::SpeedwagonSpec::new()
-                .model(&model)
-                .into_spec();
-            Agent::try_new(spec).map_err(|e| e.to_string())?
+            let store = state
+                .store_for(project_id)
+                .await
+                .map_err(|(status, _)| format!("failed to open document store ({status})"))?;
+            agent_k::agents::get_speedwagon_agent(TOP_LEVEL_AGENT_NAME, &model, store, true)
+                .await
+                .map_err(|e| e.to_string())?
         }
         // Coworker runs the sandboxed coworker agent over the session's files.
         AgentType::Coworker => {
+            // Attach a Speedwagon sub-agent when the project's corpus store
+            // opens; on failure, run without it rather than failing the session
+            // (but log it — a broken store silently drops corpus access).
+            let corpus_store = corpus_store_or_log(&*state, project_id).await;
+            // Run the Speedwagon sub-agent on the corpus-recommended model of the
+            // same provider, not necessarily Coworker's own model.
+            let corpus_model = corpus_store
+                .is_some()
+                .then(|| crate::model::speedwagon_model_for_parent(&model));
             let opts = agent_k::agents::CoworkerSandboxOptions {
                 sandbox_name: Some(sandbox_name_for(&session_id)),
                 persist: true,
                 with_skill: true,
+                corpus_store,
+                corpus_model,
             };
             agent_k::agents::get_coworker_agent_with_opts(
                 TOP_LEVEL_AGENT_NAME,
@@ -591,6 +638,7 @@ pub(crate) async fn cleanup_session_resources(
     session_id: Uuid,
 ) {
     state.remove_agent(&session_id);
+    state.clear_session_citation_checks(session_id);
     let sandbox_name = sandbox_name_for(&session_id);
     if let Err(e) = Sandbox::remove_persisted(&sandbox_name).await {
         tracing::warn!(%session_id, "failed to remove persisted sandbox: {e}");
@@ -788,7 +836,7 @@ pub async fn get_message_history(
     }
 
     let session_id = resolve_session_id(&state, &session_ref).await?;
-    let (_session, _access) = state
+    let (session, _access) = state
         .repository
         .get_session_with_authz(session_id, auth_user.id)
         .await
@@ -808,6 +856,27 @@ pub async fn get_message_history(
             .map_err(|e| AppError::internal(e.to_string()))?,
     };
 
+    // For a Speedwagon session, the corpus (title, line_count) summary backs the
+    // footnote citation checks. Read the cache (refreshed by resync); only on a
+    // cold cache compute it once from the store and warm it, so the message
+    // fetch doesn't load every document's content on every poll.
+    let corpus_docs: Vec<(String, usize)> = if session.agent_type.as_deref() == Some("speedwagon") {
+        match state.corpus_summary(session.project_id) {
+            Some(summary) => (*summary).clone(),
+            None => match state.store_for(session.project_id).await {
+                Ok(store) => {
+                    let summary =
+                        crate::handlers::knowledge::corpus_summary(&*store.read().await);
+                    state.set_corpus_summary(session.project_id, summary.clone());
+                    summary
+                }
+                Err(_) => Vec::new(),
+            },
+        }
+    } else {
+        Vec::new()
+    };
+
     let items = rows
         .into_iter()
         .map(|r| -> ApiResult<SessionMessageResponse> {
@@ -823,6 +892,23 @@ pub async fn get_message_history(
                         .unwrap_or_else(|| TOP_LEVEL_AGENT_NAME.to_string()),
                 },
             };
+            // Only Speedwagon answers carry corpus citations to check. Reuse a
+            // cached result when present; otherwise verify once and cache it.
+            // The cache is dropped per project whenever the corpus changes, so a
+            // hit always reflects the current corpus.
+            let citations = if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_docs.is_empty() {
+                match state.citation_checks(session.project_id, session.id, r.seq) {
+                    Some(cached) => (*cached).clone(),
+                    None => {
+                        let text: String = r.message.contents.iter().filter_map(|p| p.as_text()).collect();
+                        let checks = crate::handlers::knowledge::verify_citations(&text, &corpus_docs);
+                        state.set_citation_checks(session.project_id, session.id, r.seq, checks.clone());
+                        checks
+                    }
+                }
+            } else {
+                Vec::new()
+            };
             Ok(SessionMessageResponse {
                 seq: r.seq,
                 message: r.message,
@@ -830,6 +916,7 @@ pub async fn get_message_history(
                 created_at: r.created_at,
                 attachments: r.attachments,
                 artifacts: r.artifacts,
+                citations,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;

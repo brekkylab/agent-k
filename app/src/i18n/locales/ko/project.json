@@ -97,7 +97,14 @@
     "toasts": {
       "rename_success": "프로젝트 이름을 변경했습니다",
       "description_success": "설명을 변경했습니다",
-      "delete_success": "프로젝트가 삭제되었습니다"
+      "delete_success": "프로젝트가 삭제되었습니다",
+      "pdf_engine_success": "PDF 엔진이 변경되었습니다"
+    },
+    "pdf_engine": {
+      "heading": "PDF 처리 방식",
+      "help": "knowledge 폴더의 PDF에서 텍스트를 추출하는 방식입니다. Kreuzberg는 빠르고, Docling은 표·레이아웃까지 더 정확히 읽지만 시간이 더 걸립니다.",
+      "option_kreuzberg": "Kreuzberg (빠름)",
+      "option_docling": "Docling (정확·느림)"
     }
   },
   "chains_editor": {

@@ -20,6 +20,8 @@ export interface AgentRecommendation {
   chain: string[];
   /** What "recommended" resolves to right now given provider availability. */
   resolvedModel: string;
+  /** Catalog ids this agent discourages; the picker tags them "(Not Recommended)". */
+  notRecommended: string[];
 }
 
 export interface ModelCatalog {
@@ -38,6 +40,7 @@ interface BackendAgentRecommendation {
   agent_type: string;
   chain: string[];
   resolved_model: string;
+  not_recommended: string[];
 }
 
 interface BackendModelCatalog {
@@ -54,6 +57,7 @@ export async function getModelCatalog(projectRef?: string): Promise<ModelCatalog
       agentType: a.agent_type,
       chain: a.chain,
       resolvedModel: a.resolved_model,
+      notRecommended: a.not_recommended,
     })),
   };
 }

@@ -1302,6 +1302,26 @@ function MessageBubble({
             ? <MarkdownRenderer text={message.body} />
             : message.body.split('\n').map((line, i) => <p key={`${message.id}-${i}`}>{line || ' '}</p>)}
         </div>
+        {isAi && message.citations && message.citations.length > 0 && (
+          <div className="cw-citations">
+            {message.citations.map((c) => (
+              <span
+                key={c.index}
+                className={`cw-citation-chip${c.verified ? '' : ' is-unverified'}`}
+                title={
+                  c.kind === 'missing'
+                    ? t('session:citation.missing')
+                    : c.verified
+                      ? t('session:citation.verified')
+                      : t('session:citation.unverified')
+                }
+              >
+                <Icon name={c.verified ? 'check' : 'x'} size={11} />
+                [{c.index}]{c.kind === 'missing' ? ` ${t('session:citation.missing_label')}` : c.label ? ` ${c.label}` : ''}
+              </span>
+            ))}
+          </div>
+        )}
         {message.attachments && message.attachments.length > 0 && (
           <div className="cw-msg-attachments" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
             {message.attachments.map((path) => (

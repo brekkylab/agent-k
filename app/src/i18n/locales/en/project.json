@@ -97,7 +97,14 @@
     "toasts": {
       "rename_success": "Project name updated",
       "description_success": "Description updated",
-      "delete_success": "Project deleted"
+      "delete_success": "Project deleted",
+      "pdf_engine_success": "PDF engine updated"
+    },
+    "pdf_engine": {
+      "heading": "PDF parsing",
+      "help": "How text is parsed from PDFs in the knowledge folder. Kreuzberg is fast; Docling parses tables and layout more accurately but takes longer.",
+      "option_kreuzberg": "Kreuzberg (fast)",
+      "option_docling": "Docling (accurate · slower)"
     }
   },
   "chains_editor": {

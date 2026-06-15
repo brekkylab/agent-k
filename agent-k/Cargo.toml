@@ -40,3 +40,4 @@ tokio = { version = "1", features = ["process", "io-util", "rt", "rt-multi-threa
 tokio-stream = "0.1"
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v5"] }
+kreuzberg = { version = "=4.9.8", features = ["bundled-pdfium"] }

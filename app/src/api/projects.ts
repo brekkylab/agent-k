@@ -24,18 +24,58 @@ export async function getProject(projectRef: string): Promise<Project> {
 
 export async function updateProject(
   projectRef: string,
-  input: { name?: string; description?: string | null; recommendedChains?: Record<string, string[]> },
+  input: {
+    name?: string;
+    description?: string | null;
+    recommendedChains?: Record<string, string[]>;
+    pdfEngine?: string;
+  },
 ): Promise<Project> {
   const body: Record<string, unknown> = {};
   if (input.name !== undefined) body.name = input.name;
   if (input.description !== undefined) body.description = input.description;
   // Send only when provided; `{}` resets all agents to defaults.
   if (input.recommendedChains !== undefined) body.recommended_chains = input.recommendedChains;
+  if (input.pdfEngine !== undefined) body.pdf_engine = input.pdfEngine;
   const raw = await request<BackendProject>(`/projects/${projectRef}`, {
     method: 'PATCH',
     body,
   });
   return toProject(raw);
+}
+
+export interface KnowledgeStatus {
+  indexing: boolean;
+  /** Null while the store is locked by an in-flight resync (count unknown then). */
+  documentCount: number | null;
+  /** Last resync error, if the most recent resync failed; null otherwise. */
+  error: string | null;
+}
+
+/** Knowledge-corpus indexing status — whether a background resync is in flight. */
+export async function getKnowledgeStatus(projectRef: string): Promise<KnowledgeStatus> {
+  const raw = await request<{ indexing: boolean; document_count: number | null; error: string | null }>(
+    `/projects/${projectRef}/knowledge/status`,
+  );
+  return { indexing: raw.indexing, documentCount: raw.document_count ?? null, error: raw.error ?? null };
+}
+
+export interface KnowledgeFileStatus {
+  /** Scope-relative path, e.g. `knowledge/report.pdf`. */
+  path: string;
+  indexed: boolean;
+  /** The latest resync tried and failed to index this file. */
+  failed: boolean;
+}
+
+export interface KnowledgeFiles {
+  files: KnowledgeFileStatus[];
+  indexing: boolean;
+}
+
+/** Per-file corpus status for the knowledge folder. */
+export async function getKnowledgeFiles(projectRef: string): Promise<KnowledgeFiles> {
+  return request<KnowledgeFiles>(`/projects/${projectRef}/knowledge/files`);
 }
 
 export async function deleteProject(projectRef: string): Promise<void> {

@@ -2,23 +2,14 @@ mod cli;
 
 use std::{path::PathBuf, sync::Arc};
 
-use agent_k::{
-    agents::{
-        get_calculate_tool_func, get_find_in_document_tool_func, get_read_document_tool_func,
-        get_search_document_tool_func,
-    },
-    knowledge_base::Store,
-};
 use agent_k_backend::{auth, repository, router, state::AppState, worker};
 use aide::{
     axum::ApiRouter,
     openapi::{Info, OpenApi},
     scalar::Scalar,
 };
-use ailoy::agent::default_provider_mut;
 use axum::{Extension, response::IntoResponse};
 use clap::Parser;
-use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::cli::{Cli, Command, ServeArgs, ServeMode};
@@ -77,32 +68,6 @@ async fn run_server(mode: ServeMode) -> std::io::Result<()> {
         auth::bootstrap_admin_if_needed(&repo).await;
     }
 
-    let store_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".speedwagon");
-    let store = Arc::new(RwLock::new(
-        Store::new(&store_path).expect("speedwagon store init"),
-    ));
-
-    // Tool registration is required for both modes — workers execute agents
-    // directly, and the API can also drive inline agent invocations.
-    {
-        let mut provider = default_provider_mut();
-        provider
-            .tools
-            .insert_func("calculate", get_calculate_tool_func());
-        provider.tools.insert_func(
-            "search_document",
-            get_search_document_tool_func(store.clone()),
-        );
-        provider.tools.insert_func(
-            "find_in_document",
-            get_find_in_document_tool_func(store.clone()),
-        );
-        // Speedwagon (the `rag` agent surface) also reads matched spans.
-        provider
-            .tools
-            .insert_func("read_document", get_read_document_tool_func(store.clone()));
-    }
-
     let data_root = std::env::var("AGENT_K_DATA_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data"));
@@ -110,7 +75,9 @@ async fn run_server(mode: ServeMode) -> std::io::Result<()> {
     tracing::info!("data root: {}", data_root.display());
     tracing::info!("serve mode: {:?}", mode);
 
-    let app_state = Arc::new(AppState::new(repo, store, jwt, data_root));
+    // Speedwagon corpus tools bind to a per-project store at agent-build time
+    // (`agent_k::agents::get_speedwagon_agent`), not on the global provider.
+    let app_state = Arc::new(AppState::new(repo, jwt, data_root));
 
     if mode.runs_worker() {
         let worker_count = std::env::var("AGENT_K_WORKER_COUNT")

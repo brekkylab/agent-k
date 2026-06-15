@@ -23,6 +23,24 @@
 }
 .cw-md hr { border: 0; border-top: 1px solid var(--cw-line-soft); margin: 14px 0; }
 .cw-md a { color: var(--cw-accent); text-decoration: underline; text-underline-offset: 2px; }
+/* GFM footnotes — Speedwagon cites corpus/web sources as [^1]..[^N]. The marker
+   is a small superscript link; the Sources list at the bottom is set apart and
+   muted, like a references block. */
+.cw-md sup a[data-footnote-ref] {
+  text-decoration: none;
+  font-size: 0.72em;
+  font-weight: 600;
+  padding: 0 2px;
+}
+.cw-md .footnotes {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--cw-line-soft);
+  font-size: 12.5px;
+  color: var(--cw-ink-2);
+}
+.cw-md .footnotes ol { padding-left: 1.2em; }
+.cw-md .footnotes li { margin-top: 2px; }
 .cw-md-inline-code {
   font-family: var(--cw-font-mono);
   font-size: 12.5px;
@@ -157,6 +175,16 @@
   font-weight: 600;
   color: var(--cw-accent);
 }
+/* Speedwagon citation chips: source verified against the corpus, or not found. */
+.cw-citations { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cw-citation-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11.5px; line-height: 1.4;
+  background: var(--cw-paper-3); color: var(--cw-ink-3);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cw-citation-chip.is-unverified { background: var(--cw-danger-bg, #fde8e8); color: var(--cw-danger, #b42318); }
 
 
 .cw-message-error {
