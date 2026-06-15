@@ -58,6 +58,11 @@ pub struct AppState {
     /// Scope-relative paths that failed to index in the latest resync, replaced
     /// each resync. Lets the status endpoint mark a file failed, not "pending".
     knowledge_failed_files: DashMap<Uuid, Arc<std::collections::HashSet<String>>>,
+    // These two lock maps are intentionally never pruned (e.g. on evict_store):
+    // a task can hold a project's lock while another evicts that project, so
+    // removing the entry would let a fresh `entry().or_insert()` mint a second
+    // Mutex and break serialization. They are bounded by project count (one
+    // small Mutex each), so the unbounded-key concern does not apply.
     /// Per-project lock serializing resyncs so two rescans never interleave.
     resync_locks: DashMap<Uuid, Arc<Mutex<()>>>,
     /// Per-project lock serializing first-time store creation. `Store::new`
@@ -231,6 +236,13 @@ impl AppState {
     /// next read against the updated corpus.
     pub fn clear_citation_checks(&self, project_id: Uuid) {
         self.citation_checks.retain(|k, _| k.0 != project_id);
+    }
+
+    /// Drop cached citation checks for one session. Called when the session is
+    /// torn down so its entries don't linger in the cache forever (corpus-change
+    /// eviction is keyed by project, not session).
+    pub fn clear_session_citation_checks(&self, session_id: Uuid) {
+        self.citation_checks.retain(|k, _| k.1 != session_id);
     }
 
     /// Return the document corpus [`SharedStore`] for `project_id`, opening it

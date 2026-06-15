@@ -625,6 +625,7 @@ pub(crate) async fn cleanup_session_resources(
     session_id: Uuid,
 ) {
     state.remove_agent(&session_id);
+    state.clear_session_citation_checks(session_id);
     let sandbox_name = sandbox_name_for(&session_id);
     if let Err(e) = Sandbox::remove_persisted(&sandbox_name).await {
         tracing::warn!(%session_id, "failed to remove persisted sandbox: {e}");

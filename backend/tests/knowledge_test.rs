@@ -8,7 +8,8 @@ use agent_k_backend::handlers::CitationCheck;
 use agent_k_backend::state::AppState;
 use axum::http::StatusCode;
 use common::{
-    authed, build_multipart_body, get_personal_project, login, make_app_repo_state, signup,
+    authed, build_multipart_body, get_personal_project, login, make_app_repo_state,
+    post_session_authed, signup,
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -386,6 +387,40 @@ async fn corpus_change_clears_cached_citation_checks() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     assert!(cleared, "a corpus change must clear cached citation checks");
+}
+
+/// Deleting a session must drop its cached citation checks. Corpus-change
+/// eviction is keyed by project, so without session-scoped cleanup a deleted
+/// session's entries would linger in the cache for the life of the server.
+#[tokio::test]
+async fn deleting_a_session_clears_its_cached_citation_checks() {
+    let (app, _repo, state) = make_app_repo_state().await;
+    let username = format!("u_{}", Uuid::new_v4().simple());
+    signup(&app, &username, "Password123!").await;
+    let token = login(&app, &username, "Password123!").await;
+    let (_slug, pid) = personal_project_uuid(&app, &token).await;
+
+    let sid = post_session_authed(&app, &token, &pid.to_string()).await;
+    state.set_citation_checks(
+        pid,
+        sid,
+        1,
+        vec![CitationCheck {
+            index: 1,
+            label: "Doc".to_string(),
+            kind: "corpus".to_string(),
+            verified: true,
+            referenced: true,
+        }],
+    );
+    assert!(state.citation_checks(pid, sid, 1).is_some(), "cache seeded");
+
+    let (code, _) = authed(&app, "DELETE", &format!("/sessions/{sid}"), &token, None).await;
+    assert_eq!(code, StatusCode::NO_CONTENT, "session delete should succeed");
+    assert!(
+        state.citation_checks(pid, sid, 1).is_none(),
+        "deleting the session must drop its cached citation checks"
+    );
 }
 
 /// Overlapping rescans must converge: each upload spawns a background rescan and
