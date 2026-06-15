@@ -214,6 +214,29 @@ pub struct TriggerListResponse {
     pub items: Vec<TriggerResponse>,
 }
 
+// ── occurrences (computed schedule preview) ──────────────────────────────────
+
+/// A single upcoming scheduled fire, expanded from a cron trigger's expression.
+/// Not persisted — computed on demand for the calendar view.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OccurrenceResponse {
+    pub trigger_id: Uuid,
+    pub automation_id: Uuid,
+    pub automation_name: String,
+    /// The exact fire instant (UTC). Clients localize for display.
+    pub fire_at: DateTime<Utc>,
+    /// The trigger's timezone (the cron expr is evaluated in this zone).
+    pub tz: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OccurrenceListResponse {
+    pub items: Vec<OccurrenceResponse>,
+    /// `true` if any trigger's expansion hit the per-trigger cap within the
+    /// window (the calendar is showing a partial set for at least one trigger).
+    pub truncated: bool,
+}
+
 // ── run ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -64,6 +64,52 @@ pub fn next_fire_after(
         .map_err(|e| format!("no future occurrence for '{expr}': {e}"))
 }
 
+/// Expand all occurrences of `expr` (in `tz_name`) that fall within the
+/// half-open window `[from, to)`, in ascending order. `max` caps the result
+/// length to bound work for dense schedules (e.g. minutely crons over a wide
+/// window); the returned bool is `true` when the cap was hit (more occurrences
+/// exist past the last element). Used by the calendar view to preview upcoming
+/// scheduled fires without persisting them — the cron expression alone
+/// determines every future instant.
+pub fn occurrences_between(
+    expr: &str,
+    tz_name: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    max: usize,
+) -> Result<(Vec<DateTime<Utc>>, bool), String> {
+    let tz: Tz = tz_name
+        .parse()
+        .map_err(|e: chrono_tz::ParseError| format!("invalid timezone '{tz_name}': {e}"))?;
+    validate_five_field(expr)?;
+    let cron = Cron::new(expr)
+        .parse()
+        .map_err(|e| format!("invalid cron expression '{expr}': {e}"))?;
+
+    let mut out = Vec::new();
+    // First probe is inclusive so an occurrence exactly at `from` is captured;
+    // subsequent probes are exclusive to advance past the one just collected.
+    let mut cursor = from.with_timezone(&tz);
+    let mut inclusive = true;
+    loop {
+        let next = match cron.find_next_occurrence(&cursor, inclusive) {
+            Ok(t) => t,
+            // No further occurrence (croner exhausted its search horizon).
+            Err(_) => return Ok((out, false)),
+        };
+        let next_utc = next.with_timezone(&Utc);
+        if next_utc >= to {
+            return Ok((out, false));
+        }
+        out.push(next_utc);
+        if out.len() >= max {
+            return Ok((out, true));
+        }
+        cursor = next;
+        inclusive = false;
+    }
+}
+
 fn validate_five_field(expr: &str) -> Result<(), String> {
     let n = expr.split_whitespace().count();
     if n == 5 {
@@ -123,6 +169,42 @@ mod tests {
         // "5L" in the day-of-week field = last Friday of the month.
         let next = next_fire_after("0 9 * * 5L", "UTC", now).unwrap();
         assert_eq!(next, at("2026-08-28T09:00:00Z"));
+    }
+
+    #[test]
+    fn occurrences_between_expands_window() {
+        // Daily 09:00 UTC over a 3-day half-open window → 3 fires.
+        let from = at("2026-06-01T00:00:00Z");
+        let to = at("2026-06-04T00:00:00Z");
+        let (fires, truncated) = occurrences_between("0 9 * * *", "UTC", from, to, 100).unwrap();
+        assert_eq!(fires, vec![
+            at("2026-06-01T09:00:00Z"),
+            at("2026-06-02T09:00:00Z"),
+            at("2026-06-03T09:00:00Z"),
+        ]);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn occurrences_between_includes_boundary_start_excludes_end() {
+        // `from` lands exactly on an occurrence (inclusive); `to` does too (exclusive).
+        let from = at("2026-06-01T09:00:00Z");
+        let to = at("2026-06-03T09:00:00Z");
+        let (fires, _) = occurrences_between("0 9 * * *", "UTC", from, to, 100).unwrap();
+        assert_eq!(fires, vec![
+            at("2026-06-01T09:00:00Z"),
+            at("2026-06-02T09:00:00Z"),
+        ]);
+    }
+
+    #[test]
+    fn occurrences_between_caps_and_flags_truncation() {
+        // Minutely over an hour = 60 fires, but max caps at 10.
+        let from = at("2026-06-01T00:00:00Z");
+        let to = at("2026-06-01T01:00:00Z");
+        let (fires, truncated) = occurrences_between("* * * * *", "UTC", from, to, 10).unwrap();
+        assert_eq!(fires.len(), 10);
+        assert!(truncated);
     }
 
     #[test]
