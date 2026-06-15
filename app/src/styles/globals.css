@@ -271,6 +271,22 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 
 .cw-page { width: min(1084px, calc(100% - 80px)); margin: 0 auto; padding: 36px 0 72px; }
 .cw-page-enter { animation: cw-enter .26s ease both; }
+/* Home page drop layer — fills the whole main area (everything right of the
+   sidebar) so computer files can be dropped anywhere, not just on the centered
+   page content. */
+.cw-home-drop { flex: 1; display: flex; flex-direction: column; position: relative; }
+/* While dragging files over it, lay one uniform accent overlay over the whole
+   area (like the session chat's full-surface drop zone). pointer-events:none
+   lets the drop reach underneath. */
+.cw-home-drop.is-drop-target::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  background: color-mix(in oklch, var(--cw-accent), transparent 82%);
+  box-shadow: inset 0 0 0 2px var(--cw-accent);
+}
 .cw-page-head, .cw-project-hero { display: flex; justify-content: space-between; gap: var(--cw-space-6); align-items: flex-start; padding-bottom: var(--cw-space-6); border-bottom: 1px solid var(--cw-border); margin-bottom: var(--cw-space-6); }
 .cw-page h1, .cw-project-hero h1, .cw-chat-head h1 { margin: 0; font-size: var(--cw-text-2xl); line-height: 1.12; letter-spacing: -0.025em; font-weight: 650; }
 .cw-page p, .cw-project-hero p { color: var(--cw-fg-3); margin: 8px 0 8px; line-height: var(--cw-leading-relaxed); }
@@ -1456,6 +1472,12 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   animation: cw-spin 0.6s linear infinite;
 }
 @keyframes cw-spin { to { transform: rotate(360deg); } }
+/* Staged-attachment chip tray. Shared layout here; the two composers differ only
+   in padding (and the session's grid needs the tray to span all columns). */
+.cw-attach-tray { display: flex; flex-wrap: wrap; gap: 6px; }
+.cw-home-composer-box .cw-attach-tray { padding: 0 0 6px; }
+.cw-composer .cw-attach-tray { padding: 6px 0; grid-column: 1 / -1; }
+
 .cw-attach-button {
   width: 30px;
   height: 30px;

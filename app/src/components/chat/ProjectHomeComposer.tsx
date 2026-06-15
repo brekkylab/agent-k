@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
+import { AttachmentChip } from '@/components/AttachmentChip';
 
 export interface ProjectHomeComposerSubmission {
   text: string;
@@ -18,12 +19,14 @@ interface ProjectHomeComposerProps {
   disabled?: boolean;
   // While the send is being processed (waiting for session creation / stream start): show a spinner on the send button to indicate "sending".
   pending?: boolean;
-  // 현재 모델 선택이 실행 불가(가용 provider 없음)일 때 send 를 막고 힌트를 표시.
+  // Block send and show a hint when the current model selection can't run (no available provider).
   sendBlocked?: boolean;
   sendBlockedHint?: string;
   placeholder?: string;
-  // Entry point for adding files (placeholder — to be wired up to PR #114's attachment tray).
-  onAttachClick?: () => void;
+  // Local files staged for upload (uploaded to the new session's inputs/ on submit).
+  files?: File[];
+  onAddFiles?: (files: File[]) => void;
+  onRemoveFile?: (index: number) => void;
   // Home-only model picker slot. Session composer owns its own compact controls.
   modelPicker?: ReactNode;
   // Focus request signal. Focuses the input whenever the value changes (it's a nonce, not a
@@ -44,11 +47,14 @@ export function ProjectHomeComposer({
   sendBlocked = false,
   sendBlockedHint,
   placeholder = DEFAULT_PLACEHOLDER,
-  onAttachClick,
+  files = [],
+  onAddFiles,
+  onRemoveFile,
   modelPicker,
   focusSignal,
 }: ProjectHomeComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const canSubmit = value.trim().length > 0 && !disabled && !sendBlocked;
 
   useEffect(() => {
@@ -80,11 +86,11 @@ export function ProjectHomeComposer({
     }
   };
 
-  const attachButton = onAttachClick && (
+  const attachButton = onAddFiles && (
     <button
       type="button"
       className="cw-attach-button"
-      onClick={onAttachClick}
+      onClick={() => fileInputRef.current?.click()}
       disabled={disabled}
       aria-label="파일 추가"
       title="파일 추가"
@@ -108,6 +114,18 @@ export function ProjectHomeComposer({
       }}
     >
       <div className="cw-home-composer-box">
+        {files.length > 0 && (
+          <div className="cw-attach-tray">
+            {files.map((file, i) => (
+              <AttachmentChip
+                key={`${file.name}-${i}`}
+                filename={file.name}
+                status="staged"
+                onRemove={() => onRemoveFile?.(i)}
+              />
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           className="cw-home-composer-input"
@@ -118,6 +136,15 @@ export function ProjectHomeComposer({
           disabled={disabled}
           rows={3}
         />
+        {onAddFiles && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => { onAddFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+          />
+        )}
         <div className="cw-home-composer-actions">
           {modelPicker}
           <span className="cw-home-composer-actions-spacer" />
