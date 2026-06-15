@@ -72,9 +72,9 @@
       "placeholder": "What are you curious about?",
       "greeting": "Speedwagon finds answers in your files",
       "prompts": [
-        { "label": "Summarize project files", "seedText": "Summarize the key contents of the project files" },
-        { "label": "Find a specific fact", "seedText": "Find all the revenue-related figures across the documents" },
-        { "label": "Compare documents", "seedText": "Compare the differences between the two most recent reports" }
+        { "label": "Find a date", "seedText": "Find the contract or launch dates in the documents." },
+        { "label": "Find with sources", "seedText": "Find last year's revenue in the documents and cite the source." },
+        { "label": "Top complaint", "seedText": "Find the most common complaint in the survey responses." }
       ]
     },
     "deep-research": {
