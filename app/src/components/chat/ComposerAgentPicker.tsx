@@ -84,6 +84,7 @@ export function ComposerAgentPicker({
             type="button"
             aria-pressed={isActive}
             data-agent={agent.id}
+            title={t(`agent.${agent.id}.description`)}
             className={`cw-agent-tab${isActive ? ' is-active' : ''}`}
             onClick={() => onChange(agent.id)}
           >

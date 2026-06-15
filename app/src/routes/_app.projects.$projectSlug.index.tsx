@@ -58,6 +58,7 @@ function ProjectHome() {
   // Agent copy (greeting/placeholder/suggested prompts) is i18n'd in the
   // `automation` namespace, keyed by the agent surface id.
   const agentGreeting = tAgent(`agent.${selectedAgentId}.greeting`);
+  const agentDescription = tAgent(`agent.${selectedAgentId}.description`);
   const agentPlaceholder = tAgent(`agent.${selectedAgentId}.placeholder`);
   const agentPrompts = tAgent(`agent.${selectedAgentId}.prompts`, {
     returnObjects: true,
@@ -146,6 +147,9 @@ function ProjectHome() {
       <div className="cw-home-blank">
         <p className="cw-home-greeting">
           {agentGreeting}
+        </p>
+        <p className="cw-home-agent-desc">
+          {agentDescription}
         </p>
 
         <div
