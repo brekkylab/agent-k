@@ -67,9 +67,22 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
     }
   }
 
+  // While a marquee is dragging, suppress text selection page-wide. The box is
+  // portaled to <body> and roams the whole screen, so a list-only `user-select:
+  // none` doesn't stop the drag from selecting text it sweeps over (chat, etc.).
+  function lockSelection() {
+    document.body.style.setProperty('user-select', 'none');
+    document.body.style.setProperty('-webkit-user-select', 'none');
+  }
+  function unlockSelection() {
+    document.body.style.removeProperty('user-select');
+    document.body.style.removeProperty('-webkit-user-select');
+  }
+
   function cancel() {
     originRef.current = null;
     setDragRect(null);
+    unlockSelection();
   }
 
   useEffect(() => {
@@ -81,7 +94,13 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
       const dx = cx - origin.x;
       const dy = cy - origin.y;
       if (Math.abs(dx) < threshold && Math.abs(dy) < threshold && !dragRect) return;
-      didDragRef.current = true;
+      if (!didDragRef.current) {
+        didDragRef.current = true;
+        // Just crossed the threshold — this is a marquee, not a click. Lock
+        // selection and drop any text range that formed before we knew.
+        lockSelection();
+        window.getSelection()?.removeAllRanges();
+      }
       const left = Math.min(origin.x, cx);
       const top = Math.min(origin.y, cy);
       const width = Math.abs(dx);
@@ -117,6 +136,7 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
       apply(lastPointerRef.current.x, lastPointerRef.current.y);
     }
     function onUp() {
+      unlockSelection();
       const dragged = didDragRef.current && originRef.current;
       originRef.current = null;
       setDragRect(null);
@@ -152,6 +172,8 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
       window.removeEventListener('click', swallowRef.current, true);
       swallowRef.current = null;
     }
+    // Unmounting mid-drag must not leave the page un-selectable.
+    unlockSelection();
   }, []);
 
   return { onMouseDown, dragRect, cancel };
