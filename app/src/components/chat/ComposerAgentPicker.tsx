@@ -78,18 +78,22 @@ export function ComposerAgentPicker({
       />
       {AGENT_SURFACES.map((agent) => {
         const isActive = agent.id === value;
+        const description = t(`agent.${agent.id}.description`);
         return (
           <button
             key={agent.id}
             type="button"
             aria-pressed={isActive}
+            aria-label={`${agent.label} — ${description}`}
             data-agent={agent.id}
-            title={t(`agent.${agent.id}.description`)}
             className={`cw-agent-tab${isActive ? ' is-active' : ''}`}
             onClick={() => onChange(agent.id)}
           >
             <Icon name={agent.icon} size={15} />
             <span>{agent.label}</span>
+            <span className="cw-agent-tab-pop" role="tooltip" aria-hidden>
+              {description}
+            </span>
           </button>
         );
       })}
