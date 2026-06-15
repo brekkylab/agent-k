@@ -1566,6 +1566,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-home-blank .cw-home-composer-box { width: 100%; }
 .cw-home-greeting { margin: 0; text-align: center; font-size: var(--cw-text-lg); color: var(--cw-fg-2); font-weight: 500; }
 .cw-home-agent-desc { margin: -8px 0 0; text-align: center; font-size: var(--cw-text-sm); color: var(--cw-fg-3); max-width: 34rem; }
+.cw-agent-pick-desc { margin: -4px 0 0; font-size: var(--cw-text-sm); color: var(--cw-fg-3); }
 .cw-suggested-prompts {
   display: flex;
   flex-wrap: wrap;
