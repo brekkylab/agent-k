@@ -219,7 +219,11 @@ async fn main() -> anyhow::Result<()> {
             let store = corpus_store.clone().ok_or_else(|| {
                 anyhow::anyhow!("speedwagon case must define corpus_files")
             })?;
-            get_speedwagon_agent(agent_kind.name(), agent_model, store, true).await?
+            // Speedwagon is corpus-QA only; run it on the corpus-recommended
+            // (lightweight) model for the chosen provider, not the heavier shared
+            // default (e.g. gemini-3.5-flash, which is slow in the corpus loop).
+            let sw_model = speedwagon_model_for(agent_model);
+            get_speedwagon_agent(agent_kind.name(), sw_model, store, true).await?
         }
     };
     println!(
