@@ -139,6 +139,9 @@ async fn resync_inner(state: &Arc<AppState>, project_id: Uuid) -> Result<(), Str
         .map_err(|(status, _)| format!("store_for failed: {status}"))?;
     let mut store = store.write().await;
 
+    // Clear the failed files of previous resync before running ingest
+    state.set_failed_files(project_id, HashSet::new());
+
     let result = store
         .ingest_many(items, pdf_engine)
         .await
