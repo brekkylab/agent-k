@@ -1,7 +1,14 @@
-use std::path::{Component, Path, PathBuf};
+use std::{
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+};
 
+use ailoy::runenv::{Machine, Sandbox, SandboxSnapshot};
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    sync::Mutex,
+};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -11,6 +18,9 @@ pub enum FsError {
 
     #[error("invalid path: {0}")]
     InvalidPath(String),
+
+    #[error("sandbox: {0}")]
+    Sandbox(#[source] anyhow::Error),
 }
 
 pub type FsResult<T> = Result<T, FsError>;
@@ -138,11 +148,89 @@ impl FSStateV2 {
         Ok(())
     }
 
+    /// Snapshot the sandbox and export it as `.tar.zst` under
+    /// `projects/{pid}/sessions/{sid}.tar.zst`, returning the resulting path.
+    /// Thin wrapper that resolves the canonical session archive path and
+    /// delegates to [`archive_sandbox_to`].
+    pub async fn archive_session(
+        &self,
+        pid: impl AsRef<str>,
+        sid: impl AsRef<str>,
+        runenv: Arc<Mutex<Sandbox>>,
+    ) -> FsResult<PathBuf> {
+        let dst = self.session_archive_path(pid.as_ref(), sid.as_ref())?;
+        archive_sandbox_to(runenv, &dst).await
+    }
+
+
+    /// Restore the session archive at `projects/{pid}/sessions/{sid}.tar.zst`
+    /// back into a live `Sandbox`, returning a fresh `Arc<Mutex<Sandbox>>`.
+    /// The on-disk archive is deleted on successful restore (best-effort).
+    pub async fn restore_session(
+        &self,
+        pid: impl AsRef<str>,
+        sid: impl AsRef<str>,
+    ) -> FsResult<Arc<Mutex<Sandbox>>> {
+        let path = self.session_archive_path(pid.as_ref(), sid.as_ref())?;
+        let snapshot = SandboxSnapshot::try_from_archive(&path)
+            .await
+            .map_err(FsError::Sandbox)?;
+        let sandbox = Sandbox::try_from_snapshot(snapshot)
+            .await
+            .map_err(FsError::Sandbox)?;
+        // The .tar.zst is no longer needed once the sandbox is hot again.
+        let _ = tokio::fs::remove_file(&path).await;
+        Ok(Arc::new(Mutex::new(sandbox)))
+    }
+
     fn workspace_safe_join(&self, pid: &str, rel: &Path) -> FsResult<PathBuf> {
         validate_pid(pid)?;
         let workspace = self.root.join("projects").join(pid).join("workspace");
         safe_join(&workspace, rel)
     }
+
+    /// Canonical archive path for a session: `projects/{pid}/sessions/{sid}.tar.zst`.
+    /// Callers that own the sandbox lifecycle (e.g. `AgentsStateV2`) compute
+    /// the path once via this helper and pass it to [`archive_sandbox_to`].
+    pub fn session_archive_path(&self, pid: &str, sid: &str) -> FsResult<PathBuf> {
+        validate_pid(pid)?;
+        validate_sid(sid)?;
+        Ok(self
+            .root
+            .join("projects")
+            .join(pid)
+            .join("sessions")
+            .join(format!("{sid}.tar.zst")))
+    }
+}
+
+/// Stop the sandbox, take a snapshot, and archive it as `.tar.zst` at
+/// `archive_path`. `runenv` is consumed and the destination's parent directory
+/// is created if missing. Errors with `Sandbox` if the `Arc<Mutex<Sandbox>>`
+/// is still shared by another holder — this helper needs exclusive ownership.
+pub async fn archive_sandbox_to(
+    runenv: Arc<Mutex<Sandbox>>,
+    archive_path: &Path,
+) -> FsResult<PathBuf> {
+    let dir = archive_path
+        .parent()
+        .expect("archive path has a parent directory");
+    let filename = archive_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .expect("archive filename is utf-8");
+    tokio::fs::create_dir_all(dir).await?;
+
+    let mutex = Arc::try_unwrap(runenv)
+        .map_err(|_| FsError::Sandbox(anyhow::anyhow!("sandbox handle still shared")))?;
+    let mut sandbox = mutex.into_inner();
+
+    sandbox.stop().await.map_err(FsError::Sandbox)?;
+    let snapshot = sandbox.snapshot().await.map_err(FsError::Sandbox)?;
+    snapshot
+        .archive(dir, filename)
+        .await
+        .map_err(FsError::Sandbox)
 }
 
 fn validate_pid(pid: &str) -> FsResult<()> {
@@ -156,6 +244,21 @@ fn validate_pid(pid: &str) -> FsResult<()> {
     }
     if pid == "." || pid == ".." {
         return Err(FsError::InvalidPath("pid must not be '.' or '..'".into()));
+    }
+    Ok(())
+}
+
+fn validate_sid(sid: &str) -> FsResult<()> {
+    if sid.is_empty() {
+        return Err(FsError::InvalidPath("sid must not be empty".into()));
+    }
+    if sid.contains('/') || sid.contains('\\') || sid.contains('\0') {
+        return Err(FsError::InvalidPath(format!(
+            "sid contains illegal char: {sid}"
+        )));
+    }
+    if sid == "." || sid == ".." {
+        return Err(FsError::InvalidPath("sid must not be '.' or '..'".into()));
     }
     Ok(())
 }

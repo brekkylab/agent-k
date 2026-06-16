@@ -7,7 +7,10 @@
 //! cargo run -p agent-k --bin test_case -- coworker 0 --model kimi
 //! cargo run -p agent-k --bin test_case -- deep-research 0 --model claude
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::{
+    io::{self, BufRead, IsTerminal, Write},
+    sync::Arc,
+};
 
 use agent_k::agents::{
     get_coworker_agent_runenv, get_coworker_agent_spec, get_deep_research_agent_runenv,
@@ -16,9 +19,9 @@ use agent_k::agents::{
 use ailoy::{
     agent::{Agent, AgentState},
     message::{Message, Part, Role},
-    runenv::SharedMachine,
 };
 use futures::StreamExt;
+use tokio::sync::Mutex;
 
 #[path = "test_case/cases/mod.rs"]
 mod cases;
@@ -151,14 +154,18 @@ async fn main() -> anyhow::Result<()> {
     let mut agent = match agent_kind {
         AgentKind::Coworker => {
             let spec = get_coworker_agent_spec(agent_kind.name(), agent_model, !no_skill);
-            let runenv = get_coworker_agent_runenv(DATA_DIR, SHARED_DATA_DIR, ARTIFACT_DIR).await?;
-            let state = AgentState::new().with_runenv(SharedMachine::new(runenv));
+            let runenv = Arc::new(Mutex::new(
+                get_coworker_agent_runenv(DATA_DIR, SHARED_DATA_DIR, ARTIFACT_DIR).await?,
+            ));
+            let state = AgentState::new().with_runenv(runenv);
             Agent::try_with_state(spec, state)?
         }
         AgentKind::DeepResearch => {
             let spec = get_deep_research_agent_spec(agent_kind.name(), agent_model);
-            let runenv = get_deep_research_agent_runenv(ARTIFACT_DIR).await?;
-            let state = AgentState::new().with_runenv(SharedMachine::new(runenv));
+            let runenv = Arc::new(Mutex::new(
+                get_deep_research_agent_runenv(ARTIFACT_DIR).await?,
+            ));
+            let state = AgentState::new().with_runenv(runenv);
             Agent::try_with_state(spec, state)?
         }
     };
