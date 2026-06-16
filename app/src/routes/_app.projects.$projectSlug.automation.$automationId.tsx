@@ -206,10 +206,7 @@ function AutomationSettingsPage() {
   // time). The clone is created disabled so an exact duplicate doesn't double-
   // fire alongside the original until the user edits and enables it.
   const duplicateTrigger = (trig: Trigger) =>
-    createTriggerMutation.mutate(trig.spec, {
-      onSuccess: (created) =>
-        updateTriggerMutation.mutate({ triggerId: created.trigger.id, patch: { enabled: false } }),
-    });
+    createTriggerMutation.mutate({ ...trig.spec, enabled: false});
 
   // ── Add-trigger draft ───────────────────────────────────────────────────
   const [showAddForm, setShowAddForm] = useState(false);
