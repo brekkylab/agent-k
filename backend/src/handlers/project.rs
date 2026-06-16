@@ -311,11 +311,16 @@ pub async fn update_project(
             .join("projects")
             .join(project_id.to_string())
             .join(".speedwagon");
+        // Acquire `resync_lock` to wait until the in-flight resync is finished
+        let resync_lock = state.resync_lock_for(project_id);
+        let _guard = resync_lock.lock().await;
         if let Err(e) = tokio::fs::remove_dir_all(&speedwagon_dir).await
             && e.kind() != std::io::ErrorKind::NotFound
         {
             tracing::warn!(%project_id, "failed to clear corpus on engine change: {e}");
         }
+        // Release `_guard` and start a new resync
+        drop(_guard);
         super::knowledge::maybe_trigger_resync(&state, project_id, true);
     }
 
