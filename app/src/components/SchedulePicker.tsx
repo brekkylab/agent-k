@@ -2,7 +2,8 @@
 // dialog. Output is a cron expression, so options that cron can't
 // faithfully express (e.g. "every N weeks", "end after N occurrences") are
 // intentionally not surfaced. croner is used backend-side, so we lean on
-// its `W#N` syntax for "the nth weekday of the month".
+// its `<weekday>#<n>` syntax (e.g. `4#2` = 2nd Thursday) for "the nth weekday
+// of the month", and `<weekday>L` / `L` for the last weekday / last day.
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
