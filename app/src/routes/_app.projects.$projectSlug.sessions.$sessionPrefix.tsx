@@ -453,7 +453,9 @@ function SessionPage() {
     // the same files twice.
     setPendingAttachments((prev) => {
       const existing = new Set(prev.map((a) => a.globalPath).filter(Boolean));
-      const toAdd = fresh.filter((it) => !existing.has(it.globalPath));
+      const toAdd = fresh
+        .filter((it) => !existing.has(it.globalPath))
+        .slice(0, Math.max(0, MAX_ATTACHMENTS - prev.length));
       if (toAdd.length === 0) return prev;
       return [
         ...prev,
