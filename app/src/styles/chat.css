@@ -186,18 +186,6 @@
 }
 .cw-citation-chip.is-unverified { background: var(--cw-danger-bg, #fde8e8); color: var(--cw-danger, #b42318); }
 
-
-.cw-message-error {
-  margin-top: 6px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: color-mix(in oklch, var(--cw-destructive), white 88%);
-  border: 1px solid color-mix(in oklch, var(--cw-destructive), white 70%);
-  color: oklch(0.4 0.15 25);
-  font-size: 12px;
-  font-family: var(--cw-font-mono);
-}
-
 /* ── File preview lightbox (Google-Drive style) ──────────────────── */
 .cw-preview-backdrop {
   position: fixed; inset: 0; z-index: 70;
