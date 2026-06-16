@@ -114,6 +114,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/sessions/{session_id}/read",
             post(handlers::mark_session_read),
         )
+        .api_route(
+            "/sessions/{session_id}/team-messages",
+            post(handlers::send_team_message),
+        )
         .api_route("/sessions/{session_id}/fork", post(handlers::fork_session))
         .api_route(
             "/sessions/{session_id}/runs/{run_id}/stop",

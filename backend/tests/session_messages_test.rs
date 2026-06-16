@@ -382,7 +382,7 @@ async fn can_append_messages_after_clear() {
 /// GET /sessions/{id}/messages returns correct sender.kind, sender.user_id, and sender.name.
 #[tokio::test]
 async fn get_messages_response_includes_correct_sender_field() {
-    use agent_k_backend::repository::{DbSenderKind, NewSessionMessage};
+    use agent_k_backend::repository::{DbMessageKind, DbSenderKind, NewSessionMessage};
     use ailoy::message::{Message, Part, Role};
 
     let repo = common::make_repo().await;
@@ -416,6 +416,8 @@ async fn get_messages_response_includes_correct_sender_field() {
                 sender_user_id: Some(alice_id),
                 attachments: vec![],
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant).with_contents([Part::text("hi there")]),
@@ -424,6 +426,8 @@ async fn get_messages_response_includes_correct_sender_field() {
                 sender_user_id: None,
                 attachments: vec![],
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             },
         ],
     )
@@ -652,6 +656,8 @@ async fn attachment_note_not_present_in_stored_message_body() {
                 "projects/{project_id}/sessions/{session_id}/inputs/report.pdf"
             )],
             artifacts: vec![],
+            message_kind: repository::DbMessageKind::Chat,
+            mentions: vec![],
         }],
     )
     .await

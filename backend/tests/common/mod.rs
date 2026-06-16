@@ -6,7 +6,7 @@ use std::sync::Arc;
 use agent_k::knowledge_base::Store;
 use agent_k_backend::{
     auth::JwtConfig,
-    repository::{self, DbSenderKind, NewSessionMessage},
+    repository::{self, DbMessageKind, DbSenderKind, NewSessionMessage},
     router,
     state::AppState,
 };
@@ -463,6 +463,8 @@ pub fn to_new_msgs(
                 sender_user_id,
                 attachments: vec![],
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             }
         })
         .collect()

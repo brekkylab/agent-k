@@ -40,6 +40,13 @@ pub enum WsEvent {
     AgentRunIdle {
         session_id: String,
     },
+    /// A user-to-user team message was persisted (no agent run involved).
+    /// project_id is carried for future project-level notification forwarding.
+    TeamMessagePosted {
+        session_id: String,
+        project_id: String,
+        message: crate::model::SessionMessageResponse,
+    },
     /// Server-internal: signals a WS connection to drop its subscription to a session.
     /// Broadcast when a user's project membership is revoked.
     /// Task B filters this event (never forwarded to the client).

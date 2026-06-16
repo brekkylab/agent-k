@@ -63,7 +63,7 @@ mod tests {
     use super::SqliteRepository;
     use crate::{
         auth::Role as UserRole,
-        repository::{DbSenderKind, NewSessionMessage, NewUser, UpdateUser},
+        repository::{DbMessageKind, DbSenderKind, NewSessionMessage, NewUser, UpdateUser},
     };
 
     async fn make_project(pool: &sqlx::SqlitePool, owner_id: Uuid) -> Uuid {
@@ -146,6 +146,8 @@ mod tests {
                     sender_user_id: Some(user_id),
                     attachments: vec![],
                     artifacts: vec![],
+                    message_kind: DbMessageKind::Chat,
+                    mentions: vec![],
                 },
                 NewSessionMessage {
                     message: Message::new(Role::Assistant)
@@ -155,6 +157,8 @@ mod tests {
                     sender_user_id: None,
                     attachments: vec![],
                     artifacts: vec![],
+                    message_kind: DbMessageKind::Chat,
+                    mentions: vec![],
                 },
             ];
             repo.append_messages(session_id, &msgs).await.unwrap();
@@ -204,6 +208,8 @@ mod tests {
                 sender_user_id: Some(user_id),
                 attachments: vec![],
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             }],
         )
         .await
@@ -237,6 +243,8 @@ mod tests {
                 sender_user_id: Some(user_id),
                 attachments: vec![],
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant)
@@ -246,6 +254,8 @@ mod tests {
                 sender_user_id: None,
                 attachments: vec![],
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             },
         ];
         repo.append_messages(sid, &batch1).await.unwrap();
@@ -258,6 +268,8 @@ mod tests {
                 sender_user_id: Some(user_id),
                 attachments: vec![],
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             },
             NewSessionMessage {
                 message: Message::new(Role::Assistant)
@@ -267,6 +279,8 @@ mod tests {
                 sender_user_id: None,
                 attachments: vec![],
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             },
         ];
         repo.append_messages(sid, &batch2).await.unwrap();

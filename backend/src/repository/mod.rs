@@ -8,8 +8,8 @@ use std::{sync::Arc, time::Duration};
 pub use automation::{DbAutomation, DbAutomationRun, DbAutomationRunEvent, DbAutomationTrigger};
 pub use project::{DbProject, DbProjectMember};
 pub use session::{
-    DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, PrefixLookup, SessionAccess,
-    SessionOrigin, ShareMode,
+    DbMessageKind, DbSenderKind, DbSession, DbSessionMessage, NewSessionMessage, PrefixLookup,
+    SessionAccess, SessionOrigin, ShareMode, UnreadInfo,
 };
 pub use sqlite::SqliteRepository;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
