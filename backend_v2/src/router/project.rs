@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use aide::axum::{ApiRouter, routing::get};
 use axum::{
     Json,
     extract::{Path, State},
@@ -11,10 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{
-    auth::auth_required,
-    state::{AppState, Project, StateError},
-};
+use crate::state::{AppState, Project, StateError};
 
 use super::error::ApiError;
 
@@ -54,24 +50,7 @@ pub struct UpdateProjectRequest {
     pub title: Option<String>,
 }
 
-pub fn get_project_router(state: Arc<AppState>) -> ApiRouter {
-    ApiRouter::new()
-        .api_route(
-            "/projects",
-            get(list_projects).post(create_project),
-        )
-        .api_route(
-            "/projects/{id}",
-            get(get_project).patch(update_project).delete(delete_project),
-        )
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth_required,
-        ))
-        .with_state(state)
-}
-
-async fn list_projects(
+pub(super) async fn list_projects(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ProjectListResponse>, ApiError> {
     let projects = state.projects.list().await?;
@@ -80,7 +59,7 @@ async fn list_projects(
     }))
 }
 
-async fn create_project(
+pub(super) async fn create_project(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateProjectRequest>,
 ) -> Result<(StatusCode, Json<ProjectResponse>), ApiError> {
@@ -89,7 +68,7 @@ async fn create_project(
     Ok((StatusCode::CREATED, Json(ProjectResponse::from(project))))
 }
 
-async fn get_project(
+pub(super) async fn get_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ProjectResponse>, ApiError> {
@@ -101,7 +80,7 @@ async fn get_project(
     Ok(Json(ProjectResponse::from(project)))
 }
 
-async fn update_project(
+pub(super) async fn update_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateProjectRequest>,
@@ -119,7 +98,7 @@ async fn update_project(
     Ok(Json(ProjectResponse::from(updated)))
 }
 
-async fn delete_project(
+pub(super) async fn delete_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {

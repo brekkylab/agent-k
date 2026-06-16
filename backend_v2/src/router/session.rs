@@ -1,9 +1,5 @@
 use std::sync::Arc;
 
-use aide::axum::{
-    ApiRouter,
-    routing::{get, post},
-};
 use ailoy::{agent::AgentSpec, message::Part};
 use axum::{
     Json,
@@ -21,7 +17,6 @@ use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 use crate::{
-    auth::auth_required,
     event::{MessageEvent, message_channel},
     state::{AppState, Session, StateError},
 };
@@ -64,28 +59,6 @@ pub struct CreateSessionRequest {
     pub spec: AgentSpec,
 }
 
-pub fn get_session_router(state: Arc<AppState>) -> ApiRouter {
-    // `route_layer` applies `auth_required` only to the HTTP routes added
-    // above it. The WS route is appended afterward so it stays outside the
-    // middleware — browser `WebSocket` clients can't send custom
-    // `Authorization` headers, so [`stream_messages`] decodes a `?token=…`
-    // query parameter inline instead.
-    ApiRouter::new()
-        .api_route("/sessions", get(list_sessions).post(create_session))
-        .api_route("/sessions/{id}", get(get_session).delete(delete_session))
-        .api_route("/sessions/{id}/messages", post(start_run))
-        .api_route("/sessions/{id}/messages/stop", post(stop_run))
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth_required,
-        ))
-        .route(
-            "/sessions/{id}/messages/ws",
-            axum::routing::get(stream_messages),
-        )
-        .with_state(state)
-}
-
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PostMessageRequest {
@@ -106,7 +79,7 @@ pub struct MessagesWsQuery {
     pub last_seq: Option<i64>,
 }
 
-async fn list_sessions(
+pub(super) async fn list_sessions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SessionListResponse>, ApiError> {
     let sessions = state.sessions.list().await?;
@@ -115,7 +88,7 @@ async fn list_sessions(
     }))
 }
 
-async fn create_session(
+pub(super) async fn create_session(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionResponse>), ApiError> {
@@ -131,7 +104,7 @@ async fn create_session(
     Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
 }
 
-async fn get_session(
+pub(super) async fn get_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SessionResponse>, ApiError> {
@@ -139,7 +112,7 @@ async fn get_session(
     Ok(Json(SessionResponse::from(session)))
 }
 
-async fn delete_session(
+pub(super) async fn delete_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
@@ -147,7 +120,7 @@ async fn delete_session(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn start_run(
+pub(super) async fn start_run(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     Json(payload): Json<PostMessageRequest>,
@@ -159,7 +132,7 @@ async fn start_run(
     Ok(StatusCode::ACCEPTED)
 }
 
-async fn stop_run(
+pub(super) async fn stop_run(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
@@ -175,7 +148,7 @@ async fn stop_run(
 /// rows with `seq > last_seq` from the DB; then forward live events filtered
 /// by `seq > last_seq` (dedup against the catch-up). On `Lagged` we replay
 /// the catch-up to reconcile.
-async fn stream_messages(
+pub(super) async fn stream_messages(
     State(state): State<Arc<AppState>>,
     Path(sid): Path<Uuid>,
     Query(query): Query<MessagesWsQuery>,

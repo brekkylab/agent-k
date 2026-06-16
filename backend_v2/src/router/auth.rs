@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use aide::axum::{ApiRouter, routing::post};
 use axum::{Json, extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -64,14 +63,7 @@ impl From<User> for UserResponse {
     }
 }
 
-pub fn get_auth_router(state: Arc<AppState>) -> ApiRouter {
-    ApiRouter::new()
-        .api_route("/auth/signup", post(signup))
-        .api_route("/auth/login", post(login))
-        .with_state(state)
-}
-
-async fn signup(
+pub(super) async fn signup(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SignupRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
@@ -104,7 +96,7 @@ async fn signup(
     Ok((StatusCode::CREATED, Json(UserResponse::from(user))))
 }
 
-async fn login(
+pub(super) async fn login(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {

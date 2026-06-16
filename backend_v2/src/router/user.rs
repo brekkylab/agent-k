@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use aide::axum::{ApiRouter, routing::get};
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
@@ -11,10 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    auth::{
-        AuthUser, Role, admin_required, auth_required, hash_password, validate_password,
-        verify_password,
-    },
+    auth::{AuthUser, Role, hash_password, validate_password, verify_password},
     state::{AppState, NewUser, StateError, UpdateUser},
 };
 
@@ -78,32 +74,7 @@ pub struct UserListQuery {
     pub size: Option<u32>,
 }
 
-pub fn get_user_router(state: Arc<AppState>) -> ApiRouter {
-    // `admin_required` only applies to the `/admin/*` routes registered
-    // above it. `auth_required` then wraps everything, becoming the
-    // outermost layer so `AuthUser` is populated before `admin_required`
-    // checks the role.
-    ApiRouter::new()
-        .api_route(
-            "/admin/users",
-            get(list_users).post(create_user_admin),
-        )
-        .api_route(
-            "/admin/users/{id}",
-            get(get_user_admin)
-                .patch(update_user_admin)
-                .delete(delete_user_admin),
-        )
-        .route_layer(axum::middleware::from_fn(admin_required))
-        .api_route("/me", get(get_me).patch(update_me))
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth_required,
-        ))
-        .with_state(state)
-}
-
-async fn get_me(
+pub(super) async fn get_me(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
 ) -> Result<Json<UserResponse>, ApiError> {
@@ -115,7 +86,7 @@ async fn get_me(
     Ok(Json(UserResponse::from(user)))
 }
 
-async fn update_me(
+pub(super) async fn update_me(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
     Json(payload): Json<UpdateMeRequest>,
@@ -167,7 +138,7 @@ async fn update_me(
     Ok(Json(UserResponse::from(updated)))
 }
 
-async fn list_users(
+pub(super) async fn list_users(
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthUser>,
     Query(q): Query<UserListQuery>,
@@ -183,7 +154,7 @@ async fn list_users(
     }))
 }
 
-async fn create_user_admin(
+pub(super) async fn create_user_admin(
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthUser>,
     Json(payload): Json<AdminCreateUserRequest>,
@@ -223,7 +194,7 @@ async fn create_user_admin(
     Ok((StatusCode::CREATED, Json(UserResponse::from(user))))
 }
 
-async fn get_user_admin(
+pub(super) async fn get_user_admin(
     State(state): State<Arc<AppState>>,
     Extension(_auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
@@ -236,7 +207,7 @@ async fn get_user_admin(
     Ok(Json(UserResponse::from(user)))
 }
 
-async fn update_user_admin(
+pub(super) async fn update_user_admin(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
@@ -300,7 +271,7 @@ async fn update_user_admin(
     Ok(Json(UserResponse::from(updated)))
 }
 
-async fn delete_user_admin(
+pub(super) async fn delete_user_admin(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
