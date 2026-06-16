@@ -1562,9 +1562,13 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   margin: 0 auto;
   padding: 0 16px;
 }
+/* Extra room between the greeting and the composer so the agent-tab hover
+   popover (which floats above the tabs) clears the greeting line above it. */
+.cw-home-blank > .cw-home-greeting { margin-bottom: 56px; }
 .cw-home-blank .cw-agent-composer-wrap { width: 100%; }
 .cw-home-blank .cw-home-composer-box { width: 100%; }
 .cw-home-greeting { margin: 0; text-align: center; font-size: var(--cw-text-lg); color: var(--cw-fg-2); font-weight: 500; }
+.cw-agent-pick-desc { margin: -4px 0 0; max-width: 480px; font-size: var(--cw-text-sm); color: var(--cw-fg-3); line-height: 1.4; }
 .cw-suggested-prompts {
   display: flex;
   flex-wrap: wrap;
@@ -1797,6 +1801,54 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-weight: 600;
   border-radius: 14px 14px 0 0;
   margin-bottom: -1px;
+}
+
+/* Hover/focus popover: a command-style card floating above the hovered tab, with
+   a small arrow pointing down at it, so the description reads as belonging to that
+   specific agent (not a detached line of body text). Sits above the tabs (not
+   below) to clear the composer box. Shown on hover and on keyboard focus. */
+.cw-agent-tab-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  z-index: 60;
+  width: max-content;
+  max-width: 240px;
+  transform: translateX(-50%) translateY(3px);
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--cw-paper);
+  border: 1px solid var(--cw-agent-accent);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.16);
+  color: var(--cw-fg-2);
+  font-size: 12px;
+  font-weight: 450;
+  line-height: 1.4;
+  text-align: center;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease, visibility 0s linear 120ms;
+}
+/* Down-pointing arrow on the card's bottom edge (outside the card), pointing at
+   the tab below. The card is centred on its tab (translateX(-50%)) and the arrow
+   shares that centre, so the arrow always lands on the hovered tab. */
+.cw-agent-tab-pop::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 7px solid transparent;
+  border-top-color: var(--cw-agent-accent);
+}
+.cw-agent-tab:hover .cw-agent-tab-pop,
+.cw-agent-tab:focus-visible .cw-agent-tab-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+  transition: opacity 120ms ease, transform 120ms ease;
 }
 
 /* Standalone variant: the picker stands on its own (no composer box beneath),

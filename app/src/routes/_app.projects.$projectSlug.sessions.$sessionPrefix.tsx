@@ -40,7 +40,7 @@ import { ToolCallDetails } from '@/components/chat/ToolCallDetails';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
-  loader: () => loadNs('session', 'dialogs'),
+  loader: () => loadNs('session', 'dialogs', 'automation'),
   component: SessionPage,
 });
 
@@ -922,7 +922,7 @@ function SessionPage() {
                 <span
                   className="cw-session-agent-chip"
                   data-agent={activeAgent.id}
-                  title={t('chat.agent_chip')}
+                  title={t(`automation:agent.${activeAgent.id}.description`)}
                 >
                   <Icon name={activeAgent.icon} size={13} />
                   <span>{activeAgent.label}</span>
