@@ -145,9 +145,7 @@ function AutomationsPage() {
   const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<RunStatus | 'all'>('all');
-  // Default to schedule so the calendar reads as a schedule timeline; the user
-  // can widen to all / manual / webhook. Shared with the list view.
-  const [triggerFilter, setTriggerFilter] = useState<TriggerKind | 'all'>('cron');
+  const [triggerFilter, setTriggerFilter] = useState<TriggerKind | 'all'>('all');
   const [page, setPage] = useState(0);
   const [view, setView] = useState<'list' | 'calendar'>('list');
   const [selectedOccurrence, setSelectedOccurrence] = useState<Occurrence | null>(null);
@@ -757,11 +755,11 @@ function AutomationsPage() {
                 { value: 'manual',  label: t('trigger_kind.manual') },
               ]}
             />
-            {(statusFilter !== 'all' || triggerFilter !== 'cron') && (
+            {(statusFilter !== 'all' || triggerFilter !== 'all') && (
               <button
                 type="button"
                 className="cw-filter-reset"
-                onClick={() => { setStatusFilter('all'); setTriggerFilter('cron'); }}
+                onClick={() => { setStatusFilter('all'); setTriggerFilter('all'); }}
               >
                 <Icon name="rotate-ccw" size={12} /> {t('list.reset_filter')}
               </button>
