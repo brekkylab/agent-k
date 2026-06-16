@@ -47,6 +47,14 @@ function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
 }
 
+// Scroll the message list to its tail. We scroll the container itself rather
+// than `scrollIntoView` on a sentinel: scrollIntoView walks every scrollable
+// ancestor, so a tall answer (e.g. one with a footnote Sources section) pushes
+// the whole page up and leaves the list parked above the viewport.
+function scrollToTail(el: HTMLElement | null, behavior: ScrollBehavior) {
+  el?.scrollTo({ top: el.scrollHeight, behavior });
+}
+
 // History page size in TURNS (a user message + the agent responses after it).
 const MESSAGES_PAGE_TURNS = 10;
 
@@ -134,7 +142,6 @@ function SessionPage() {
   const initialMessageRef = useRef<string | null>(location.state.initialMessage ?? null);
   const consumedInitialMessageRef = useRef(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // Scroll anchor for older-page prepends — restored so the view doesn't jump.
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
@@ -301,14 +308,14 @@ function SessionPage() {
     // Own send — jump to the bottom immediately, even if scrolled far up.
     if (forceScrollRef.current) {
       forceScrollRef.current = false;
-      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      scrollToTail(el, 'instant');
       setShowNewMsgPill(false);
       return;
     }
 
     // Initial history load (refresh / session entry) — start at the bottom.
     if (prevCount === 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      scrollToTail(el, 'instant');
       return;
     }
 
@@ -321,7 +328,7 @@ function SessionPage() {
 
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distanceFromBottom <= 700) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      scrollToTail(el, 'smooth');
     } else if (allMessages.length > prevCount) {
       // Scrolled too far up to auto-follow — surface a "new message" pill instead.
       setShowNewMsgPill(true);
@@ -346,7 +353,7 @@ function SessionPage() {
 
   const scrollToBottom = useCallback(() => {
     setShowNewMsgPill(false);
-    messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+    scrollToTail(scrollContainerRef.current, 'instant');
   }, []);
 
   // ── Progressive history scroll behavior ─────────────────────────────────
@@ -994,7 +1001,6 @@ function SessionPage() {
           {streaming && (
             <div className={stopping ? 'cw-live is-stopping' : runDelayed ? 'cw-live is-delayed' : 'cw-live'}><span />{stopping ? t('ui.stopping') : runDelayed ? t('ui.response_delayed') : t('ui.ai_responding')}</div>
           )}
-          <div ref={messagesEndRef} />
         </div>
         </div>
 
