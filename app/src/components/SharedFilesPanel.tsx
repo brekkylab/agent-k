@@ -191,7 +191,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedF
         {rows.map((row) =>
           row.kind === 'dir' ? (
             <div
-              className={`cw-sf-row cw-sf-dir${selected.has(row.globalPath) ? ' is-selected' : ''}`}
+              className={`cw-sf-row${selected.has(row.globalPath) ? ' is-selected' : ''}`}
               key={row.relPath}
               data-sf-path={row.globalPath}
               data-sf-name={row.name}
