@@ -1,17 +1,19 @@
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
-    message::{Message, MessageOutput, Part, Role},
+    message::{Message, Part, Role},
     runenv::{Machine as _, Sandbox},
 };
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt as _;
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{StateError, StateResult, parse_ts, parse_uuid};
+use crate::event::{EventQueue, MessageEvent, message_channel};
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -76,17 +78,22 @@ pub struct SessionsState {
 
     data_root: PathBuf,
 
-    /// Tracks sessions currently inside [`SessionsState::run`] to prevent
-    /// two concurrent runs against the same session.
-    running: Arc<Mutex<HashSet<Uuid>>>,
+    /// Active runs keyed by session id. The [`CancellationToken`] is held so
+    /// [`SessionsState::cancel`] can wake the spawned task; the entry's
+    /// presence is also the "is this session running?" gate that rejects
+    /// concurrent [`SessionsState::run`] calls.
+    runs: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
+
+    events: EventQueue,
 }
 
 impl SessionsState {
-    pub fn new(db: SqlitePool, data_root: PathBuf) -> Self {
+    pub fn new(db: SqlitePool, data_root: PathBuf, events: EventQueue) -> Self {
         Self {
             db,
             data_root,
-            running: Arc::new(Mutex::new(HashSet::new())),
+            runs: Arc::new(Mutex::new(HashMap::new())),
+            events,
         }
     }
 
@@ -151,6 +158,12 @@ impl SessionsState {
 
     pub async fn remove(&self, id: Uuid) -> StateResult<Session> {
         let existing = self.get(id).await?.ok_or(StateError::NotFound)?;
+        // Signal any in-flight run to stop before we tear down the row. The
+        // task self-removes from `runs` on its own; we don't wait for it
+        // here. A racing INSERT may briefly succeed or fail with an FK
+        // error, but the cancellation will close the loop before any
+        // further work is done.
+        self.cancel(id).await;
         sqlx::query("DELETE FROM sessions WHERE id = ?")
             .bind(id.to_string())
             .execute(&self.db)
@@ -159,178 +172,207 @@ impl SessionsState {
         if tokio::fs::try_exists(&dir).await? {
             tokio::fs::remove_dir_all(&dir).await?;
         }
+        // Drop the channel so any attached WS subscribers wake up with
+        // RecvError::Closed instead of waiting on a session that no longer
+        // exists.
+        self.events.remove_channel(&message_channel(id));
         Ok(existing)
     }
 
-    /// Restore the agent from the persisted spec + sandbox snapshot, replay
-    /// history from the `messages` table, and run a single turn with `query`.
-    /// Each emitted message is inserted into the `messages` table as it
-    /// arrives, and the sandbox is re-archived on the way out — whether the
-    /// run finishes normally, errors, or is canceled.
-    ///
-    /// Returns an [`mpsc::Receiver`] that yields each [`MessageOutput`] (or an
-    /// error) and a [`oneshot::Sender`] that aborts the run when signaled.
-    pub fn run(
+    /// Request that any in-flight run for `id` stop at the next safe point.
+    /// Returns `true` if a run was found and signaled, `false` if no run was
+    /// active. Non-blocking; the spawned task will clean up its own entry.
+    pub async fn cancel(&self, id: Uuid) -> bool {
+        match self.runs.lock().await.get(&id) {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Return messages for `session_id` with `seq > since`, ordered ascending.
+    /// The WS handler uses this for catch-up before switching to the live
+    /// event subscription.
+    pub async fn list_messages_since(
         &self,
-        id: Uuid,
-        query: Vec<Part>,
-    ) -> (
-        mpsc::Receiver<anyhow::Result<MessageOutput>>,
-        oneshot::Sender<()>,
-    ) {
-        let (tx, rx) = mpsc::channel::<anyhow::Result<MessageOutput>>(32);
-        let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
+        session_id: Uuid,
+        since: i64,
+    ) -> StateResult<Vec<(i64, Message)>> {
+        let rows = sqlx::query(
+            "SELECT seq, content FROM messages \
+             WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
+        )
+        .bind(session_id.to_string())
+        .bind(since)
+        .fetch_all(&self.db)
+        .await?;
+        rows.into_iter()
+            .map(|r| -> StateResult<(i64, Message)> {
+                let seq: i64 = r.get("seq");
+                let content: String = r.get("content");
+                let message: Message = serde_json::from_str(&content)?;
+                Ok((seq, message))
+            })
+            .collect()
+    }
+
+    /// Trigger an agent run for `id` with `query` as the user turn. Returns
+    /// as soon as the run slot is reserved and the background task is
+    /// spawned. Each persisted message is also published on the session's
+    /// `message/{id}` channel (no-op if no one is subscribed). Cancellation
+    /// is requested via [`SessionsState::cancel`].
+    ///
+    /// Returns [`StateError::AlreadyRunning`] if a run is already in flight
+    /// for this session.
+    pub async fn run(&self, id: Uuid, query: Vec<Part>) -> StateResult<()> {
+        let token = CancellationToken::new();
+        {
+            let mut runs = self.runs.lock().await;
+            if runs.contains_key(&id) {
+                return Err(StateError::AlreadyRunning(id));
+            }
+            runs.insert(id, token.clone());
+        }
 
         let db = self.db.clone();
         let data_root = self.data_root.clone();
-        let running = self.running.clone();
+        let events = self.events.clone();
+        let runs = self.runs.clone();
 
         tokio::spawn(async move {
-            // Reserve the run slot before doing any work. If another run is
-            // already in flight we must NOT remove the id later.
-            if !running.lock().await.insert(id) {
-                let _ = tx
-                    .send(Err(anyhow::anyhow!("session {id} is already running")))
-                    .await;
-                return;
-            }
-
             let session_key = id.to_string();
             let dir = data_root.join(&session_key);
             let archive_path = dir.join("sandbox.tar.zst");
+            let channel = message_channel(id);
 
-            // Setup phase — load spec from the DB row, history from messages,
-            // and the sandbox archive if one exists. Sessions without a
-            // sandbox skip all sandbox plumbing below.
-            let setup: anyhow::Result<(AgentSpec, Option<Arc<Mutex<Sandbox>>>, Vec<Message>)> =
-                async {
-                    let row = sqlx::query("SELECT spec, runenv FROM sessions WHERE id = ?")
-                        .bind(&session_key)
-                        .fetch_optional(&db)
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("session {id} not found"))?;
-                    let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
-                    let has_runenv: bool = row.get("runenv");
-
-                    let runenv = if has_runenv {
-                        if !tokio::fs::try_exists(&archive_path).await? {
-                            anyhow::bail!(
-                                "session {id} marked as having a runenv but archive is missing at {}",
-                                archive_path.display()
-                            );
-                        }
-                        Some(Arc::new(Mutex::new(
-                            Sandbox::try_from_archive(&archive_path).await?,
-                        )))
-                    } else {
-                        None
-                    };
-
-                    let rows = sqlx::query(
-                        "SELECT content FROM messages WHERE session_id = ? ORDER BY seq ASC",
-                    )
+            let result: anyhow::Result<()> = async {
+                // Setup — spec, history, sandbox.
+                let row = sqlx::query("SELECT spec, runenv FROM sessions WHERE id = ?")
                     .bind(&session_key)
-                    .fetch_all(&db)
-                    .await?;
-                    let history: Vec<Message> = rows
-                        .iter()
-                        .map(|r| serde_json::from_str::<Message>(&r.get::<String, _>("content")))
-                        .collect::<Result<_, _>>()?;
-                    Ok((spec, runenv, history))
-                }
-                .await;
+                    .fetch_optional(&db)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("session {id} not found"))?;
+                let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
+                let has_runenv: bool = row.get("runenv");
 
-            let (spec, runenv, history) = match setup {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ = tx.send(Err(e)).await;
-                    running.lock().await.remove(&id);
-                    return;
-                }
-            };
+                let runenv = if has_runenv {
+                    if !tokio::fs::try_exists(&archive_path).await? {
+                        anyhow::bail!(
+                            "session {id} marked as having a runenv but archive is missing at {}",
+                            archive_path.display()
+                        );
+                    }
+                    Some(Arc::new(Mutex::new(
+                        Sandbox::try_from_archive(&archive_path).await?,
+                    )))
+                } else {
+                    None
+                };
 
-            // Drive phase — persist each message eagerly. Any error here
-            // exits the loop but we still fall through to archive below.
-            let drive: anyhow::Result<()> = async {
-                let mut next_seq = history.len() as i64;
-                let mut state = AgentState::new().with_history(history);
-                if let Some(ref r) = runenv {
-                    state = state.with_runenv(r.clone());
-                }
-                let mut agent = Agent::try_with_state(spec, state)?;
-
-                let user_msg = Message::new(Role::User).with_contents(query);
-                sqlx::query(
-                    "INSERT INTO messages (session_id, seq, content, created_at) \
-                     VALUES (?, ?, ?, ?)",
+                let rows = sqlx::query(
+                    "SELECT content FROM messages WHERE session_id = ? ORDER BY seq ASC",
                 )
                 .bind(&session_key)
-                .bind(next_seq)
-                .bind(serde_json::to_string(&user_msg)?)
-                .bind(Utc::now().to_rfc3339())
-                .execute(&db)
+                .fetch_all(&db)
                 .await?;
-                next_seq += 1;
+                let history: Vec<Message> = rows
+                    .iter()
+                    .map(|r| serde_json::from_str::<Message>(&r.get::<String, _>("content")))
+                    .collect::<Result<_, _>>()?;
 
-                let mut stream = agent.run(user_msg);
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = &mut cancel_rx => break,
-                        next = stream.next() => {
-                            let Some(output) = next else { break; };
-                            let output = output?;
-                            sqlx::query(
-                                "INSERT INTO messages (session_id, seq, content, created_at) \
-                                 VALUES (?, ?, ?, ?)",
-                            )
-                            .bind(&session_key)
-                            .bind(next_seq)
-                            .bind(serde_json::to_string(&output.message)?)
-                            .bind(Utc::now().to_rfc3339())
-                            .execute(&db)
-                            .await?;
-                            next_seq += 1;
-                            if tx.send(Ok(output)).await.is_err() {
-                                // Receiver dropped — treat as cancellation.
-                                break;
+                // Drive — persist + publish each message. The sandbox archive
+                // below must run regardless of how this exits, so capture the
+                // drive's Result and propagate it after archiving.
+                let drive: anyhow::Result<()> = async {
+                    let mut next_seq = history.len() as i64;
+                    let mut state = AgentState::new().with_history(history);
+                    if let Some(ref r) = runenv {
+                        state = state.with_runenv(r.clone());
+                    }
+                    let mut agent = Agent::try_with_state(spec, state)?;
+
+                    let user_msg = Message::new(Role::User).with_contents(query);
+                    sqlx::query(
+                        "INSERT INTO messages (session_id, seq, content, created_at) \
+                         VALUES (?, ?, ?, ?)",
+                    )
+                    .bind(&session_key)
+                    .bind(next_seq)
+                    .bind(serde_json::to_string(&user_msg)?)
+                    .bind(Utc::now().to_rfc3339())
+                    .execute(&db)
+                    .await?;
+                    events.publish(
+                        &channel,
+                        serde_json::to_string(&MessageEvent {
+                            seq: next_seq,
+                            message: user_msg.clone(),
+                        })?,
+                    );
+                    next_seq += 1;
+
+                    let mut stream = agent.run(user_msg);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = token.cancelled() => break,
+                            next = stream.next() => {
+                                let Some(output) = next else { break };
+                                let output = output?;
+                                sqlx::query(
+                                    "INSERT INTO messages (session_id, seq, content, created_at) \
+                                     VALUES (?, ?, ?, ?)",
+                                )
+                                .bind(&session_key)
+                                .bind(next_seq)
+                                .bind(serde_json::to_string(&output.message)?)
+                                .bind(Utc::now().to_rfc3339())
+                                .execute(&db)
+                                .await?;
+                                events.publish(
+                                    &channel,
+                                    serde_json::to_string(&MessageEvent {
+                                        seq: next_seq,
+                                        message: output.message,
+                                    })?,
+                                );
+                                next_seq += 1;
                             }
                         }
                     }
-                }
-                Ok(())
-            }
-            .await;
-
-            if let Err(e) = drive {
-                let _ = tx.send(Err(e)).await;
-            }
-
-            // Best-effort sandbox archive: runs whether the drive phase
-            // finished normally, errored, or was canceled. Skipped entirely
-            // for sandbox-less sessions.
-            if let Some(runenv) = runenv {
-                let archive: anyhow::Result<()> = async {
-                    let mut sandbox = runenv.lock().await;
-                    sandbox.stop().await?;
-                    if tokio::fs::try_exists(&archive_path).await? {
-                        tokio::fs::remove_file(&archive_path).await?;
-                    }
-                    sandbox.archive(&archive_path).await?;
                     Ok(())
                 }
                 .await;
-                if let Err(e) = archive {
-                    let _ = tx
-                        .send(Err(anyhow::anyhow!("sandbox archive failed: {e:#}")))
-                        .await;
-                }
-            }
 
-            running.lock().await.remove(&id);
+                if let Some(runenv) = runenv {
+                    let mut sandbox = runenv.lock().await;
+                    let archive: anyhow::Result<()> = async {
+                        sandbox.stop().await?;
+                        if tokio::fs::try_exists(&archive_path).await? {
+                            tokio::fs::remove_file(&archive_path).await?;
+                        }
+                        sandbox.archive(&archive_path).await?;
+                        Ok(())
+                    }
+                    .await;
+                    if let Err(e) = archive {
+                        tracing::error!(session = %id, "sandbox archive failed: {e:#}");
+                    }
+                }
+
+                drive
+            }
+            .await;
+
+            if let Err(e) = result {
+                tracing::error!(session = %id, "run failed: {e:#}");
+            }
+            runs.lock().await.remove(&id);
         });
 
-        (rx, cancel_tx)
+        Ok(())
     }
 }
 

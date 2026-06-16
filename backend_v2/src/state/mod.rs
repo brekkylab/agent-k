@@ -1,17 +1,19 @@
 use std::{path::PathBuf, time::Duration};
 
 use chrono::{DateTime, Utc};
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::{auth::JwtConfig, event::EventQueue};
+
 mod project;
 mod session;
+mod user;
 
 pub use project::*;
 pub use session::*;
+pub use user::*;
 
 pub(crate) fn parse_uuid(raw: String, field: &str) -> StateResult<Uuid> {
     Uuid::parse_str(&raw).map_err(|e| StateError::InvalidData(format!("{field}: {e}")))
@@ -40,6 +42,9 @@ pub enum StateError {
     #[error("unique constraint violation on {0}")]
     UniqueViolation(String),
 
+    #[error("session {0} is already running")]
+    AlreadyRunning(Uuid),
+
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 
@@ -55,10 +60,13 @@ pub type StateResult<T> = Result<T, StateError>;
 pub struct AppState {
     pub projects: ProjectsState,
     pub sessions: SessionsState,
+    pub users: UsersState,
+    pub events: EventQueue,
+    pub jwt: JwtConfig,
 }
 
 impl AppState {
-    pub async fn new(db_url: &str, data_root: PathBuf) -> StateResult<Self> {
+    pub async fn new(db_url: &str, data_root: PathBuf, jwt: JwtConfig) -> StateResult<Self> {
         let options = db_url
             .parse::<SqliteConnectOptions>()
             .map_err(|e| StateError::InvalidData(format!("DATABASE_URL: {e}")))?
@@ -75,9 +83,14 @@ impl AppState {
 
         sqlx::migrate!("./migrations").run(&db).await?;
 
+        let events = EventQueue::new();
+
         Ok(Self {
             projects: ProjectsState::new(db.clone()),
-            sessions: SessionsState::new(db, data_root),
+            sessions: SessionsState::new(db.clone(), data_root, events.clone()),
+            users: UsersState::new(db),
+            events,
+            jwt,
         })
     }
 }

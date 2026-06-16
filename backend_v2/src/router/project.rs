@@ -11,7 +11,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::state::{AppState, Project, StateError};
+use crate::{
+    auth::auth_required,
+    state::{AppState, Project, StateError},
+};
 
 use super::error::ApiError;
 
@@ -61,6 +64,10 @@ pub fn get_project_router(state: Arc<AppState>) -> ApiRouter {
             "/projects/{id}",
             get(get_project).patch(update_project).delete(delete_project),
         )
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_required,
+        ))
         .with_state(state)
 }
 

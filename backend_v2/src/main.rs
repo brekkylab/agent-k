@@ -1,3 +1,4 @@
+mod auth;
 mod event;
 mod router;
 mod state;
@@ -12,9 +13,13 @@ use aide::{
 use axum::{Extension, response::IntoResponse};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::state::AppState;
+use crate::{
+    auth::{JwtConfig, bootstrap_admin_if_needed},
+    state::AppState,
+};
 
 const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
+const DEFAULT_JWT_EXPIRY_SECS: u64 = 60 * 60 * 24 * 7;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -40,11 +45,21 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("data root: {}", data_root.display());
 
+    let jwt_secret = std::env::var("AGENT_K_JWT_SECRET")
+        .expect("AGENT_K_JWT_SECRET must be set");
+    let jwt_expiry_secs = std::env::var("AGENT_K_JWT_EXPIRY_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_JWT_EXPIRY_SECS);
+    let jwt = JwtConfig::new(&jwt_secret, jwt_expiry_secs);
+
     let app_state = Arc::new(
-        AppState::new(&db_url, data_root)
+        AppState::new(&db_url, data_root, jwt)
             .await
             .expect("failed to initialise app state"),
     );
+
+    bootstrap_admin_if_needed(&app_state.users).await;
 
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 

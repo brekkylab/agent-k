@@ -31,6 +31,9 @@ impl From<StateError> for ApiError {
             StateError::UniqueViolation(col) => {
                 err(StatusCode::CONFLICT, format!("conflict on {col}"))
             }
+            StateError::AlreadyRunning(_) => {
+                err(StatusCode::CONFLICT, "session is already running")
+            }
             other => {
                 tracing::error!("state error: {other}");
                 err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")

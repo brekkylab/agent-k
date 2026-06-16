@@ -2,7 +2,10 @@ CREATE TABLE users (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
     display_name TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    preferred_language TEXT NOT NULL DEFAULT 'en',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
