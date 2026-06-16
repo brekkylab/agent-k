@@ -12,10 +12,11 @@ import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
 import { getProject, listMembers } from '@/api/projects';
-import { deleteDirent, downloadFile, scopeRoot, uploadFiles, type DirentScope } from '@/api/dirents';
+import { deleteDirent, downloadFile, listDirentsRaw, parseGlobalPath, scopeRoot, uploadFiles, type DirentScope } from '@/api/dirents';
 import { Icon } from '@/components/Icon';
 import { Avatar, IconButton, SharePill, ShareSelect } from '@/components/uiPrimitives';
 import { getAgentSurface, type AgentId } from '@/domain/agentSurfaces';
+import { expandDirentPaths, MAX_ATTACHMENTS } from '@/domain/files';
 import { getModelCatalog, modelLabel } from '@/api/models';
 import { useAuthStore } from '@/stores/auth';
 import { useToastStore } from '@/components/Toast';
@@ -26,6 +27,7 @@ import type { Message, Session, ShareMode, User } from '@/domain/types';
 import { ApiError } from '@/api/client';
 import { SessionTitleText } from '@/components/SessionTitleText';
 import { ArtifactsPanel } from '@/components/ArtifactsPanel';
+import { SharedFilesBrowser, SESSION_IMPORT_MIME, type SessionImportItem } from '@/components/SharedFilesPanel';
 import { CopyToSharedDialog } from '@/components/CopyToSharedDialog';
 import { AttachmentChip } from '@/components/AttachmentChip';
 import { AttachmentPreview } from '@/components/AttachmentPreview';
@@ -203,6 +205,10 @@ function SessionPage() {
   };
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
 
+  // Right sidebar swaps between the default info view and a full file browser
+  // (slides across when the user taps the "browse shared files" button).
+  const [sideView, setSideView] = useState<'info' | 'files'>('info');
+
   // Reset when switching sessions — done during render (not in an effect) so React
   // StrictMode's double-invoked effects can't wipe the optimistic user/ai bubbles
   // the initial-send effect adds on entry (React's "adjust state on prop change").
@@ -221,6 +227,7 @@ function SessionPage() {
       wsInactivityTimerRef.current = null;
     }
     setPendingAttachments([]);
+    setSideView('info');
     setShowNewMsgPill(false);
     setShowScrollDown(false);
     wsOutputsRef.current.clear();
@@ -424,11 +431,95 @@ function SessionPage() {
     }
   }, [composerText, composerExpanded]);
 
+  // Highlight the chat surface while a shared file is dragged over it.
+  const [importDragOver, setImportDragOver] = useState(false);
+
+
+  // Import shared files (dragged from SharedFilesBrowser, its inline button, or a
+  // folder drop expanded to its files) as pending attachments. They already exist
+  // in shared storage, so no upload is needed — we just carry the global path the
+  // send flow forwards. Dedupe against pending paths; if the batch would push the
+  // total past MAX_ATTACHMENTS, reject the whole batch (attach nothing) and toast.
+  const importSharedFiles = useCallback((items: SessionImportItem[]) => {
+    if (items.length === 0) return;
+    const curPaths = new Set(pendingAttachments.map((a) => a.globalPath).filter(Boolean));
+    const fresh = items.filter((it) => !curPaths.has(it.globalPath));
+    if (fresh.length === 0) return; // everything already attached
+    if (pendingAttachments.length + fresh.length > MAX_ATTACHMENTS) {
+      showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+      return; // over the cap — don't attach any of them
+    }
+    // Dedupe against the authoritative `prev` inside the updater, so a repeated
+    // or concurrent call (e.g. StrictMode's double-invoked effect) can't append
+    // the same files twice.
+    setPendingAttachments((prev) => {
+      const existing = new Set(prev.map((a) => a.globalPath).filter(Boolean));
+      const toAdd = fresh
+        .filter((it) => !existing.has(it.globalPath))
+        .slice(0, Math.max(0, MAX_ATTACHMENTS - prev.length));
+      if (toAdd.length === 0) return prev;
+      return [
+        ...prev,
+        ...toAdd.map((it, i) => ({
+          tempId: `shared-${Date.now()}-${i}-${it.filename}`,
+          filename: it.filename,
+          status: 'uploaded' as const,
+          globalPath: it.globalPath,
+        })),
+      ];
+    });
+  }, [pendingAttachments, showToast, t]);
+
+  const handleImportDrop = useCallback((e: React.DragEvent) => {
+    const raw = e.dataTransfer.getData(SESSION_IMPORT_MIME);
+    if (!raw) return;
+    e.preventDefault();
+    setImportDragOver(false);
+    // Clear any selection the drag formed underneath the overlay, so it doesn't
+    // reappear once the overlay is gone.
+    window.getSelection()?.removeAllRanges();
+    let items: SessionImportItem[];
+    try { items = JSON.parse(raw); } catch { return; }
+    if (Array.isArray(items)) importSharedFiles(items);
+  }, [importSharedFiles]);
+
+  // Files dragged from the Files page onto this session's row arrive as
+  // scope-relative shared paths in router state. Attach them once session/project
+  // resolve, then clear the state so a refresh doesn't re-attach. A dropped folder
+  // is expanded into the files it contains (recursively).
+  useEffect(() => {
+    const rels = location.state.attachShared;
+    if (!rels?.length || !projectId || !sessionId) return;
+    void navigate({ replace: true, state: (prev) => ({ ...prev, attachShared: undefined }) });
+    void (async () => {
+      const sharedScope: DirentScope = { kind: 'shared', projectId };
+      const root = scopeRoot(sharedScope);
+      let entries: Awaited<ReturnType<typeof listDirentsRaw>> = [];
+      try {
+        entries = await queryClient.fetchQuery({
+          queryKey: ['dirents', 'shared', projectId],
+          queryFn: () => listDirentsRaw(sharedScope, true),
+        });
+      } catch { /* fall back to treating each path as a file */ }
+      // Folders expand to their files (recursive, .keep/dotfiles skipped, deduped).
+      const items = expandDirentPaths(entries, rels.map((rel) => `${root}/${rel}`));
+      if (items.length) importSharedFiles(items);
+    })();
+  }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate, queryClient]);
+
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
     // Reset input so same file can be selected again
     e.target.value = '';
+
+    // Cap like the shared-import path: if this batch would push the total past
+    // MAX_ATTACHMENTS, reject the whole batch (upload nothing) and toast — so the
+    // UI can't reach the backend's hard 400 on >MAX attachments.
+    if (pendingAttachments.length + files.length > MAX_ATTACHMENTS) {
+      showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+      return;
+    }
 
     for (const file of files) {
       const tempId = `${Date.now()}-${file.name}`;
@@ -453,7 +544,7 @@ function SessionPage() {
         ));
       }
     }
-  }, [projectId, sessionId]);
+  }, [projectId, sessionId, pendingAttachments, showToast, t]);
 
   // Clears all run/streaming state for a run that ended without a terminal WS event.
   const resetEndedRun = useCallback(() => {
@@ -913,7 +1004,21 @@ function SessionPage() {
 
   return (
     <div className="cw-session-layout cw-page-enter">
-      <section className="cw-chat-surface">
+      <section
+        className={`cw-chat-surface${importDragOver ? ' is-import-target' : ''}`}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes(SESSION_IMPORT_MIME)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          if (!importDragOver) setImportDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          // Ignore leaves into descendant elements — only clear when leaving the surface.
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setImportDragOver(false);
+        }}
+        onDrop={handleImportDrop}
+      >
         <div className="cw-chat-head">
           <div>
             <div className="cw-session-title-row">
@@ -1029,6 +1134,7 @@ function SessionPage() {
                   key={a.tempId}
                   filename={a.filename}
                   status={a.status}
+                  shared={a.globalPath ? parseGlobalPath(a.globalPath)?.scope.kind === 'shared' : false}
                   error={a.error}
                   onRemove={() => setPendingAttachments((prev) => prev.filter((x) => x.tempId !== a.tempId))}
                 />
@@ -1085,30 +1191,69 @@ function SessionPage() {
       </section>
 
       <aside className="cw-session-side">
-        <h3>{t('side.members')}</h3>
-        {userList.map((user) => (
-          <div className="cw-side-row" key={user.id}>
-            <Avatar user={user} small />
-            {user.name}
+        <div className={`cw-side-views${sideView === 'files' ? ' show-files' : ''}`}>
+          {/* ── default info view (left) ──────────────────────────── */}
+          <div className="cw-side-view" inert={sideView !== 'info'}>
+            <div className="cw-side-scroll">
+              <h3>{t('side.members')}</h3>
+              {userList.map((user) => (
+                <div className="cw-side-row" key={user.id}>
+                  <Avatar user={user} small />
+                  {user.name}
+                </div>
+              ))}
+              <h3>{t('side.referenced_files')}</h3>
+              {sess?.references.length
+                ? <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 11 }}>{sess.references.join(', ')}</p>
+                : <p>{t('side.no_pinned_files')}</p>}
+              <h3>{t('side.access')}</h3>
+              {sess && <SharePill mode={sess.shareMode} />}
+              {sess && <p>{t(`common:share.${sess.shareMode}.desc`)}</p>}
+              <h3>{t('side.session')}</h3>
+              <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
+              <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
+                {t('side.project_label', { name: project.data?.name ?? '...' })}
+              </p>
+              <ArtifactsPanel
+                projectId={projectId}
+                sessionId={sessionId}
+                onCopyToShared={(scope, paths) => setCopyToShared({ scope, paths })}
+              />
+            </div>
           </div>
-        ))}
-        <h3>{t('side.referenced_files')}</h3>
-        {sess?.references.length
-          ? <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 11 }}>{sess.references.join(', ')}</p>
-          : <p>{t('side.no_pinned_files')}</p>}
-        <h3>{t('side.access')}</h3>
-        {sess && <SharePill mode={sess.shareMode} />}
-        {sess && <p>{t(`common:share.${sess.shareMode}.desc`)}</p>}
-        <h3>{t('side.session')}</h3>
-        <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>{sessionPrefix}</p>
-        <p style={{ fontFamily: 'var(--cw-font-mono)', fontSize: 10.5, color: 'var(--cw-ink-4)' }}>
-          {t('side.project_label', { name: project.data?.name ?? '...' })}
-        </p>
-        <ArtifactsPanel
-          projectId={projectId}
-          sessionId={sessionId}
-          onCopyToShared={(scope, paths) => setCopyToShared({ scope, paths })}
-        />
+
+          {/* ── files browser view (right) ────────────────────────── */}
+          <div className="cw-side-view" inert={sideView !== 'files'}>
+            <SharedFilesBrowser projectId={projectId} projectName={project.data?.name} onImport={importSharedFiles} />
+          </div>
+        </div>
+
+        {/* Segmented view switch — pinned outside the sliding track so it stays
+            put in both views. Two tabs: session info ↔ shared file browser. */}
+        <div className="cw-side-switchbar">
+          <div className="cw-side-seg" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sideView === 'info'}
+              className="cw-side-seg-tab"
+              onClick={() => setSideView('info')}
+            >
+              <Icon name="message-square" size={14} />
+              {t('side.info_tab')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sideView === 'files'}
+              className="cw-side-seg-tab"
+              onClick={() => setSideView('files')}
+            >
+              <Icon name="folder" size={14} />
+              {t('side.files_tab')}
+            </button>
+          </div>
+        </div>
       </aside>
 
       {copyToShared !== null && (
