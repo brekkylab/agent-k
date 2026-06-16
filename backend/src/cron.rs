@@ -118,10 +118,11 @@ mod tests {
     }
 
     #[test]
-    fn last_weekday_of_month_is_supported() {
+    fn last_weekday_of_month_resolves_next_fire() {
         let now = at("2026-08-01T00:00:00Z");
         // "5L" in the day-of-week field = last Friday of the month.
-        assert!(next_fire_after("0 9 * * 5L", "UTC", now).is_ok(), "5L should parse");
+        let next = next_fire_after("0 9 * * 5L", "UTC", now).unwrap();
+        assert_eq!(next, at("2026-08-28T09:00:00Z"));
     }
 
     #[test]
