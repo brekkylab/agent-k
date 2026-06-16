@@ -10,6 +10,7 @@
     "artifact_deleted": "Deleted",
     "artifact_delete_failed": "Delete failed",
     "copied": "Copied to clipboard",
+    "team_send_failed": "Team message failed: {{message}}",
     "unknown_error": "unknown"
   },
   "ui": {
@@ -23,7 +24,12 @@
     "stop_generation": "Stop generating",
     "stopping": "Stopping… a final message may still arrive.",
     "composer_placeholder": "Message Cowork and the team…",
-    "composer_hint": "Enter to send · Reference files with @filename",
+    "composer_hint": "Enter to send · # attach a file · @ mention a member",
+    "command_no_results": "No matches",
+    "command_loading": "Loading…",
+    "mention_all_label": "Everyone",
+    "team_mode_hint": "Team only · AI won't see it",
+    "team_message_tooltip": "Not visible to AI",
     "new_message": "New message",
     "scroll_to_bottom": "Scroll to bottom",
     "copy": "Copy",

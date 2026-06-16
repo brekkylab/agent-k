@@ -3,10 +3,15 @@ import type { BackendSession } from './backend-types';
 import { toSession } from './transformers';
 import type { Session, SessionOrigin, ShareMode } from '@/domain/types';
 
-export async function listSessions(projectRef: string, origin?: SessionOrigin): Promise<Session[]> {
-  const params = new URLSearchParams({ project_ref: projectRef });
+// Omit projectRef to list every session the user can access across projects
+// (the backend treats project_ref as optional) — used for project-level mention
+// markers before a project is opened. `origin` optionally filters user/automation.
+export async function listSessions(projectRef?: string, origin?: SessionOrigin): Promise<Session[]> {
+  const params = new URLSearchParams();
+  if (projectRef) params.set('project_ref', projectRef);
   if (origin) params.set('origin', origin);
-  const res = await request<{ items: BackendSession[] }>(`/sessions?${params.toString()}`);
+  const qs = params.toString();
+  const res = await request<{ items: BackendSession[] }>(`/sessions${qs ? `?${qs}` : ''}`);
   return res.items.map(toSession);
 }
 

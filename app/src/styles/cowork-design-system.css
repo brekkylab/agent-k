@@ -49,6 +49,11 @@
   --cw-warn:         oklch(0.70 0.12 75);
   --cw-destructive:  oklch(0.560 0.150 25);   /* muted brick red, less saturated */
 
+  /* @mention accent — a true, vivid blue (distinct from the teal --cw-accent),
+     used for mention tokens in message bodies + team-message styling. */
+  --cw-mention:      oklch(0.52 0.20 260);    /* vivid blue */
+  --cw-mention-soft: oklch(0.965 0.030 260);  /* pale blue wash */
+
   /* Warn surfaces (used for read-only banners, advisory notices) */
   --cw-warn-bg:      oklch(0.975 0.025 85);
   --cw-warn-border:  oklch(0.910 0.060 85);

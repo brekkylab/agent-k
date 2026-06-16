@@ -7,7 +7,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
 import { getSession, markSessionRead, updateSessionShareMode } from '@/api/sessions';
-import { listMessageItems, sendMessage, stopRun, getRunActive, deriveStreamState } from '@/api/messages';
+import { listMessageItems, sendMessage, sendTeamMessage, stopRun, getRunActive, deriveStreamState } from '@/api/messages';
 import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
@@ -39,6 +39,13 @@ import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 import { resolveComposerKeyAction } from '@/lib/composerKeys';
 import { ToolCallDetails } from '@/components/chat/ToolCallDetails';
+import { scanMentions } from '@/lib/mentionScan';
+import { buildHighlightSegments } from '@/lib/mentionHighlight';
+import { withAllMentionKeys, expandAllMentions, ALL_MENTION_TOKENS } from '@/lib/mentionAll';
+import { CommandSuggestionPopup } from '@/components/chat/composerCommands/CommandSuggestionPopup';
+import { useComposerCommands } from '@/components/chat/composerCommands/useComposerCommands';
+import { useFileCommand, type PickedSharedFile } from '@/components/chat/composerCommands/useFileCommand';
+import { useMentionCommand } from '@/components/chat/composerCommands/useMentionCommand';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
@@ -66,7 +73,7 @@ type HistoryPageParam = { older: number } | { newer: number } | null;
 
 function SessionPage() {
   const { projectSlug, sessionPrefix } = Route.useParams();
-  const { t } = useTranslation(['session', 'common']);
+  const { t, i18n } = useTranslation(['session', 'common']);
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -152,6 +159,8 @@ function SessionPage() {
   const didInitialScrollRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Backdrop highlight layer that mirrors the composer textarea (mention tint).
+  const highlightRef = useRef<HTMLDivElement>(null);
   // Set when the local user sends a message — the next scroll effect jumps to
   // the bottom instantly, regardless of how far up the user has scrolled.
   const forceScrollRef = useRef(false);
@@ -257,16 +266,29 @@ function SessionPage() {
     if (!sessionId) return;
     void markSessionRead(sessionId).catch(() => {});
     // Cancel + zero + invalidate-without-refetch so an in-flight session-list
-    // fetch can't clobber the optimistic unread reset.
+    // fetch can't clobber the optimistic unread reset. Also clear the mention
+    // flag so the session-row mention dot disappears immediately.
     void queryClient.cancelQueries({ queryKey: ['sessions', projectSlug] });
     queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', projectSlug] }, (old) => {
-      if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
-      return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
+      if (!old?.some((s) => s.id === sessionId && (s.unreadCount > 0 || s.unreadMention))) return old;
+      return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0, unreadMention: false } : s));
     });
     void queryClient.invalidateQueries({
       queryKey: ['sessions', projectSlug],
       refetchType: 'none',
     });
+    // The cross-project list (['sessions','__all__']) does not share the
+    // ['sessions', projectSlug] prefix, so the optimistic update above misses
+    // it. Zero the mention here too — otherwise the PROJECT-level mention dot
+    // (derived from this query) lingers until a refetch round-trip, and could
+    // even re-appear if that refetch beats the not-yet-committed mark-read POST.
+    // Same cancel → set → invalidate-without-refetch pattern as above.
+    void queryClient.cancelQueries({ queryKey: ['sessions', '__all__'] });
+    queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', '__all__'] }, (old) => {
+      if (!old?.some((s) => s.id === sessionId && (s.unreadCount > 0 || s.unreadMention))) return old;
+      return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0, unreadMention: false } : s));
+    });
+    void queryClient.invalidateQueries({ queryKey: ['sessions', '__all__'], refetchType: 'none' });
   }, [sessionId, projectSlug, queryClient]);
 
   // Merge pages oldest→newest, collapse once so tool_call/result pairs span
@@ -614,6 +636,93 @@ function SessionPage() {
     return () => clearInterval(id);
   }, [runDelayed, stopping, ownedRunId, sessionId, resetEndedRun]);
 
+  // ── Composer commands ('#' attach file, '@' mention) ──────────────────────
+  const handleSharedFilePick = useCallback(({ filename, globalPath }: PickedSharedFile) => {
+    // Shared files are already on the server — enter the tray as 'uploaded'
+    // with their global path, exactly like a finished drag-and-drop upload.
+    setPendingAttachments((prev) =>
+      prev.some((a) => a.globalPath === globalPath)
+        ? prev
+        : [...prev, { tempId: `shared-${globalPath}`, filename, status: 'uploaded', globalPath }],
+    );
+  }, []);
+  const fileCommand = useFileCommand({
+    projectId,
+    emptyLabel: t('ui.command_no_results'),
+    onPick: handleSharedFilePick,
+  });
+  // The inserted literal tracks the UI locale (ko → '모두', en → 'all') but both
+  // are recognized at scan time, so insert and recognition can't drift apart.
+  const mentionAllConfig = useMemo(
+    () => ({
+      label: t('ui.mention_all_label'),
+      token: i18n.language.startsWith('ko') ? '모두' : ALL_MENTION_TOKENS[0],
+    }),
+    [t, i18n.language],
+  );
+  const mentionCommand = useMentionCommand({
+    members: members.data ?? [],
+    emptyLabel: t('ui.command_no_results'),
+    allMention: mentionAllConfig,
+  });
+  // Private sessions have no other viewers, so '@' is hidden (the backend
+  // rejects team messages there too).
+  const isPrivateSession = session.data?.shareMode === 'private';
+  const composerCommands = useMemo(
+    () => (isPrivateSession ? [fileCommand] : [fileCommand, mentionCommand]),
+    [isPrivateSession, fileCommand, mentionCommand],
+  );
+  const composerCmd = useComposerCommands({
+    textareaRef: composerRef,
+    value: composerText,
+    onChangeValue: setComposerText,
+    commands: composerCommands,
+    disabled: streaming,
+  });
+
+  // A draft that mentions a member is a team message: stored and shown to the
+  // team, never delivered to the agent. Mentions of users who are no longer
+  // members demote to plain text (the backend re-validates as the backstop).
+  // Mention matching keys off the current member roster (username → id), so an
+  // "@username" recognises whether it was picked from the popup or typed by
+  // hand. Display names aren't keys — the handle (username) is what's inserted
+  // and matched, matching how the popup writes it.
+  const memberMentionMap = useMemo(
+    () =>
+      new Map(
+        (members.data ?? [])
+          .filter((u) => u.username)
+          .map((u) => [u.username as string, u.id] as const),
+      ),
+    [members.data],
+  );
+  // The roster map plus the reserved '@all'/'@모두' tokens. This single scan is
+  // the source for BOTH the send payload and the live highlight (no second scan).
+  const allMemberIds = useMemo(() => (members.data ?? []).map((u) => u.id), [members.data]);
+  const memberMentionMapWithAll = useMemo(() => withAllMentionKeys(memberMentionMap), [memberMentionMap]);
+  const mentionScanResult = useMemo(
+    () => scanMentions(composerText, memberMentionMapWithAll),
+    [composerText, memberMentionMapWithAll],
+  );
+  // Expand '@all'/'@모두' (a sentinel in the scan) into the member list, minus the
+  // sender. `hadAll` keeps a '@모두' draft a team message even if it expands empty.
+  const { userIds: mentionUserIds, hadAll } = useMemo(
+    () => expandAllMentions(mentionScanResult.userIds, allMemberIds, currentUser?.id),
+    [mentionScanResult.userIds, allMemberIds, currentUser?.id],
+  );
+  const isTeamMessage = (mentionUserIds.length > 0 || hadAll) && !isPrivateSession;
+
+  // Backdrop highlight: confirmed mention spans + the '@' token being typed, so
+  // mentions read as distinct in the plain textarea ('#' attaches turn into
+  // chips, but '@' stays as text).
+  const highlightSegments = useMemo(() => {
+    const ranges = [...mentionScanResult.ranges];
+    const active = composerCmd.activeToken;
+    if (active && active.trigger === '@') ranges.push([active.start, active.end]);
+    return buildHighlightSegments(composerText, ranges);
+  }, [composerText, mentionScanResult, composerCmd.activeToken]);
+  const hasMentionHighlight = highlightSegments.some((s) => s.mention);
+
   const send = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? composerText).trim();
     const uploading = pendingAttachments.some((a) => a.status === 'uploading');
@@ -622,6 +731,45 @@ function SessionPage() {
     const attachmentPaths = pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
       .map((a) => a.globalPath!);
+
+    // Team message: persist + broadcast only, no agent run. Guarded on
+    // overrideText because the home-composer auto-send carries its own text —
+    // the mention scan over composerText doesn't apply to it.
+    if (overrideText === undefined && isTeamMessage) {
+      const prevText = composerText;
+      const prevAttachments = pendingAttachments;
+      setComposerText('');
+      setPendingAttachments([]);
+      const teamMsgId = `live-team-${Date.now()}`;
+      forceScrollRef.current = true;
+      setLiveMessages((prev) => [...prev, {
+        id: teamMsgId,
+        sessionId: sessionPrefix,
+        sender: { kind: 'user', userId: currentUser?.id ?? 'user' },
+        createdAt: new Date().toISOString(),
+        body: text,
+        status: 'done',
+        messageKind: 'team',
+        attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
+      }]);
+      try {
+        await sendTeamMessage(sessionId, text, mentionUserIds, attachmentPaths.length > 0 ? attachmentPaths : undefined);
+        // The 201 response is the primary cleanup path (the WS echo can lag or
+        // drop): swap the optimistic bubble for the persisted message. Same
+        // refetch-then-clear order as the run-done flow.
+        await queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+        setLiveMessages((prev) => prev.filter((m) => m.id !== teamMsgId));
+        void queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
+      } catch (err) {
+        // Restore the draft so a failed team message isn't lost.
+        setLiveMessages((prev) => prev.filter((m) => m.id !== teamMsgId));
+        setComposerText(prevText);
+        setPendingAttachments(prevAttachments);
+        const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'send failed';
+        showToast(t('toast.team_send_failed', { message: msg }));
+      }
+      return;
+    }
 
     setComposerText('');
     setPendingAttachments([]);
@@ -670,7 +818,8 @@ function SessionPage() {
       optimisticUserIdRef.current = null;
     }
     // On success: the WS event (agent_run_done) handles completion. No finally block.
-  }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments, t, armWatchdog]);
+  }, [composerText, streaming, sessionPrefix, sessionId, currentUser, showToast, pendingAttachments, t, armWatchdog,
+      isTeamMessage, mentionUserIds, queryClient, projectSlug]);
 
   const stopGeneration = useCallback(async () => {
     if (!ownedRunId || !sessionId || stopping) return;
@@ -704,11 +853,14 @@ function SessionPage() {
   }, [ownedRunId, sessionId, stopping, showToast, t, resetEndedRun]);
 
   const handleComposerKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // The suggestion popup gets first refusal: while it's open, Enter selects
+    // an item instead of sending.
+    if (composerCmd.handleKeyDown(e)) return;
     if (resolveComposerKeyAction({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing }) === 'send') {
       e.preventDefault();
       void send();
     }
-  }, [send]);
+  }, [send, composerCmd]);
 
   // Composer textarea is disabled while streaming, so listen on window for Esc.
   useEffect(() => {
@@ -944,6 +1096,17 @@ function SessionPage() {
         })();
       }
 
+      if (event.type === 'team_message_posted') {
+        // Self posts are reconciled by the 201 response path in send(); the WS
+        // echo only serves other clients.
+        const sender = event.message.sender;
+        const isSelf = sender.kind === 'user' && sender.user_id === currentUser?.id;
+        if (!isSelf) {
+          void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
+        }
+        return;
+      }
+
       if (event.type === 'agent_run_idle') {
         // The server has no active run for this session (completed before we
         // subscribed, or server restarted). Clear the inactivity watchdog
@@ -976,7 +1139,7 @@ function SessionPage() {
         wsInactivityTimerRef.current = null;
       }
     };
-  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t, armWatchdog, fetchPreviousPage]);
+  }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t, armWatchdog, fetchPreviousPage, currentUser]);
 
   const shareMutation = useMutation({
     mutationFn: (mode: ShareMode) => updateSessionShareMode(sessionPrefix, mode),
@@ -1147,16 +1310,66 @@ function SessionPage() {
               ))}
             </div>
           )}
-          <div className="cw-composer-box" data-expanded={composerExpanded ? 'true' : 'false'}>
-            <textarea
-              ref={composerRef}
-              value={composerText}
-              onChange={(e) => setComposerText(e.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              placeholder={t('ui.composer_placeholder')}
-              rows={1}
-            />
+          <div
+            className="cw-composer-box"
+            data-expanded={composerExpanded ? 'true' : 'false'}
+            data-team-mode={isTeamMessage ? 'true' : undefined}
+          >
+            {composerCmd.open && (
+              <CommandSuggestionPopup
+                items={composerCmd.items}
+                highlightIndex={composerCmd.highlightIndex}
+                listboxId={composerCmd.listboxId}
+                isLoading={composerCmd.activeCommand?.isLoading ?? false}
+                emptyLabel={composerCmd.activeCommand?.emptyLabel ?? ''}
+                loadingLabel={t('ui.command_loading')}
+                onHighlight={composerCmd.setHighlightIndex}
+                onSelect={composerCmd.selectItem}
+              />
+            )}
+            <div className="cw-composer-input" data-has-mention={hasMentionHighlight ? 'true' : undefined}>
+              {/* Backdrop highlight layer: same typographic box as the textarea,
+                  but only mention spans get a tint. aria-hidden — the textarea
+                  is the real input. */}
+              <div className="cw-composer-highlight" aria-hidden="true" ref={highlightRef}>
+                {highlightSegments.map((seg, i) =>
+                  seg.mention ? (
+                    <mark key={i} className="cw-mention-hl">{seg.text}</mark>
+                  ) : (
+                    <span key={i}>{seg.text}</span>
+                  ),
+                )}
+                {/* Trailing newline needs a spacer so the box height matches the
+                    textarea's, which always reserves a final empty line. */}
+                {'​'}
+              </div>
+              <textarea
+                ref={composerRef}
+                value={composerText}
+                onChange={(e) => {
+                  setComposerText(e.target.value);
+                  composerCmd.handleSelectionChange();
+                }}
+                onKeyDown={handleComposerKeyDown}
+                onSelect={composerCmd.handleSelectionChange}
+                onScroll={(e) => {
+                  if (highlightRef.current) highlightRef.current.scrollTop = e.currentTarget.scrollTop;
+                }}
+                onCompositionStart={composerCmd.handleCompositionStart}
+                onCompositionEnd={composerCmd.handleCompositionEnd}
+                aria-activedescendant={composerCmd.activeOptionId}
+                placeholder={t('ui.composer_placeholder')}
+                disabled={streaming}
+                rows={1}
+              />
+            </div>
             <div className="cw-composer-actions">
+              {isTeamMessage && (
+                <span className="cw-composer-team-hint">
+                  <Icon name="users" size={11} />
+                  {t('ui.team_mode_hint')}
+                </span>
+              )}
               <button
                 type="button"
                 className="cw-attach-btn"
@@ -1405,6 +1618,33 @@ function extractSubagentQuery(args: unknown): string {
   return '';
 }
 
+// Render a plain-text message body, tinting "@username" mention tokens. Scans
+// each line independently (mentions never cross a newline) so the per-line
+// <p> structure — and its CSS — stays intact.
+function renderBodyWithMentions(
+  body: string,
+  candidates: ReadonlyMap<string, string>,
+  keyPrefix: string,
+) {
+  return body.split('\n').map((line, i) => {
+    if (candidates.size === 0) return <p key={`${keyPrefix}-${i}`}>{line || ' '}</p>;
+    const segs = buildHighlightSegments(line, scanMentions(line, candidates).ranges);
+    return (
+      <p key={`${keyPrefix}-${i}`}>
+        {segs.length === 0
+          ? ' '
+          : segs.map((s, j) =>
+              s.mention ? (
+                <span key={j} className="cw-mention-token">{s.text}</span>
+              ) : (
+                <span key={j}>{s.text}</span>
+              ),
+            )}
+      </p>
+    );
+  });
+}
+
 function MessageBubble({
   message,
   users,
@@ -1438,6 +1678,22 @@ function MessageBubble({
   const timeLabel = formatMessageTime(message.createdAt);
   const agentLabel = isAi ? (message.sender as { name: string }).name : null;
 
+  // username → userId for the users this message mentions (team messages only;
+  // chat messages have no mentions, so the map is empty and rendering is plain).
+  const mentionCandidates = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const uid of message.mentions ?? []) {
+      const u = users.find((x) => x.id === uid);
+      if (u?.username) map.set(u.username, uid);
+    }
+    // A team-message body may hold the literal '@all'/'@모두' token (the per-uid
+    // map only has expanded names), so add the reserved keys to highlight it.
+    // Gate on 'team' so plain chat stays unhighlighted; keep it on messageKind,
+    // not mentions.length, so the optimistic team bubble (no mentions yet) still
+    // highlights '@모두'.
+    return message.messageKind === 'team' ? withAllMentionKeys(map) : map;
+  }, [message.mentions, message.messageKind, users]);
+
   const isLive = message.id.startsWith('live-');
 
   return (
@@ -1447,11 +1703,16 @@ function MessageBubble({
         <div className="cw-message-meta">
           <b>{isSelf ? `${displayUser.name.split(' ')[0]} · ${t('ui.self_label')}` : isAi ? (agentLabel ?? 'AI') : displayUser.name.split(' ')[0]}</b>
           <time dateTime={message.createdAt} data-tooltip={formatMessageTimeFull(message.createdAt)}>{timeLabel}</time>
+          {message.messageKind === 'team' && (
+            <span className="cw-team-mark" data-tooltip={t('ui.team_message_tooltip')}>
+              <Icon name="users" size={11} />
+            </span>
+          )}
         </div>
-        <div className={isAi ? 'cw-ai-prose' : 'cw-message-bubble'}>
+        <div className={isAi ? 'cw-ai-prose' : `cw-message-bubble${message.messageKind === 'team' ? ' cw-message-bubble-team' : ''}`}>
           {isAi
             ? <MarkdownRenderer text={message.body} />
-            : message.body.split('\n').map((line, i) => <p key={`${message.id}-${i}`}>{line || ' '}</p>)}
+            : renderBodyWithMentions(message.body, mentionCandidates, message.id)}
         </div>
         {isAi && message.citations && message.citations.length > 0 && (
           <div className="cw-citations">

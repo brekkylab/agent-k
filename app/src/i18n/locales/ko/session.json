@@ -10,6 +10,7 @@
     "artifact_deleted": "삭제되었습니다",
     "artifact_delete_failed": "삭제 실패",
     "copied": "클립보드에 복사되었습니다",
+    "team_send_failed": "팀 메시지 전송 실패: {{message}}",
     "unknown_error": "unknown"
   },
   "ui": {
@@ -23,7 +24,12 @@
     "stop_generation": "응답 생성 중지",
     "stopping": "중지 중… 마지막 메시지가 도착할 수 있어요.",
     "composer_placeholder": "Cowork와 팀에 메시지 보내기…",
-    "composer_hint": "Enter로 전송 · @파일명으로 파일 참조",
+    "composer_hint": "Enter로 전송 · #로 파일 첨부 · @로 멤버 멘션",
+    "command_no_results": "결과 없음",
+    "command_loading": "불러오는 중…",
+    "mention_all_label": "모두",
+    "team_mode_hint": "팀에게만 전송 · AI가 보지 않음",
+    "team_message_tooltip": "AI가 보지 않는 메시지",
     "new_message": "새 메시지",
     "scroll_to_bottom": "맨 아래로",
     "copy": "복사",

@@ -860,6 +860,15 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 }
 .cw-unread-badge .dot { width: 4px; height: 4px; border-radius: var(--cw-radius-full); background: var(--cw-paper); }
 .cw-unread-badge .n { font-family: var(--cw-font-mono); }
+/* Mention marker — independent of the unread badge: a small red dot flagging
+   that an unread message @mentions the current user. */
+.cw-mention-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: var(--cw-radius-full);
+  background: var(--cw-destructive);
+}
 .cw-caught-up { display: inline-flex; align-items: center; color: var(--cw-cozy-sage); }
 
 .cw-pocket {
@@ -1227,7 +1236,15 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   position: relative;
   cursor: default;
 }
-.cw-message-meta time[data-tooltip]::before {
+.cw-message-meta .cw-team-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--cw-ink-4);
+  position: relative;
+  cursor: default;
+}
+.cw-message-meta time[data-tooltip]::before,
+.cw-message-meta .cw-team-mark[data-tooltip]::before {
   content: attr(data-tooltip);
   position: absolute;
   bottom: calc(100% + 6px);
@@ -1245,7 +1262,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   transition: opacity 0.15s;
   z-index: 100;
 }
-.cw-message-meta time[data-tooltip]:hover::before {
+.cw-message-meta time[data-tooltip]:hover::before,
+.cw-message-meta .cw-team-mark[data-tooltip]:hover::before {
   opacity: 1;
 }
 .cw-message-bubble {
@@ -1257,6 +1275,21 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   line-height: 1.6;
 }
 .cw-message.is-self .cw-message-bubble { background: var(--cw-paper-4); }
+/* Team message — user-to-user, not delivered to the agent. Quiet visual
+   distinction: dashed border + faint accent wash, for self and others alike. */
+.cw-message-bubble.cw-message-bubble-team {
+  border: 1px dashed color-mix(in oklch, var(--cw-accent) 45%, var(--cw-border));
+  background: color-mix(in oklch, var(--cw-accent) 6%, var(--cw-paper));
+}
+.cw-message.is-self .cw-message-bubble.cw-message-bubble-team {
+  background: color-mix(in oklch, var(--cw-accent) 9%, var(--cw-paper));
+}
+/* @mention tokens inside a posted message body — bright blue so they pop
+   against the body ink. */
+.cw-mention-token {
+  color: var(--cw-mention);
+  font-weight: 700;
+}
 .cw-message p { margin: 0; }
 .cw-ai-chip {
   width: 28px;
@@ -1299,6 +1332,8 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 /* Rounded single-row pill (PR #114 base): the session composer keeps its compact
    pill controls here. Project home uses the separate .cw-home-composer selectors. */
 .cw-composer-box {
+  /* Positioning context for the command suggestion popup (.cw-cmd-popup). */
+  position: relative;
   display: flex;
   flex-direction: row;
   align-items: flex-end;
@@ -1359,6 +1394,124 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
      drive sizing instead. */
   flex: 0 0 auto;
 }
+
+/* ── Mention highlight overlay ──────────────────────────────────────────── */
+/* Wraps the textarea so a backdrop layer can tint mention spans. The wrap
+   takes the textarea's old flex role; the textarea fills it and renders the
+   real (opaque) glyphs on top of the tint. */
+.cw-composer-input {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.cw-composer-box[data-expanded="true"] .cw-composer-input {
+  width: 100%;
+  flex: 0 0 auto;
+}
+.cw-composer-input textarea {
+  position: relative;
+  z-index: 1;
+}
+/* Same typographic box as the textarea — only the mention <mark> is visible
+   (everything else is transparent; the textarea draws the glyphs). */
+.cw-composer-highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  margin: 0;
+  padding: 7px 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  color: transparent;
+}
+.cw-composer-box[data-expanded="true"] .cw-composer-highlight {
+  padding: 2px 0;
+}
+.cw-mention-hl {
+  color: transparent;
+  background: color-mix(in oklch, var(--cw-mention) 18%, transparent);
+  border-radius: 4px;
+  /* Slight horizontal bleed so the tint hugs the text without clipping glyphs. */
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--cw-mention) 24%, transparent);
+}
+
+/* ── Composer command suggestions (#file, @mention) ─────────────────────── */
+/* Full-width panel opening upward from the composer box. Anchored to the box
+   (not the caret) — robust against auto-grow, the compact/expanded flip, and
+   Korean IME caret movement. */
+.cw-cmd-popup {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-lg);
+  background: var(--cw-bg);
+  box-shadow: var(--cw-shadow-popover);
+  padding: 4px;
+  z-index: 12;
+}
+.cw-cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: var(--cw-radius-md);
+  font-size: 13px;
+  color: var(--cw-fg-1);
+  cursor: pointer;
+}
+.cw-cmd-item[aria-selected="true"] {
+  background: var(--cw-paper-3);
+}
+.cw-cmd-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+.cw-cmd-label {
+  flex-shrink: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cw-cmd-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--cw-ink-4);
+}
+.cw-cmd-status {
+  padding: 9px 10px;
+  font-size: 12.5px;
+  color: var(--cw-ink-3);
+}
+/* Team mode — the draft mentions a member, so it sends to the team only. */
+.cw-composer-box[data-team-mode="true"] {
+  border-color: color-mix(in oklch, var(--cw-accent) 55%, var(--cw-border));
+}
+.cw-composer-team-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--cw-accent-2);
+  white-space: nowrap;
+}
+
 .cw-home-composer {
   position: static;
   display: flex;

@@ -50,7 +50,18 @@ export interface AgentRunIdleEvent {
   session_id: string;
 }
 
-export type AppWsEvent = SessionTitleUpdatedEvent | AgentRunStartedEvent | AgentMessageEvent | AgentErrorEvent | AgentRunDoneEvent | AgentRunIdleEvent;
+export interface TeamMessagePostedEvent {
+  type: 'team_message_posted';
+  session_id: string;
+  project_id: string;
+  message: {
+    sender: { kind: 'user'; user_id: string } | { kind: 'agent'; name: string };
+    created_at: string;
+    mentions: string[];
+  };
+}
+
+export type AppWsEvent = SessionTitleUpdatedEvent | AgentRunStartedEvent | AgentMessageEvent | AgentErrorEvent | AgentRunDoneEvent | AgentRunIdleEvent | TeamMessagePostedEvent;
 
 type Handler = (event: AppWsEvent) => void;
 

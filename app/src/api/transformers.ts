@@ -126,6 +126,7 @@ export function toSession(backend: BackendSession): Session {
     lastMessageAt: backend.last_message_at,
     lastMessageSnippet: backend.last_message_snippet,
     unreadCount: backend.unread_count,
+    unreadMention: backend.unread_mention ?? false,
     references: [],
     agentType: backend.agent_type ?? null,
     model: backend.model ?? null,
@@ -193,6 +194,8 @@ export function toMessageItem(
     artifacts: item.artifacts?.length ? item.artifacts : undefined,
     citations: item.citations?.length ? item.citations : undefined,
     status: 'done',
+    messageKind: item.message_kind === 'team' ? 'team' : undefined,
+    mentions: item.mentions?.length ? item.mentions : undefined,
   };
 }
 

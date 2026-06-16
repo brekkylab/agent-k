@@ -40,6 +40,8 @@ export interface Session {
   lastMessageAt: string | null;
   lastMessageSnippet: string | null;
   unreadCount: number;
+  /** True when an unread message mentions the current user. */
+  unreadMention: boolean;
   references: FileAsset['id'][];
   artifactId?: string;
   isAutoAppend?: boolean;
@@ -81,6 +83,9 @@ export interface Message {
   attachments?: string[];
   artifacts?: string[];
   status?: 'sent' | 'streaming' | 'done';
+  /** 'team' = user-to-user message, never delivered to the agent. Absent = normal chat. */
+  messageKind?: 'team';
+  mentions?: string[];
 }
 
 export interface FileAsset {

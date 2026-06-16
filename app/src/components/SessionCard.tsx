@@ -33,6 +33,9 @@ export function SessionCard({
           <SessionTitleText title={session.title} />
         </span>
         <span className="cw-session-right">
+          {session.unreadMention && (
+            <span className="cw-mention-dot" role="img" aria-label="mentions you (unread)" title="You were mentioned" />
+          )}
           {isUnread && (
             <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>
               <span className="dot" />

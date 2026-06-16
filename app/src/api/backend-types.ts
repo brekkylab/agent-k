@@ -57,6 +57,7 @@ export interface BackendSession {
   model: string | null;
   model_available: boolean;
   unread_count: number;
+  unread_mention?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -115,6 +116,8 @@ export interface BackendCitation {
   referenced: boolean;
 }
 
+export type BackendMessageKind = 'chat' | 'team';
+
 export interface SessionMessageItem {
   /** Session-global insertion order — stable identity across paginated windows. */
   seq: number;
@@ -124,6 +127,9 @@ export interface SessionMessageItem {
   attachments?: string[];
   artifacts?: string[];
   citations?: BackendCitation[];
+  // 'team' = user-to-user message, never delivered to the agent.
+  message_kind?: BackendMessageKind;
+  mentions?: string[];
 }
 
 export interface SessionMessageList {
