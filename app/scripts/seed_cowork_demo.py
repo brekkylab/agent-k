@@ -286,12 +286,22 @@ def seed_rows(db: Path) -> None:
     attached_input_path = f"projects/{PROJECT_KLIENT}/sessions/{SESSION_ATTACHED}/inputs/survey_raw.csv"
     attached_image_path = f"projects/{PROJECT_KLIENT}/sessions/{SESSION_ATTACHED}/inputs/chart_sample.png"
 
-    # (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments_json)
+    # Column order for every tuple below:
+    #   session_id, message_json, created_at, sender_kind, sender_name,
+    #   sender_user_id, attachments, artifacts, message_kind, mentions
     def user_msg(session_id: str, text: str, creator_id: str, t: str, attachments: list[str] | None = None):
-        return (session_id, message_json("user", text), t, "user", None, creator_id, json.dumps(attachments or []), "[]")
+        return (session_id, message_json("user", text), t, "user", None, creator_id, json.dumps(attachments or []), "[]", "chat", "[]")
 
     def agent_msg(session_id: str, text: str, t: str, artifacts: list[str] | None = None):
-        return (session_id, message_json("assistant", text), t, "agent", "agent-k", None, "[]", json.dumps(artifacts or []))
+        return (session_id, message_json("assistant", text), t, "agent", "agent-k", None, "[]", json.dumps(artifacts or []), "chat", "[]")
+
+    # Team messages ('@' mentions): stored + shown in history but NEVER delivered
+    # to the agent. sender_kind stays 'user'; the FE resolves the display name
+    # from sender_user_id via the project member roster. The "@username" literal
+    # in the body must match the mentioned user's username so the FE highlights
+    # it and re-scan agrees with the `mentions` UUID array that drives the badge.
+    def team_msg(session_id: str, text: str, sender_id: str, t: str, mentions: list[str]):
+        return (session_id, message_json("user", text), t, "user", None, sender_id, "[]", "[]", "team", json.dumps(mentions))
 
     messages = [
         # SESSION_Q2
@@ -319,13 +329,115 @@ def seed_rows(db: Path) -> None:
             ts(40),
             artifacts=["GTM_summary_report.md", "ICP_comparison_table.csv"],
         ),
+        # ── Team messages ('@' mentions) — appended last so each becomes its
+        #    session's latest activity. These are NEVER sent to the agent.
+        # Q2: Olive pulls Milo in to sanity-check the SMB data (Milo not caught up).
+        team_msg(
+            SESSION_Q2,
+            "@milo SMB 갱신 데이터, 보드 메모 들어가기 전에 한 번 봐줄 수 있어? 우리끼리 메모라 AI한테는 안 넘겼어.",
+            OLIVE_ID,
+            ts(45),
+            [MILO_ID],
+        ),
+        # Decision: Milo asks Owen to re-check a source (Owen not caught up).
+        team_msg(
+            SESSION_DECISION,
+            "@owen 경쟁사 스캔 raw 파일 출처만 다시 확인해줄래? 팀 노트로 남겨둘게.",
+            MILO_ID,
+            ts(46),
+            [OWEN_ID],
+        ),
+        # GTM: Milo leaves Olive a review note (Olive not caught up).
+        team_msg(
+            SESSION_GTM,
+            "@olive launch appendix 초안 방향 여기 적어둘게. 검토 부탁! 에이전트엔 안 넘어가는 메모야.",
+            MILO_ID,
+            ts(47),
+            [OLIVE_ID],
+        ),
     ]
     conn.executemany(
-        "INSERT INTO session_messages (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments, artifacts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session_messages (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments, artifacts, message_kind, mentions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         messages,
     )
+
+    # Team messages are the latest activity in their sessions; reflect that in
+    # the sidebar preview (last_message_at / snippet), matching the Slack-style
+    # behavior the backend uses for live team messages.
+    team_session_updates = [
+        (ts(45), "@milo SMB 갱신 데이터, 보드 메모 들어가기 전에 한 번 봐줄 수 있어? 우리끼리 메모라 AI한테는 안 넘겼어.", SESSION_Q2),
+        (ts(46), "@owen 경쟁사 스캔 raw 파일 출처만 다시 확인해줄래? 팀 노트로 남겨둘게.", SESSION_DECISION),
+        (ts(47), "@olive launch appendix 초안 방향 여기 적어둘게. 검토 부탁! 에이전트엔 안 넘어가는 메모야.", SESSION_GTM),
+    ]
+    conn.executemany(
+        "UPDATE sessions SET last_message_at = ?, last_message_snippet = ? WHERE id = ?",
+        team_session_updates,
+    )
+
+    seed_reads(conn, created)
+
     conn.commit()
     conn.close()
+
+
+# Project membership and session→project mapping, used to seed read state.
+PROJECT_MEMBERS = {
+    PROJECT_KLIENT: [OLIVE_ID, MILO_ID, OWEN_ID],
+    PROJECT_GTM: [MILO_ID, OLIVE_ID],
+}
+SESSION_PROJECT = {
+    SESSION_Q2: PROJECT_KLIENT,
+    SESSION_DECISION: PROJECT_KLIENT,
+    SESSION_ATTACHED: PROJECT_KLIENT,
+    SESSION_GTM: PROJECT_GTM,
+    SESSION_REPORT: PROJECT_GTM,
+}
+
+
+def seed_reads(conn: sqlite3.Connection, updated_at: str) -> None:
+    """Seed session_reads so the mention markers stand out.
+
+    Baseline: every member has read every session up to its latest message, so
+    the sidebar is quiet. Then carve out exactly the cases we want to showcase:
+      - the mentioned user is "read up to just before" the team message, so that
+        team message stays unread AND carries their UUID -> @ mention marker;
+      - Milo keeps SESSION_REPORT fully unread with no mention, so a plain unread
+        badge sits next to a mention marker for visual contrast.
+    """
+    def max_seq(session_id: str) -> int:
+        row = conn.execute(
+            "SELECT MAX(seq) FROM session_messages WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        return row[0] or 0
+
+    def seq_before_team(session_id: str) -> int:
+        # Largest seq in the session strictly before its first team message.
+        row = conn.execute(
+            "SELECT MAX(seq) FROM session_messages "
+            "WHERE session_id = ? AND seq < "
+            "(SELECT MIN(seq) FROM session_messages WHERE session_id = ? AND message_kind = 'team')",
+            (session_id, session_id),
+        ).fetchone()
+        return (row[0] if row and row[0] is not None else 0)
+
+    # Baseline: all members fully caught up on every session in their projects.
+    reads: dict[tuple[str, str], int] = {}
+    for session_id, project_id in SESSION_PROJECT.items():
+        for user_id in PROJECT_MEMBERS[project_id]:
+            reads[(session_id, user_id)] = max_seq(session_id)
+
+    # Unread @ mentions (mentioned user is behind by exactly the team message).
+    reads[(SESSION_Q2, MILO_ID)] = seq_before_team(SESSION_Q2)
+    reads[(SESSION_DECISION, OWEN_ID)] = seq_before_team(SESSION_DECISION)
+    reads[(SESSION_GTM, OLIVE_ID)] = seq_before_team(SESSION_GTM)
+
+    # Plain unread (no mention) for contrast: Milo has not opened the GTM report.
+    reads[(SESSION_REPORT, MILO_ID)] = 0
+
+    conn.executemany(
+        "INSERT INTO session_reads (session_id, user_id, last_read_seq, updated_at) VALUES (?, ?, ?, ?)",
+        [(session_id, user_id, seq, updated_at) for (session_id, user_id), seq in reads.items()],
+    )
 
 
 def main() -> None:
