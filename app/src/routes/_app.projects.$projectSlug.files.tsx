@@ -11,7 +11,7 @@
 //   drag empty area — rubber-band rectangle select
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { MarqueeOverlay } from '@/components/MarqueeOverlay';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -51,6 +51,7 @@ import {
   type FolderNode,
 } from '@/domain/files';
 import type { BackendDirent } from '@/api/backend-types';
+import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 
 type ViewMode = 'list' | 'grid';
 const VIEW_KEY = 'cowork.files.viewMode';
@@ -558,80 +559,16 @@ function FilesPage() {
 
   // ── Rubber-band selection ────────────────────────────────────────
   const bodyRef = useRef<HTMLDivElement>(null);
-  const dragOriginRef = useRef<{
-    x: number;
-    y: number;
-    basePaths: Set<string>;
-    startedOnRow: boolean;
-    additive: boolean;
-  } | null>(null);
-  const didDragRef = useRef(false);
-  const [dragRect, setDragRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-
-  const onBodyMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    const rowEl = (e.target as HTMLElement).closest('[data-row-index]');
-    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
-    dragOriginRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      basePaths: rowEl || additive ? new Set(selectedPaths) : new Set(),
-      startedOnRow: !!rowEl,
-      additive,
-    };
-    didDragRef.current = false;
-    if (!rowEl && !additive) clearSelection();
-  }, [selectedPaths, clearSelection]);
-
-  useEffect(() => {
-    function onMove(e: MouseEvent) {
-      const origin = dragOriginRef.current;
-      if (!origin) return;
-      const dx = e.clientX - origin.x;
-      const dy = e.clientY - origin.y;
-      if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD && !dragRect) return;
-      didDragRef.current = true;
-
-      const left = Math.min(origin.x, e.clientX);
-      const top = Math.min(origin.y, e.clientY);
-      const width = Math.abs(dx);
-      const height = Math.abs(dy);
-      setDragRect({ left, top, width, height });
-
-      const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-row-index]'));
-      const next = new Set(origin.basePaths);
-      const r = { left, top, right: left + width, bottom: top + height };
-      for (const row of rows) {
-        const rect = row.getBoundingClientRect();
-        const inside = rect.left < r.right && rect.right > r.left && rect.top < r.bottom && rect.bottom > r.top;
-        if (inside) {
-          const path = row.dataset.rowPath;
-          if (path && !isProtectedPath(path)) next.add(path);
-        }
-      }
-      setSelectedPaths(next);
-    }
-    function onUp() {
-      const origin = dragOriginRef.current;
-      dragOriginRef.current = null;
-      setDragRect(null);
-      if (!origin) return;
-      if (didDragRef.current) {
-        const swallow = (ev: Event) => {
-          ev.stopPropagation();
-          ev.preventDefault();
-          window.removeEventListener('click', swallow, true);
-        };
-        window.addEventListener('click', swallow, true);
-      }
-    }
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [dragRect, isProtectedPath]);
+  const marquee = useMarqueeSelection({
+    scrollRef: bodyRef,
+    itemSelector: '[data-row-index]',
+    keyAttr: 'rowPath',
+    getSelection: () => selectedPaths,
+    setSelection: setSelectedPaths,
+    onClear: clearSelection, // also resets the shift-select anchor
+    canSelect: (path) => !isProtectedPath(path), // the knowledge folder can't be selected
+    threshold: DRAG_THRESHOLD,
+  });
 
   // ── Intra-app drag (move/copy) ───────────────────────────────────
   useEffect(() => {
@@ -645,8 +582,7 @@ function FilesPage() {
       e.preventDefault();
       return;
     }
-    dragOriginRef.current = null;
-    setDragRect(null);
+    marquee.cancel();
     e.dataTransfer.effectAllowed = 'copyMove';
     const dragPaths = selectedPaths.has(entry.path)
       ? Array.from(selectedPaths)
@@ -820,7 +756,7 @@ function FilesPage() {
             ref={bodyRef}
             className={`cw-file-body cw-view-${viewMode}${isDraggingOver ? ' is-over' : ''}`}
             onClick={(e) => { if (e.target === e.currentTarget) clearSelection(); }}
-            onMouseDown={onBodyMouseDown}
+            onMouseDown={marquee.onMouseDown}
             onDragEnter={(e) => {
               if (e.dataTransfer.types.includes('application/x-cowork-dirent-paths')) return;
               e.preventDefault();
@@ -921,13 +857,7 @@ function FilesPage() {
         </section>
       </div>
 
-      {dragRect && createPortal(
-        <div
-          className="cw-marquee"
-          style={{ left: dragRect.left, top: dragRect.top, width: dragRect.width, height: dragRect.height }}
-        />,
-        document.body,
-      )}
+      <MarqueeOverlay rect={marquee.dragRect} />
 
       {folderDialogOpen && (
         <NewFolderDialog

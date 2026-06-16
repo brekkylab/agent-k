@@ -9,7 +9,7 @@ export type IconName =
   | 'recap' | 'more' | 'upload' | 'trash' | 'download' | 'copy'
   | 'list' | 'grid' | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left'
   | 'paperclip' | 'file-pdf' | 'file-code' | 'file-archive' | 'file-video' | 'file-audio'
-  | 'pause' | 'play' | 'sticky-notes' | 'stop' | 'zoom-out' | 'log-out' | 'globe';
+  | 'pause' | 'play' | 'sticky-notes' | 'stop' | 'zoom-out' | 'log-out' | 'globe' | 'cloud';
 
 type PreviewIconName =
   | 'home' | 'folder' | 'folder-open' | 'users' | 'settings' | 'lock'
@@ -20,7 +20,7 @@ type PreviewIconName =
   | 'more-horizontal' | 'trash-2' | 'download' | 'copy' | 'list' | 'grid-3x3'
   | 'chevron-right' | 'chevron-left' | 'rotate-ccw' | 'corner-down-left' | 'paperclip' | 'file-code'
   | 'file-archive' | 'file-video' | 'file-audio' | 'pause' | 'play' | 'sticky-notes'
-  | 'square' | 'zoom-out' | 'log-out' | 'globe';
+  | 'square' | 'zoom-out' | 'log-out' | 'globe' | 'cloud';
 
 const previewIconPath: Record<PreviewIconName, string> = {
   lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
@@ -77,6 +77,7 @@ const previewIconPath: Record<PreviewIconName, string> = {
   'zoom-out': '<circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="8" x2="14" y1="11" y2="11"/>',
   'log-out': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
   globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  cloud: '<path d="M2.25 15a4.5 4.5 0 0 0 4.5 4.5H18a3.75 3.75 0 0 0 1.332-7.257 3 3 0 0 0-3.758-3.848 5.25 5.25 0 0 0-10.233 2.33A4.502 4.502 0 0 0 2.25 15Z"/>',
 };
 
 const iconAlias: Record<IconName, PreviewIconName> = {
@@ -137,6 +138,7 @@ const iconAlias: Record<IconName, PreviewIconName> = {
   'zoom-out': 'zoom-out',
   'log-out': 'log-out',
   globe: 'globe',
+  cloud: 'cloud',
 };
 
 export function Icon({ name, size = 16, className = '', strokeWidth = 2, style, ...props }: SVGProps<SVGSVGElement> & { name: IconName; size?: number }) {

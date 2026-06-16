@@ -75,6 +75,11 @@
 
 /* Tool call collapsible — collapsed chip under the parent assistant message. */
 .cw-toolcall {
+  position: relative;
+  /* Collapsed: wrap the summary as a compact chip. Expanded: fill the bubble
+     (see [open] + the .cw-message-body:has() rule) so open tool calls line up. */
+  width: fit-content;
+  max-width: 100%;
   margin-top: 6px;
   border: 1px solid var(--cw-paper-4);
   border-radius: 6px;
@@ -83,6 +88,10 @@
   font-size: 11.5px;
   background: var(--cw-paper-2);
 }
+.cw-toolcall[open] { width: auto; }
+/* When any tool call in a bubble is expanded, stretch the bubble to its full
+   width so the open tool call (and any others) share one consistent width. */
+.cw-message-body:has(.cw-toolcall[open]) { width: min(560px, calc(100% - 44px)); }
 .cw-toolcall > summary {
   cursor: pointer;
   color: var(--cw-ink-3);
@@ -91,10 +100,25 @@
 }
 .cw-toolcall > summary::-webkit-details-marker { display: none; }
 .cw-toolcall > summary::marker { display: none; }
-.cw-toolcall[open] > summary { color: var(--cw-ink); margin-bottom: 6px; }
-.cw-toolcall-args,
-.cw-toolcall-result {
-  margin: 4px 0;
+.cw-toolcall[open] > summary {
+  color: var(--cw-ink);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding-right: 34px;
+}
+.cw-toolcall-section { margin: 4px 0; }
+.cw-toolcall-section-label {
+  display: block;
+  margin: 6px 0 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cw-ink-4);
+}
+.cw-toolcall-raw {
+  margin: 0;
   padding: 6px 8px;
   background: var(--cw-paper-3);
   border-radius: 4px;
@@ -104,7 +128,42 @@
   overflow: auto;
   font-size: 11px;
 }
-.cw-toolcall-args { opacity: 0.85; }
+.cw-toolcall-empty { margin: 0; color: var(--cw-ink-4); font-style: italic; }
+.cw-toolcall-fields { margin: 0; display: flex; flex-direction: column; gap: 3px; }
+.cw-toolcall-field { display: flex; gap: 6px; align-items: baseline; }
+.cw-toolcall-field dt { flex: 0 0 auto; color: var(--cw-ink-3); font-weight: 600; }
+.cw-toolcall-field dt::after { content: ':'; }
+/* Single-line string value: a <pre> kept inline on the key's row (preserves the
+   raw text exactly, no quotes), wrapping if long. */
+.cw-toolcall-inline {
+  display: inline;
+  margin: 0;
+  background: var(--cw-paper-3);
+  font-family: inherit;
+  font-size: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cw-toolcall-field dd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--cw-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Multi-line string value: key on its own line, value in a full-width <pre>. */
+.cw-toolcall-field.is-block { flex-direction: column; gap: 2px; align-items: stretch; }
+.cw-toolcall-field.is-block dd { width: 100%; }
+.cw-toolcall-field.is-block dd .cw-toolcall-raw { margin: 0; }
+.cw-toolcall .cw-toolcall-copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: var(--cw-paper-2);
+  opacity: 0.6;
+}
+.cw-toolcall:hover .cw-toolcall-copy { opacity: 1; }
 
 /* Subagent mention — "@math <query>" inline line under parent assistant message. */
 .cw-subagent-call {

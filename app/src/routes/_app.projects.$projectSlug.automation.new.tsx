@@ -211,6 +211,7 @@ function NewAutomationPage() {
               style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'flex-start' }}
             >
               <ComposerAgentPicker value={agentId} onChange={setAgentId} standalone />
+              <p className="cw-agent-pick-desc">{t(`agent.${agentId}.description`)}</p>
               <ComposerModelPicker
                 catalog={catalog.data}
                 agentType={agentId}

@@ -30,6 +30,7 @@ export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
 
   const parsed = parseGlobalPath(globalPath);
   const canCopy = Boolean(onCopyToShared && parsed);
+  const isShared = parsed?.scope.kind === 'shared';
 
   function handleDownload() {
     void downloadFileByGlobalPath(globalPath);
@@ -51,6 +52,10 @@ export function AttachmentPreview({ globalPath, onCopyToShared }: Props) {
       onClick={() => setMenuOpen((prev) => !prev)}
       title={filename}
     >
+      {/* Source marker: cloud = referenced from shared files, clip = uploaded. */}
+      <span className={`cw-attach-source cw-attach-source--${isShared ? 'shared' : 'upload'}`}>
+        <Icon name={isShared ? 'cloud' : 'paperclip'} size={12} />
+      </span>
       <FileTypeIcon filename={filename} size={16} />
       <span className="cw-attach-name">{filename}</span>
       {menuOpen && (

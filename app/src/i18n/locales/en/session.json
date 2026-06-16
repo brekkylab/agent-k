@@ -9,6 +9,7 @@
     "share_change_failed": "Share change failed: {{message}}",
     "artifact_deleted": "Deleted",
     "artifact_delete_failed": "Delete failed",
+    "copied": "Copied to clipboard",
     "unknown_error": "unknown"
   },
   "ui": {
@@ -25,6 +26,7 @@
     "composer_hint": "Enter to send · Reference files with @filename",
     "new_message": "New message",
     "scroll_to_bottom": "Scroll to bottom",
+    "copy": "Copy",
     "title_fallback": "…"
   },
   "chat": {
@@ -42,9 +44,22 @@
     "no_pinned_files": "No pinned files yet.",
     "access": "Access",
     "session": "Session",
-    "project_label": "project · {{name}}"
+    "project_label": "project · {{name}}",
+    "info_tab": "Info",
+    "files_tab": "Files"
   },
   "artifacts_header": "Artifacts",
+  "shared_files_header": "Shared files",
+  "shared_files": {
+    "import": "Add to message",
+    "remove": "Remove",
+    "up": "Back",
+    "drag_hint": "Drag into the chat to attach",
+    "attach_limit": "You can attach up to {{max}} files at once.",
+    "drag_items": "{{count}} files",
+    "empty_title": "No shared files",
+    "empty_body": "Project shared files appear here. Drag one into the chat to attach it."
+  },
   "menu": {
     "options": "Session options",
     "mark_read": "Mark as read",

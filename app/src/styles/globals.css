@@ -246,7 +246,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-brand-lockup strong { color: var(--cw-fg-1); font-size: 22px; line-height: 1; letter-spacing: -0.035em; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-section-label-app { padding: 5px 3px 5px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--cw-fg-3); font-weight: 500; }
 .cw-nav-list, .cw-session-rail { display: flex; flex-direction: column; gap: 1px; }
-.cw-nav-row, .cw-session-row { width: 100%; min-height: 31px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: var(--cw-radius-md); background: transparent; color: var(--cw-fg-2); padding: 6px 8px; text-align: left; font-size: 13px; transition: background 120ms, color 120ms, transform 120ms; }
+.cw-nav-row, .cw-session-row { width: 100%; min-height: 31px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: var(--cw-radius-md); background: transparent; color: var(--cw-fg-2); padding: 6px 8px; text-align: left; font-size: 13px; user-select: none; transition: background 120ms, color 120ms, transform 120ms; }
 .cw-nav-row:hover, .cw-session-row:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
 .cw-nav-row:active, .cw-session-row:active, .cw-btn-primary:active, .cw-btn-secondary:active { transform: translateY(1px); }
 .cw-nav-row.is-active, .cw-session-row.is-active { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
@@ -260,6 +260,8 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-session-row { min-height: 28px; padding: 5px 8px; font-size: 12.5px; color: var(--cw-fg-3); }
 .cw-session-row.is-active { background: color-mix(in oklch, var(--cw-accent) 12%, var(--cw-bg-subtle)); color: var(--cw-fg-1); font-weight: 600; }
 .cw-session-row.is-unread { color: var(--cw-fg-1); font-weight: 600; }
+/* Dragging a file from the Files page over a session row — drop to attach it. */
+.cw-session-row.is-drop-target { background: color-mix(in oklch, var(--cw-accent) 18%, var(--cw-bg-subtle)); box-shadow: inset 0 0 0 1.5px var(--cw-accent); color: var(--cw-fg-1); }
 .auto-dot { margin-left: auto; color: var(--cw-accent); font-size: 10px; }
 .cw-sidebar-user { border-top: 1px solid var(--cw-border); padding: 10px 6px 2px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center; color: var(--cw-fg-2); }
 .cw-sidebar-user-meta { min-width: 0; }
@@ -316,7 +318,17 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-activity-row time { color: var(--cw-fg-3); font-family: var(--cw-font-mono); font-size: 11px; }
 
 .cw-session-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; flex: 1; min-height: 0; overflow: hidden; }
-.cw-chat-surface { min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
+.cw-chat-surface { position: relative; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
+/* While a shared file is dragged over the conversation, lay a single uniform
+   accent overlay over the whole surface (a clean drop zone) instead of letting
+   the drag paint a ragged text selection. pointer-events:none so the drop still
+   reaches the surface underneath. */
+.cw-chat-surface.is-import-target::after {
+  content: ''; position: absolute; inset: 0; z-index: 5; pointer-events: none;
+  background: color-mix(in oklch, var(--cw-accent), transparent 82%);
+  /* Ring on the overlay (above content) so opaque children can't break it. */
+  box-shadow: inset 0 0 0 2px var(--cw-accent);
+}
 .cw-chat-head { padding: 34px 28px 18px; border-bottom: 1px solid var(--cw-border); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .cw-chat-head p { display: flex; align-items: center; gap: 7px; color: var(--cw-fg-3); margin: 14px 0 0; }
 /* Session title shares its row with the agent chip (mode lives at title level). */
@@ -337,9 +349,70 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-message-meta time { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
 .cw-message p { margin: 7px 0 0; line-height: 1.65; white-space: pre-wrap; }
 .cw-composer small { grid-column: 1 / -1; color: var(--cw-fg-4); font-size: 11px; }
-.cw-session-side { padding: 22px 18px; background: var(--cw-bg-subtle); overflow: auto; }
+.cw-session-side { padding: 0; background: var(--cw-bg-subtle); overflow: hidden; display: flex; flex-direction: column; }
 .cw-session-side h3 { margin: 16px 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--cw-fg-3); font-weight: 500; }
 .cw-session-side p { color: var(--cw-fg-3); line-height: 1.55; }
+
+/* Two sidebar views (info | file browser) on a horizontal track, ordered to
+   match the bottom tabs: info on the left, files on the right. Switching to
+   Files slides the track left so the file browser glides in from the right. */
+.cw-side-views { flex: 1; min-height: 0; display: flex; width: 200%; transform: translateX(0); transition: transform .28s cubic-bezier(.4, 0, .2, 1); }
+.cw-side-views.show-files { transform: translateX(-50%); }
+.cw-side-view { width: 50%; flex: 0 0 50%; min-height: 0; display: flex; flex-direction: column; }
+.cw-side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 18px; }
+
+/* Bottom view switch — pinned outside the sliding track, same position in both
+   views. Segmented control: two tabs (session info ↔ shared file browser). */
+.cw-side-switchbar { flex-shrink: 0; padding: 10px 16px; border-top: 1px solid var(--cw-border); }
+.cw-side-seg { display: flex; gap: 2px; width: 100%; padding: 3px; background: var(--cw-bg-muted); border-radius: var(--cw-radius-md); }
+.cw-side-seg-tab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; border: 0; border-radius: calc(var(--cw-radius-md) - 3px); background: transparent; color: var(--cw-ink-3); font-size: 12.5px; font-weight: 500; cursor: pointer; transition: background 120ms, color 120ms, box-shadow 120ms; }
+.cw-side-seg-tab:hover { color: var(--cw-ink); }
+.cw-side-seg-tab[aria-selected="true"] { background: var(--cw-accent-soft); color: var(--cw-accent-2); box-shadow: inset 0 0 0 1px var(--cw-accent-line); font-weight: 600; }
+
+/* File-browser view inside the sidebar — mirrors the Files page layout in the
+   narrow column: fixed head + breadcrumb, scrolling row list. */
+.cw-files-browser { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.cw-files-breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 1px; flex-shrink: 0; padding: 20px 14px 8px; font-size: 11px; color: var(--cw-ink-3); }
+.cw-files-up { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-right: 3px; border: 0; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-ink-2); cursor: pointer; transition: background 100ms, color 100ms; }
+.cw-files-up:not(:disabled):hover { background: var(--cw-bg-muted); color: var(--cw-ink); }
+/* Reserve the slot at root so entering a folder doesn't shift the breadcrumb. */
+.cw-files-up:disabled { visibility: hidden; }
+/* Keep the project-name root constant whether or not it's the current dir
+   (the home button is disabled at root, enabled deeper — don't let that recolor it). */
+.cw-files-home, .cw-files-home:disabled { gap: 5px; max-width: 150px; color: var(--cw-ink-2); }
+.cw-files-home-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.cw-files-breadcrumb button { display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--cw-ink-3); font-size: 11px; cursor: pointer; padding: 2px 3px; border-radius: 4px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cw-files-breadcrumb button:not(:disabled):hover { background: var(--cw-bg-muted); color: var(--cw-ink); }
+/* pointer-events:none so releasing a marquee over a disabled (gray) crumb still
+   fires window mouseup — disabled buttons otherwise swallow the event. */
+.cw-files-breadcrumb button:disabled { cursor: default; color: var(--cw-ink-2); pointer-events: none; }
+.cw-files-crumb { display: inline-flex; align-items: center; }
+.cw-files-browser-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 14px; display: flex; flex-direction: column; gap: 1px; user-select: none; }
+
+/* Shared-file rows: color-chip icon (FileTypeIcon) + name, with a drag handle
+   that fades in on hover to signal the row is draggable. */
+.cw-sf-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 3px 6px 3px 3px; border: 0; border-radius: var(--cw-radius-sm); background: transparent; font-size: 13px; color: var(--cw-fg-1); text-align: left; transition: background 100ms; }
+.cw-sf-row:hover { background: var(--cw-bg-muted); }
+.cw-sf-row.is-selected { background: var(--cw-selected-bg); }
+.cw-sf-row.is-selected:hover { background: var(--cw-selected-bg-2); }
+.cw-sf-row .cw-file-label { flex: 1; }
+.cw-sf-row[draggable="true"] { cursor: grab; }
+/* Left type-icon swaps to a quick-add (+) on hover. */
+.cw-sf-icon { position: relative; width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+.cw-sf-icon > :not(.cw-sf-icon-add) { transition: opacity 100ms; }
+.cw-sf-row:hover .cw-sf-icon > :not(.cw-sf-icon-add) { opacity: 0; }
+/* pointer-events:none while hidden — an opacity:0 button still takes clicks, so
+   without this a tap on the icon (touch, where there's no hover to reveal the +)
+   would import the file instead of selecting the row. */
+.cw-sf-icon-add { position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-accent); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity 100ms, background 100ms, border-color 100ms; }
+/* Visible (and clickable) on row hover (or focus): a clear neutral border so the
+   + reads as a button. (--cw-border was too faint and washed out on the
+   accent-wash selected fill.) */
+.cw-sf-row:hover .cw-sf-icon-add, .cw-sf-icon-add:focus-visible { opacity: 1; pointer-events: auto; border-color: var(--cw-ink-4); }
+/* Hovering the + itself deepens its fill and its border (neutral, a couple steps darker). */
+.cw-sf-row:hover .cw-sf-icon-add:hover, .cw-sf-icon-add:focus-visible:hover { background: color-mix(in oklch, var(--cw-ink) 12%, transparent); border-color: var(--cw-ink-2); }
+/* Drag affordance hint under the breadcrumb (replaces the old per-row grip). */
+.cw-sf-drag-hint { margin: 0; padding: 0 14px 6px; font-size: 10px; color: var(--cw-ink-4); flex-shrink: 0; user-select: none; }
 .cw-side-row, .cw-side-file { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; font-size: 13px; }
 .cw-side-file > span { display: inline-flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-side-file small { color: var(--cw-fg-4); font-family: var(--cw-font-mono); }
@@ -358,6 +431,10 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-artifact-row { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 4px; border-radius: var(--cw-radius-sm); font-size: 12.5px; transition: background 100ms; }
 .cw-artifact-row:hover { background: var(--cw-bg-muted); }
 .cw-artifact-name { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cw-fg-1); }
+/* The icon stays fixed; the label takes the remaining width and ellipsizes.
+   (text-overflow needs a real element — a bare text node in the flex row won't clip.) */
+.cw-artifact-name > svg, .cw-artifact-name > img { flex-shrink: 0; }
+.cw-file-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw-artifact-size { flex-shrink: 0; font-family: var(--cw-font-mono); font-size: 10.5px; color: var(--cw-fg-4); }
 .cw-artifact-menu-wrap { flex-shrink: 0; position: relative; }
 .cw-artifact-menu-wrap > button { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--cw-radius-sm); background: transparent; color: var(--cw-fg-3); cursor: pointer; opacity: 0; transition: opacity 100ms, background 100ms; }
@@ -542,7 +619,7 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-file-head, .cw-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 130px 24px; gap: 12px; align-items: center; }
 .cw-file-head { padding: 10px 8px; border-bottom: 1px solid var(--cw-border); color: var(--cw-fg-3); font-family: var(--cw-font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .cw-file-row { width: 100%; border: 0; border-bottom: 1px solid var(--cw-line-soft); background: transparent; min-height: 46px; padding: 7px 8px; color: var(--cw-fg-2); text-align: left; }
-.cw-file-row:hover, .cw-file-row.is-selected { background: var(--cw-bg); }
+.cw-file-row:hover { background: var(--cw-bg); }
 .cw-file-row > span:first-child:not(.cw-pocket) { display: inline-flex; align-items: center; gap: 9px; color: var(--cw-fg-1); }
 .cw-knowledge { margin-top: 28px; border: 1px dashed var(--cw-border-hover); border-radius: var(--cw-radius-lg); padding: 18px; background: var(--cw-bg); }
 .cw-knowledge h2 { margin: 0; display: flex; align-items: center; gap: 8px; }
@@ -1044,8 +1121,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   border-bottom: 1px solid var(--cw-line-soft);
   color: var(--cw-ink);
 }
-.cw-file-row:hover,
-.cw-file-row.is-selected { background: var(--cw-paper-2); }
+.cw-file-row:hover { background: var(--cw-paper-2); }
+.cw-file-row.is-selected { background: var(--cw-selected-bg); }
+.cw-file-row.is-selected:hover { background: var(--cw-selected-bg-2); }
 .cw-file-main {
   flex: 1;
   min-width: 0;
@@ -1203,16 +1281,6 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   gap: 4px;
   color: var(--cw-ink-4);
 }
-.cw-ai-actions button {
-  height: 26px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--cw-ink-3);
-  font-size: 11px;
-}
-.cw-ai-actions button:hover { background: var(--cw-paper-3); color: var(--cw-ink); }
 
 .cw-composer {
   position: sticky;
@@ -1582,9 +1650,13 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   margin: 0 auto;
   padding: 0 16px;
 }
+/* Extra room between the greeting and the composer so the agent-tab hover
+   popover (which floats above the tabs) clears the greeting line above it. */
+.cw-home-blank > .cw-home-greeting { margin-bottom: 56px; }
 .cw-home-blank .cw-agent-composer-wrap { width: 100%; }
 .cw-home-blank .cw-home-composer-box { width: 100%; }
 .cw-home-greeting { margin: 0; text-align: center; font-size: var(--cw-text-lg); color: var(--cw-fg-2); font-weight: 500; }
+.cw-agent-pick-desc { margin: -4px 0 0; max-width: 480px; font-size: var(--cw-text-sm); color: var(--cw-fg-3); line-height: 1.4; }
 .cw-suggested-prompts {
   display: flex;
   flex-wrap: wrap;
@@ -1623,6 +1695,11 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   transition: background 120ms, border-color 120ms;
 }
 .cw-attach-chip--file:hover { background: var(--cw-paper-4); border-color: var(--cw-border-hover); }
+/* Source marker on an attachment chip: folder = referenced from shared files
+   (accent), clip = uploaded via the composer (muted). */
+.cw-attach-source { display: inline-flex; align-items: center; flex-shrink: 0; }
+.cw-attach-source--shared { color: var(--cw-accent); }
+.cw-attach-source--upload { color: var(--cw-ink-2); }
 .cw-attach-name {
   flex: 1;
   min-width: 0;
@@ -1630,18 +1707,13 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cw-attach-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: transparent;
-  color: var(--cw-ink-4);
-  cursor: pointer;
-  padding: 0;
-  flex-shrink: 0;
-}
-.cw-attach-remove:hover { color: var(--cw-ink); }
+/* Pending composer chip: the whole chip is click-to-remove; hovering turns it red. */
+.cw-attach-chip--removable { cursor: pointer; transition: background 120ms, border-color 120ms, color 120ms; }
+.cw-attach-chip--removable:hover { background: color-mix(in oklch, var(--cw-destructive), white 90%); border-color: color-mix(in oklch, var(--cw-destructive), transparent 55%); color: var(--cw-destructive); }
+.cw-attach-chip--removable:focus-visible { outline: 2px solid color-mix(in oklch, var(--cw-destructive), transparent 40%); outline-offset: 1px; }
+/* Persistent × affordance; muted by default, reddens with the chip on hover. */
+.cw-attach-remove-hint { display: inline-flex; align-items: center; flex-shrink: 0; color: var(--cw-ink-4); }
+.cw-attach-chip--removable:hover .cw-attach-remove-hint { color: var(--cw-destructive); }
 .cw-attach-error { color: var(--cw-destructive); display: inline-flex; }
 .cw-attach-spinner { font-size: 10px; }
 
@@ -1817,6 +1889,54 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   font-weight: 600;
   border-radius: 14px 14px 0 0;
   margin-bottom: -1px;
+}
+
+/* Hover/focus popover: a command-style card floating above the hovered tab, with
+   a small arrow pointing down at it, so the description reads as belonging to that
+   specific agent (not a detached line of body text). Sits above the tabs (not
+   below) to clear the composer box. Shown on hover and on keyboard focus. */
+.cw-agent-tab-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  z-index: 60;
+  width: max-content;
+  max-width: 240px;
+  transform: translateX(-50%) translateY(3px);
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--cw-paper);
+  border: 1px solid var(--cw-agent-accent);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.16);
+  color: var(--cw-fg-2);
+  font-size: 12px;
+  font-weight: 450;
+  line-height: 1.4;
+  text-align: center;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease, visibility 0s linear 120ms;
+}
+/* Down-pointing arrow on the card's bottom edge (outside the card), pointing at
+   the tab below. The card is centred on its tab (translateX(-50%)) and the arrow
+   shares that centre, so the arrow always lands on the hovered tab. */
+.cw-agent-tab-pop::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 7px solid transparent;
+  border-top-color: var(--cw-agent-accent);
+}
+.cw-agent-tab:hover .cw-agent-tab-pop,
+.cw-agent-tab:focus-visible .cw-agent-tab-pop {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+  transition: opacity 120ms ease, transform 120ms ease;
 }
 
 /* Standalone variant: the picker stands on its own (no composer box beneath),

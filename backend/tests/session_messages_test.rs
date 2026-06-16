@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use agent_k_backend::{
-    handlers::{build_attachment_note, inject_attachment_note},
+    handlers::{build_attachment_note, ensure_attachment_count, inject_attachment_note},
     repository,
     state::AppState,
 };
@@ -802,6 +802,7 @@ fn inject_then_re_inject_is_idempotent_on_text_prefix() {
     );
 }
 
+
 // ── reverse-indexed pagination ────────────────────────────────────────────────
 
 fn history_texts(body: &serde_json::Value) -> Vec<String> {
@@ -834,6 +835,17 @@ fn history_seqs(body: &serde_json::Value) -> std::collections::HashMap<String, i
             )
         })
         .collect()
+}
+
+#[test]
+fn attachment_count_at_or_under_limit_is_ok() {
+    assert!(ensure_attachment_count(0).is_ok());
+    assert!(ensure_attachment_count(30).is_ok());
+}
+
+#[test]
+fn attachment_count_over_limit_is_rejected() {
+    assert!(ensure_attachment_count(31).is_err());
 }
 
 /// GET messages?limit=&before_seq=/after_seq= pages by keyset cursor in TURN
