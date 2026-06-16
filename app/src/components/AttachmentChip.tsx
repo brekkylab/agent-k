@@ -14,7 +14,9 @@ interface Props {
 
 export function AttachmentChip({ filename, status, shared, error, onRemove }: Props) {
   const { t } = useTranslation('session');
-  // The whole chip is click-to-remove (hover turns it red); no separate × button.
+  // The whole chip is click-to-remove. It shows a persistent × and reddens on hover so
+  // the destructive action is unmistakable (per PR review — colour alone read as ambiguous).
+  // The × is a visual hint, not a separate button; the chip itself handles the click.
   return (
     <div
       className="cw-attach-chip cw-attach-chip--removable"
@@ -37,6 +39,8 @@ export function AttachmentChip({ filename, status, shared, error, onRemove }: Pr
         </>
       )}
       <span className="cw-attach-name">{filename}</span>
+      {/* Persistent × hint — signals that clicking the chip removes it. */}
+      <span className="cw-attach-remove-hint" aria-hidden="true"><Icon name="x" size={11} /></span>
     </div>
   );
 }

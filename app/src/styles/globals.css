@@ -1707,6 +1707,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-attach-chip--removable { cursor: pointer; transition: background 120ms, border-color 120ms, color 120ms; }
 .cw-attach-chip--removable:hover { background: color-mix(in oklch, var(--cw-destructive), white 90%); border-color: color-mix(in oklch, var(--cw-destructive), transparent 55%); color: var(--cw-destructive); }
 .cw-attach-chip--removable:focus-visible { outline: 2px solid color-mix(in oklch, var(--cw-destructive), transparent 40%); outline-offset: 1px; }
+/* Persistent × affordance; muted by default, reddens with the chip on hover. */
+.cw-attach-remove-hint { display: inline-flex; align-items: center; flex-shrink: 0; color: var(--cw-ink-4); }
+.cw-attach-chip--removable:hover .cw-attach-remove-hint { color: var(--cw-destructive); }
 .cw-attach-error { color: var(--cw-destructive); display: inline-flex; }
 .cw-attach-spinner { font-size: 10px; }
 
