@@ -22,6 +22,9 @@ interface UseMarqueeSelectionOpts {
   onClear?: () => void;
   /** Elements that must NOT start a marquee (e.g. an inline action button). */
   ignoreSelector?: string;
+  /** Gate which rows the marquee may add. Defaults to selecting every swept row;
+   *  return false to skip one (e.g. a protected folder that can't be selected). */
+  canSelect?: (key: string) => boolean;
   /** Pixels of movement before a press becomes a drag. */
   threshold?: number;
 }
@@ -115,7 +118,7 @@ export function useMarqueeSelection(opts: UseMarqueeSelectionOpts) {
         const rect = el.getBoundingClientRect();
         if (rect.left < r.right && rect.right > r.left && rect.top < r.bottom && rect.bottom > r.top) {
           const key = el.dataset[o.keyAttr];
-          if (key) next.add(key);
+          if (key && (!o.canSelect || o.canSelect(key))) next.add(key);
         }
       }
       o.setSelection(next);

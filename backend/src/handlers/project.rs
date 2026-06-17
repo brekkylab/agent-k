@@ -250,6 +250,32 @@ pub async fn update_project(
         }
     };
 
+    let new_pdf_engine = match payload.pdf_engine {
+        None => None,
+        Some(ref s) => {
+            let engine = agent_k::knowledge_base::PdfEngine::from_str_opt(s)
+                .ok_or_else(|| AppError::bad_request("pdf_engine must be 'kreuzberg' or 'docling'"))?;
+            Some(engine.as_str().to_string())
+        }
+    };
+
+    // Did the PDF engine actually change? If so the existing corpus was parsed
+    // by the old engine and is stale — it must be rebuilt. Compare against the
+    // current stored value before the update.
+    let engine_changed = match &new_pdf_engine {
+        None => false,
+        Some(new) => {
+            let current = state
+                .repository
+                .get_project(project_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|p| p.pdf_engine);
+            current.as_deref() != Some(new.as_str())
+        }
+    };
+
     let updated = state
         .repository
         .update_project(
@@ -258,12 +284,50 @@ pub async fn update_project(
             payload.description.map(Some),
             new_slug,
             new_chains,
+            new_pdf_engine,
         )
         .await
         .map_err(|e| match e {
             RepositoryError::UniqueViolation(_) => AppError::conflict("slug already in use"),
             other => AppError::internal(other.to_string()),
         })?;
+
+    // Rebuild the corpus under the new engine: drop the cached store, delete the
+    // derived corpus/index on disk (originals stay in the knowledge folder), and
+    // trigger a resync that re-parses every PDF with the new engine.
+    if engine_changed {
+        let speedwagon_dir = state
+            .data_root
+            .join("projects")
+            .join(project_id.to_string())
+            .join(".speedwagon");
+        // Hold `resync_lock` across the whole rebuild so it can't interleave with
+        // an in-flight resync. Order matters: `store_for` reopens (and caches) the
+        // index on a cache miss without taking this lock, so deleting the derived
+        // index FIRST and evicting only after means any reopen that races in sees
+        // either the about-to-be-evicted handle or a fresh empty index on the
+        // now-cleared dir — never a cached handle to a dir we're about to delete.
+        let resync_lock = state.resync_lock_for(project_id);
+        let _guard = resync_lock.lock().await;
+        if let Err(e) = tokio::fs::remove_dir_all(&speedwagon_dir).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%project_id, "failed to clear corpus on engine change: {e}");
+        }
+        state.evict_store(project_id);
+        // Drop cached session agents for this project so they rebuild against
+        // the new store. Their corpus tools captured the old SharedStore at
+        // build time; without this an active session keeps querying the
+        // now-deleted index. Agents reopen the store on the next message.
+        if let Ok(sessions) = state.repository.list_all_sessions_in_project(project_id).await {
+            for session in sessions {
+                state.remove_agent(&session.id);
+            }
+        }
+        // Release `_guard` and start a new resync
+        drop(_guard);
+        super::knowledge::maybe_trigger_resync(&state, project_id, true);
+    }
 
     Ok(Json(ProjectResponse::from(updated)))
 }

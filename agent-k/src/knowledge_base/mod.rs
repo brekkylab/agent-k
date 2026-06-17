@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 pub use document::{Document, FindResult};
 pub use searcher::{SearchPage, SearchResult};
+pub use translator::PdfEngine;
 
 #[derive(Debug, Clone)]
 pub struct IngestResult {
@@ -126,6 +127,7 @@ impl Store {
         &mut self,
         contents: impl IntoIterator<Item = impl Into<u8>>,
         filetype: FileType,
+        pdf_engine: PdfEngine,
     ) -> Result<Uuid> {
         let bytes: Vec<u8> = contents.into_iter().map(|b| b.into()).collect();
 
@@ -143,7 +145,7 @@ impl Store {
                     if !origin_path.exists() {
                         fs::write(&origin_path, &bytes)?;
                     }
-                    translator::translate(filetype, &origin_path, &corpus_path).await?;
+                    translator::translate(filetype, &origin_path, &corpus_path, pdf_engine).await?;
                 }
             }
         }
@@ -175,6 +177,7 @@ impl Store {
     pub async fn ingest_many(
         &mut self,
         items: impl IntoIterator<Item = (impl IntoIterator<Item = u8>, FileType)>,
+        pdf_engine: PdfEngine,
     ) -> Result<IngestResult> {
         let items: Vec<(Vec<u8>, FileType)> = items
             .into_iter()
@@ -208,7 +211,7 @@ impl Store {
                             }
                             new_origin = Some(origin_path.clone());
                         }
-                        translator::translate(filetype.clone(), &origin_path, &corpus_path)
+                        translator::translate(filetype.clone(), &origin_path, &corpus_path, pdf_engine)
                             .await
                             .map_err(|e| e.to_string())
                     }
@@ -231,6 +234,11 @@ impl Store {
 
             match indexer::document_exists(&self.index, &id.to_string()) {
                 Ok(true) => {
+                    succeeded.push(id);
+                }
+                // Already queued earlier in this same batch (e.g. two files with
+                // identical content → identical UUIDv5). Don't index it twice.
+                Ok(false) if to_index.iter().any(|(_, queued, _, _)| *queued == id) => {
                     succeeded.push(id);
                 }
                 Ok(false) => match fs::read_to_string(&corpus_path) {
@@ -344,6 +352,11 @@ impl Store {
     /// Get # of documents
     pub fn count(&self) -> u32 {
         indexer::num_documents(&self.index).unwrap_or(0) as u32
+    }
+
+    /// Merge index segments and reclaim space from deleted documents.
+    pub fn compact(&self) -> Result<()> {
+        indexer::compact(&self.index)
     }
 
     /// Returns all documents stored in the index.
@@ -498,7 +511,7 @@ mod tests {
         fs::write(&corpus_path, invalid_utf8).expect("failed to seed existing corpus");
 
         let result = store
-            .ingest_many([(bytes.to_vec(), FileType::MD)])
+            .ingest_many([(bytes.to_vec(), FileType::MD)], PdfEngine::default())
             .await
             .expect("ingest_many should report per-item failure");
 
@@ -532,7 +545,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("failed to fetch {name}"))
                 .into();
             let id = store
-                .ingest(bytes, FileType::PDF)
+                .ingest(bytes, FileType::PDF, PdfEngine::default())
                 .await
                 .unwrap_or_else(|e| panic!("failed to ingest {name}: {e}"));
             println!("[{i}] {name} → {id}");

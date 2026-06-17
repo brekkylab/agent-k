@@ -7,7 +7,8 @@
     "select": "Select model",
     "recommended": "Recommended model",
     "recommended_named": "Recommended · {{label}}",
-    "unavailable_suffix": " (unavailable)"
+    "unavailable_suffix": " (unavailable)",
+    "not_recommended_suffix": " (Not Recommended)"
   },
   "list": {
     "title": "Automations",
@@ -61,33 +62,38 @@
     "coworker": {
       "placeholder": "Describe a task to run…",
       "greeting": "Coworker helps you get it done",
+      "description": "Makes the documents and files you need.",
       "prompts": [
-        { "label": "This week's progress summary", "seedText": "Summarize this week's progress and draft a report" },
-        { "label": "Tidy up meeting notes", "seedText": "Organize today's meeting notes around action items" },
-        { "label": "Email draft", "seedText": "Write a draft email to share this decision with the team" }
+        { "label": "IRR calculation", "seedText": "Create an IRR calculation table in Excel for an AI startup investment. Include capital calls, exit payouts, and a year-by-year cash flow analysis, with the returns calculated automatically by formula." },
+        { "label": "Investor pitch deck", "seedText": "Make an investor pitch deck. Cover the business problem, our solution, the market opportunity, the business model, our competitive advantage, a team overview, and detailed financial projections, and make it persuasive and data-driven so it helps with fundraising. Make it about 10 slides including a title slide and a closing slide, in a clean, professional PowerPoint design." },
+        { "label": "Tidy up meeting notes", "seedText": "Read the meeting notes file I've attached and turn it into a clean summary. Put a short overview at the top, list the key decisions that were made, and add an action-item table with columns for task, owner, and due date. List any open questions or unassigned items separately at the end." },
+        { "label": "Email draft", "seedText": "Write a clear, professional email announcing an update to my team. Give it a subject line, a short friendly opening, the main points laid out clearly, and a clear next step at the end. Leave a spot for me to fill in the specific details, and write it in a ready-to-send email format." }
       ]
     },
     "speedwagon": {
       "placeholder": "What are you curious about?",
       "greeting": "Speedwagon finds answers in your files",
+      "description": "Answers your questions using your project's files and the web.",
       "prompts": [
-        { "label": "Summarize project files", "seedText": "Summarize the key contents of the project files" },
-        { "label": "Find a specific fact", "seedText": "Find all the revenue-related figures across the documents" },
-        { "label": "Compare documents", "seedText": "Compare the differences between the two most recent reports" }
+        { "label": "Find a date", "seedText": "Find the contract or launch dates in the documents." },
+        { "label": "Find with sources", "seedText": "Find last year's revenue in the documents and cite the source." },
+        { "label": "Top complaint", "seedText": "Find the most common complaint in the survey responses." }
       ]
     },
     "deep-research": {
       "placeholder": "What should I research?",
       "greeting": "Deep Research digs in deep",
+      "description": "Researches a topic in depth across the web and writes you a report.",
       "prompts": [
-        { "label": "Market trend research", "seedText": "Research recent trends in the market where KlientCo operates" },
-        { "label": "Competitor analysis", "seedText": "Compare and analyze the strategies of three major competitors" },
-        { "label": "Prior research review", "seedText": "Summarize prior research in the relevant field" }
+        { "label": "Market sizing", "seedText": "Analyze the size of the EV charging infrastructure market from several angles. Estimate TAM/SAM/SOM, give a five-year growth forecast, identify the key drivers and headwinds shaping the market, break down the major customer segments, and map the competitive landscape and how the leading players are positioned." },
+        { "label": "Competitor benchmarking", "seedText": "Run an in-depth benchmarking study of the six leading companies in the cloud data warehouse space. Compare their core features, pricing, market share, customer satisfaction, and go-to-market strategy, then lay out each one's strengths, weaknesses, differentiation, and target segment, and draw out the implications for us." },
+        { "label": "Customer persona research", "seedText": "Research and map detailed customer personas and journey maps for a subscription-based online learning platform. Identify each persona's goals and motivations, their main pain points and decision criteria, analyze the touchpoints from awareness through sign-up and renewal, and pinpoint where users drop off along with concrete opportunities to improve conversion." }
       ]
     },
     "buddy": {
       "placeholder": "Talk to me freely…",
       "greeting": "Chat freely with Buddy",
+      "description": "A general chat for anything else, from quick questions to ideas.",
       "prompts": [
         { "label": "Brainstorm ideas", "seedText": "Throw out 10 quick ideas for the Q3 campaign" },
         { "label": "Explain terms", "seedText": "Explain these domain terms in simple language" },

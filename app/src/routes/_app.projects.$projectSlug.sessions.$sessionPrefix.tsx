@@ -38,15 +38,24 @@ import { loadNs } from '@/i18n/loader';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 import { resolveComposerKeyAction } from '@/lib/composerKeys';
+import { ToolCallDetails } from '@/components/chat/ToolCallDetails';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
-  loader: () => loadNs('session', 'dialogs'),
+  loader: () => loadNs('session', 'dialogs', 'automation'),
   component: SessionPage,
 });
 
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
+}
+
+// Scroll the message list to its tail. We scroll the container itself rather
+// than `scrollIntoView` on a sentinel: scrollIntoView walks every scrollable
+// ancestor, so a tall answer (e.g. one with a footnote Sources section) pushes
+// the whole page up and leaves the list parked above the viewport.
+function scrollToTail(el: HTMLElement | null, behavior: ScrollBehavior) {
+  el?.scrollTo({ top: el.scrollHeight, behavior });
 }
 
 // History page size in TURNS (a user message + the agent responses after it).
@@ -137,7 +146,6 @@ function SessionPage() {
   const initialAttachmentsRef = useRef<string[] | null>(location.state.initialAttachments ?? null);
   const consumedInitialMessageRef = useRef(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // Scroll anchor for older-page prepends — restored so the view doesn't jump.
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
@@ -309,14 +317,14 @@ function SessionPage() {
     // Own send — jump to the bottom immediately, even if scrolled far up.
     if (forceScrollRef.current) {
       forceScrollRef.current = false;
-      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      scrollToTail(el, 'instant');
       setShowNewMsgPill(false);
       return;
     }
 
     // Initial history load (refresh / session entry) — start at the bottom.
     if (prevCount === 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      scrollToTail(el, 'instant');
       return;
     }
 
@@ -329,7 +337,7 @@ function SessionPage() {
 
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distanceFromBottom <= 700) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      scrollToTail(el, 'smooth');
     } else if (allMessages.length > prevCount) {
       // Scrolled too far up to auto-follow — surface a "new message" pill instead.
       setShowNewMsgPill(true);
@@ -354,7 +362,7 @@ function SessionPage() {
 
   const scrollToBottom = useCallback(() => {
     setShowNewMsgPill(false);
-    messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+    scrollToTail(scrollContainerRef.current, 'instant');
   }, []);
 
   // ── Progressive history scroll behavior ─────────────────────────────────
@@ -1037,7 +1045,7 @@ function SessionPage() {
                 <span
                   className="cw-session-agent-chip"
                   data-agent={activeAgent.id}
-                  title={t('chat.agent_chip')}
+                  title={t(`automation:agent.${activeAgent.id}.description`)}
                 >
                   <Icon name={activeAgent.icon} size={13} />
                   <span>{activeAgent.label}</span>
@@ -1110,7 +1118,6 @@ function SessionPage() {
           {streaming && (
             <div className={stopping ? 'cw-live is-stopping' : runDelayed ? 'cw-live is-delayed' : 'cw-live'}><span />{stopping ? t('ui.stopping') : runDelayed ? t('ui.response_delayed') : t('ui.ai_responding')}</div>
           )}
-          <div ref={messagesEndRef} />
         </div>
         </div>
 
@@ -1429,6 +1436,7 @@ function MessageBubble({
   onArtifactDeleted?: (path: string) => void;
 }) {
   const { t } = useTranslation('session');
+  const showToast = useToastStore((s) => s.show);
   const isAi = message.sender.kind === 'agent';
   const isSelf = message.sender.kind === 'user' && message.sender.userId === currentUserId;
 
@@ -1456,6 +1464,26 @@ function MessageBubble({
             ? <MarkdownRenderer text={message.body} />
             : message.body.split('\n').map((line, i) => <p key={`${message.id}-${i}`}>{line || ' '}</p>)}
         </div>
+        {isAi && message.citations && message.citations.length > 0 && (
+          <div className="cw-citations">
+            {message.citations.map((c) => (
+              <span
+                key={c.index}
+                className={`cw-citation-chip${c.verified ? '' : ' is-unverified'}`}
+                title={
+                  c.kind === 'missing'
+                    ? t('session:citation.missing')
+                    : c.verified
+                      ? t('session:citation.verified')
+                      : t('session:citation.unverified')
+                }
+              >
+                <Icon name={c.verified ? 'check' : 'x'} size={11} />
+                [{c.index}]{c.kind === 'missing' ? ` ${t('session:citation.missing_label')}` : c.label ? ` ${c.label}` : ''}
+              </span>
+            ))}
+          </div>
+        )}
         {message.attachments && message.attachments.length > 0 && (
           <div className="cw-msg-attachments" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
             {message.attachments.map((path) => (
@@ -1470,15 +1498,7 @@ function MessageBubble({
               {' '}{extractSubagentQuery(tc.arguments)}
             </div>
           ) : (
-            <details key={tc.id} className="cw-toolcall">
-              <summary>🔧 {tc.name}{tc.result === undefined && isStreaming ? ` · ${t('ui.tool_running')}` : ''}</summary>
-              {tc.arguments !== undefined && (
-                <pre className="cw-toolcall-args">{typeof tc.arguments === 'string'
-                  ? tc.arguments
-                  : JSON.stringify(tc.arguments, null, 2)}</pre>
-              )}
-              {tc.result !== undefined && <pre className="cw-toolcall-result">{tc.result}</pre>}
-            </details>
+            <ToolCallDetails key={tc.id} tc={tc} isStreaming={isStreaming} />
           )
         )}
         {isAi && artifactPaths && artifactPaths.length > 0 && projectId && sessionId && onCopyToShared && onArtifactDeleted && (
@@ -1495,11 +1515,19 @@ function MessageBubble({
             ))}
           </div>
         )}
-        {isAi && message.status === 'done' && (
+        {isAi && message.status === 'done' && message.body.trim() !== '' && (
           <div className="cw-ai-actions">
-            <button>Copy</button>
-            <button>Regenerate</button>
-            <button>Good</button>
+            <IconButton
+              icon="copy"
+              label={t('ui.copy')}
+              expandedText={t('ui.copy')}
+              onClick={() => {
+                void navigator.clipboard?.writeText(message.body).then(
+                  () => showToast(t('toast.copied')),
+                  () => {},
+                );
+              }}
+            />
           </div>
         )}
       </div>

@@ -9,6 +9,7 @@
     "share_change_failed": "공유 변경 실패: {{message}}",
     "artifact_deleted": "삭제되었습니다",
     "artifact_delete_failed": "삭제 실패",
+    "copied": "클립보드에 복사되었습니다",
     "unknown_error": "unknown"
   },
   "ui": {
@@ -25,6 +26,7 @@
     "composer_hint": "Enter로 전송 · @파일명으로 파일 참조",
     "new_message": "새 메시지",
     "scroll_to_bottom": "맨 아래로",
+    "copy": "복사",
     "title_fallback": "…"
   },
   "chat": {
@@ -88,5 +90,11 @@
     "title": "삭제 확인",
     "body": "{{count}}개 파일을 삭제하시겠습니까?",
     "confirm": "삭제"
+  },
+  "citation": {
+    "verified": "이 프로젝트 문서에서 확인됨",
+    "unverified": "프로젝트 문서에서 확인되지 않음",
+    "missing": "답변에서 인용했지만 출처가 표시되지 않음",
+    "missing_label": "출처 없음"
   }
 }

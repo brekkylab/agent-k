@@ -31,7 +31,7 @@ import {
   type DirentScope,
   stripScopePrefix,
 } from '@/api/dirents';
-import { getProject } from '@/api/projects';
+import { getProject, getKnowledgeStatus, getKnowledgeFiles } from '@/api/projects';
 import { Icon } from '@/components/Icon';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -56,6 +56,11 @@ import { useMarqueeSelection } from '@/lib/useMarqueeSelection';
 type ViewMode = 'list' | 'grid';
 const VIEW_KEY = 'cowork.files.viewMode';
 const DRAG_THRESHOLD = 5; // px — under this we treat mousedown as click
+
+// Extensions the corpus indexer accepts (mirrors backend `indexable_filetype`).
+const INDEXABLE_CORPUS_EXTS = new Set(['pdf', 'md', 'markdown', 'txt', 'html', 'htm']);
+const isIndexableCorpusFile = (path: string) =>
+  INDEXABLE_CORPUS_EXTS.has(path.split('.').pop()?.toLowerCase() ?? '');
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/files')({
   // Rename / NewFolder / CopyToShared / FolderPicker all live on this page → `dialogs`.
@@ -85,6 +90,36 @@ function FilesPage() {
   // ── Navigation state ─────────────────────────────────────────────
   const [currentPath, setCurrentPath] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // Knowledge-corpus indexing status. Only polled while inside the knowledge
+  // folder; re-fetches every 1.5s as long as a background resync is in flight.
+  const inKnowledge = currentPath[0] === 'knowledge';
+  const knowledge = useQuery({
+    queryKey: ['knowledge-status', projectSlug],
+    queryFn: () => getKnowledgeStatus(projectSlug),
+    enabled: inKnowledge && Boolean(project.data),
+    refetchInterval: (q) => (q.state.data?.indexing ? 1500 : false),
+  });
+
+  // Per-file corpus status, polled while indexing or while any file is still
+  // settling. A file that failed to index is terminal, so it doesn't keep the
+  // poll alive. Keyed by scope-relative path (e.g. `knowledge/foo.pdf`).
+  const knowledgeFiles = useQuery({
+    queryKey: ['knowledge-files', projectSlug],
+    queryFn: () => getKnowledgeFiles(projectSlug),
+    enabled: inKnowledge && Boolean(project.data),
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (!d) return false;
+      return d.indexing || d.files.some((f) => !f.indexed && !f.failed) ? 1500 : false;
+    },
+  });
+  const corpusStateByPath = new Map<string, 'ready' | 'pending' | 'failed'>(
+    (knowledgeFiles.data?.files ?? []).map((f) => [
+      f.path,
+      f.indexed ? 'ready' : f.failed ? 'failed' : 'pending',
+    ]),
+  );
 
   useEffect(() => {
     setExpanded((prev) => {
@@ -185,6 +220,10 @@ function FilesPage() {
     },
     onSuccess: async (result, files) => {
       await queryClient.invalidateQueries({ queryKey: ['dirents', 'shared', projectId] });
+      // Uploading into knowledge kicks off a background resync; refetch its
+      // status so the banner flips to "indexing…" and then polls to done.
+      queryClient.invalidateQueries({ queryKey: ['knowledge-status', projectSlug] });
+      queryClient.invalidateQueries({ queryKey: ['knowledge-files', projectSlug] });
       const ok = result.succeeded.length;
       const ko = result.failed.length;
 
@@ -309,8 +348,18 @@ function FilesPage() {
   function openFolderDialog() { setFolderDialogOpen(true); }
 
   // ── Selection handlers ───────────────────────────────────────────
+  // The fixed knowledge folder can't be renamed/moved/copied/deleted (the
+  // server rejects it), so keep it out of selection entirely — that also keeps
+  // it out of every selection-driven action (bulk bar, F2, drag). Navigating
+  // into it still works; only selecting it is blocked.
+  const isProtectedPath = useCallback(
+    (path: string) => currentPath.length === 0 && path === 'knowledge',
+    [currentPath.length],
+  );
+
   const handleSelect = useCallback((entry: BackendDirent, ev: React.MouseEvent | React.KeyboardEvent) => {
     const path = entry.path;
+    if (isProtectedPath(path)) return;
     const idx = rowIndex.get(path);
     const shift = 'shiftKey' in ev && ev.shiftKey;
     const meta = ('metaKey' in ev && ev.metaKey) || ('ctrlKey' in ev && ev.ctrlKey);
@@ -319,7 +368,7 @@ function FilesPage() {
       const aIdx = rowIndex.get(anchorRef.current);
       if (aIdx != null && idx != null) {
         const [lo, hi] = aIdx <= idx ? [aIdx, idx] : [idx, aIdx];
-        setSelectedPaths(new Set(allRows.slice(lo, hi + 1).map((r) => r.path)));
+        setSelectedPaths(new Set(allRows.slice(lo, hi + 1).map((r) => r.path).filter((p) => !isProtectedPath(p))));
         return;
       }
     }
@@ -335,7 +384,7 @@ function FilesPage() {
     }
     setSelectedPaths(new Set([path]));
     anchorRef.current = path;
-  }, [allRows, rowIndex]);
+  }, [allRows, rowIndex, isProtectedPath]);
 
   const openEntry = useCallback((entry: BackendDirent) => {
     if (entry.kind === 'dir') setCurrentPath(entry.path.split('/').filter(Boolean));
@@ -467,7 +516,7 @@ function FilesPage() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
         if (allRows.length === 0) return;
         e.preventDefault();
-        setSelectedPaths(new Set(allRows.map((r) => r.path)));
+        setSelectedPaths(new Set(allRows.map((r) => r.path).filter((p) => !isProtectedPath(p))));
         anchorRef.current = allRows[allRows.length - 1]?.path ?? null;
         return;
       }
@@ -485,9 +534,11 @@ function FilesPage() {
           const aIdx = rowIndex.get(anchorRef.current);
           if (aIdx != null) {
             const [lo, hi] = aIdx <= next ? [aIdx, next] : [next, aIdx];
-            setSelectedPaths(new Set(allRows.slice(lo, hi + 1).map((r) => r.path)));
+            // Keep the protected knowledge folder out of the range, like click /
+            // Ctrl+A / marquee already do.
+            setSelectedPaths(new Set(allRows.slice(lo, hi + 1).map((r) => r.path).filter((p) => !isProtectedPath(p))));
           }
-        } else {
+        } else if (!isProtectedPath(nextEntry.path)) {
           setSelectedPaths(new Set([nextEntry.path]));
           anchorRef.current = nextEntry.path;
         }
@@ -497,7 +548,7 @@ function FilesPage() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [allRows, rowIndex, selectedPaths.size, clearSelection, requestBulkDelete]);
+  }, [allRows, rowIndex, selectedPaths.size, clearSelection, requestBulkDelete, isProtectedPath]);
 
   function toggleExpand(path: string) {
     setExpanded((prev) => {
@@ -517,6 +568,7 @@ function FilesPage() {
     getSelection: () => selectedPaths,
     setSelection: setSelectedPaths,
     onClear: clearSelection, // also resets the shift-select anchor
+    canSelect: (path) => !isProtectedPath(path), // the knowledge folder can't be selected
     threshold: DRAG_THRESHOLD,
   });
 
@@ -528,6 +580,10 @@ function FilesPage() {
   }, []);
 
   const handleDragStart = useCallback((e: React.DragEvent, entry: BackendDirent) => {
+    if (isProtectedPath(entry.path)) {
+      e.preventDefault();
+      return;
+    }
     marquee.cancel();
     e.dataTransfer.effectAllowed = 'copyMove';
     const dragPaths = selectedPaths.has(entry.path)
@@ -544,7 +600,7 @@ function FilesPage() {
     document.body.appendChild(ghost);
     e.dataTransfer.setDragImage(ghost, 14, 14);
     requestAnimationFrame(() => ghost.remove());
-  }, [selectedPaths]);
+  }, [selectedPaths, isProtectedPath]);
 
   const handleDropOnFolder = useCallback((destination: string, e: React.DragEvent): boolean => {
     const raw = e.dataTransfer.getData('application/x-cowork-dirent-paths');
@@ -724,6 +780,17 @@ function FilesPage() {
               onDropFiles(e.dataTransfer.files);
             }}
           >
+            {inKnowledge && !view.isSearch && (
+              <div className={`cw-knowledge-banner${!knowledge.data?.indexing && knowledge.data?.error ? ' is-error' : ''}`}>
+                {knowledge.data?.indexing ? (
+                  <><Icon name="rotate-ccw" size={14} /> <span>{t('files:knowledge.indexing')}</span></>
+                ) : knowledge.data?.error ? (
+                  <><Icon name="x" size={14} /> <span>{t('files:knowledge.error')}</span></>
+                ) : (
+                  <><Icon name="sparkles" size={14} /> <span>{t('files:knowledge.banner')}</span></>
+                )}
+              </div>
+            )}
             {allRows.length === 0 ? (
               <EmptyState
                 title={view.isSearch ? t('files:empty.search_no_results') : t('files:empty.folder_empty_title')}
@@ -754,6 +821,12 @@ function FilesPage() {
                     onCopy={(e) => setPendingCopy([e])}
                     onMenuToggle={setOpenMenuPath}
                     onDragStart={handleDragStart}
+                    corpusState={
+                      inKnowledge && entry.kind !== 'dir' && isIndexableCorpusFile(entry.path)
+                        ? (corpusStateByPath.get(entry.path) ?? 'pending')
+                        : undefined
+                    }
+                    protectedEntry={isProtectedPath(entry.path)}
                   />
                 ))}
               </div>
@@ -777,6 +850,7 @@ function FilesPage() {
                     onCopy={(e) => setPendingCopy([e])}
                     onMenuToggle={setOpenMenuPath}
                     onDragStart={handleDragStart}
+                    protectedEntry={isProtectedPath(entry.path)}
                   />
                 ))}
               </div>
@@ -972,6 +1046,10 @@ interface RowProps {
   onCopy: (e: BackendDirent) => void;
   onMenuToggle: (path: string | null) => void;
   onDragStart: (ev: React.DragEvent, e: BackendDirent) => void;
+  /** Corpus status for a knowledge-folder file; undefined elsewhere (no badge). */
+  corpusState?: 'ready' | 'pending' | 'failed';
+  /** True for the fixed knowledge folder, which has no row actions. */
+  protectedEntry?: boolean;
 }
 
 
@@ -982,7 +1060,7 @@ function folderSubtitle(entry: BackendDirent, entries: BackendDirent[], t: TFunc
 }
 
 function RowMenu({
-  entry, menuOpen, onMenuToggle, onDownload, onPreview, onRename, onMove, onCopy, onDelete,
+  entry, menuOpen, onMenuToggle, onDownload, onPreview, onRename, onMove, onCopy, onDelete, protectedEntry,
 }: {
   entry: BackendDirent;
   menuOpen: boolean;
@@ -993,8 +1071,13 @@ function RowMenu({
   onMove: () => void;
   onCopy: () => void;
   onDelete: () => void;
+  /** The fixed knowledge folder: rename/move/copy/delete are disallowed, so the
+   *  whole menu is hidden rather than offering actions the server will reject. */
+  protectedEntry?: boolean;
 }) {
   const { t } = useTranslation('files');
+  // A protected folder has no available actions (no download for a dir), so omit the menu entirely.
+  if (protectedEntry) return null;
   return (
     <div className="cw-file-menu-wrap">
       <button
@@ -1053,7 +1136,7 @@ function RowMenu({
   );
 }
 
-function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart }: RowProps) {
+function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart, corpusState, protectedEntry }: RowProps) {
   const { t } = useTranslation('files');
   const isDir = entry.kind === 'dir';
   return (
@@ -1064,7 +1147,7 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
       aria-selected={selected}
       data-row-index={index}
       data-row-path={entry.path}
-      draggable
+      draggable={!protectedEntry}
       onDragStart={(e) => onDragStart(e, entry)}
       onClick={(e) => { e.stopPropagation(); onSelect(entry, e); }}
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
@@ -1083,6 +1166,24 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
             : `${entry.modified_at ? new Date(entry.modified_at).toLocaleDateString() : '—'} · ${formatBytes(entry.bytes ?? 0)}`}
         </span>
       </span>
+      {corpusState && (
+        <span
+          className={`cw-corpus-badge is-${corpusState}`}
+          title={corpusState === 'failed' ? t('knowledge.file_failed_hint') : undefined}
+        >
+          <Icon
+            name={corpusState === 'ready' ? 'check' : corpusState === 'failed' ? 'x' : 'rotate-ccw'}
+            size={11}
+          />
+          {t(
+            corpusState === 'ready'
+              ? 'knowledge.file_ready'
+              : corpusState === 'failed'
+                ? 'knowledge.file_failed'
+                : 'knowledge.file_pending',
+          )}
+        </span>
+      )}
       <RowMenu
         entry={entry}
         menuOpen={menuOpen}
@@ -1093,12 +1194,13 @@ function ListRow({ entry, index, entries, selected, showPath, menuOpen, onSelect
         onMove={() => onMove(entry)}
         onCopy={() => onCopy(entry)}
         onDelete={() => onDelete(entry)}
+        protectedEntry={protectedEntry}
       />
     </div>
   );
 }
 
-function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart }: RowProps) {
+function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelect, onOpen, onDownload, onDelete, onRename, onMove, onCopy, onMenuToggle, onDragStart, protectedEntry }: RowProps) {
   const { t } = useTranslation('files');
   const isDir = entry.kind === 'dir';
   return (
@@ -1109,7 +1211,7 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
       aria-selected={selected}
       data-row-index={index}
       data-row-path={entry.path}
-      draggable
+      draggable={!protectedEntry}
       onDragStart={(e) => onDragStart(e, entry)}
       onClick={(e) => { e.stopPropagation(); onSelect(entry, e); }}
       onDoubleClick={(e) => { e.stopPropagation(); onOpen(entry); }}
@@ -1137,6 +1239,7 @@ function GridCard({ entry, index, entries, selected, showPath, menuOpen, onSelec
         onMove={() => onMove(entry)}
         onCopy={() => onCopy(entry)}
         onDelete={() => onDelete(entry)}
+        protectedEntry={protectedEntry}
       />
     </div>
   );

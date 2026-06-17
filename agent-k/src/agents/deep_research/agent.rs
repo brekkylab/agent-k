@@ -1,11 +1,15 @@
 use std::path::Path;
 
 use ailoy::{
-    agent::{Agent, AgentSpec, default_provider_mut},
+    agent::{Agent, AgentSpec, default_provider, default_provider_mut},
     runenv::{RunEnv, SandboxConfig, VolumeMount},
 };
 
 use super::tool::{get_api_search_tool_desc, get_api_search_tool_factory};
+use crate::agents::speedwagon::{
+    SPEEDWAGON_DELEGATION_NOTE_DEEP_RESEARCH, register_corpus_tools, speedwagon_subagent_spec,
+};
+use crate::knowledge_base::SharedStore;
 
 const DEEP_RESEARCH_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to produce long-form research reports grounded in multiple web sources with inline citations.
 
@@ -88,6 +92,11 @@ pub async fn get_deep_research_agent(
     name: impl AsRef<str>,
     model: impl AsRef<str>,
     artifacts_dir: impl AsRef<Path>,
+    corpus_store: Option<SharedStore>,
+    // Model for the Speedwagon sub-agent; `None` inherits Deep Research's model.
+    // Set to the corpus-recommended model so a parent on a model that fares
+    // poorly in the corpus loop doesn't drag the sub-agent down.
+    corpus_model: Option<String>,
 ) -> anyhow::Result<Agent> {
     let mut config = SandboxConfig::default();
     config.image = "brekkylab/agent-k:latest".into();
@@ -108,10 +117,25 @@ pub async fn get_deep_research_agent(
     ensure_api_search_registered();
 
     let spec = AgentSpec::new(model.as_ref())
-        .instruction(inst)
+        .instruction(inst.clone())
         .system_tools()
         .tool(get_api_search_tool_desc())
         .web_fetch_tool()
         .max_tokens(32_000);
-    Agent::try_with_runenv(spec, RunEnv::sandbox(config).await?)
+
+    let runenv = RunEnv::sandbox(config).await?;
+    match corpus_store {
+        // A corpus store lets Deep Research delegate document questions to a
+        // Speedwagon sub-agent whose corpus tools resolve against this provider.
+        Some(store) => {
+            let mut provider = default_provider().clone();
+            register_corpus_tools(&mut provider.tools, store);
+            let sub_model = corpus_model.as_deref().unwrap_or(model.as_ref());
+            let spec = spec
+                .instruction(format!("{inst}{SPEEDWAGON_DELEGATION_NOTE_DEEP_RESEARCH}"))
+                .subagent(speedwagon_subagent_spec(name.as_ref(), sub_model));
+            Agent::try_with_provider_and_runenv(spec, &provider, runenv)
+        }
+        None => Agent::try_with_runenv(spec, runenv),
+    }
 }

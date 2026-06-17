@@ -118,12 +118,17 @@ export function ProjectModelChainsEditor({
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                <b style={{ fontSize: 13, color: 'var(--cw-ink)' }}>
-                  {label}
-                  {isDefault && (
-                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--cw-ink-4)', fontWeight: 400 }}>{t('chains_editor.default')}</span>
-                  )}
-                </b>
+                <div>
+                  <b style={{ fontSize: 13, color: 'var(--cw-ink)' }}>
+                    {label}
+                    {isDefault && (
+                      <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--cw-ink-4)', fontWeight: 400 }}>{t('chains_editor.default')}</span>
+                    )}
+                  </b>
+                  <div style={{ marginTop: 2, fontSize: 11, color: 'var(--cw-ink-4)' }}>
+                    {t(`agent.${type}.description`, { ns: 'automation' })}
+                  </div>
+                </div>
                 {editable && !isDefault && (
                   <button
                     type="button"
