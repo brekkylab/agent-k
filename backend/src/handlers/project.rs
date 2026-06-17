@@ -296,6 +296,24 @@ pub async fn update_project(
     // derived corpus/index on disk (originals stay in the knowledge folder), and
     // trigger a resync that re-parses every PDF with the new engine.
     if engine_changed {
+        let speedwagon_dir = state
+            .data_root
+            .join("projects")
+            .join(project_id.to_string())
+            .join(".speedwagon");
+        // Hold `resync_lock` across the whole rebuild so it can't interleave with
+        // an in-flight resync. Order matters: `store_for` reopens (and caches) the
+        // index on a cache miss without taking this lock, so deleting the derived
+        // index FIRST and evicting only after means any reopen that races in sees
+        // either the about-to-be-evicted handle or a fresh empty index on the
+        // now-cleared dir — never a cached handle to a dir we're about to delete.
+        let resync_lock = state.resync_lock_for(project_id);
+        let _guard = resync_lock.lock().await;
+        if let Err(e) = tokio::fs::remove_dir_all(&speedwagon_dir).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%project_id, "failed to clear corpus on engine change: {e}");
+        }
         state.evict_store(project_id);
         // Drop cached session agents for this project so they rebuild against
         // the new store. Their corpus tools captured the old SharedStore at
@@ -305,19 +323,6 @@ pub async fn update_project(
             for session in sessions {
                 state.remove_agent(&session.id);
             }
-        }
-        let speedwagon_dir = state
-            .data_root
-            .join("projects")
-            .join(project_id.to_string())
-            .join(".speedwagon");
-        // Acquire `resync_lock` to wait until the in-flight resync is finished
-        let resync_lock = state.resync_lock_for(project_id);
-        let _guard = resync_lock.lock().await;
-        if let Err(e) = tokio::fs::remove_dir_all(&speedwagon_dir).await
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(%project_id, "failed to clear corpus on engine change: {e}");
         }
         // Release `_guard` and start a new resync
         drop(_guard);
