@@ -110,6 +110,10 @@ pub struct SessionMessageResponse {
     pub attachments: Vec<String>,
     /// Scope-relative paths of artifacts created during this message turn.
     pub artifacts: Vec<String>,
+    /// Citations parsed from a Speedwagon answer and checked against the corpus.
+    /// Empty for non-Speedwagon messages or answers without citations.
+    #[serde(default)]
+    pub citations: Vec<crate::handlers::knowledge::CitationCheck>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

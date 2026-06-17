@@ -65,15 +65,29 @@ impl AgentType {
         AgentType::Buddy,
     ];
 
+    /// Selectable but not recommended for this agent — a soft picker hint, not a
+    /// block. Speedwagon discourages gemini-3.5-flash (slow in the corpus loop).
+    pub fn discourages_model(self, model_id: &str) -> bool {
+        matches!((self, model_id), (AgentType::Speedwagon, "google/gemini-3.5-flash"))
+    }
+
     /// Ordered, provider-diverse recommendation chain. The last entry is the
     /// terminal default (returned even if its provider is unavailable).
     pub fn chain(self) -> &'static [&'static str] {
         match self {
-            // Coworker + Speedwagon (RAG) share a balanced "standard" chain.
-            AgentType::Coworker | AgentType::Speedwagon => &[
+            // Coworker: a balanced "standard" general-assistant chain.
+            AgentType::Coworker => &[
                 "openai/gpt-5.4-mini",
                 "anthropic/claude-sonnet-4-6",
                 "google/gemini-3-flash-preview",
+                "moonshotai/kimi-k2.6",
+            ],
+            // Speedwagon (corpus QA): its own chain. Gemini slot is 3.1 Flash-Lite
+            // — fast with good accuracy in the corpus loop.
+            AgentType::Speedwagon => &[
+                "openai/gpt-5.4-mini",
+                "anthropic/claude-sonnet-4-6",
+                "google/gemini-3.1-flash-lite",
                 "moonshotai/kimi-k2.6",
             ],
             AgentType::DeepResearch => &[
@@ -90,6 +104,21 @@ impl AgentType {
             ],
         }
     }
+}
+
+/// The Speedwagon model to use when a parent (Coworker / DeepResearch)
+/// delegates to it: the same-provider slot from Speedwagon's own chain, so a
+/// parent on a model that is poor for the corpus loop (e.g. the discouraged
+/// `google/gemini-3.5-flash`) doesn't drag the sub-agent down with it. Falls
+/// back to the parent's model when the provider has no Speedwagon slot.
+pub fn speedwagon_model_for_parent(parent_model: &str) -> String {
+    let provider = parent_model.split('/').next().unwrap_or("");
+    AgentType::Speedwagon
+        .chain()
+        .iter()
+        .find(|m| m.split('/').next() == Some(provider))
+        .map(|m| m.to_string())
+        .unwrap_or_else(|| parent_model.to_string())
 }
 
 /// A catalogued model. `id` is the full ailoy `provider/model-id`
@@ -117,6 +146,11 @@ pub const CATALOG: &[ModelInfo] = &[
     ModelInfo {
         id: "google/gemini-3.1-flash-lite",
         label: "Gemini 3.1 Flash-Lite",
+        tier: ModelTier::Light,
+    },
+    ModelInfo {
+        id: "google/gemini-2.5-flash",
+        label: "Gemini 2.5 Flash",
         tier: ModelTier::Light,
     },
     // ── standard ─────────────────────────────────────────────────────────────
@@ -235,7 +269,8 @@ impl ProjectChains {
         Self { by_agent }
     }
 
-    /// Effective chain for an agent: the project override, else the default.
+    /// Effective chain for an agent: the project override (honored as-is), else
+    /// the built-in default. No per-agent model is blocked.
     pub fn chain_for(&self, agent: AgentType) -> Vec<String> {
         match self.by_agent.get(&agent) {
             Some(ids) => ids.clone(),
@@ -244,8 +279,9 @@ impl ProjectChains {
     }
 }
 
-/// Validate project chain overrides for storage: known agent_type keys, non-empty
-/// lists of catalogued model ids. Provider availability is NOT required.
+/// Validate project chain overrides for storage: known agent_type keys and
+/// non-empty lists of catalogued model ids. Provider availability and per-agent
+/// recommendation are not enforced — any catalogued model may be chosen.
 pub fn validate_chains(chains: &BTreeMap<String, Vec<String>>) -> Result<(), String> {
     for (key, ids) in chains {
         if AgentType::from_str(key).is_none() {
@@ -283,6 +319,9 @@ pub struct AgentRecommendation {
     /// The model that resolution would pick right now given provider
     /// availability — the value the composer pre-selects for "recommended".
     pub resolved_model: String,
+    /// Catalog ids this agent discourages (see [`AgentType::discourages_model`]).
+    /// The picker tags these "(Not Recommended)" but still lets them be chosen.
+    pub not_recommended: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -312,6 +351,11 @@ pub fn catalog_response(chains: &ProjectChains) -> ModelCatalogResponse {
                 agent_type: agent,
                 resolved_model: resolve_model_in(&chain, None),
                 chain,
+                not_recommended: CATALOG
+                    .iter()
+                    .filter(|m| agent.discourages_model(m.id))
+                    .map(|m| m.id.to_string())
+                    .collect(),
             }
         })
         .collect();
@@ -368,6 +412,79 @@ mod tests {
     }
 
     #[test]
+    fn speedwagon_chain_uses_gemini_3_1_flash_lite() {
+        // Speedwagon's chain is independent of Coworker's: its Gemini slot is
+        // 3.1 Flash-Lite, Coworker keeps 3 Flash. Guards the split.
+        let sw = AgentType::Speedwagon.chain();
+        let cw = AgentType::Coworker.chain();
+        assert!(
+            sw.contains(&"google/gemini-3.1-flash-lite"),
+            "speedwagon chain should use gemini-3.1-flash-lite: {sw:?}"
+        );
+        assert!(
+            !sw.contains(&"google/gemini-3-flash-preview"),
+            "speedwagon chain should not use coworker's gemini-3-flash-preview: {sw:?}"
+        );
+        assert!(
+            cw.contains(&"google/gemini-3-flash-preview"),
+            "coworker chain should keep gemini-3-flash-preview: {cw:?}"
+        );
+        assert!(
+            !cw.contains(&"google/gemini-3.1-flash-lite"),
+            "coworker chain should not use gemini-3.1-flash-lite: {cw:?}"
+        );
+    }
+
+    #[test]
+    fn speedwagon_discourages_gemini_3_5_flash() {
+        let sw = AgentType::Speedwagon;
+        // Discouraged (hint only, still selectable).
+        assert!(sw.discourages_model("google/gemini-3.5-flash"));
+        // Recommended / fine — not discouraged.
+        assert!(!sw.discourages_model("google/gemini-2.5-flash"));
+        assert!(!sw.discourages_model("google/gemini-3.1-flash-lite"));
+        assert!(!sw.discourages_model("openai/gpt-5.4-mini"));
+        // Other agents discourage nothing.
+        for m in CATALOG {
+            assert!(!AgentType::Coworker.discourages_model(m.id), "coworker discouraged {}", m.id);
+        }
+    }
+
+    #[test]
+    fn validate_chains_accepts_any_catalogued_model() {
+        // No per-agent blocking: a model that is merely discouraged for
+        // Speedwagon is still accepted in an override.
+        let mut ok = BTreeMap::new();
+        ok.insert("speedwagon".to_string(), vec!["google/gemini-3.5-flash".to_string()]);
+        assert!(validate_chains(&ok).is_ok());
+
+        // Unknown agent_type and uncatalogued model are still rejected.
+        let mut bad_agent = BTreeMap::new();
+        bad_agent.insert("nope".to_string(), vec!["openai/gpt-5.4-mini".to_string()]);
+        assert!(validate_chains(&bad_agent).is_err());
+        let mut bad_model = BTreeMap::new();
+        bad_model.insert("speedwagon".to_string(), vec!["openai/does-not-exist".to_string()]);
+        assert!(validate_chains(&bad_model).is_err());
+    }
+
+    #[test]
+    fn chain_for_returns_override_verbatim() {
+        // A stored project override (projects.recommended_chains JSON) is returned
+        // as-is — a now-discouraged model is no longer filtered out.
+        let json = r#"{"speedwagon":["google/gemini-3.5-flash","openai/gpt-5.4-mini"]}"#;
+        let chains = ProjectChains::parse(Some(json));
+        assert_eq!(
+            chains.chain_for(AgentType::Speedwagon),
+            ["google/gemini-3.5-flash", "openai/gpt-5.4-mini"]
+        );
+        // No override → built-in chain.
+        assert_eq!(
+            ProjectChains::default().chain_for(AgentType::Speedwagon),
+            AgentType::Speedwagon.chain()
+        );
+    }
+
+    #[test]
     fn resolve_always_returns_a_catalogued_model() {
         // Env-independent: resolution always yields a real catalog entry
         // (chain hit, pin, or last-resort) — never an empty/garbage id.
@@ -383,5 +500,28 @@ mod tests {
         // resolves via the provider glob and would be honored as-is.
         let bogus = resolve_model(Some("buddy"), Some("nonexistent/model"));
         assert!(catalog_entry(&bogus).is_some());
+    }
+
+    #[test]
+    fn speedwagon_model_for_parent_maps_within_provider() {
+        // A parent on the discouraged Gemini maps to Speedwagon's Gemini slot.
+        assert_eq!(
+            speedwagon_model_for_parent("google/gemini-3.5-flash"),
+            "google/gemini-3.1-flash-lite"
+        );
+        // Anthropic / OpenAI parents map to the same-provider Speedwagon slot.
+        assert_eq!(
+            speedwagon_model_for_parent("anthropic/claude-opus-4-7"),
+            "anthropic/claude-sonnet-4-6"
+        );
+        assert_eq!(
+            speedwagon_model_for_parent("openai/gpt-5.5"),
+            "openai/gpt-5.4-mini"
+        );
+        // A provider with no Speedwagon slot falls back to the parent model.
+        assert_eq!(
+            speedwagon_model_for_parent("someprovider/whatever"),
+            "someprovider/whatever"
+        );
     }
 }

@@ -90,5 +90,11 @@
     "title": "Delete files?",
     "body": "Delete {{count}} files?",
     "confirm": "Delete"
+  },
+  "citation": {
+    "verified": "Verified against this project's documents",
+    "unverified": "Not found in this project's documents",
+    "missing": "This footnote is cited in the answer but has no source listed",
+    "missing_label": "no source"
   }
 }

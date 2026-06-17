@@ -23,6 +23,8 @@ export interface Project {
   memberIds: UserId[];
   /** Per-agent_type recommendation-chain overrides (agent_type → ordered model ids). */
   recommendedChains: Record<string, string[]>;
+  /** Knowledge-corpus PDF engine: "kreuzberg" | "docling". */
+  pdfEngine: string;
 }
 
 export type SessionOrigin = 'user' | 'automation';
@@ -58,6 +60,16 @@ export interface ToolCallInvocation {
   result?: string;
 }
 
+export interface Citation {
+  index: number;
+  label: string;
+  /** `missing` = a body marker `[^N]` with no `[^N]:` definition in Sources. */
+  kind: 'corpus' | 'web' | 'missing' | string;
+  verified: boolean;
+  /** Whether a body marker cites this footnote (false = orphan definition). */
+  referenced: boolean;
+}
+
 export interface Message {
   id: string;
   sessionId: SessionId;
@@ -65,7 +77,7 @@ export interface Message {
   createdAt: string;
   body: string;
   toolCalls?: ToolCallInvocation[];
-  citations?: FileAsset['id'][];
+  citations?: Citation[];
   attachments?: string[];
   artifacts?: string[];
   status?: 'sent' | 'streaming' | 'done';

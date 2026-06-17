@@ -172,6 +172,19 @@ pub fn delete_document(index: &Index, id: &str) -> Result<Option<Document>> {
     Ok(Some(doc))
 }
 
+/// Merge segments and garbage-collect stale files. Short-lived writers leave
+/// the background merge thread little chance to run, so call this after a batch.
+pub fn compact(index: &Index) -> Result<()> {
+    let segment_ids = index.searchable_segment_ids()?;
+    if segment_ids.len() <= 1 {
+        return Ok(());
+    }
+    let mut writer: IndexWriter = index.writer(128_000_000)?;
+    writer.merge(&segment_ids).wait()?;
+    writer.garbage_collect_files().wait()?;
+    Ok(())
+}
+
 pub fn list_documents(index: &Index, include_content: bool) -> Result<Vec<Document>> {
     let reader = index.reader()?;
     let searcher = reader.searcher();
@@ -386,5 +399,34 @@ mod tests {
 
         let removed = delete_document(&index, "id1").unwrap().unwrap();
         assert_eq!(removed.purpose, "the-purpose");
+    }
+
+    #[test]
+    fn compact_merges_segments_and_keeps_live_docs() {
+        let tmp = TempDir::new().unwrap();
+        let index = open_or_create(&tmp.path().join("idx")).unwrap();
+
+        // Each add commits its own segment.
+        for i in 0..4 {
+            add_document(&index, &format!("id{i}"), "T", "P", "body").unwrap();
+        }
+        delete_document(&index, "id1").unwrap();
+        assert!(index.searchable_segment_ids().unwrap().len() > 1);
+
+        compact(&index).unwrap();
+
+        assert!(index.searchable_segment_ids().unwrap().len() <= 1);
+        assert_eq!(num_documents(&index).unwrap(), 3);
+        assert!(get_document(&index, "id0").unwrap().is_some());
+        assert!(get_document(&index, "id1").unwrap().is_none());
+    }
+
+    #[test]
+    fn compact_noop_on_single_segment() {
+        let tmp = TempDir::new().unwrap();
+        let index = open_or_create(&tmp.path().join("idx")).unwrap();
+        add_document(&index, "id0", "T", "P", "body").unwrap();
+        compact(&index).unwrap();
+        assert_eq!(num_documents(&index).unwrap(), 1);
     }
 }

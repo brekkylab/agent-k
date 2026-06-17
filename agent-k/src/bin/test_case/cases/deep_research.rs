@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use ailoy::message::{Message, Part, Role};
 
 use super::Case;
@@ -21,6 +23,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 1 — space / astronomy, ko
         Case {
@@ -30,6 +33,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 2 — history, en
         Case {
@@ -39,6 +43,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 3 — history, ko
         Case {
@@ -49,6 +54,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 4 — climate / energy, en
         Case {
@@ -59,6 +65,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 5 — climate / energy, ko
         Case {
@@ -69,6 +76,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 6 — philosophy, en, hard
         Case {
@@ -79,6 +87,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 7 — philosophy, ko, hard
         Case {
@@ -90,6 +99,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 8 — cuisine / food, en, hard
         Case {
@@ -100,6 +110,7 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 9 — cuisine / food, ko, hard
         Case {
@@ -110,6 +121,39 @@ pub fn get_deep_research_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
+        },
+        // Case 10 — delegation (en): a real research-and-write task whose own
+        // baseline numbers live in the project's documents. Deep Research does
+        // the web research itself but must pull our library's figures from the
+        // corpus (via the `subagent_speedwagon` sub-agent) and fold that corpus
+        // citation into its `citations.json` numbering alongside the web sources.
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "Write a short briefing on how public libraries are adapting to \
+                 e-book demand, and benchmark our own library's collection size and \
+                 annual circulation against the trends you find.",
+            )]),
+            files: Vec::new(),
+            shared_files: Vec::new(),
+            corpus_files: vec![(
+                include_bytes!("maple_library_guide.md").to_vec(),
+                PathBuf::from("knowledge/maple_library_guide.md"),
+            )],
+        },
+        // Case 11 — delegation (ko): same shape, Korean corpus + research task.
+        Case {
+            query: Message::new(Role::User).with_contents([Part::text(
+                "국내 생활협동조합 시장이 요즘 어떻게 돌아가는지 조사해서 짧은 \
+                 보고서로 써주고, 우리 조합의 조합원 수랑 작년 매출이 업계에서 \
+                 어느 정도 위치인지도 같이 짚어줘.",
+            )]),
+            files: Vec::new(),
+            shared_files: Vec::new(),
+            corpus_files: vec![(
+                include_bytes!("haneul_coop_rules.md").to_vec(),
+                PathBuf::from("knowledge/haneul_coop_rules.md"),
+            )],
         },
     ]
 }

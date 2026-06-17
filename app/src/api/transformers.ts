@@ -110,6 +110,7 @@ export function toProject(backend: BackendProject, memberIds: string[] = []): Pr
     ownerId: backend.owner_id,
     memberIds: memberIds.length > 0 ? memberIds : [backend.owner_id],
     recommendedChains: backend.recommended_chains ?? {},
+    pdfEngine: backend.pdf_engine ?? 'kreuzberg',
   };
 }
 
@@ -190,6 +191,7 @@ export function toMessageItem(
     toolCalls,
     attachments: item.attachments ?? undefined,
     artifacts: item.artifacts?.length ? item.artifacts : undefined,
+    citations: item.citations?.length ? item.citations : undefined,
     status: 'done',
   };
 }

@@ -15,6 +15,9 @@ pub struct DbProject {
     /// Per-project custom recommendation chains as a JSON object keyed by
     /// agent_type; `None` = use built-in defaults.
     pub recommended_chains: Option<String>,
+    /// PDF engine for the knowledge corpus ("kreuzberg" | "docling");
+    /// `None` = "kreuzberg".
+    pub pdf_engine: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -37,6 +40,7 @@ impl SqliteRepository {
             recommended_chains: row
                 .try_get::<Option<String>, _>("recommended_chains")
                 .unwrap_or(None),
+            pdf_engine: row.try_get::<Option<String>, _>("pdf_engine").unwrap_or(None),
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "projects.created_at",
@@ -79,6 +83,7 @@ impl SqliteRepository {
             description,
             owner_id,
             recommended_chains: None,
+            pdf_engine: None,
             created_at: Self::parse_timestamp(now.clone(), "projects.created_at")?,
             updated_at: Self::parse_timestamp(now, "projects.updated_at")?,
         })
@@ -86,7 +91,7 @@ impl SqliteRepository {
 
     pub async fn get_project(&self, id: Uuid) -> RepositoryResult<Option<DbProject>> {
         let row = sqlx::query(
-            "SELECT id, slug, name, description, owner_id, recommended_chains, created_at, updated_at \
+            "SELECT id, slug, name, description, owner_id, recommended_chains, pdf_engine, created_at, updated_at \
              FROM projects WHERE id = ?",
         )
         .bind(id.to_string())
@@ -97,7 +102,7 @@ impl SqliteRepository {
 
     pub async fn get_project_by_slug(&self, slug: &str) -> RepositoryResult<Option<DbProject>> {
         let row = sqlx::query(
-            "SELECT id, slug, name, description, owner_id, recommended_chains, created_at, updated_at \
+            "SELECT id, slug, name, description, owner_id, recommended_chains, pdf_engine, created_at, updated_at \
              FROM projects WHERE slug = ?",
         )
         .bind(slug)
@@ -109,7 +114,7 @@ impl SqliteRepository {
     pub async fn list_projects_for_user(&self, user_id: Uuid) -> RepositoryResult<Vec<DbProject>> {
         let uid = user_id.to_string();
         let rows = sqlx::query(
-            "SELECT DISTINCT p.id, p.slug, p.name, p.description, p.owner_id, p.recommended_chains, p.created_at, p.updated_at
+            "SELECT DISTINCT p.id, p.slug, p.name, p.description, p.owner_id, p.recommended_chains, p.pdf_engine, p.created_at, p.updated_at
              FROM projects p
              LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?1
              WHERE p.owner_id = ?1 OR pm.user_id IS NOT NULL
@@ -148,6 +153,7 @@ impl SqliteRepository {
         // `Some(json)` replaces the recommendation-chain overrides; `None` leaves
         // them unchanged. (An empty `{}` JSON resets every agent to defaults.)
         recommended_chains: Option<String>,
+        pdf_engine: Option<String>,
     ) -> RepositoryResult<DbProject> {
         let now = Self::now_string();
         let current = self
@@ -159,6 +165,7 @@ impl SqliteRepository {
         let new_desc = description.unwrap_or(current.description.clone());
         let new_slug = slug.unwrap_or_else(|| current.slug.clone());
         let new_chains = recommended_chains.or_else(|| current.recommended_chains.clone());
+        let new_pdf_engine = pdf_engine.or_else(|| current.pdf_engine.clone());
         let slug_changed = new_slug != current.slug;
 
         let mut tx = self.pool.begin().await?;
@@ -181,13 +188,14 @@ impl SqliteRepository {
         }
 
         sqlx::query(
-            "UPDATE projects SET slug = ?, name = ?, description = ?, recommended_chains = ?, updated_at = ? \
+            "UPDATE projects SET slug = ?, name = ?, description = ?, recommended_chains = ?, pdf_engine = ?, updated_at = ? \
              WHERE id = ?",
         )
         .bind(&new_slug)
         .bind(&new_name)
         .bind(&new_desc)
         .bind(&new_chains)
+        .bind(&new_pdf_engine)
         .bind(&now)
         .bind(id.to_string())
         .execute(&mut *tx)
