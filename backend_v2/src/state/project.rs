@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
@@ -45,11 +47,12 @@ impl Project {
 
 pub struct ProjectsState {
     db: SqlitePool,
+    data_root: PathBuf,
 }
 
 impl ProjectsState {
-    pub fn new(db: SqlitePool) -> Self {
-        Self { db }
+    pub fn new(db: SqlitePool, data_root: PathBuf) -> Self {
+        Self { db, data_root }
     }
 
     pub async fn list(&self) -> StateResult<Vec<Project>> {
@@ -97,6 +100,10 @@ impl ProjectsState {
             .await?;
         Ok(existing)
     }
+
+    pub fn workspace_root(&self, id: Uuid) -> PathBuf {
+        self.data_root.join(id.to_string()).join("workspace")
+    }
 }
 
 #[cfg(test)]
@@ -112,7 +119,7 @@ mod tests {
     #[tokio::test]
     async fn project_crud_round_trip() {
         let pool = fresh_db().await;
-        let state = ProjectsState::new(pool);
+        let state = ProjectsState::new(pool, std::env::temp_dir());
 
         let project = Project::new("Alpha".into());
         let id = project.id;

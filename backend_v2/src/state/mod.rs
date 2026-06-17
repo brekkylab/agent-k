@@ -86,7 +86,7 @@ impl AppState {
         let events = EventQueue::new();
 
         Ok(Self {
-            projects: ProjectsState::new(db.clone()),
+            projects: ProjectsState::new(db.clone(), data_root.clone()),
             sessions: SessionsState::new(db.clone(), data_root, events.clone()),
             users: UsersState::new(db),
             events,

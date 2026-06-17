@@ -16,6 +16,7 @@ mod auth;
 mod project;
 mod session;
 mod user;
+mod workspace;
 
 pub fn get_router(state: Arc<AppState>) -> ApiRouter {
     // Layering rules:
