@@ -73,5 +73,16 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/sessions/{id}/messages/ws",
             axum::routing::get(session::stream_messages),
         )
+        // Two routes: matchit's `{*rest}` wildcard requires one-or-more
+        // segments, so the bare collection path (`/…/workspace`) needs its
+        // own entry — without it, `PROPFIND` on the workspace root 404s.
+        .route_service(
+            "/projects/{pid}/workspace",
+            workspace::router(state.clone()),
+        )
+        .route_service(
+            "/projects/{pid}/workspace/{*rest}",
+            workspace::router(state.clone()),
+        )
         .with_state(state)
 }
