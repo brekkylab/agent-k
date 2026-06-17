@@ -45,8 +45,13 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("data root: {}", data_root.display());
 
-    let jwt_secret = std::env::var("AGENT_K_JWT_SECRET")
-        .expect("AGENT_K_JWT_SECRET must be set");
+    let jwt_secret = std::env::var("AGENT_K_JWT_SECRET").unwrap_or_else(|_| {
+        tracing::warn!(
+            "AGENT_K_JWT_SECRET is not set — falling back to an insecure default. \
+             Set this in any non-local deployment."
+        );
+        "insecure-dev-default-please-override".to_string()
+    });
     let jwt_expiry_secs = std::env::var("AGENT_K_JWT_EXPIRY_SECS")
         .ok()
         .and_then(|v| v.parse().ok())

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
 use ailoy::{agent::AgentSpec, message::Part};
 use axum::{
     Json,
@@ -51,12 +52,50 @@ pub struct SessionListResponse {
     pub items: Vec<SessionResponse>,
 }
 
+/// Identity passed as `name` to agent-k's spec builders. Per-agent identity is
+/// not yet a configurable concept in v2.
+const SESSION_AGENT_NAME: &str = "agent-k";
+
+const DEFAULT_MODEL_COWORKER: &str = "anthropic/claude-sonnet-4-5";
+const DEFAULT_MODEL_DEEP_RESEARCH: &str = "anthropic/claude-sonnet-4-5";
+
+/// Selects which agent-k preset builds the [`AgentSpec`] when creating a
+/// session. Variants correspond 1:1 to the `get_*_agent_spec` family in
+/// [`agent_k::agents`]; [`build_spec`] is the dispatch.
+// TODO: add `Speedwagon` variant once the knowledge-base store wiring is ready.
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentType {
+    Coworker,
+    DeepResearch,
+}
+
+fn build_spec(agent_type: AgentType, model: Option<&str>) -> AgentSpec {
+    match agent_type {
+        AgentType::Coworker => {
+            get_coworker_agent_spec(
+                SESSION_AGENT_NAME,
+                model.unwrap_or(DEFAULT_MODEL_COWORKER),
+                true,
+            )
+        }
+        AgentType::DeepResearch => get_deep_research_agent_spec(
+            SESSION_AGENT_NAME,
+            model.unwrap_or(DEFAULT_MODEL_DEEP_RESEARCH),
+        ),
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSessionRequest {
     pub project_id: Uuid,
     pub title: Option<String>,
-    pub spec: AgentSpec,
+    pub agent_type: AgentType,
+    /// Override the agent-type's default model. `None` falls back to the
+    /// per-type default in [`build_spec`].
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -96,7 +135,8 @@ pub(super) async fn create_session(
         return Err(err(StatusCode::NOT_FOUND, "project not found"));
     }
 
-    let mut session = Session::new(payload.project_id, payload.spec);
+    let spec = build_spec(payload.agent_type, payload.model.as_deref());
+    let mut session = Session::new(payload.project_id, spec);
     if let Some(t) = payload.title {
         session = session.with_title(t);
     }
