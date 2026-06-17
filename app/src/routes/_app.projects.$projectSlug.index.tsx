@@ -12,6 +12,9 @@ import { AvatarStack } from '@/components/uiPrimitives';
 import { ProjectHomeComposer, type ProjectHomeComposerSubmission } from '@/components/chat/ProjectHomeComposer';
 import { ComposerModelPicker } from '@/components/chat/ComposerModelPicker';
 import { ComposerAgentPicker } from '@/components/chat/ComposerAgentPicker';
+import { SharedFilePickerDialog } from '@/components/SharedFilePickerDialog';
+import { type SessionImportItem } from '@/components/SharedFilesPanel';
+import { MAX_ATTACHMENTS } from '@/domain/files';
 import { DEFAULT_AGENT_ID, type AgentId, type SuggestedPrompt } from '@/domain/agentSurfaces';
 import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
@@ -21,7 +24,8 @@ import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/')({
   // Home composer + toasts live on `project`; `common` comes from parents.
-  loader: () => loadNs('project', 'automation'),
+  // `session` is needed by the reused SharedFilesBrowser inside the shared-file picker.
+  loader: () => loadNs('project', 'automation', 'session'),
   component: ProjectHome,
 });
 
@@ -45,6 +49,9 @@ function ProjectHome() {
   });
 
   const [composerText, setComposerText] = useState('');
+  // Shared (server) files staged for attach — referenced by global path, no upload.
+  const [pendingShared, setPendingShared] = useState<SessionImportItem[]>([]);
+  const [sharedPickerOpen, setSharedPickerOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
   // Model selection is remembered per project + agent surface and persisted to
   // localStorage (see useModelPrefsStore): switching agents — or reloading —
@@ -99,22 +106,30 @@ function ProjectHome() {
   // Submit creates a session and hands the first message + selected agent to the
   // session page via router state, where it auto-streams on entry.
   const startSessionMutation = useMutation({
-    mutationFn: async (firstMessage: string) => {
+    mutationFn: async (
+      { firstMessage, shared }: { firstMessage: string; shared: SessionImportItem[] },
+    ) => {
       const session = await createSession(projectSlug, {
         agentType: selectedAgentId,
         model: selectedModel,
       });
-      return { session, firstMessage };
+      // Shared files already live on the server, so just reference their global
+      // paths — they ride initialAttachments to the auto-sent first message.
+      const attachmentPaths = shared.map((s) => s.globalPath);
+      return { session, firstMessage, attachmentPaths };
     },
-    onSuccess: async ({ session, firstMessage }) => {
+    onSuccess: async ({ session, firstMessage, attachmentPaths }) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       setComposerText('');
+      setPendingShared([]);
       navigate({
         to: '/projects/$projectSlug/sessions/$sessionPrefix',
         params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
-        state: firstMessage
-          ? { initialMessage: firstMessage, initialAgentId: selectedAgentId }
-          : { initialAgentId: selectedAgentId },
+        state: {
+          ...(firstMessage ? { initialMessage: firstMessage } : {}),
+          initialAgentId: selectedAgentId,
+          ...(attachmentPaths.length > 0 ? { initialAttachments: attachmentPaths } : {}),
+        },
         // Morph the composer to its session position/shape (shared view-transition-name).
         viewTransition: true,
       });
@@ -127,12 +142,37 @@ function ProjectHome() {
 
   const handleSubmit = ({ text }: ProjectHomeComposerSubmission) => {
     if (startSessionMutation.isPending) return;
-    startSessionMutation.mutate(text);
+    startSessionMutation.mutate({ firstMessage: text, shared: pendingShared });
+  };
+
+  // Attach shared files picked from the dialog. Dedupe against what's already
+  // staged; if the batch would push the total past MAX_ATTACHMENTS, reject the
+  // whole batch (attach nothing) and toast — mirrors the session's importSharedFiles
+  // so picking a 30+ folder behaves like not picking it at all. The cap check runs
+  // against the current value (not inside the updater) so the toast is a clean
+  // side effect, not one fired during render.
+  const addShared = (items: SessionImportItem[]) => {
+    if (items.length === 0) return;
+    const curPaths = new Set(pendingShared.map((s) => s.globalPath));
+    const fresh = items.filter((it) => !curPaths.has(it.globalPath));
+    if (fresh.length === 0) return; // everything already attached
+    if (pendingShared.length + fresh.length > MAX_ATTACHMENTS) {
+      showToast(t('home.shared_picker.attach_limit', { max: MAX_ATTACHMENTS }));
+      return; // over the cap — don't attach any of them
+    }
+    // Dedupe again against the authoritative `prev` inside the updater so a
+    // repeated/concurrent call can't append the same files twice.
+    setPendingShared((prev) => {
+      const existing = new Set(prev.map((s) => s.globalPath));
+      const toAdd = fresh.filter((it) => !existing.has(it.globalPath));
+      return toAdd.length === 0 ? prev : [...prev, ...toAdd];
+    });
   };
 
   const memberList = members.data ?? [];
 
   return (
+    <>
     <section className="cw-page cw-page-enter">
       <div className="cw-project-hero is-slim">
         <div>
@@ -166,6 +206,9 @@ function ProjectHome() {
             placeholder={agentPlaceholder}
             focusSignal={focusNonce}
             onAttachClick={() => showToast(t('home.attach_coming_soon'))}
+            sharedFiles={pendingShared}
+            onPickShared={project.data?.id ? () => setSharedPickerOpen(true) : undefined}
+            onRemoveShared={(i) => setPendingShared((prev) => prev.filter((_, idx) => idx !== i))}
             modelPicker={
               <ComposerModelPicker
                 catalog={catalog.data}
@@ -198,5 +241,16 @@ function ProjectHome() {
         </div>
       </div>
     </section>
+    {sharedPickerOpen && project.data?.id && (
+      <SharedFilePickerDialog
+        projectId={project.data.id}
+        projectName={project.data.name}
+        onImport={addShared}
+        staged={pendingShared}
+        onRemove={(globalPath) => setPendingShared((prev) => prev.filter((s) => s.globalPath !== globalPath))}
+        onClose={() => setSharedPickerOpen(false)}
+      />
+    )}
+    </>
   );
 }

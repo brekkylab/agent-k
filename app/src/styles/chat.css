@@ -365,3 +365,42 @@
 .cw-preview-fallback-title { color: var(--cw-fg-1); }
 .cw-preview-fallback-body { color: var(--cw-fg-3); font-size: var(--cw-text-xs); max-width: 320px; }
 .cw-preview-fallback .cw-btn-primary { margin-top: 8px; }
+
+/* ── Inline preview pane (FilePreviewPane) ──────────────────────────────────
+   Reuses the same PreviewBody markup as the full-screen modal, but lives in a
+   small panel (e.g. the home shared-file picker's right side). The preview
+   classes above are sized for the modal (viewport margins, 84vw/100vh sheets,
+   white-on-dim loading), so re-scope them to fill the pane when nested under it. */
+.cw-preview-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.cw-preview-pane.is-empty {
+  align-items: center; justify-content: center; gap: 10px;
+  color: var(--cw-fg-3); font-size: 13px; text-align: center; padding: 20px;
+}
+.cw-preview-pane-head {
+  display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  padding: 8px 10px; border-bottom: 1px solid var(--cw-border);
+}
+.cw-preview-pane-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; color: var(--cw-fg-2);
+}
+.cw-preview-pane-head button {
+  display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0;
+  border: 0; appearance: none; border-radius: var(--cw-radius-md);
+  color: var(--cw-fg-2); background: transparent;
+}
+.cw-preview-pane-head button:hover { background: var(--cw-bg-muted); }
+.cw-preview-pane-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
+
+/* Neutralize the modal's viewport-relative sizing inside the pane. */
+.cw-preview-pane-body .cw-preview-loading { margin: auto; color: var(--cw-fg-3); padding: 24px; }
+.cw-preview-pane-body .cw-preview-sheet,
+.cw-preview-pane-body .cw-preview-sheet--frame,
+.cw-preview-pane-body .cw-preview-sheet--wide,
+.cw-preview-pane-body .cw-preview-sheet--code {
+  margin: 0; width: 100%; max-height: none; height: auto;
+  border-radius: 0; box-shadow: none; background: var(--cw-bg-elevated);
+}
+.cw-preview-pane-body .cw-preview-sheet--frame { height: 100%; }
+.cw-preview-pane-body .cw-preview-stage { padding: 12px; height: 100%; }
+.cw-preview-pane-body .cw-preview-fallcard { margin: auto; box-shadow: none; }

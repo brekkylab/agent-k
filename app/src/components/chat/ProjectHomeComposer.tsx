@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
+import { AttachmentChip } from '@/components/AttachmentChip';
 
 export interface ProjectHomeComposerSubmission {
   text: string;
@@ -24,6 +25,12 @@ interface ProjectHomeComposerProps {
   placeholder?: string;
   // Entry point for adding files (placeholder — to be wired up to PR #114's attachment tray).
   onAttachClick?: () => void;
+  // Shared (server) files staged for attach, picked from the shared-file dialog.
+  // Referenced by global path — already on the server, so no upload on send.
+  sharedFiles?: { globalPath: string; filename: string }[];
+  // Opens the shared-file picker dialog. Omitted (button hidden) until the project resolves.
+  onPickShared?: () => void;
+  onRemoveShared?: (index: number) => void;
   // Home-only model picker slot. Session composer owns its own compact controls.
   modelPicker?: ReactNode;
   // Focus request signal. Focuses the input whenever the value changes (it's a nonce, not a
@@ -45,6 +52,9 @@ export function ProjectHomeComposer({
   sendBlockedHint,
   placeholder = DEFAULT_PLACEHOLDER,
   onAttachClick,
+  sharedFiles = [],
+  onPickShared,
+  onRemoveShared,
   modelPicker,
   focusSignal,
 }: ProjectHomeComposerProps) {
@@ -93,6 +103,19 @@ export function ProjectHomeComposer({
     </button>
   );
 
+  const sharedButton = onPickShared && (
+    <button
+      type="button"
+      className="cw-attach-button"
+      onClick={onPickShared}
+      disabled={disabled}
+      aria-label="공유 파일 첨부"
+      title="공유 파일 첨부"
+    >
+      <Icon name="folder" size={17} />
+    </button>
+  );
+
   const sendButton = (
     <button type="submit" className="cw-send-button" aria-label="Send" disabled={!canSubmit || pending}>
       {pending ? <span className="cw-send-spinner" aria-hidden /> : <Icon name="send" size={12} />}
@@ -108,6 +131,19 @@ export function ProjectHomeComposer({
       }}
     >
       <div className="cw-home-composer-box">
+        {sharedFiles.length > 0 && (
+          <div className="cw-attach-tray" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 0 6px' }}>
+            {sharedFiles.map((item, i) => (
+              <AttachmentChip
+                key={`s-${item.globalPath}`}
+                filename={item.filename}
+                status="uploaded"
+                shared
+                onRemove={() => onRemoveShared?.(i)}
+              />
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           className="cw-home-composer-input"
@@ -121,6 +157,7 @@ export function ProjectHomeComposer({
         <div className="cw-home-composer-actions">
           {modelPicker}
           <span className="cw-home-composer-actions-spacer" />
+          {sharedButton}
           {attachButton}
           {sendButton}
         </div>

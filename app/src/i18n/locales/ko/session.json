@@ -52,6 +52,7 @@
   "shared_files_header": "공유 파일",
   "shared_files": {
     "import": "메시지에 추가",
+    "added": "추가됨",
     "remove": "제거",
     "up": "뒤로가기",
     "drag_hint": "채팅으로 끌어다 놓으면 첨부돼요",
