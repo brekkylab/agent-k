@@ -223,6 +223,7 @@
     "cancel_aria": "Cancel",
     "bearer_token": "bearer token",
     "edit_trigger_aria": "Edit trigger",
+    "duplicate_trigger_aria": "Duplicate trigger",
     "webhook_not_editable": "Webhooks can't be edited",
     "edit": "Edit",
     "delete_again": "Press again to delete",
@@ -244,20 +245,30 @@
     "trigger_save_failed": "Failed to update trigger: {{message}}"
   },
   "sched": {
-    "weekdays": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    "weekdays_short": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    "weekdays": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
     "nth": ["1st", "2nd", "3rd", "4th", "5th"],
-    "repeat_every": "Repeat every",
-    "repeat_mode": "Repeats",
+    "repeat_every": "Frequency",
+    "repeat_mode": "Mode",
+    "monthly_mode": {
+      "day": "Date",
+      "weekday": "Day of the week"
+    },
     "day_of_month": "Day",
-    "day_suffix": "",
+    "day_label": "{{day}}",
+    "last_day": "Last day",
+    "nth_last": "Last",
     "detail": "Detail",
-    "weekday_label": "Days",
+    "weekday_label": "Day of the week",
     "run_time": "Time",
     "timezone": "Timezone",
-    "interval_hint": "cron only supports N>1 for the hourly unit.",
+    "interval_label": "Interval",
+    "interval_suffix": "hours",
+    "minute_suffix": "minutes",
     "cron_preview_title": "Generated cron expression",
     "opt": {
-      "hourly": "Hourly",
+      "minutely": "By minute",
+      "hourly": "By hour",
       "daily": "Daily",
       "weekly": "Weekly",
       "monthly": "Monthly",
@@ -266,14 +277,20 @@
     "monthly_day_opt": "Day {{day}} of month",
     "monthly_weekday_opt": "The {{nth}} {{weekday}}",
     "weekday_option": "{{day}}",
+    "weekday_implied": "{{day}} (default)",
     "summary": {
+      "every_minute": "Every minute",
+      "every_n_minutes": "Every {{n}} minutes",
       "every_hour": "Every hour",
       "every_n_hours": "Every {{n}} hours",
+      "oclock": "{{h}} o'clock",
       "daily": "Daily at {{time}}",
       "weekly_all": "Weekly at {{time}}",
       "weekly": "Weekly on {{days}} at {{time}}",
       "monthly_day": "Monthly on day {{day}} at {{time}}",
-      "monthly_weekday": "Monthly on the {{nth}} {{weekday}} at {{time}}"
+      "monthly_last": "Last day of month at {{time}}",
+      "monthly_weekday": "Monthly on the {{nth}} {{weekday}} at {{time}}",
+      "monthly_weekday_last": "Last {{weekday}} of month at {{time}}"
     }
   },
   "webhook_dialog": {
