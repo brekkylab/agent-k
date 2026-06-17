@@ -534,9 +534,11 @@ function FilesPage() {
           const aIdx = rowIndex.get(anchorRef.current);
           if (aIdx != null) {
             const [lo, hi] = aIdx <= next ? [aIdx, next] : [next, aIdx];
-            setSelectedPaths(new Set(allRows.slice(lo, hi + 1).map((r) => r.path)));
+            // Keep the protected knowledge folder out of the range, like click /
+            // Ctrl+A / marquee already do.
+            setSelectedPaths(new Set(allRows.slice(lo, hi + 1).map((r) => r.path).filter((p) => !isProtectedPath(p))));
           }
-        } else {
+        } else if (!isProtectedPath(nextEntry.path)) {
           setSelectedPaths(new Set([nextEntry.path]));
           anchorRef.current = nextEntry.path;
         }
