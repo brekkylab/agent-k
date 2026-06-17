@@ -305,9 +305,6 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-project-card p, .cw-session-card p { margin: 0; color: var(--cw-fg-3); font-size: 13px; line-height: 1.55; }
 .cw-session-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 34px; }
 .cw-hero-actions { display: flex; gap: 10px; align-items: center; }
-.cw-activity-row { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: start; border: 1px solid var(--cw-border); background: var(--cw-bg-subtle); border-radius: var(--cw-radius-lg); padding: 12px; }
-.cw-activity-row p { margin: 3px 0 0; font-size: 13px; }
-.cw-activity-row time { color: var(--cw-fg-3); font-family: var(--cw-font-mono); font-size: 11px; }
 
 .cw-session-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; flex: 1; min-height: 0; overflow: hidden; }
 .cw-chat-surface { position: relative; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--cw-border); background: var(--cw-bg); overflow: hidden; }
@@ -591,7 +588,6 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 
 .cw-page-head > div:last-child { display: flex; gap: 8px; align-items: center; }
 .cw-file-browser { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 480px; border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); overflow: hidden; background: var(--cw-bg-subtle); }
-.cw-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 130px 24px; gap: 12px; align-items: center; }
 .cw-file-row { width: 100%; border: 0; border-bottom: 1px solid var(--cw-line-soft); background: transparent; min-height: 46px; padding: 7px 8px; color: var(--cw-fg-2); text-align: left; }
 .cw-file-row:hover { background: var(--cw-bg); }
 .cw-file-row > span:first-child:not(.cw-pocket) { display: inline-flex; align-items: center; gap: 9px; color: var(--cw-fg-1); }
@@ -600,18 +596,10 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-knowledge-banner.is-error { background: var(--cw-danger-bg, #fde8e8); color: var(--cw-danger, #b42318); }
 
 .cw-simple-page { max-width: 760px; }
-.cw-info-row { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); padding: 14px; background: var(--cw-bg-subtle); }
-.cw-info-row p { margin: 2px 0 0; font-size: 13px; }
-.cw-info-row span { color: var(--cw-fg-3); font-size: 12px; font-style: normal; }
 .cw-simple-page code { display: block; border: 1px solid var(--cw-border); border-radius: var(--cw-radius-md); background: var(--cw-bg-muted); padding: 10px; font-family: var(--cw-font-mono); color: var(--cw-fg-2); }
 .cw-simple-page ol { line-height: 1.8; color: var(--cw-fg-2); }
 
 .cw-pocket { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: var(--cw-radius-sm); border: 1px solid var(--cw-line-soft); background: var(--cw-bg); flex: 0 0 auto; }
-.cw-file-pdf { background: oklch(0.96 0.018 210); color: var(--cw-icon-analysis); }
-.cw-file-doc { background: oklch(0.965 0.018 340); color: var(--cw-icon-writing); }
-.cw-file-folder { background: oklch(0.96 0.018 150); color: var(--cw-icon-recap); }
-.cw-file-sheet { background: oklch(0.96 0.018 150); color: var(--cw-cozy-sage); }
-.cw-file-image { background: oklch(0.965 0.018 45); color: var(--cw-cozy-clay); }
 .cw-share-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; border-radius: var(--cw-radius-full); border: 1px solid var(--cw-border); background: var(--cw-bg); color: var(--cw-fg-2); padding: 4px 9px; font-size: 12px; }
 .cw-share-pill.private { background: var(--cw-share-private-bg); border-color: var(--cw-share-private-border); color: var(--cw-share-private-fg); }
 .cw-share-pill.readonly { background: var(--cw-share-readonly-bg); border-color: var(--cw-share-readonly-border); color: var(--cw-share-readonly-fg); }
@@ -650,7 +638,6 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
   .cw-messages { padding: 22px 18px 120px; }
   .cw-composer { grid-template-columns: 1fr; padding: 12px 18px; }
   .cw-file-browser { grid-template-columns: 1fr; }
-  .cw-file-row { grid-template-columns: minmax(0, 1fr) 70px 88px 18px; }
 }
 
 .cw-toast { position: fixed; bottom: 18px; right: 18px; z-index: 25; display: inline-flex; flex-direction: column; align-items: stretch; gap: 6px; max-width: min(420px, calc(100vw - 36px)); border: 1px solid var(--cw-accent-line); background: var(--cw-accent-soft); color: var(--cw-accent-2); border-radius: var(--cw-radius-lg); padding: 10px 14px; box-shadow: var(--cw-shadow-popover); font-size: 13px; animation: cw-rise .18s ease both; }
@@ -693,7 +680,7 @@ button:disabled { cursor: not-allowed; opacity: .48; transform: none !important;
 .cw-nav-files { background: color-mix(in oklch, var(--cw-cozy-honey) 22%, var(--cw-paper)); color: oklch(0.50 0.13 75); }
 .cw-nav-schedule { background: color-mix(in oklch, var(--cw-cozy-mustard) 24%, var(--cw-paper)); color: oklch(0.50 0.11 90); }
 .cw-nav-members { background: color-mix(in oklch, var(--cw-cozy-rose) 14%, var(--cw-paper)); color: var(--cw-cozy-rose); }
-.cw-nav-settings, .cw-nav-neutral { background: var(--cw-paper-3); color: var(--cw-ink-3); }
+.cw-nav-settings { background: var(--cw-paper-3); color: var(--cw-ink-3); }
 
 .cw-project-card,
 .cw-session-card {
@@ -1915,8 +1902,7 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-pocket.cw-nav-home { background: color-mix(in oklch, var(--cw-cozy-clay) 14%, var(--cw-paper)); color: var(--cw-cozy-clay); }
 .cw-pocket.cw-nav-files { background: color-mix(in oklch, var(--cw-cozy-honey) 18%, var(--cw-paper)); color: oklch(0.55 0.13 75); }
 .cw-pocket.cw-nav-members { background: color-mix(in oklch, var(--cw-cozy-rose) 14%, var(--cw-paper)); color: var(--cw-cozy-rose); }
-.cw-pocket.cw-nav-settings,
-.cw-pocket.cw-nav-neutral { background: var(--cw-paper-3); color: var(--cw-ink-3); }
+.cw-pocket.cw-nav-settings { background: var(--cw-paper-3); color: var(--cw-ink-3); }
 .cw-pocket.cw-nav-schedule { background: color-mix(in oklch, var(--cw-cozy-mustard) 18%, var(--cw-paper)); color: oklch(0.5 0.1 95); }
 .cw-pocket.cw-nav-trust { background: color-mix(in oklch, var(--cw-cozy-teal) 14%, var(--cw-paper)); color: var(--cw-cozy-teal); }
 .cw-pocket.cw-nav-add { background: color-mix(in oklch, var(--cw-cozy-sage) 14%, var(--cw-paper)); color: var(--cw-cozy-sage); }
