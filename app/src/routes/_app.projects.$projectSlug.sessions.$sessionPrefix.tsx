@@ -38,6 +38,7 @@ import { loadNs } from '@/i18n/loader';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 import { resolveComposerKeyAction } from '@/lib/composerKeys';
+import { useFileDropzone } from '@/lib/useFileDropzone';
 import { ToolCallDetails } from '@/components/chat/ToolCallDetails';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
@@ -49,6 +50,10 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sess
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
 }
+
+// Besides computer files, the chat dropzone also accepts shared-file references
+// dragged from the shared-files panel. Module-level so the dropzone handlers stay memoized.
+const SESSION_DROP_ACCEPT = [SESSION_IMPORT_MIME];
 
 // Scroll the message list to its tail. We scroll the container itself rather
 // than `scrollIntoView` on a sentinel: scrollIntoView walks every scrollable
@@ -439,10 +444,6 @@ function SessionPage() {
     }
   }, [composerText, composerExpanded]);
 
-  // Highlight the chat surface while a shared file is dragged over it.
-  const [importDragOver, setImportDragOver] = useState(false);
-
-
   // Import shared files (dragged from SharedFilesBrowser, its inline button, or a
   // folder drop expanded to its files) as pending attachments. They already exist
   // in shared storage, so no upload is needed — we just carry the global path the
@@ -579,21 +580,24 @@ function SessionPage() {
     void uploadLocalFiles(files);
   }, [uploadLocalFiles]);
 
-  const handleImportDrop = useCallback((e: React.DragEvent) => {
-    const osFiles = Array.from(e.dataTransfer.files ?? []);
-    const raw = e.dataTransfer.getData(SESSION_IMPORT_MIME);
-    if (osFiles.length === 0 && !raw) return; // not a drop we handle
-    e.preventDefault();
-    setImportDragOver(false);
+  // Shared-file references dropped on the chat (SESSION_IMPORT_MIME, from the
+  // shared-files panel) → attach by path. Computer files go through onFiles below.
+  const onSharedDrop = useCallback((e: React.DragEvent) => {
     // Clear any selection the drag formed underneath the overlay, so it doesn't
     // reappear once the overlay is gone.
     window.getSelection()?.removeAllRanges();
-    // Computer files → upload to inputs/. Shared-file references → attach by path.
-    if (osFiles.length > 0) { void uploadLocalFiles(osFiles); return; }
     let items: SessionImportItem[];
-    try { items = JSON.parse(raw); } catch { return; }
+    try { items = JSON.parse(e.dataTransfer.getData(SESSION_IMPORT_MIME)); } catch { return; }
     if (Array.isArray(items)) importSharedFiles(items);
-  }, [importSharedFiles, uploadLocalFiles]);
+  }, [importSharedFiles]);
+
+  // Chat-surface dropzone — reuses useFileDropzone: computer files upload to
+  // inputs/ (onFiles), shared-file refs attach by path (onAcceptedDrop).
+  const importDropzone = useFileDropzone({
+    onFiles: uploadLocalFiles,
+    acceptTypes: SESSION_DROP_ACCEPT,
+    onAcceptedDrop: onSharedDrop,
+  });
 
   // Files dragged from the Files page onto this session's row arrive as
   // scope-relative shared paths in router state. Attach them once session/project
@@ -1021,21 +1025,8 @@ function SessionPage() {
   return (
     <div className="cw-session-layout cw-page-enter">
       <section
-        className={`cw-chat-surface${importDragOver ? ' is-import-target' : ''}`}
-        onDragOver={(e) => {
-          // Accept both computer files (upload) and shared-file references.
-          const types = e.dataTransfer.types;
-          if (!types.includes('Files') && !types.includes(SESSION_IMPORT_MIME)) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'copy';
-          if (!importDragOver) setImportDragOver(true);
-        }}
-        onDragLeave={(e) => {
-          // Ignore leaves into descendant elements — only clear when leaving the surface.
-          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-          setImportDragOver(false);
-        }}
-        onDrop={handleImportDrop}
+        className={`cw-chat-surface${importDropzone.isOver ? ' is-import-target' : ''}`}
+        {...importDropzone.dropProps}
       >
         <div className="cw-chat-head">
           <div>
