@@ -395,18 +395,12 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 .cw-sf-row:hover { background: var(--cw-bg-muted); }
 .cw-sf-row.is-selected { background: var(--cw-selected-bg); }
 .cw-sf-row.is-selected:hover { background: var(--cw-selected-bg-2); }
-.cw-sf-row.is-active { box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--cw-accent), transparent 40%); }
 .cw-sf-row .cw-file-label { flex: 1; }
 .cw-sf-row[draggable="true"] { cursor: grab; }
 /* Left type-icon swaps to a quick-add (+) on hover. */
 .cw-sf-icon { position: relative; width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
-.cw-sf-icon > :not(.cw-sf-icon-add):not(.cw-sf-icon-added) { transition: opacity 100ms; }
-.cw-sf-row:hover .cw-sf-icon > :not(.cw-sf-icon-add):not(.cw-sf-icon-added) { opacity: 0; }
-/* Added (picker) rows: a persistent check replaces the +; hide the type icon
-   beneath it so the picked state is unmistakable even without hovering. */
-.cw-sf-icon-added { position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--cw-accent); }
-.cw-sf-row.is-added .cw-sf-icon > :not(.cw-sf-icon-added) { opacity: 0; }
-.cw-sf-row.is-added { color: var(--cw-fg-2); }
+.cw-sf-icon > :not(.cw-sf-icon-add) { transition: opacity 100ms; }
+.cw-sf-row:hover .cw-sf-icon > :not(.cw-sf-icon-add) { opacity: 0; }
 /* pointer-events:none while hidden — an opacity:0 button still takes clicks, so
    without this a tap on the icon (touch, where there's no hover to reveal the +)
    would import the file instead of selecting the row. */
@@ -682,16 +676,9 @@ body.is-resizing-sidebar .cw-app-shell[data-sidebar-mode="hidden"] .cw-sidebar-a
 }
 .cw-shared-picker-title { margin: 0 0 2px; font-size: 18px; letter-spacing: -0.015em; }
 .cw-shared-picker-sub { margin: 0 0 14px; font-size: 13px; line-height: 1.5; color: var(--cw-ink-3); }
-.cw-shared-picker-body { flex: 1; min-height: 0; display: flex; gap: 14px; }
-.cw-shared-picker-list {
-  flex: 0 0 320px; min-height: 0; display: flex; flex-direction: column;
-  border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); overflow: hidden;
-}
-.cw-shared-picker-preview {
-  flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
-  border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg); overflow: hidden;
-  background: var(--cw-bg-subtle);
-}
+/* Body is the Finder column strip itself — the first column is the shared root and
+   each opened folder appends a column (see FolderColumnsPane). */
+.cw-shared-picker-body { flex: 1; min-height: 0; display: flex; }
 .cw-shared-picker-foot { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
 .cw-shared-picker-staged { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-height: 64px; overflow-y: auto; }
 .cw-shared-picker-count { font-size: 12.5px; font-weight: 500; color: var(--cw-fg-2); white-space: nowrap; }

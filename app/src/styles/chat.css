@@ -404,3 +404,49 @@
 .cw-preview-pane-body .cw-preview-sheet--frame { height: 100%; }
 .cw-preview-pane-body .cw-preview-stage { padding: 12px; height: 100%; }
 .cw-preview-pane-body .cw-preview-fallcard { margin: auto; box-shadow: none; }
+
+/* Folder column view (FolderColumnsPane) — macOS Finder miller columns in the
+   picker's right pane: each opened folder adds a column to the right (horizontal
+   scroll), a picked file shows its preview as the trailing pane. */
+.cw-folder-columns { flex: 1; min-width: 0; display: flex; gap: 8px; height: 100%; min-height: 0; overflow-x: auto; overflow-y: hidden; }
+/* Each opened folder is its own framed pane (Finder columns), appended per click. */
+.cw-folder-column {
+  flex: 0 0 200px; width: 200px; display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg);
+  background: var(--cw-bg-subtle); overflow: hidden;
+}
+.cw-folder-column-head {
+  display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  padding: 7px 9px; border-bottom: 1px solid var(--cw-border); color: var(--cw-fg-2);
+}
+.cw-folder-column-head > svg { flex-shrink: 0; }
+.cw-folder-column-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.cw-folder-column-body { flex: 1; min-height: 0; overflow-y: auto; }
+.cw-folder-column-empty { margin: 0; padding: 16px 10px; font-size: 12px; color: var(--cw-fg-3); text-align: center; }
+/* Trailing file-preview pane in the column strip — wider than a folder column, same frame. */
+.cw-folder-columns-preview {
+  flex: 1 0 300px; min-width: 300px; display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--cw-border); border-radius: var(--cw-radius-lg);
+  background: var(--cw-bg-subtle); overflow: hidden;
+}
+.cw-folder-list { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 1px; }
+.cw-folder-list-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 4px 8px;
+  border: 0; appearance: none; border-radius: var(--cw-radius-sm); background: transparent;
+  font-size: 13px; color: var(--cw-fg-1); text-align: left; cursor: pointer; transition: background 100ms;
+}
+.cw-folder-list-row:hover { background: var(--cw-bg-muted); }
+.cw-folder-list-row.is-active { background: var(--cw-selected-bg); }
+.cw-folder-list-row.is-added { color: var(--cw-fg-2); }
+.cw-folder-list-row > svg { flex-shrink: 0; color: var(--cw-fg-2); }
+.cw-folder-list-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Trailing "+" attach button — appears on row hover (matches the left browser); a
+   persistent check replaces it once the file is staged. */
+.cw-folder-list-add {
+  display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; padding: 0;
+  border: 1px solid transparent; border-radius: var(--cw-radius-sm); background: transparent;
+  color: var(--cw-accent); cursor: pointer; opacity: 0; transition: opacity 100ms, background 100ms, border-color 100ms;
+}
+.cw-folder-list-row:hover .cw-folder-list-add, .cw-folder-list-add:focus-visible { opacity: 1; border-color: var(--cw-ink-4); }
+.cw-folder-list-add:hover { background: color-mix(in oklch, var(--cw-ink) 12%, transparent); border-color: var(--cw-ink-2); }
+.cw-folder-list-check { display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; color: var(--cw-accent); }

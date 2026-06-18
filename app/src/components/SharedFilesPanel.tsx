@@ -27,19 +27,6 @@ interface SharedFilesBrowserProps {
   projectName?: string;
   /** Import the given shared files into the session (inline button fallback). */
   onImport: (items: SessionImportItem[]) => void;
-  /**
-   * When provided (picker mode), clicking a file row reports its global path so
-   * the parent can render a side preview, and the browser's own preview modal is
-   * suppressed. `activePath` highlights the row currently shown in that preview.
-   */
-  onActivate?: (globalPath: string) => void;
-  activePath?: string | null;
-  /**
-   * Global paths already staged for attach (picker mode). Rows in this set show
-   * a "added" check instead of the "+" so the user sees what's been picked
-   * without leaving the dialog.
-   */
-  addedPaths?: Set<string>;
 }
 
 function formatBytes(bytes: number): string {
@@ -52,7 +39,7 @@ type Row =
   | { kind: 'dir'; name: string; relPath: string; globalPath: string }
   | { kind: 'file'; name: string; relPath: string; globalPath: string; bytes?: number | null };
 
-export function SharedFilesBrowser({ projectId, projectName, onImport, onActivate, activePath, addedPaths }: SharedFilesBrowserProps) {
+export function SharedFilesBrowser({ projectId, projectName, onImport }: SharedFilesBrowserProps) {
   const { t } = useTranslation('session');
   const scope: DirentScope = { kind: 'shared', projectId };
 
@@ -231,36 +218,29 @@ export function SharedFilesBrowser({ projectId, projectName, onImport, onActivat
             </div>
           ) : (
             <div
-              className={`cw-sf-row${selected.has(row.globalPath) ? ' is-selected' : ''}${activePath === row.globalPath ? ' is-active' : ''}${addedPaths?.has(row.globalPath) ? ' is-added' : ''}`}
+              className={`cw-sf-row${selected.has(row.globalPath) ? ' is-selected' : ''}`}
               key={row.relPath}
               data-sf-path={row.globalPath}
               data-sf-name={row.name}
               draggable
               onDragStart={(e) => handleRowDragStart(e, row.globalPath)}
-              onClick={(e) => { selectClick(e, row.globalPath); onActivate?.(row.globalPath); }}
-              onDoubleClick={() => (onActivate ? onActivate(row.globalPath) : setPreviewPath(row.globalPath))}
+              onClick={(e) => selectClick(e, row.globalPath)}
+              onDoubleClick={() => setPreviewPath(row.globalPath)}
               title={`${row.name}${row.bytes != null ? ` · ${formatBytes(row.bytes)}` : ''}`}
             >
-              {/* Type icon swaps to a quick-add (+) on hover; once added it shows a
-                  persistent check so the picked state is visible without leaving the dialog. */}
+              {/* Type icon swaps to a quick-add (+) on hover; double-click previews the file. */}
               <span className="cw-sf-icon">
                 <FileTypeIcon filename={row.name} size={18} />
-                {addedPaths?.has(row.globalPath) ? (
-                  <span className="cw-sf-icon-added" aria-label={t('shared_files.added')} title={t('shared_files.added')}>
-                    <Icon name="check" size={13} />
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className="cw-sf-icon-add"
-                    aria-label={t('shared_files.import')}
-                    title={t('shared_files.import')}
-                    onClick={(e) => { e.stopPropagation(); onImport([{ globalPath: row.globalPath, filename: row.name }]); }}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                  >
-                    <Icon name="plus" size={14} />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="cw-sf-icon-add"
+                  aria-label={t('shared_files.import')}
+                  title={t('shared_files.import')}
+                  onClick={(e) => { e.stopPropagation(); onImport([{ globalPath: row.globalPath, filename: row.name }]); }}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <Icon name="plus" size={14} />
+                </button>
               </span>
               <span className="cw-file-label">{row.name}</span>
             </div>
@@ -274,7 +254,7 @@ export function SharedFilesBrowser({ projectId, projectName, onImport, onActivat
 
       <MarqueeOverlay rect={marquee.dragRect} />
 
-      {!onActivate && previewPath && (
+      {previewPath && (
         <FilePreviewModal globalPath={previewPath} onClose={() => setPreviewPath(null)} />
       )}
     </div>

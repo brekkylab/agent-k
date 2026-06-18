@@ -24,7 +24,7 @@ import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/')({
   // Home composer + toasts live on `project`; `common` comes from parents.
-  // `session` is needed by the reused SharedFilesBrowser inside the shared-file picker.
+  // `session` supplies the shared-file labels (import/added/…) the picker's column view reuses.
   loader: () => loadNs('project', 'automation', 'session'),
   component: ProjectHome,
 });

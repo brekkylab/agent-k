@@ -1,20 +1,22 @@
-// 16:9 two-pane picker for attaching project shared files to the home composer's
-// first message. Left: SharedFilesBrowser (reused from the session). Right: a live
-// preview of the highlighted file (FilePreviewPane). The browser's per-row "+"
-// adds a file via onImport; the dialog stays open so several can be added.
+// 16:9 picker for attaching project shared files to the home composer's first
+// message. A single macOS Finder-style column (miller) view: the first column is
+// the project's shared root, opening a folder appends a column to the right, and
+// clicking a file shows its preview as the trailing pane. Every row carries a "+"
+// to attach (a check once staged); the dialog stays open so several can be added.
 
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SharedFilesBrowser, type SessionImportItem } from './SharedFilesPanel';
-import { FilePreviewPane } from './preview/FilePreviewPane';
+import { type SessionImportItem } from './SharedFilesPanel';
+import { FolderColumnsPane } from './preview/FolderColumnsPane';
 import { AttachmentChip } from './AttachmentChip';
+import { scopeRoot } from '@/api/dirents';
 import { useDialogEscape } from '@/lib/useDialogEscape';
 import { Icon } from './Icon';
 
 interface Props {
   projectId: string;
   projectName?: string;
-  /** Add the picked shared files to the composer (per-row "+" in the browser). */
+  /** Add the picked shared files to the composer (a row's "+"). */
   onImport: (items: SessionImportItem[]) => void;
   /** Files already staged on the composer — shown as a tray so the user sees what's picked. */
   staged: SessionImportItem[];
@@ -26,9 +28,9 @@ interface Props {
 export function SharedFilePickerDialog({ projectId, projectName, onImport, staged, onRemove, onClose }: Props) {
   const { t } = useTranslation('project');
   const { t: tCommon } = useTranslation('common');
-  const [activePath, setActivePath] = useState<string | null>(null);
   const downOnBackdropRef = useRef(false);
   const addedPaths = useMemo(() => new Set(staged.map((s) => s.globalPath)), [staged]);
+  const sharedRoot = scopeRoot({ kind: 'shared', projectId });
 
   useDialogEscape(onClose);
 
@@ -51,19 +53,13 @@ export function SharedFilePickerDialog({ projectId, projectName, onImport, stage
         <h2 className="cw-shared-picker-title">{t('home.shared_picker.title')}</h2>
         <p className="cw-shared-picker-sub">{t('home.shared_picker.subtitle')}</p>
         <div className="cw-shared-picker-body">
-          <div className="cw-shared-picker-list">
-            <SharedFilesBrowser
-              projectId={projectId}
-              projectName={projectName}
-              onImport={onImport}
-              onActivate={setActivePath}
-              activePath={activePath}
-              addedPaths={addedPaths}
-            />
-          </div>
-          <div className="cw-shared-picker-preview">
-            <FilePreviewPane globalPath={activePath} emptyHint={t('home.shared_picker.preview_empty')} />
-          </div>
+          <FolderColumnsPane
+            projectId={projectId}
+            rootFolderPath={sharedRoot}
+            rootLabel={projectName}
+            onImport={onImport}
+            addedPaths={addedPaths}
+          />
         </div>
         <div className="cw-shared-picker-foot">
           {/* Staged files live behind the dialog on the composer, so mirror them here
