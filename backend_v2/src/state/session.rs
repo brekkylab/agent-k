@@ -192,6 +192,13 @@ impl SessionsState {
         }
     }
 
+    /// Return all messages for `session_id`, ordered by `seq` ascending. Backs
+    /// the `GET /sessions/{id}/messages` endpoint; the WS catch-up path uses
+    /// [`SessionsState::list_messages_since`] instead.
+    pub async fn list_messages(&self, session_id: Uuid) -> StateResult<Vec<(i64, Message)>> {
+        self.list_messages_since(session_id, -1).await
+    }
+
     /// Return messages for `session_id` with `seq > since`, ordered ascending.
     /// The WS handler uses this for catch-up before switching to the live
     /// event subscription.

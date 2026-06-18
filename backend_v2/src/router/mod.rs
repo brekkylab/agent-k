@@ -13,6 +13,7 @@ use crate::{
 pub(crate) mod error;
 
 mod auth;
+mod message;
 mod project;
 mod session;
 mod user;
@@ -61,8 +62,11 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/sessions/{id}",
             get(session::get_session).delete(session::delete_session),
         )
-        .api_route("/sessions/{id}/messages", post(session::start_run))
-        .api_route("/sessions/{id}/messages/stop", post(session::stop_run))
+        .api_route(
+            "/sessions/{id}/messages",
+            get(message::list_messages).post(message::start_run),
+        )
+        .api_route("/sessions/{id}/messages/stop", post(message::stop_run))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,
@@ -71,7 +75,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .api_route("/auth/login", post(auth::login))
         .route(
             "/sessions/{id}/messages/ws",
-            axum::routing::get(session::stream_messages),
+            axum::routing::get(message::stream_messages),
         )
         // Two routes: matchit's `{*rest}` wildcard requires one-or-more
         // segments, so the bare collection path (`/…/workspace`) needs its
