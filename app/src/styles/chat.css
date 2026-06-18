@@ -394,11 +394,15 @@
 
 /* Neutralize the modal's viewport-relative sizing inside the pane. */
 .cw-preview-pane-body .cw-preview-loading { margin: auto; color: var(--cw-fg-3); padding: 24px; }
+/* Paint the scroll area for sheet docs so a short file (a few lines of .md/code)
+   doesn't read as cut off — the white extends to the bottom of the pane, not just
+   the last line. */
+.cw-preview-pane[data-mode="sheet"] .cw-preview-pane-body { background: var(--cw-bg-elevated); }
 .cw-preview-pane-body .cw-preview-sheet,
 .cw-preview-pane-body .cw-preview-sheet--frame,
 .cw-preview-pane-body .cw-preview-sheet--wide,
 .cw-preview-pane-body .cw-preview-sheet--code {
-  margin: 0; width: 100%; max-height: none; height: auto;
+  margin: 0; width: 100%; max-height: none; min-height: 100%;
   border-radius: 0; box-shadow: none; background: var(--cw-bg-elevated);
 }
 .cw-preview-pane-body .cw-preview-sheet--frame { height: 100%; }
