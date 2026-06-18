@@ -59,6 +59,9 @@ type CalEntry =
   | { kind: 'run'; time: Date; run: Run }
   | { kind: 'occ'; time: Date; occ: Occurrence };
 
+// One automation's entries on a given day (a cell/popover chip).
+type DayGroup = { automationId: string; name: string; entries: CalEntry[] };
+
 export function AutomationCalendar({
   projectSlug,
   automationNameById,
@@ -151,6 +154,13 @@ export function AutomationCalendar({
     return map;
   }, [automationNameById]);
   const automationColor = (id: string) => colorByAutomation.get(id) ?? PALETTE[0]!;
+  // Rank in the project list — used only as a stable tiebreaker when two
+  // automations share the same first-fire time within a day.
+  const automationIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    Object.keys(automationNameById).forEach((id, i) => map.set(id, i));
+    return map;
+  }, [automationNameById]);
   const runTriggerKind = (run: Run): TriggerKind =>
     run.triggerId ? (triggerById[run.triggerId]?.kind as TriggerKind) ?? 'manual' : 'manual';
   // Occurrences are future schedule predictions — shown when the trigger filter
@@ -215,8 +225,12 @@ export function AutomationCalendar({
   const todayKey = localDayKey(new Date());
   const total = gridDays.reduce((n, d) => n + (entriesByDay.get(localDayKey(d))?.length ?? 0), 0);
 
-  // "+N more" expands the day into a popover listing every entry.
-  const [dayPopover, setDayPopover] = useState<{ day: Date; anchor: HTMLElement } | null>(null);
+  // Day popover: lists individual entries — either every entry for the day
+  // ("+N more"), or one automation's entries (a multi-run chip). `automationId`
+  // null = unscoped.
+  const [dayPopover, setDayPopover] = useState<
+    { day: Date; anchor: HTMLElement; automationId: string | null } | null
+  >(null);
 
   const pickEntry = (e: CalEntry, anchor: HTMLElement) => {
     if (e.kind === 'run') onSelectRun?.(e.run, anchor);
@@ -263,6 +277,68 @@ export function AutomationCalendar({
       >
         <span className="cw-cal-event-time">{hhmm(e.time)}</span>
         <span className="cw-cal-event-name">{occ.automationName}</span>
+      </button>
+    );
+  };
+
+  const isEntrySelected = (e: CalEntry): boolean =>
+    e.kind === 'run'
+      ? selectedRunId != null && e.run.id === selectedRunId
+      : selectedKey != null && `${e.occ.triggerId}@${e.occ.fireAt}` === selectedKey;
+
+  // Group a day's entries by automation, ordered by project rank. One chip per
+  // automation — single entry shows its time, multiple show a count — so a day
+  // with many runs (retries, minutely/hourly) stays readable.
+  const groupsForDay = (dayKey: string) => {
+    const byAuto = new Map<string, CalEntry[]>();
+    for (const e of entriesByDay.get(dayKey) ?? []) {
+      const id = e.kind === 'run' ? e.run.automationId : e.occ.automationId;
+      const arr = byAuto.get(id);
+      if (arr) arr.push(e);
+      else byAuto.set(id, [e]);
+    }
+    return [...byAuto.entries()]
+      .map(([automationId, entries]) => ({
+        automationId,
+        name:
+          automationNameById[automationId] ??
+          entries.find((e): e is Extract<CalEntry, { kind: 'occ' }> => e.kind === 'occ')?.occ
+            .automationName ??
+          automationId,
+        entries,
+      }))
+      // Order by each automation's first (earliest) entry that day; ties broken
+      // by project rank for stability. Entries are already time-sorted, so
+      // entries[0] is the earliest.
+      .sort((a, b) => {
+        const dt = a.entries[0]!.time.getTime() - b.entries[0]!.time.getTime();
+        if (dt !== 0) return dt;
+        return (
+          (automationIndex.get(a.automationId) ?? Infinity) -
+          (automationIndex.get(b.automationId) ?? Infinity)
+        );
+      });
+  };
+
+  // One automation chip (cell or popover). Click handling is delegated so the
+  // cell and the "+N more" popover can route single vs multiple differently.
+  const renderGroup = (g: DayGroup, onPick: (g: DayGroup, el: HTMLElement) => void) => {
+    const single = g.entries.length === 1;
+    const first = g.entries[0]!;
+    const active = g.entries.some(isEntrySelected);
+    const runStatus = single && first.kind === 'run' ? first.run.status : null;
+    return (
+      <button
+        key={g.automationId}
+        type="button"
+        className={`cw-cal-group ${active ? 'is-active' : ''}`}
+        style={{ ['--cal-accent' as string]: automationColor(g.automationId) }}
+        title={single ? `${g.name} — ${hhmm(first.time)}` : `${g.name} (${g.entries.length})`}
+        onClick={(ev) => onPick(g, ev.currentTarget)}
+      >
+        {runStatus && <span className={`cw-status-dot cw-status-${runStatus} is-compact`} />}
+        <span className="cw-cal-group-name">{g.name}</span>
+        <span className="cw-cal-group-meta">{single ? hhmm(first.time) : `×${g.entries.length}`}</span>
       </button>
     );
   };
@@ -322,11 +398,11 @@ export function AutomationCalendar({
         ))}
         {gridDays.map((day) => {
           const key = localDayKey(day);
-          const entries = entriesByDay.get(key) ?? [];
+          const groups = groupsForDay(key);
           const outside = day.getMonth() !== monthStart.getMonth();
           const isToday = key === todayKey;
-          const shown = entries.slice(0, MAX_PER_CELL);
-          const overflow = entries.length - shown.length;
+          const shown = groups.slice(0, MAX_PER_CELL);
+          const overflow = groups.length - shown.length;
           return (
             <div
               key={key}
@@ -335,7 +411,12 @@ export function AutomationCalendar({
             >
               <span className="cw-cal-daynum">{day.getDate()}</span>
               <div className="cw-cal-events">
-                {shown.map((e, i) => renderEntry(e, i, pickEntry))}
+                {shown.map((g) => renderGroup(g, (grp, el) => {
+                  if (grp.entries.length === 1) { pickEntry(grp.entries[0]!, el); return; }
+                  // Multiple → drill into this automation's entries for the day.
+                  const cell = (el.closest('.cw-cal-cell') as HTMLElement | null) ?? el;
+                  setDayPopover({ day, anchor: cell, automationId: grp.automationId });
+                }))}
                 {overflow > 0 && (
                   <button
                     type="button"
@@ -344,6 +425,7 @@ export function AutomationCalendar({
                       setDayPopover({
                         day,
                         anchor: (ev.currentTarget.closest('.cw-cal-cell') as HTMLElement | null) ?? ev.currentTarget,
+                        automationId: null,
                       })
                     }
                   >
@@ -369,13 +451,37 @@ export function AutomationCalendar({
       {dayPopover && (
         <CalendarDayPopover
           anchor={dayPopover.anchor}
-          title={new Intl.DateTimeFormat(i18n.language, { month: 'long', day: 'numeric', weekday: 'long' }).format(dayPopover.day)}
+          title={
+            <>
+              {new Intl.DateTimeFormat(i18n.language, { month: 'long', day: 'numeric', weekday: 'long' }).format(dayPopover.day)}
+              {dayPopover.automationId && (
+                <span className="cw-cal-daypop-sub">{automationNameById[dayPopover.automationId] ?? ''}</span>
+              )}
+            </>
+          }
           onClose={() => setDayPopover(null)}
         >
-          {(() => {
-            const dayEntries = entriesByDay.get(localDayKey(dayPopover.day)) ?? [];
-            const shown = dayEntries.slice(0, DAY_POPOVER_CAP);
-            const extra = dayEntries.length - shown.length;
+          {dayPopover.automationId == null ? (() => {
+            // Unscoped: list automations (grouped), like the cells. Single →
+            // open its detail; multiple → re-scope this popover to it.
+            const groups = groupsForDay(localDayKey(dayPopover.day));
+            const shown = groups.slice(0, DAY_POPOVER_CAP);
+            const extra = groups.length - shown.length;
+            return (
+              <>
+                {shown.map((g) => renderGroup(g, (grp) => {
+                  if (grp.entries.length === 1) { pickEntry(grp.entries[0]!, dayPopover.anchor); setDayPopover(null); return; }
+                  setDayPopover({ ...dayPopover, automationId: grp.automationId });
+                }))}
+                {extra > 0 && <p className="cw-cal-daypop-more">{t('calendar.more', { count: extra })}</p>}
+              </>
+            );
+          })() : (() => {
+            // Scoped to one automation: list its individual entries.
+            const entries = (entriesByDay.get(localDayKey(dayPopover.day)) ?? [])
+              .filter((e) => (e.kind === 'run' ? e.run.automationId : e.occ.automationId) === dayPopover.automationId);
+            const shown = entries.slice(0, DAY_POPOVER_CAP);
+            const extra = entries.length - shown.length;
             // Anchor the detail to the day cell (survives the popover closing).
             const activate = (entry: CalEntry) => { pickEntry(entry, dayPopover.anchor); setDayPopover(null); };
             return (
@@ -400,7 +506,7 @@ function CalendarDayPopover({
   children,
 }: {
   anchor: HTMLElement;
-  title: string;
+  title: React.ReactNode;
   onClose: () => void;
   children: React.ReactNode;
 }) {

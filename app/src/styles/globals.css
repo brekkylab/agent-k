@@ -3180,6 +3180,29 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-cal-event:hover { background: var(--cw-bg-muted); }
 .cw-cal-event-time { font-variant-numeric: tabular-nums; color: var(--cw-ink-2); flex: none; }
 .cw-cal-event-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* Per-automation chip in a day cell: name (truncating) + trailing time/count. */
+.cw-cal-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 2px 6px;
+  border: none;
+  border-left: 3px solid var(--cal-accent, var(--cw-accent));
+  border-radius: 3px;
+  background: var(--cw-bg-subtle);
+  color: var(--cw-ink);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.cw-cal-group:hover { background: var(--cw-bg-muted); }
+.cw-cal-group.is-active { background: var(--cw-accent-soft); box-shadow: inset 0 0 0 1px var(--cw-accent); }
+.cw-cal-group .cw-status-dot { flex: none; }
+.cw-cal-group-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cw-cal-group-meta { flex: none; color: var(--cw-ink-2); font-variant-numeric: tabular-nums; }
 .cw-cal-more {
   align-self: flex-start;
   border: 0;
@@ -3207,12 +3230,17 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
   overflow: hidden;
 }
 .cw-cal-daypop-head {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   padding: 9px 12px;
   font-size: 12px;
   font-weight: 600;
   color: var(--cw-ink-2);
   border-bottom: 1px solid var(--cw-line-soft);
 }
+/* Scoped automation name on its own line, lighter than the date. */
+.cw-cal-daypop-sub { font-size: 11px; font-weight: 500; color: var(--cw-ink-3); }
 .cw-cal-daypop-list {
   display: flex;
   flex-direction: column;
