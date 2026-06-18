@@ -403,9 +403,13 @@ function AutomationsPage() {
     setPendingManualRun(null);
   };
 
-  // Below this viewport, drop the right-side drawer column and expand the
-  // selected row inline within the runs list instead.
-  const isWide = useWideLayout('(min-width: 1440px)');
+  // Below this viewport, drop the right-side drawer column (list expands the
+  // selected row inline; calendar uses an anchored popover). The calendar's
+  // 7-column grid needs more room than the runs list, so it keeps full width
+  // until a wider breakpoint rather than sharing with a ~440px drawer.
+  const isWideList = useWideLayout('(min-width: 1440px)');
+  const isWideCalendar = useWideLayout('(min-width: 1680px)');
+  const isWide = view === 'calendar' ? isWideCalendar : isWideList;
 
   const renderOccurrenceDetail = (occ: Occurrence) => {
     const trigger = triggerById[occ.triggerId] ?? null;
