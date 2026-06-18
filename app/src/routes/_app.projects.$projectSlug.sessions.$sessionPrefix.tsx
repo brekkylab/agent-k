@@ -455,7 +455,7 @@ function SessionPage() {
     const fresh = items.filter((it) => !curPaths.has(it.globalPath));
     if (fresh.length === 0) return; // everything already attached
     if (pendingAttachments.length + fresh.length > MAX_ATTACHMENTS) {
-      showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+      showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
       return; // over the cap — don't attach any of them
     }
     // Dedupe against the authoritative `prev` inside the updater, so a repeated
@@ -485,7 +485,7 @@ function SessionPage() {
     // MAX_ATTACHMENTS, reject the whole batch (upload nothing) and toast — so the
     // UI can't reach the backend's hard 400 on >MAX attachments.
     if (pendingAttachments.length + files.length > MAX_ATTACHMENTS) {
-      showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+      showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
       return;
     }
     for (const file of files) {

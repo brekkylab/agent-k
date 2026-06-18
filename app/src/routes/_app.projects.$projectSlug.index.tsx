@@ -177,7 +177,7 @@ function ProjectHome() {
   const addFiles = (fs: File[]) => {
     if (fs.length === 0) return;
     if (pendingFiles.length + fs.length > MAX_ATTACHMENTS) {
-      showToast(t('home.attach_limit', { max: MAX_ATTACHMENTS }));
+      showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
       return;
     }
     setPendingFiles((prev) => [...prev, ...fs]);

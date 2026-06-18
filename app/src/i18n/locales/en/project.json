@@ -68,7 +68,6 @@
     "preview_pill_aria": "Preview — not yet sent to the server",
     "suggested_prompts_aria": "Suggested prompts (preview)",
     "send_blocked_hint": "No available model. Set a provider API key or pick another model.",
-    "attach_limit": "You can attach up to {{max}} files at once.",
     "upload_failed": "Some files couldn't be uploaded and weren't attached:",
     "upload_failed_more": "+{{count}} more"
   },
