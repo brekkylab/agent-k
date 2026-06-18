@@ -199,8 +199,8 @@ export async function listRuns(
 }
 
 /**
- * Cron-triggered runs across a project whose scheduled time falls in
- * `[from, to)` — the calendar's realized (past) slots. `from`/`to` are ISO.
+ * Automation runs across a project whose scheduled time falls in `[from, to)`
+ * — the calendar's realized (past) slots. `from`/`to` are ISO.
  */
 export async function listRunsInWindow(
   projectRef: string,
