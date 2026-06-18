@@ -43,7 +43,6 @@ export interface Session {
   /** True when an unread message mentions the current user. */
   unreadMention: boolean;
   references: FileAsset['id'][];
-  artifactId?: string;
   isAutoAppend?: boolean;
   agentType: string | null;
   model: string | null;
@@ -96,19 +95,6 @@ export interface FileAsset {
   type: 'pdf' | 'sheet' | 'doc' | 'image' | 'folder';
   sizeLabel: string;
   updatedAt: string;
-  summary: string;
-  groundTruth: string[];
-}
-
-export interface Artifact {
-  id: string;
-  sessionId: SessionId;
-  title: string;
-  kind: 'team_decision_record';
-  status: 'draft' | 'ready';
-  generatedFromFileIds: FileAsset['id'][];
-  sections: Array<{ label: string; body: string; evidence?: FileAsset['id'][] }>;
-  nextActions: string[];
 }
 
 // ── Automation domain types ────────────────────────────────────────────────

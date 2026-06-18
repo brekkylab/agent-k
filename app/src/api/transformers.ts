@@ -275,10 +275,6 @@ export function toFileAsset(entry: BackendDirent, projectId: string, projectName
     type: entry.kind === 'dir' ? 'folder' : inferFileType(entry.path),
     sizeLabel: entry.kind === 'dir' ? 'folder' : formatBytes(entry.bytes ?? 0),
     updatedAt: entry.modified_at ? compactDate(entry.modified_at) : '—',
-    summary: '',
-    groundTruth: entry.kind === 'dir'
-      ? ['Persisted directory']
-      : ['Persisted file in backend storage'],
   };
 }
 

@@ -1,7 +1,7 @@
 // Projects index — markup mirrors app-live ProjectsPage exactly.
 // Server data: listProjects + per-project members/sessions for footer chips.
 
-import { createFileRoute, useNavigate, useRouterState } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listMembers, listProjects } from '@/api/projects';
@@ -13,15 +13,6 @@ import { loadNs } from '@/i18n/loader';
 import { useAuthStore } from '@/stores/auth';
 import type { Project, Session, User } from '@/domain/types';
 
-function useActiveProjectSlugFromRoute(): string | null {
-  const state = useRouterState();
-  for (const match of state.matches) {
-    const params = match.params as { projectSlug?: string };
-    if (params.projectSlug) return params.projectSlug;
-  }
-  return null;
-}
-
 export const Route = createFileRoute('/_app/projects/')({
   // NewProjectDialog is rendered here → `dialogs`. Cards show member badges → `members`.
   loader: () => loadNs('project', 'members', 'dialogs'),
@@ -32,7 +23,6 @@ function ProjectsPage() {
   const { t } = useTranslation('project');
   const navigate = useNavigate();
   const projects = useQuery({ queryKey: ['projects'], queryFn: listProjects });
-  const activeProjectSlug = useActiveProjectSlugFromRoute() ?? projects.data?.[0]?.slug ?? null;
   const creator = useNewProjectDialog();
 
   return (
@@ -52,7 +42,6 @@ function ProjectsPage() {
           <ProjectCard
             key={project.id}
             project={project}
-            isActive={project.slug === activeProjectSlug}
             onOpen={() => navigate({ to: '/projects/$projectSlug', params: { projectSlug: project.slug } })}
           />
         ))}
@@ -62,7 +51,7 @@ function ProjectsPage() {
   );
 }
 
-function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive: boolean; onOpen: () => void }) {
+function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
   const { t } = useTranslation(['project', 'common', 'members']);
   const currentUser = useAuthStore((s) => s.currentUser);
   const members = useQuery({ queryKey: ['members', project.slug], queryFn: () => listMembers(project.slug) });
@@ -77,7 +66,7 @@ function ProjectCard({ project, isActive, onOpen }: { project: Project; isActive
   const hasMention = (sessions.data ?? []).some((s) => s.unreadMention);
 
   return (
-    <button className={`cw-project-card ${isActive ? 'is-active' : ''}`} onClick={onOpen}>
+    <button className="cw-project-card" onClick={onOpen}>
       <div className="cw-project-card-head">
         <span className="cw-project-card-name">
           <Icon name="folder" size={15} />

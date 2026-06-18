@@ -57,10 +57,6 @@ export function byId<T extends { id: string }>(items: T[], id: string): T {
   return item;
 }
 
-export function InfoRow({ icon, title, meta, children }: { icon: IconName; title: string; meta: string; children: ReactNode }) { return <article className="cw-info-row"><IconPocket tone="neutral" icon={icon} /><div><b>{title}</b><p>{children}</p></div><span>{meta}</span></article>; }
-
-export function ActivityRow({ title, date, children }: { title: string; date: string; children: ReactNode }) { return <article className="cw-activity-row"><span><Icon name="recap" /></span><div><b>{title}</b><p>{children}</p></div><time>{date}</time></article>; }
-
 export function SharePill({ mode, compact = false }: { mode: ShareMode; compact?: boolean }) {
   const { t } = useTranslation('common');
   const labelKey = compact ? `share.${mode}.short_label` : `share.${mode}.label`;

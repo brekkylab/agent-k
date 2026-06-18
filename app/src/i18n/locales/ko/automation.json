@@ -223,6 +223,7 @@
     "cancel_aria": "취소",
     "bearer_token": "bearer 토큰",
     "edit_trigger_aria": "트리거 편집",
+    "duplicate_trigger_aria": "트리거 복제",
     "webhook_not_editable": "웹훅은 편집 불가",
     "edit": "편집",
     "delete_again": "한 번 더 눌러 삭제",
@@ -244,20 +245,30 @@
     "trigger_save_failed": "트리거 수정 실패: {{message}}"
   },
   "sched": {
-    "weekdays": ["일", "월", "화", "수", "목", "금", "토"],
+    "weekdays_short": ["일", "월", "화", "수", "목", "금", "토"],
+    "weekdays": ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"],
     "nth": ["첫째", "둘째", "셋째", "넷째", "다섯째"],
     "repeat_every": "반복 주기",
-    "repeat_mode": "반복 방식",
+    "repeat_mode": "방식",
+    "monthly_mode": {
+      "day": "날짜",
+      "weekday": "요일"
+    },
     "day_of_month": "며칠",
-    "day_suffix": "일",
+    "day_label": "{{day}}일",
+    "last_day": "말일",
+    "nth_last": "마지막",
     "detail": "상세",
     "weekday_label": "요일",
     "run_time": "실행 시각",
     "timezone": "시간대",
-    "interval_hint": "cron으로는 매시간 단위에서만 N>1을 지원합니다.",
+    "interval_label": "간격",
+    "interval_suffix": "시간마다",
+    "minute_suffix": "분마다",
     "cron_preview_title": "생성될 cron 표현식",
     "opt": {
-      "hourly": "시간마다",
+      "minutely": "분 단위",
+      "hourly": "시간 단위",
       "daily": "매일",
       "weekly": "매주",
       "monthly": "매월",
@@ -266,14 +277,20 @@
     "monthly_day_opt": "매월 {{day}}일",
     "monthly_weekday_opt": "매월 {{nth}} {{weekday}}요일",
     "weekday_option": "{{day}}요일",
+    "weekday_implied": "{{day}} (기본값)",
     "summary": {
+      "every_minute": "매분",
+      "every_n_minutes": "{{n}}분마다",
       "every_hour": "매시간",
       "every_n_hours": "{{n}}시간마다",
+      "oclock": "{{h}}시",
       "daily": "매일 {{time}}",
       "weekly_all": "매주 {{time}}",
       "weekly": "매주 {{days}}요일 {{time}}",
       "monthly_day": "매월 {{day}}일 {{time}}",
-      "monthly_weekday": "매월 {{nth}} {{weekday}}요일 {{time}}"
+      "monthly_last": "매월 말일 {{time}}",
+      "monthly_weekday": "매월 {{nth}} {{weekday}}요일 {{time}}",
+      "monthly_weekday_last": "매월 마지막 {{weekday}}요일 {{time}}"
     }
   },
   "webhook_dialog": {
