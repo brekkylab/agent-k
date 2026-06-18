@@ -130,10 +130,15 @@ export function AutomationCalendar({
         ? 4000 : false,
   });
 
-  // Pin the past/future split for the component's lifetime: a per-render
-  // Date.now() would bust the entriesByDay memo every render and drift the
-  // boundary mid-session.
-  const now = useMemo(() => Date.now(), []);
+  // Past/future split point. Advanced once a minute (not per render, which
+  // would thrash the entriesByDay memo) so a calendar left open across a fire
+  // stops showing the now-past occurrence as a prediction — the real run takes
+  // over once the run-window query picks it up.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
   const matchAutomation = (id: string) => !filterAutomationId || id === filterAutomationId;
 
   // Assign accent by the automation's rank in the project list (insertion
