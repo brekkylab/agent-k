@@ -453,4 +453,26 @@
 }
 .cw-folder-list-row:hover .cw-folder-list-add, .cw-folder-list-add:focus-visible { opacity: 1; border-color: var(--cw-ink-4); }
 .cw-folder-list-add:hover { background: color-mix(in oklch, var(--cw-ink) 12%, transparent); border-color: var(--cw-ink-2); }
-.cw-folder-list-check { display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; color: var(--cw-accent); }
+/* Staged check — clicking it un-stages, so it reads as a check normally and swaps
+   to a destructive × on hover. */
+.cw-folder-list-check {
+  display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; padding: 0;
+  border: 1px solid transparent; border-radius: var(--cw-radius-sm); background: transparent;
+  color: var(--cw-accent); cursor: pointer; transition: background 100ms, border-color 100ms;
+}
+.cw-preview-pane-added { color: var(--cw-accent); }
+/* Scoped under the button so these beat the base `.cw-icon { display: inline-block }`
+   (same specificity otherwise — load order would leave both icons visible). */
+.cw-folder-list-check .cw-folder-list-check-off,
+.cw-preview-pane-added .cw-folder-list-check-off { display: none; }
+/* Removing, so the hover box is destructive-tinted (icon, background and border
+   all red) — the same box shape as the "+" button, but red instead of neutral ink. */
+.cw-folder-list-check:hover, .cw-preview-pane-added:hover { color: var(--cw-destructive); }
+.cw-folder-list-check:hover {
+  background: color-mix(in oklch, var(--cw-destructive) 12%, transparent);
+  border-color: color-mix(in oklch, var(--cw-destructive), transparent 45%);
+}
+.cw-folder-list-check:hover .cw-folder-list-check-on,
+.cw-preview-pane-added:hover .cw-folder-list-check-on { display: none; }
+.cw-folder-list-check:hover .cw-folder-list-check-off,
+.cw-preview-pane-added:hover .cw-folder-list-check-off { display: inline-block; }

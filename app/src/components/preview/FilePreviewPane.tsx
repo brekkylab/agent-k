@@ -10,6 +10,8 @@ interface Props {
   emptyHint: string;
   /** When set, the header shows a "+" that attaches this file (or a check if already staged). */
   onAttach?: () => void;
+  /** Un-stage this file — clicking the check toggles the attachment off. */
+  onRemove?: () => void;
   added?: boolean;
 }
 
@@ -18,7 +20,7 @@ interface Props {
  * logic as FilePreviewModal via useFilePreview + PreviewBody, but renders into
  * a plain panel — e.g. the right pane of the home shared-file picker.
  */
-export function FilePreviewPane({ globalPath, emptyHint, onAttach, added }: Props) {
+export function FilePreviewPane({ globalPath, emptyHint, onAttach, onRemove, added }: Props) {
   if (!globalPath) {
     return (
       <div className="cw-preview-pane is-empty">
@@ -27,10 +29,10 @@ export function FilePreviewPane({ globalPath, emptyHint, onAttach, added }: Prop
       </div>
     );
   }
-  return <FilePreviewPaneInner key={globalPath} globalPath={globalPath} onAttach={onAttach} added={added} />;
+  return <FilePreviewPaneInner key={globalPath} globalPath={globalPath} onAttach={onAttach} onRemove={onRemove} added={added} />;
 }
 
-function FilePreviewPaneInner({ globalPath, onAttach, added }: { globalPath: string; onAttach?: () => void; added?: boolean }) {
+function FilePreviewPaneInner({ globalPath, onAttach, onRemove, added }: { globalPath: string; onAttach?: () => void; onRemove?: () => void; added?: boolean }) {
   const { t } = useTranslation('common');
   const { t: tSession } = useTranslation('session');
   const { state, filename, download, isStage } = useFilePreview(globalPath);
@@ -39,9 +41,11 @@ function FilePreviewPaneInner({ globalPath, onAttach, added }: { globalPath: str
       <div className="cw-preview-pane-head">
         <span className="cw-preview-pane-title" title={filename}>{filename}</span>
         {onAttach && (added ? (
-          <span className="cw-preview-pane-added" aria-label={tSession('shared_files.added')} title={tSession('shared_files.added')}>
-            <Icon name="check" size={15} />
-          </span>
+          // Click the check to un-stage (toggle off); an × on hover signals removal.
+          <button type="button" className="cw-preview-pane-added" aria-label={tSession('shared_files.remove')} title={tSession('shared_files.remove')} onClick={onRemove}>
+            <Icon name="check" size={15} className="cw-folder-list-check-on" />
+            <Icon name="x" size={15} className="cw-folder-list-check-off" />
+          </button>
         ) : (
           <button type="button" aria-label={tSession('shared_files.import')} title={tSession('shared_files.import')} onClick={onAttach}>
             <Icon name="plus" size={15} />

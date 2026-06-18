@@ -58,6 +58,7 @@ export function SharedFilePickerDialog({ projectId, projectName, onImport, stage
             rootFolderPath={sharedRoot}
             rootLabel={projectName}
             onImport={onImport}
+            onRemove={onRemove}
             addedPaths={addedPaths}
           />
         </div>

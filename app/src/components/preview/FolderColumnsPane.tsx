@@ -17,6 +17,8 @@ interface Props {
   rootLabel?: string;
   /** Attach files/folders picked from a row's "+". */
   onImport: (items: SessionImportItem[]) => void;
+  /** Un-stage a file by global path — clicking the check on an added row toggles it off. */
+  onRemove: (globalPath: string) => void;
   /** Global paths already staged — file rows show a check instead of the "+". */
   addedPaths: Set<string>;
 }
@@ -29,7 +31,7 @@ interface Props {
  * added-check as the left browser. Reuses the browser's cached shared-dirents
  * query, so no extra fetch.
  */
-export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImport, addedPaths }: Props) {
+export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImport, onRemove, addedPaths }: Props) {
   const scope: DirentScope = { kind: 'shared', projectId };
   const { data: entries = [] } = useQuery({
     queryKey: ['dirents', 'shared', projectId],
@@ -72,6 +74,7 @@ export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImpo
           onOpenFolder={(p) => openFolderAt(i, p)}
           onSelectFile={(p) => selectFileAt(i, p)}
           onImport={onImport}
+          onRemove={onRemove}
         />
       ))}
       {selectedFile && (
@@ -81,6 +84,7 @@ export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImpo
             emptyHint=""
             added={addedPaths.has(selectedFile)}
             onAttach={() => onImport([{ globalPath: selectedFile, filename: selectedFile.split('/').filter(Boolean).pop() ?? selectedFile }])}
+            onRemove={() => onRemove(selectedFile)}
           />
         </div>
       )}
@@ -97,9 +101,10 @@ interface ColumnProps {
   onOpenFolder: (globalPath: string) => void;
   onSelectFile: (globalPath: string) => void;
   onImport: (items: SessionImportItem[]) => void;
+  onRemove: (globalPath: string) => void;
 }
 
-function FolderColumn({ entries, folderPath, headerLabel, selectedChild, addedPaths, onOpenFolder, onSelectFile, onImport }: ColumnProps) {
+function FolderColumn({ entries, folderPath, headerLabel, selectedChild, addedPaths, onOpenFolder, onSelectFile, onImport, onRemove }: ColumnProps) {
   const { t } = useTranslation('session');
   const { folders, files } = useMemo(
     () => listDirectChildren(entries, folderPath.split('/')),
@@ -148,9 +153,17 @@ function FolderColumn({ entries, folderPath, headerLabel, selectedChild, addedPa
                 <FileTypeIcon filename={nameOf(f)} size={16} />
                 <span className="cw-folder-list-name">{nameOf(f)}</span>
                 {addedPaths.has(f.path) ? (
-                  <span className="cw-folder-list-check" aria-label={t('shared_files.added')} title={t('shared_files.added')}>
-                    <Icon name="check" size={14} />
-                  </span>
+                  // Click the check to un-stage (toggle off). Default check; an × on hover signals removal.
+                  <button
+                    type="button"
+                    className="cw-folder-list-check"
+                    aria-label={t('shared_files.remove')}
+                    title={t('shared_files.remove')}
+                    onClick={(e) => { e.stopPropagation(); onRemove(f.path); }}
+                  >
+                    <Icon name="check" size={14} className="cw-folder-list-check-on" />
+                    <Icon name="x" size={14} className="cw-folder-list-check-off" />
+                  </button>
                 ) : (
                   <button
                     type="button"
