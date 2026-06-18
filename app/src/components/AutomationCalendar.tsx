@@ -532,7 +532,7 @@ function CalendarDayPopover({
     if (spaceBelow >= 200 || spaceBelow >= spaceAbove) {
       setPos({ placement: 'below', top: r.top - gap, left, width, maxHeight: Math.max(160, spaceBelow) });
     } else {
-      setPos({ placement: 'above', bottom: window.innerHeight - r.bottom + gap, left, width, maxHeight: Math.max(160, spaceAbove) });
+      setPos({ placement: 'above', bottom: window.innerHeight - r.bottom - gap, left, width, maxHeight: Math.max(160, spaceAbove) });
     }
   }, [anchor]);
 
