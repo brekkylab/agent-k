@@ -34,6 +34,9 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')(
 
 type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 type TriggerKind = 'cron' | 'webhook' | 'manual';
+// 'scheduled' is calendar-only: future predicted fires (occurrences), which
+// aren't runs and so have no run status.
+type StatusFilter = RunStatus | 'all' | 'scheduled';
 
 interface RunEventLike { id: number; ts: string; kind: string; detail?: string }
 
@@ -144,7 +147,7 @@ function AutomationsPage() {
   const { t } = useTranslation('automation');
   const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<RunStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [triggerFilter, setTriggerFilter] = useState<TriggerKind | 'all'>('all');
   const [page, setPage] = useState(0);
   const [view, setView] = useState<'list' | 'calendar'>('list');
@@ -717,7 +720,11 @@ function AutomationsPage() {
           <div className="cw-runs-filterbar">
             <SegmentedControl<'list' | 'calendar'>
               value={view}
-              onChange={setView}
+              onChange={(v) => {
+                setView(v);
+                // 'scheduled' has no meaning for the runs list — clear it.
+                if (v === 'list' && statusFilter === 'scheduled') setStatusFilter('all');
+              }}
               ariaLabel={t('view.aria')}
               iconOnly
               options={[
@@ -731,12 +738,16 @@ function AutomationsPage() {
                 <span>{selectedAutomation.description ?? ''}</span>
               </div>
             )}
-            <FilterSelect<RunStatus | 'all'>
+            <FilterSelect<StatusFilter>
               label={t('list.context_status')}
               value={statusFilter}
               onChange={setStatusFilter}
               options={[
                 { value: 'all',       label: t('list.status_all') },
+                // Calendar-only: filter to upcoming predicted fires.
+                ...(view === 'calendar'
+                  ? [{ value: 'scheduled' as const, label: t('status.scheduled') }]
+                  : []),
                 { value: 'queued',    label: t('status.queued') },
                 { value: 'running',   label: t('status.running') },
                 { value: 'succeeded', label: t('status.succeeded') },

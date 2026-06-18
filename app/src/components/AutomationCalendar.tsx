@@ -153,10 +153,13 @@ export function AutomationCalendar({
   const automationColor = (id: string) => colorByAutomation.get(id) ?? PALETTE[0]!;
   const runTriggerKind = (run: Run): TriggerKind =>
     run.triggerId ? (triggerById[run.triggerId]?.kind as TriggerKind) ?? 'manual' : 'manual';
-  // Occurrences are future schedule predictions — only meaningful when the
-  // trigger filter admits 'cron' and no specific status is selected.
+  // Occurrences are future schedule predictions — shown when the trigger filter
+  // admits 'cron' and the status filter is either unset ('all') or the
+  // dedicated 'scheduled' pseudo-status (which also hides all real runs, since
+  // no run has that status).
   const showOccurrences =
-    (triggerFilter === 'all' || triggerFilter === 'cron') && statusFilter === 'all';
+    (triggerFilter === 'all' || triggerFilter === 'cron') &&
+    (statusFilter === 'all' || statusFilter === 'scheduled');
 
   // Merge real runs (past) + predicted occurrences (future) into per-day
   // buckets, honoring the shared status / trigger-kind filters.

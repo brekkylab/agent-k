@@ -72,7 +72,8 @@
     "running": "실행 중",
     "succeeded": "성공",
     "failed": "실패",
-    "cancelled": "취소"
+    "cancelled": "취소",
+    "scheduled": "예약됨"
   },
   "tier": {
     "light": "경량",

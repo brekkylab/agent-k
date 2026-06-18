@@ -72,7 +72,8 @@
     "running": "Running",
     "succeeded": "Succeeded",
     "failed": "Failed",
-    "cancelled": "Cancelled"
+    "cancelled": "Cancelled",
+    "scheduled": "Scheduled"
   },
   "tier": {
     "light": "Light",
