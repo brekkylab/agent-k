@@ -141,7 +141,7 @@ impl SessionsState {
         .await?;
 
         if let Some(mut runenv) = runenv {
-            let dir = self.data_root.join(item.id.to_string());
+            let dir = self.data_root.join("sessions").join(item.id.to_string());
             tokio::fs::create_dir_all(&dir).await?;
             runenv
                 .stop()
@@ -168,7 +168,7 @@ impl SessionsState {
             .bind(id.to_string())
             .execute(&self.db)
             .await?;
-        let dir = self.data_root.join(id.to_string());
+        let dir = self.data_root.join("sessions").join(id.to_string());
         if tokio::fs::try_exists(&dir).await? {
             tokio::fs::remove_dir_all(&dir).await?;
         }
@@ -250,7 +250,7 @@ impl SessionsState {
 
         tokio::spawn(async move {
             let session_key = id.to_string();
-            let dir = data_root.join(&session_key);
+            let dir = data_root.join("sessions").join(&session_key);
             let archive_path = dir.join("sandbox.tar.zst");
             let channel = message_channel(id);
 

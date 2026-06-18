@@ -102,7 +102,10 @@ impl ProjectsState {
     }
 
     pub fn workspace_root(&self, id: Uuid) -> PathBuf {
-        self.data_root.join(id.to_string()).join("workspace")
+        self.data_root
+            .join("projects")
+            .join(id.to_string())
+            .join("workspace")
     }
 }
 
