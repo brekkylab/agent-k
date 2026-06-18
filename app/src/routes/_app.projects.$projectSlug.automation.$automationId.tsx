@@ -153,7 +153,8 @@ function AutomationSettingsPage() {
   };
 
   const createTriggerMutation = useMutation({
-    mutationFn: (spec: TriggerSpec) => createTriggerApi(automationId, spec),
+    mutationFn: (vars: { spec: TriggerSpec; enabled?: boolean }) =>
+      createTriggerApi(automationId, vars.spec, { enabled: vars.enabled }),
     onSuccess: (created) => {
       invalidateTriggers();
       if (created.webhookToken) {
@@ -206,7 +207,7 @@ function AutomationSettingsPage() {
   // time). The clone is created disabled so an exact duplicate doesn't double-
   // fire alongside the original until the user edits and enables it.
   const duplicateTrigger = (trig: Trigger) =>
-    createTriggerMutation.mutate({ ...trig.spec, enabled: false});
+    createTriggerMutation.mutate({ spec: trig.spec, enabled: false });
 
   // ── Add-trigger draft ───────────────────────────────────────────────────
   const [showAddForm, setShowAddForm] = useState(false);
@@ -221,12 +222,14 @@ function AutomationSettingsPage() {
   const submitDraft = () => {
     if (draftKind === 'cron') {
       createTriggerMutation.mutate({
-        kind: 'cron',
-        expr: draftSchedule.expr || '0 * * * *',
-        tz: draftSchedule.tz || null,
+        spec: {
+          kind: 'cron',
+          expr: draftSchedule.expr || '0 * * * *',
+          tz: draftSchedule.tz || null,
+        },
       });
     } else {
-      createTriggerMutation.mutate({ kind: 'webhook' });
+      createTriggerMutation.mutate({ spec: { kind: 'webhook' } });
     }
   };
 

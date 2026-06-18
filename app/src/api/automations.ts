@@ -137,10 +137,15 @@ export async function listOccurrences(
 export async function createTrigger(
   automationId: AutomationId,
   spec: TriggerSpec,
+  opts?: { enabled?: boolean },
 ): Promise<CreatedTrigger> {
+  const body = {
+    ...specToBody(spec),
+    ...(opts?.enabled !== undefined ? { enabled: opts.enabled } : {}),
+  };
   const raw = await request<CreatedTriggerResponse>(
     `/automations/${automationId}/triggers`,
-    { method: 'POST', body: specToBody(spec) },
+    { method: 'POST', body },
   );
   return toCreatedTrigger(raw);
 }

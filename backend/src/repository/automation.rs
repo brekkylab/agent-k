@@ -475,6 +475,20 @@ impl SqliteRepository {
         webhook_token_hash: Option<String>,
         next_fire_at: Option<DateTime<Utc>>,
     ) -> RepositoryResult<DbAutomationTrigger> {
+        self.create_trigger_with_enabled(automation_id, spec, true, webhook_token_hash, next_fire_at)
+            .await
+    }
+
+    /// Like `create_trigger`, but lets the caller create the trigger disabled
+    /// (e.g. duplicating a trigger so the clone doesn't double-fire).
+    pub async fn create_trigger_with_enabled(
+        &self,
+        automation_id: Uuid,
+        spec: &TriggerSpec,
+        enabled: bool,
+        webhook_token_hash: Option<String>,
+        next_fire_at: Option<DateTime<Utc>>,
+    ) -> RepositoryResult<DbAutomationTrigger> {
         let id = Uuid::new_v4();
         let now = Self::now_string();
         let kind = spec.kind();
@@ -484,12 +498,13 @@ impl SqliteRepository {
         sqlx::query(
             "INSERT INTO automation_triggers \
                (id, automation_id, kind, spec_json, enabled, next_fire_at, webhook_token_hash, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(automation_id.to_string())
         .bind(kind.as_str())
         .bind(&spec_json)
+        .bind(if enabled { 1i64 } else { 0i64 })
         .bind(&nfa_str)
         .bind(&webhook_token_hash)
         .bind(&now)
@@ -503,7 +518,7 @@ impl SqliteRepository {
             automation_id,
             kind,
             spec_json,
-            enabled: true,
+            enabled,
             next_fire_at,
             webhook_token_hash,
             created_at: Self::parse_timestamp(now.clone(), "automation_triggers.created_at")?,

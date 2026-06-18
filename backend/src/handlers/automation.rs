@@ -194,9 +194,10 @@ pub async fn create_trigger(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Path(automation_id): Path<Uuid>,
-    Json(spec): Json<CreateTriggerRequest>,
+    Json(payload): Json<CreateTriggerRequest>,
 ) -> ApiResult<(StatusCode, Json<CreatedTriggerResponse>)> {
     require_automation_access(&state, auth_user.id, automation_id).await?;
+    let CreateTriggerRequest { spec, enabled } = payload;
 
     let (token_hash, plaintext) = if matches!(spec, TriggerSpec::Webhook { .. }) {
         let token = generate_webhook_token();
@@ -217,7 +218,7 @@ pub async fn create_trigger(
 
     let trigger = state
         .repository
-        .create_trigger(automation_id, &spec, token_hash, next_fire_at)
+        .create_trigger_with_enabled(automation_id, &spec, enabled, token_hash, next_fire_at)
         .await
         .map_err(|e| match e {
             RepositoryError::UniqueViolation(_) => {

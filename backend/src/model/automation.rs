@@ -189,9 +189,21 @@ impl TriggerResponse {
     }
 }
 
-/// Trigger creation body is `TriggerSpec` directly (avoids serde flatten +
-/// deny_unknown_fields conflict from a wrapper struct).
-pub type CreateTriggerRequest = TriggerSpec;
+fn default_true() -> bool {
+    true
+}
+
+/// Trigger creation body: the `TriggerSpec` fields (internally tagged by
+/// `kind`) flattened inline, plus an optional `enabled` (defaults to true) so a
+/// trigger can be created disabled in one request — e.g. duplicating a trigger.
+/// No `deny_unknown_fields` here: it's incompatible with `#[serde(flatten)]`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateTriggerRequest {
+    #[serde(flatten)]
+    pub spec: TriggerSpec,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
