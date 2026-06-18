@@ -1061,6 +1061,11 @@ pub async fn send_team_message(
             "team messages require a shared session",
         ));
     }
+    // Defense in depth: the UI guards on a trimmed value, but a direct API call
+    // with blank content would persist an empty bubble (and still badge mentions).
+    if payload.content.trim().is_empty() {
+        return Err(AppError::bad_request("team message content must not be empty"));
+    }
 
     let attachments = payload.attachments.clone().unwrap_or_default();
     validate_attachments(

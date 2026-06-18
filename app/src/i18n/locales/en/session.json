@@ -27,6 +27,7 @@
     "composer_hint": "Enter to send · # attach a file · @ mention a member",
     "command_no_results": "No matches",
     "command_loading": "Loading…",
+    "command_suggestions": "Suggestions",
     "mention_all_label": "Everyone",
     "team_mode_hint": "Team only · AI won't see it",
     "team_message_tooltip": "Not visible to AI",

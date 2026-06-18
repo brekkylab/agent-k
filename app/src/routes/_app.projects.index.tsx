@@ -72,7 +72,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
           <Icon name="folder" size={15} />
           <span>{project.name}</span>
           {hasMention && (
-            <span className="cw-mention-dot" role="img" aria-label="you have unread mentions here" title="Unread mentions" />
+            <span className="cw-mention-dot" role="img" aria-label={t('common:mention.unread_in_project')} title={t('common:mention.unread_in_project')} />
           )}
         </span>
         <span className={`cw-role-badge ${isOwner ? 'owner' : 'member'}`}>

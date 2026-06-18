@@ -9,6 +9,8 @@ interface CommandSuggestionPopupProps {
   isLoading: boolean;
   emptyLabel: string;
   loadingLabel: string;
+  /** Accessible name for the listbox (screen readers announce it on focus). */
+  ariaLabel: string;
   onHighlight: (index: number) => void;
   onSelect: (index: number) => void;
 }
@@ -23,6 +25,7 @@ export function CommandSuggestionPopup({
   isLoading,
   emptyLabel,
   loadingLabel,
+  ariaLabel,
   onHighlight,
   onSelect,
 }: CommandSuggestionPopupProps) {
@@ -34,7 +37,7 @@ export function CommandSuggestionPopup({
   }, [highlightIndex, items]);
 
   return (
-    <div className="cw-cmd-popup" role="listbox" id={listboxId} ref={listRef}>
+    <div className="cw-cmd-popup" role="listbox" id={listboxId} ref={listRef} aria-label={ariaLabel}>
       {isLoading && items.length === 0 && <div className="cw-cmd-status">{loadingLabel}</div>}
       {!isLoading && items.length === 0 && <div className="cw-cmd-status">{emptyLabel}</div>}
       {items.map((item, i) => (

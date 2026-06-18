@@ -1,6 +1,8 @@
 // Session card — rich session preview (title, snippet, time, share, unread).
 // Shared by the project home (previously) and the "View all" sessions overlay.
 
+import { useTranslation } from 'react-i18next';
+
 import { SharePill } from '@/components/uiPrimitives';
 import { SessionCardMenu } from '@/components/SessionCardMenu';
 import { SessionTitleText } from '@/components/SessionTitleText';
@@ -18,6 +20,7 @@ export function SessionCard({
   onOpen: () => void;
   onRequestDelete: () => void;
 }) {
+  const { t } = useTranslation('common');
   const isUnread = session.unreadCount > 0;
   const timeLabel = session.lastMessageAt ? timeAgo(session.lastMessageAt) : null;
 
@@ -34,7 +37,7 @@ export function SessionCard({
         </span>
         <span className="cw-session-right">
           {session.unreadMention && (
-            <span className="cw-mention-dot" role="img" aria-label="mentions you (unread)" title="You were mentioned" />
+            <span className="cw-mention-dot" role="img" aria-label={t('mention.you_were_mentioned')} title={t('mention.you_were_mentioned')} />
           )}
           {isUnread && (
             <span className="cw-unread-badge" aria-label={`unread ${session.unreadCount}`}>

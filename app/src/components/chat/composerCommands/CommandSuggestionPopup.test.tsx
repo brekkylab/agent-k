@@ -71,6 +71,7 @@ function Harness({
           isLoading={cmd.activeCommand?.isLoading ?? false}
           emptyLabel={cmd.activeCommand?.emptyLabel ?? ''}
           loadingLabel="loading"
+          ariaLabel="Suggestions"
           onHighlight={cmd.setHighlightIndex}
           onSelect={cmd.selectItem}
         />

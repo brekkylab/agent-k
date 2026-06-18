@@ -1121,7 +1121,9 @@ button.cw-select[aria-expanded="true"] .cw-select-caret {
 .cw-message-meta .cw-team-mark {
   display: inline-flex;
   align-items: center;
-  color: var(--cw-ink-4);
+  /* ink-3 (not ink-4) so the "not visible to AI" marker clears the 3:1 UI
+     contrast floor and reads as deliberate rather than a smudge. */
+  color: var(--cw-ink-3);
   position: relative;
   cursor: default;
 }

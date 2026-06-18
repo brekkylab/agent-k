@@ -1323,6 +1323,7 @@ function SessionPage() {
                 isLoading={composerCmd.activeCommand?.isLoading ?? false}
                 emptyLabel={composerCmd.activeCommand?.emptyLabel ?? ''}
                 loadingLabel={t('ui.command_loading')}
+                ariaLabel={t('ui.command_suggestions')}
                 onHighlight={composerCmd.setHighlightIndex}
                 onSelect={composerCmd.selectItem}
               />

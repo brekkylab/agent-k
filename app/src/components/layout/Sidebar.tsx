@@ -424,10 +424,16 @@ export function Sidebar() {
   const markReadMutation = useMutation({
     mutationFn: (sessionId: string) => markSessionRead(sessionId),
     onSuccess: (_data, sessionId) => {
-      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', activeProjectSlug] }, (old) => {
-        if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
-        return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
-      });
+      // Clear the unread count AND the mention flag. Update both the per-project
+      // list and the cross-project list (['sessions','__all__']) that feeds the
+      // project-level mention dot — they don't share a key prefix, so the dot
+      // would otherwise linger after "Mark as read" until a refetch.
+      const clear = (old?: Session[]) => {
+        if (!old?.some((s) => s.id === sessionId && (s.unreadCount > 0 || s.unreadMention))) return old;
+        return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0, unreadMention: false } : s));
+      };
+      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', activeProjectSlug] }, clear);
+      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', '__all__'] }, clear);
     },
   });
 
@@ -511,7 +517,7 @@ export function Sidebar() {
               <span className="cw-project-swatch" />
               <span>{item.name}</span>
               {mentionedProjectIds.has(item.id) && (
-                <span className="cw-mention-dot" role="img" aria-label="unread mentions" title="Unread mentions" />
+                <span className="cw-mention-dot" role="img" aria-label={t('mention.unread_in_project')} title={t('mention.unread_in_project')} />
               )}
             </button>
           ))}
@@ -608,7 +614,7 @@ export function Sidebar() {
                       <IconPocket tone="trust" icon="message-square" compact />
                     )}
                     {session.unreadMention && (
-                      <span className="cw-mention-dot" role="img" aria-label="mentions you (unread)" title="You were mentioned" />
+                      <span className="cw-mention-dot" role="img" aria-label={t('mention.you_were_mentioned')} title={t('mention.you_were_mentioned')} />
                     )}
                     <SessionTitleText title={session.title} />
                     {session.isAutoAppend && <span className="auto-dot">●</span>}

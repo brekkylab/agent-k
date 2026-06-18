@@ -244,6 +244,10 @@ async fn authz_and_validation() {
     let (st, body) = post_team_message(&app, &owner_token, session_id, "hi", &[Uuid::new_v4()]).await;
     assert_eq!(st, axum::http::StatusCode::BAD_REQUEST, "body: {body}");
 
+    // Blank content: 400 (defense in depth; the UI trims before sending).
+    let (st, body) = post_team_message(&app, &owner_token, session_id, "   ", &[]).await;
+    assert_eq!(st, axum::http::StatusCode::BAD_REQUEST, "body: {body}");
+
     // Read-only share mode: member may read but not post.
     update_share_mode(&app, &owner_token, session_id, "shared_readonly").await;
     let (st, _) = post_team_message(&app, &member_token, session_id, "hi", &[]).await;

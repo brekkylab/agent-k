@@ -76,6 +76,10 @@
       "settings": "Settings"
     }
   },
+  "mention": {
+    "you_were_mentioned": "You were mentioned",
+    "unread_in_project": "Unread mentions in this project"
+  },
   "placeholders": {
     "untitled_session": "Untitled session",
     "no_description": "No description"
