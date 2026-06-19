@@ -18,6 +18,12 @@ CREATE TABLE projects (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE project_permissions {
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    user_id TEXT NOT NULL
+}
+
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
