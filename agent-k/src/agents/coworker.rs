@@ -1,20 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use ailoy::{
-    agent::{Agent, AgentSpec, default_provider},
-    runenv::{FileEntry, RunEnv, SandboxConfig, VolumeMount},
+    agent::AgentSpec,
+    runenv::{FileEntry, Sandbox, SandboxBuilder, VolumeMount},
 };
 
-use crate::agents::speedwagon::{
-    SPEEDWAGON_DELEGATION_NOTE, register_corpus_tools, speedwagon_subagent_spec,
-};
-use crate::knowledge_base::SharedStore;
-
-const XLSX_SKILL_DIR: &str = "/workspace/skills/xlsx";
-pub const GUEST_ATTACHED_DIR: &str = "/workspace/attached";
-pub const GUEST_SHARED_DIR: &str = "/workspace/shared";
-pub const GUEST_ARTIFACTS_DIR: &str = "/workspace/artifacts";
-pub const PPTX_SKILL_DIR: &str = "/workspace/skills/pptx";
+const XLSX_SKILL_DIR: &str = "/root/skills/xlsx";
+pub const GUEST_ATTACHED_DIR: &str = "/root/attached";
+pub const GUEST_SHARED_DIR: &str = "/root/shared";
+pub const GUEST_ARTIFACTS_DIR: &str = "/root/artifacts";
+pub const PPTX_SKILL_DIR: &str = "/root/skills/pptx";
 
 const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to plan and perform tasks based on the user's query.
 
@@ -37,7 +32,7 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 
 ## Input files
 - The user may mention files in the query outside the home directory.
-- These files are reside in the `{{INPUTS}}` (input files) or `{{SHARED_DATA}}` (shared data files) directories.
+- These files are reside in the `{{ATTACHMENTS}}` (attachment files) or `{{SHARED_DATA}}` (shared data files) directories.
 
 ## Artifacts
 - Artifacts are output files produced by the task and shown to the user as the result.
@@ -49,125 +44,58 @@ const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to 
 - Current time: {{TIME}}
 - Always respond in the language the user used."#;
 
-#[derive(Default, Clone)]
-pub struct CoworkerSandboxOptions {
-    pub sandbox_name: Option<String>,
-    pub persist: bool,
-    /// When true, the bundled PPTX and XLSX skills are materialised under
-    /// [`PPTX_SKILL_DIR`] / [`XLSX_SKILL_DIR`] and surfaced via the
-    /// auto-rendered "Available Skills" table. Default `false`; the CLI
-    /// wrappers (`run`, `test_case`) flip this on explicitly.
-    pub with_skill: bool,
-    /// When set, a Speedwagon sub-agent (`subagent_speedwagon`) bound to this
-    /// document store is attached, letting Coworker delegate corpus questions.
-    pub corpus_store: Option<SharedStore>,
-    /// Model for the Speedwagon sub-agent. `None` inherits Coworker's own model;
-    /// set it to the corpus-recommended model so a parent on a model that is
-    /// poor for the corpus loop doesn't drag the sub-agent down.
-    pub corpus_model: Option<String>,
+/// Days since 1970-01-01 → (year, month, day). Howard Hinnant's `civil_from_days`.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// UTC timestamp in ISO 8601 (`YYYY-MM-DDTHH:MM:SSZ`) using only stdlib.
+fn now_utc_iso8601() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let sod = secs.rem_euclid(86_400);
+    let (y, mo, d) = civil_from_days(days);
+    let h = sod / 3600;
+    let mi = (sod % 3600) / 60;
+    let s = sod % 60;
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
 }
 
 /// name: Identity of the model
 /// model: Model to be used (e.g. openai/gpt-4.5)
-pub async fn get_coworker_agent(
+pub fn get_coworker_agent_spec(
     name: impl AsRef<str>,
     model: impl AsRef<str>,
-    input_dir: impl AsRef<Path>,
-    shared_data_dir: impl AsRef<Path>,
-    artifacts_dir: impl AsRef<Path>,
     with_skill: bool,
-) -> anyhow::Result<Agent> {
-    get_coworker_agent_with_opts(
-        name,
-        model,
-        input_dir,
-        shared_data_dir,
-        artifacts_dir,
-        CoworkerSandboxOptions {
-            with_skill,
-            ..Default::default()
-        },
-    )
-    .await
-}
-
-pub async fn get_coworker_agent_with_opts(
-    name: impl AsRef<str>,
-    model: impl AsRef<str>,
-    input_dir: impl AsRef<Path>,
-    shared_data_dir: impl AsRef<Path>,
-    artifacts_dir: impl AsRef<Path>,
-    opts: CoworkerSandboxOptions,
-) -> anyhow::Result<Agent> {
-    /// Days since 1970-01-01 → (year, month, day). Howard Hinnant's `civil_from_days`.
-    fn civil_from_days(days: i64) -> (i64, u32, u32) {
-        let z = days + 719_468;
-        let era = z.div_euclid(146_097);
-        let doe = z.rem_euclid(146_097) as u64;
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-        let y = yoe as i64 + era * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-        let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
-        let y = if m <= 2 { y + 1 } else { y };
-        (y, m, d)
-    }
-
-    /// UTC timestamp in ISO 8601 (`YYYY-MM-DDTHH:MM:SSZ`) using only stdlib.
-    fn now_utc_iso8601() -> String {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let days = secs.div_euclid(86_400);
-        let sod = secs.rem_euclid(86_400);
-        let (y, mo, d) = civil_from_days(days);
-        let h = sod / 3600;
-        let mi = (sod % 3600) / 60;
-        let s = sod % 60;
-        format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
-    }
-
-    // Build instruction
-    let mut config = SandboxConfig::default();
-    config.name = opts.sandbox_name;
-    config.persist = opts.persist;
-    config.image = "brekkylab/agent-k-libreoffice:latest".into();
-    config.cpus = 8;
-    config.memory_mib = 1024;
-    config.workdir = "/workspace".into();
-    config.env.insert("HOME".into(), "/workspace".into());
-    config.volumes.push(VolumeMount::Bind {
-        host: input_dir.as_ref().into(),
-        guest: GUEST_ATTACHED_DIR.into(),
-        readonly: true,
-    });
-    config.volumes.push(VolumeMount::Bind {
-        host: shared_data_dir.as_ref().into(),
-        guest: GUEST_SHARED_DIR.into(),
-        readonly: true,
-    });
-    config.volumes.push(VolumeMount::Bind {
-        host: artifacts_dir.as_ref().into(),
-        guest: GUEST_ARTIFACTS_DIR.into(),
-        readonly: false,
-    });
+) -> AgentSpec {
     let inst = COWORKER_INSTRUCTION
         .replace("{{NAME}}", name.as_ref())
         .replace("{{TIME}}", &now_utc_iso8601())
-        .replace("{{HOME}}", "/workspace")
-        .replace("{{INPUTS}}", GUEST_ATTACHED_DIR)
+        .replace("{{HOME}}", "/root")
+        .replace("{{ATTACHMENTS}}", GUEST_ATTACHED_DIR)
         .replace("{{SHARED_DATA}}", GUEST_SHARED_DIR)
         .replace("{{ARTIFACTS}}", GUEST_ARTIFACTS_DIR)
         .replace("{{OS}}", "Debian GNU/Linux 13 (trixie)");
 
     let mut spec = AgentSpec::new(model.as_ref())
-        .instruction(inst.clone())
+        .instruction(inst)
         .system_tools()
         .web_search_tool(vec![])
         .max_tokens(32_000);
-    if opts.with_skill {
+    if with_skill {
         let pptx_dir = PathBuf::from(PPTX_SKILL_DIR);
         let xlsx_dir = PathBuf::from(XLSX_SKILL_DIR);
         spec = spec
@@ -198,20 +126,33 @@ pub async fn get_coworker_agent_with_opts(
                 ],
             );
     }
-    let runenv = RunEnv::sandbox(config).await?;
-    match opts.corpus_store {
-        // A corpus store lets Coworker delegate document questions to a
-        // Speedwagon sub-agent. The sub-agent's corpus tools resolve against
-        // this provider, so register them here alongside the default tools.
-        Some(store) => {
-            let mut provider = default_provider().clone();
-            register_corpus_tools(&mut provider.tools, store);
-            let sub_model = opts.corpus_model.as_deref().unwrap_or(model.as_ref());
-            let spec = spec
-                .instruction(format!("{inst}{SPEEDWAGON_DELEGATION_NOTE}"))
-                .subagent(speedwagon_subagent_spec(name.as_ref(), sub_model));
-            Agent::try_with_provider_and_runenv(spec, &provider, runenv)
-        }
-        None => Agent::try_with_runenv(spec, runenv),
-    }
+    spec
+}
+
+pub async fn get_coworker_agent_runenv(
+    input_dir: impl AsRef<Path>,
+    shared_data_dir: impl AsRef<Path>,
+    artifacts_dir: impl AsRef<Path>,
+) -> anyhow::Result<Sandbox> {
+    SandboxBuilder::new()
+        .image("brekkylab/agent-k-libreoffice:latest")
+        .cpus(8)
+        .memory_mib(1024)
+        .mount(VolumeMount::Bind {
+            host: input_dir.as_ref().to_path_buf(),
+            guest: GUEST_ATTACHED_DIR.to_string(),
+            readonly: false,
+        })
+        .mount(VolumeMount::Bind {
+            host: shared_data_dir.as_ref().to_path_buf(),
+            guest: GUEST_SHARED_DIR.to_string(),
+            readonly: true,
+        })
+        .mount(VolumeMount::Bind {
+            host: artifacts_dir.as_ref().to_path_buf(),
+            guest: GUEST_ARTIFACTS_DIR.to_string(),
+            readonly: false,
+        })
+        .build()
+        .await
 }

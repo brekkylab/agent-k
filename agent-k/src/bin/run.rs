@@ -6,14 +6,19 @@
 //!
 //! cargo run -p agent-k --bin run -- "Hello"
 
-use std::io::{self, BufRead, IsTerminal, Read, Write};
+use std::{
+    io::{self, BufRead, IsTerminal, Read, Write},
+    sync::Arc,
+};
 
-use agent_k::agents::get_coworker_agent;
+use agent_k::agents::{get_coworker_agent_runenv, get_coworker_agent_spec};
 use ailoy::{
-    agent::Agent,
+    agent::{Agent, AgentState},
     message::{Message, Part, Role},
+    runenv::Sandbox,
 };
 use futures::StreamExt;
+use tokio::sync::Mutex;
 
 const COWORKER_AGENT_NAME: &str = "minerva";
 const COWORKER_AGENT_OPENAI_MODEL: &str = "openai/gpt-5.4";
@@ -90,15 +95,12 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let mut agent = get_coworker_agent(
-        COWORKER_AGENT_NAME,
-        coworker_agent_model,
-        DATA_DIR,
-        SHARED_DATA_DIR,
-        ARTIFACT_DIR,
-        true,
-    )
-    .await?;
+    let spec = get_coworker_agent_spec(COWORKER_AGENT_NAME, coworker_agent_model, true);
+    let runenv = Arc::new(Mutex::new(
+        get_coworker_agent_runenv(DATA_DIR, SHARED_DATA_DIR, ARTIFACT_DIR).await?,
+    ));
+    let state = AgentState::new().with_runenv(runenv);
+    let mut agent = Agent::try_with_state(spec, state)?;
     println!(
         "[coworker] starting as '{}' ({})",
         COWORKER_AGENT_NAME, coworker_agent_model
