@@ -1,7 +1,7 @@
 // Project Home — a "new conversation" surface. Browsing past sessions lives in the
 // sidebar SESSIONS list + its "View all" overlay, not here.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -51,6 +51,12 @@ function ProjectHome() {
   const [composerText, setComposerText] = useState('');
   // Shared (server) files staged for attach — referenced by global path, no upload.
   const [pendingShared, setPendingShared] = useState<SessionImportItem[]>([]);
+  // Synchronous mirror of pendingShared. addShared's cap/dedupe decision must see
+  // additions made earlier in the same tick (a closure over the state value can't),
+  // so it reads/advances this ref. Re-synced from state after every commit, so the
+  // other mutation paths (remove/clear) keep it correct too.
+  const pendingSharedRef = useRef<SessionImportItem[]>([]);
+  useEffect(() => { pendingSharedRef.current = pendingShared; }, [pendingShared]);
   const [sharedPickerOpen, setSharedPickerOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
   // Model selection is remembered per project + agent surface and persisted to
@@ -152,25 +158,26 @@ function ProjectHome() {
   // Attach shared files picked from the dialog. Dedupe against what's already
   // staged; if the batch would push the total past MAX_ATTACHMENTS, reject the
   // whole batch (attach nothing) and toast — mirrors the session's importSharedFiles
-  // so picking a 30+ folder behaves like not picking it at all. The cap check runs
-  // against the current value (not inside the updater) so the toast is a clean
-  // side effect, not one fired during render.
+  // so picking a 30+ folder behaves like not picking it at all. Both the dedupe and
+  // the cap are decided against pendingSharedRef (not the closure's state value) so
+  // two calls in the same tick see each other's additions and can't blow past the
+  // cap; the toast stays out here, not inside the updater, so it's a clean side
+  // effect rather than one fired during render.
   const addShared = (items: SessionImportItem[]) => {
     if (items.length === 0) return;
-    const curPaths = new Set(pendingShared.map((s) => s.globalPath));
+    const cur = pendingSharedRef.current;
+    const curPaths = new Set(cur.map((s) => s.globalPath));
     const fresh = items.filter((it) => !curPaths.has(it.globalPath));
     if (fresh.length === 0) return; // everything already attached
-    if (pendingShared.length + fresh.length > MAX_ATTACHMENTS) {
+    if (cur.length + fresh.length > MAX_ATTACHMENTS) {
       showToast(t('home.shared_picker.attach_limit', { max: MAX_ATTACHMENTS }));
       return; // over the cap — don't attach any of them
     }
-    // Dedupe again against the authoritative `prev` inside the updater so a
-    // repeated/concurrent call can't append the same files twice.
-    setPendingShared((prev) => {
-      const existing = new Set(prev.map((s) => s.globalPath));
-      const toAdd = fresh.filter((it) => !existing.has(it.globalPath));
-      return toAdd.length === 0 ? prev : [...prev, ...toAdd];
-    });
+    // Advance the ref synchronously so a same-tick repeat sees these additions; the
+    // sync effect will re-affirm it from state after the commit.
+    const next = [...cur, ...fresh];
+    pendingSharedRef.current = next;
+    setPendingShared(next);
   };
 
   const memberList = members.data ?? [];
