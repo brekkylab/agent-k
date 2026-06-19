@@ -126,9 +126,13 @@ function ProjectHome() {
         to: '/projects/$projectSlug/sessions/$sessionPrefix',
         params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
         state: {
-          ...(firstMessage ? { initialMessage: firstMessage } : {}),
+          // Attachments only ride along with a message — the session auto-sends on
+          // `initialMessage`, so handing over attachments without one would just drop
+          // them. Gate both together so that case can't arise.
+          ...(firstMessage
+            ? { initialMessage: firstMessage, ...(attachmentPaths.length > 0 ? { initialAttachments: attachmentPaths } : {}) }
+            : {}),
           initialAgentId: selectedAgentId,
-          ...(attachmentPaths.length > 0 ? { initialAttachments: attachmentPaths } : {}),
         },
         // Morph the composer to its session position/shape (shared view-transition-name).
         viewTransition: true,
