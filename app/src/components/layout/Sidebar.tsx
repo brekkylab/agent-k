@@ -4,7 +4,7 @@
 // expanded and collapsed via the sticky SectionHeader, and even when collapsed the active item
 // and (Sessions only) unread items remain visible.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -247,6 +247,17 @@ export function Sidebar() {
     enabled: Boolean(activeProjectSlug),
   });
 
+  // All accessible sessions (across projects) — drives the project-level mention
+  // markers in the PROJECTS nav so they're visible before opening a project.
+  const allSessionsQuery = useQuery({
+    queryKey: ['sessions', '__all__'],
+    queryFn: () => listSessions(),
+  });
+  const mentionedProjectIds = useMemo(
+    () => new Set((allSessionsQuery.data ?? []).filter((s) => s.unreadMention).map((s) => s.projectId)),
+    [allSessionsQuery.data],
+  );
+
   const queryClient = useQueryClient();
   const showToast = useToastStore((s) => s.show);
   const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set());
@@ -347,6 +358,17 @@ export function Sidebar() {
             queryClient.removeQueries({ queryKey: ['messages', event.session_id] });
           }
         }
+      } else if (event.type === 'team_message_posted') {
+        // Team messages bump unread/mention badges without any run lifecycle.
+        // Same cache hygiene as agent_run_done: refresh the list, and drop the
+        // stale messages cache of sessions the user isn't currently viewing.
+        const slug = activeProjectSlugRef.current;
+        if (slug) void queryClient.invalidateQueries({ queryKey: ['sessions', slug] });
+        // Refresh the cross-project list that drives project-level mention dots.
+        void queryClient.invalidateQueries({ queryKey: ['sessions', '__all__'] });
+        if (event.session_id !== activeSessionIdRef.current) {
+          queryClient.removeQueries({ queryKey: ['messages', event.session_id] });
+        }
       }
     });
   }, [queryClient]);
@@ -402,10 +424,16 @@ export function Sidebar() {
   const markReadMutation = useMutation({
     mutationFn: (sessionId: string) => markSessionRead(sessionId),
     onSuccess: (_data, sessionId) => {
-      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', activeProjectSlug] }, (old) => {
-        if (!old?.some((s) => s.id === sessionId && s.unreadCount > 0)) return old;
-        return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0 } : s));
-      });
+      // Clear the unread count AND the mention flag. Update both the per-project
+      // list and the cross-project list (['sessions','__all__']) that feeds the
+      // project-level mention dot — they don't share a key prefix, so the dot
+      // would otherwise linger after "Mark as read" until a refetch.
+      const clear = (old?: Session[]) => {
+        if (!old?.some((s) => s.id === sessionId && (s.unreadCount > 0 || s.unreadMention))) return old;
+        return old.map((s) => (s.id === sessionId ? { ...s, unreadCount: 0, unreadMention: false } : s));
+      };
+      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', activeProjectSlug] }, clear);
+      queryClient.setQueriesData<Session[]>({ queryKey: ['sessions', '__all__'] }, clear);
     },
   });
 
@@ -488,6 +516,9 @@ export function Sidebar() {
             >
               <span className="cw-project-swatch" />
               <span>{item.name}</span>
+              {mentionedProjectIds.has(item.id) && (
+                <span className="cw-mention-dot" role="img" aria-label={t('mention.unread_in_project')} title={t('mention.unread_in_project')} />
+              )}
             </button>
           ))}
         </nav>
@@ -581,6 +612,9 @@ export function Sidebar() {
                       </span>
                     ) : (
                       <IconPocket tone="trust" icon="message-square" compact />
+                    )}
+                    {session.unreadMention && (
+                      <span className="cw-mention-dot" role="img" aria-label={t('mention.you_were_mentioned')} title={t('mention.you_were_mentioned')} />
                     )}
                     <SessionTitleText title={session.title} />
                     {session.isAutoAppend && <span className="auto-dot">●</span>}

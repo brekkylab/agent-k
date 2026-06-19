@@ -61,6 +61,9 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
   const latestRaw = latestUpdated(userSessions);
   const latest = latestRaw === 'new' ? t('card.latest_new') : latestRaw;
   const memberUsers: User[] = members.data ?? [];
+  // Any unread mention in this project's sessions → surface a marker on the card
+  // so it's visible from the projects list (before drilling into a session).
+  const hasMention = (sessions.data ?? []).some((s) => s.unreadMention);
 
   return (
     <button className="cw-project-card" onClick={onOpen}>
@@ -68,6 +71,9 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
         <span className="cw-project-card-name">
           <Icon name="folder" size={15} />
           <span>{project.name}</span>
+          {hasMention && (
+            <span className="cw-mention-dot" role="img" aria-label={t('common:mention.unread_in_project')} title={t('common:mention.unread_in_project')} />
+          )}
         </span>
         <span className={`cw-role-badge ${isOwner ? 'owner' : 'member'}`}>
           {isOwner ? t('members:badges.owner') : t('members:badges.member')}

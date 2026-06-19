@@ -526,7 +526,7 @@ async fn repository_mark_and_count_unread() {
 
     // No messages → unread is 0 for everyone
     let unread = repo.count_session_unread(session.id, bob_id).await.unwrap();
-    assert_eq!(unread, 0, "no messages → unread should be 0");
+    assert_eq!(unread.count, 0, "no messages → unread should be 0");
 
     // Append 2 messages
     repo.append_messages(
@@ -544,12 +544,12 @@ async fn repository_mark_and_count_unread() {
 
     // bob hasn't read anything → unread = 2
     let unread_bob = repo.count_session_unread(session.id, bob_id).await.unwrap();
-    assert_eq!(unread_bob, 2, "bob should see 2 unread");
+    assert_eq!(unread_bob.count, 2, "bob should see 2 unread");
 
     // mark bob as read
     repo.mark_session_read(session.id, bob_id).await.unwrap();
     let unread_after = repo.count_session_unread(session.id, bob_id).await.unwrap();
-    assert_eq!(unread_after, 0, "after mark_read, unread should be 0");
+    assert_eq!(unread_after.count, 0, "after mark_read, unread should be 0");
 
     // Append 1 more message
     repo.append_messages(
@@ -563,7 +563,7 @@ async fn repository_mark_and_count_unread() {
     .unwrap();
     let unread_new = repo.count_session_unread(session.id, bob_id).await.unwrap();
     assert_eq!(
-        unread_new, 1,
+        unread_new.count, 1,
         "after new message, bob should see 1 unread again"
     );
 }

@@ -92,6 +92,31 @@ impl DbSenderKind {
     }
 }
 
+/// Chat messages go to the agent; team messages are user-to-user ('@' mention)
+/// and must never enter the agent's LLM history.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DbMessageKind {
+    Chat,
+    Team,
+}
+
+impl DbMessageKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DbMessageKind::Chat => "chat",
+            DbMessageKind::Team => "team",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "chat" => Some(DbMessageKind::Chat),
+            "team" => Some(DbMessageKind::Team),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DbSessionMessage {
     /// Session-global insertion order — stable client identity (ailoy
@@ -105,6 +130,9 @@ pub struct DbSessionMessage {
     pub attachments: Vec<String>,
     /// Scope-relative paths of artifacts created during this message turn.
     pub artifacts: Vec<String>,
+    pub message_kind: DbMessageKind,
+    /// User ids mentioned by a team message.
+    pub mentions: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +144,17 @@ pub struct NewSessionMessage {
     pub attachments: Vec<String>,
     /// Scope-relative paths of artifacts created during this message turn.
     pub artifacts: Vec<String>,
+    pub message_kind: DbMessageKind,
+    /// User ids mentioned by a team message.
+    pub mentions: Vec<Uuid>,
+}
+
+/// Per-session unread summary for a user.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnreadInfo {
+    pub count: u64,
+    /// True when at least one unread message mentions the user.
+    pub mentioned: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -468,10 +507,13 @@ impl SqliteRepository {
         .execute(&mut *tx)
         .await?;
 
+        // message_kind/mentions must be copied: dropping them would default the
+        // forked rows to 'chat', leaking team messages into the agent's history
+        // on the fork's next cold replay.
         sqlx::query(
             "INSERT INTO session_messages \
-                 (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments) \
-             SELECT ?, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments \
+                 (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments, message_kind, mentions) \
+             SELECT ?, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments, message_kind, mentions \
              FROM session_messages WHERE session_id = ? ORDER BY seq ASC;",
         )
         .bind(new_id.to_string())
@@ -511,14 +553,18 @@ impl SqliteRepository {
         &self,
         session_id: Uuid,
         messages: &[NewSessionMessage],
-    ) -> RepositoryResult<()> {
+    ) -> RepositoryResult<i64> {
         if messages.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
 
         let sid = session_id.to_string();
         let mut tx = self.pool.begin().await?;
 
+        // seq is INTEGER PRIMARY KEY AUTOINCREMENT, so last_insert_rowid() is the
+        // inserted message's seq — returned so callers (e.g. team messages) can
+        // build a response without a follow-up read.
+        let mut last_seq = 0i64;
         for msg in messages {
             let now = Self::now_string();
             let msg_json = serde_json::to_string(&msg.message)?;
@@ -526,10 +572,14 @@ impl SqliteRepository {
                 serde_json::to_string(&msg.attachments).unwrap_or_else(|_| "[]".to_string());
             let artifacts_json =
                 serde_json::to_string(&msg.artifacts).unwrap_or_else(|_| "[]".to_string());
-            sqlx::query(
+            let mentions_json = serde_json::to_string(
+                &msg.mentions.iter().map(Uuid::to_string).collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|_| "[]".to_string());
+            let result = sqlx::query(
                 "INSERT INTO session_messages \
-                     (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments, artifacts) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
+                     (session_id, message_json, created_at, sender_kind, sender_name, sender_user_id, attachments, artifacts, message_kind, mentions) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
             )
             .bind(&sid)
             .bind(&msg_json)
@@ -539,8 +589,11 @@ impl SqliteRepository {
             .bind(msg.sender_user_id.map(|u| u.to_string()))
             .bind(&attachments_json)
             .bind(&artifacts_json)
+            .bind(msg.message_kind.as_str())
+            .bind(&mentions_json)
             .execute(&mut *tx)
             .await?;
+            last_seq = result.last_insert_rowid();
         }
 
         // Extract text snippet from the last message for session card previews.
@@ -578,7 +631,7 @@ impl SqliteRepository {
         .await?;
 
         tx.commit().await?;
-        Ok(())
+        Ok(last_seq)
     }
 
     pub async fn clear_messages(&self, session_id: Uuid) -> RepositoryResult<()> {
@@ -628,7 +681,7 @@ impl SqliteRepository {
         let rows = sqlx::query(
             "WITH numbered AS (
                  SELECT seq, message_json, sender_kind, sender_name, sender_user_id, \
-                        created_at, attachments, artifacts, \
+                        created_at, attachments, artifacts, message_kind, mentions, \
                         SUM(CASE WHEN sender_kind = 'user' THEN 1 ELSE 0 END) \
                             OVER (ORDER BY seq) AS turn_id
                  FROM session_messages
@@ -639,7 +692,7 @@ impl SqliteRepository {
                  FROM numbered
              )
              SELECT seq, message_json, sender_kind, sender_name, sender_user_id, \
-                    created_at, attachments, artifacts
+                    created_at, attachments, artifacts, message_kind, mentions
              FROM numbered, bounds
              WHERE ?3 IS NULL OR MAX(turn_id, 1) > top - ?3
              ORDER BY seq ASC;",
@@ -664,7 +717,7 @@ impl SqliteRepository {
     ) -> RepositoryResult<Vec<DbSessionMessage>> {
         let rows = sqlx::query(
             "SELECT seq, message_json, sender_kind, sender_name, sender_user_id, \
-                    created_at, attachments, artifacts \
+                    created_at, attachments, artifacts, message_kind, mentions \
              FROM session_messages WHERE session_id = ? AND seq > ? ORDER BY seq ASC;",
         )
         .bind(session_id.to_string())
@@ -712,6 +765,20 @@ impl SqliteRepository {
         let artifacts_json: String = row.try_get("artifacts").unwrap_or_default();
         let artifacts: Vec<String> = serde_json::from_str(&artifacts_json).unwrap_or_default();
 
+        // Tolerate pre-migration rows (attachments precedent): missing
+        // column → 'chat' / no mentions.
+        let message_kind = row
+            .try_get::<String, _>("message_kind")
+            .ok()
+            .and_then(|s| DbMessageKind::from_str(&s))
+            .unwrap_or(DbMessageKind::Chat);
+        let mentions_json: String = row.try_get("mentions").unwrap_or_default();
+        let mentions: Vec<Uuid> = serde_json::from_str::<Vec<String>>(&mentions_json)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| Uuid::parse_str(s).ok())
+            .collect();
+
         Ok(DbSessionMessage {
             seq: row.get::<i64, _>("seq"),
             message,
@@ -721,6 +788,8 @@ impl SqliteRepository {
             created_at,
             attachments,
             artifacts,
+            message_kind,
+            mentions,
         })
     }
 
@@ -786,12 +855,12 @@ impl SqliteRepository {
         Ok(())
     }
 
-    /// Returns unread counts for a batch of sessions for a given user (eliminates N+1 in list).
+    /// Returns unread info for a batch of sessions for a given user (eliminates N+1 in list).
     pub async fn count_unread_batch_for_user(
         &self,
         session_ids: &[Uuid],
         user_id: Uuid,
-    ) -> RepositoryResult<std::collections::HashMap<Uuid, u64>> {
+    ) -> RepositoryResult<std::collections::HashMap<Uuid, UnreadInfo>> {
         if session_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
@@ -802,8 +871,14 @@ impl SqliteRepository {
             .map(|_| "?")
             .collect::<Vec<_>>()
             .join(", ");
+        // json_each gives exact-value matching on the mentions array; a LIKE
+        // would substring-match. Binds are positional and follow SQL text
+        // order: uid (json_each) → session ids → uid (last_read_seq).
         let sql = format!(
-            "SELECT sm.session_id, COUNT(*) AS cnt
+            "SELECT sm.session_id, COUNT(*) AS cnt,
+                    MAX(EXISTS (
+                        SELECT 1 FROM json_each(sm.mentions) AS je WHERE je.value = ?
+                    )) AS has_mention
              FROM session_messages sm
              WHERE sm.session_id IN ({placeholders})
                AND sm.seq > COALESCE(
@@ -815,6 +890,7 @@ impl SqliteRepository {
         );
 
         let mut q = sqlx::query(&sql);
+        q = q.bind(&uid);
         for sid in session_ids {
             q = q.bind(sid.to_string());
         }
@@ -826,21 +902,27 @@ impl SqliteRepository {
         for row in rows {
             let sid_str: String = row.get("session_id");
             let count = row.get::<i64, _>("cnt") as u64;
+            // EXISTS yields 0/1 ints; sqlite has no bool decode for it.
+            let mentioned = row.get::<i64, _>("has_mention") != 0;
             if let Ok(sid) = Uuid::parse_str(&sid_str) {
-                map.insert(sid, count);
+                map.insert(sid, UnreadInfo { count, mentioned });
             }
         }
         Ok(map)
     }
 
-    /// Count messages the user has not yet read in a session.
+    /// Unread info for a single session (count + whether the user is mentioned).
     pub async fn count_session_unread(
         &self,
         session_id: Uuid,
         user_id: Uuid,
-    ) -> RepositoryResult<u64> {
+    ) -> RepositoryResult<UnreadInfo> {
         let row = sqlx::query(
-            "SELECT COUNT(*) AS cnt FROM session_messages
+            "SELECT COUNT(*) AS cnt,
+                    MAX(EXISTS (
+                        SELECT 1 FROM json_each(mentions) AS je WHERE je.value = ?
+                    )) AS has_mention
+             FROM session_messages
              WHERE session_id = ?
                AND seq > COALESCE(
                    (SELECT last_read_seq FROM session_reads
@@ -848,13 +930,17 @@ impl SqliteRepository {
                    0
                )",
         )
+        .bind(user_id.to_string())
         .bind(session_id.to_string())
         .bind(session_id.to_string())
         .bind(user_id.to_string())
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(row.get::<i64, _>("cnt") as u64)
+        Ok(UnreadInfo {
+            count: row.get::<i64, _>("cnt") as u64,
+            mentioned: row.try_get::<i64, _>("has_mention").unwrap_or(0) != 0,
+        })
     }
 
     // ── Session metadata ────────────────────────────────────────────────────────

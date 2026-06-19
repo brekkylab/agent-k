@@ -22,12 +22,14 @@ use crate::{
         DirentScope, copy_dir_recursive, enforce_scope_access, parse_dirent_path, scope_root,
     },
     model::{
-        CreateSessionRequest, MessageSender, RunAck, RunActiveResponse, SendMessageRequest,
-        SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
+        CreateSessionRequest, MessageKind, MessageSender, RunAck, RunActiveResponse,
+        SendMessageRequest, SendTeamMessageRequest, SessionListResponse,
+        SessionMessageListResponse, SessionMessageResponse, SessionResponse,
         UpdateSessionRequest,
     },
     repository::{
-        DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, SessionOrigin, ShareMode,
+        DbMessageKind, DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess,
+        SessionOrigin, ShareMode, UnreadInfo,
     },
     services::session_title::generate_session_title,
     state::AppState,
@@ -310,6 +312,8 @@ pub(crate) fn attribute_messages(
                     vec![]
                 },
                 artifacts: vec![],
+                message_kind: DbMessageKind::Chat,
+                mentions: vec![],
             },
         )
         .collect()
@@ -340,6 +344,18 @@ fn classify_senders_from_outputs(
     senders
 }
 
+/// Stored rows → agent LLM history. Messages are persisted without the
+/// attachment note, so it is re-injected here. Team messages are filtered HERE
+/// (not in `get_messages`, which the history API shares and which must show
+/// them) — this is the single point where DB rows become agent history, so
+/// this filter is what guarantees team messages never reach the agent.
+pub fn build_replay_history(rows: Vec<crate::repository::DbSessionMessage>) -> Vec<Message> {
+    rows.into_iter()
+        .filter(|r| r.message_kind != DbMessageKind::Team)
+        .map(|r| inject_attachment_note(r.message, &r.attachments))
+        .collect()
+}
+
 async fn resolve_agent_for(
     state: &Arc<AppState>,
     session_id: Uuid,
@@ -354,12 +370,7 @@ async fn resolve_agent_for(
         .get_messages(session_id)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
-    // Messages are stored without the attachment note; re-inject it so the agent sees
-    // the correct file hints when replaying history.
-    let history: Vec<Message> = rows
-        .into_iter()
-        .map(|r| inject_attachment_note(r.message, &r.attachments))
-        .collect();
+    let history = build_replay_history(rows);
 
     let mut agent = build_session_agent(state, project_id, session_id)
         .await
@@ -510,7 +521,7 @@ pub async fn create_session(
     tracing::info!(id = %session.id, agent_type = ?session.agent_type, model = ?session.model, "session created");
     Ok((
         StatusCode::CREATED,
-        Json(SessionResponse::from_db(session, 0)),
+        Json(SessionResponse::from_db(session, UnreadInfo::default())),
     ))
 }
 
@@ -563,7 +574,7 @@ pub async fn list_sessions(
     let items: Vec<SessionResponse> = sessions
         .into_iter()
         .map(|s| {
-            let unread = unread_map.get(&s.id).copied().unwrap_or(0);
+            let unread = unread_map.get(&s.id).copied().unwrap_or_default();
             SessionResponse::from_db(s, unread)
         })
         .collect();
@@ -771,7 +782,7 @@ pub async fn fork_session(
         );
         return Ok((
             StatusCode::CREATED,
-            Json(SessionResponse::from_db(new_session, 0)),
+            Json(SessionResponse::from_db(new_session, UnreadInfo::default())),
         ));
     }
 
@@ -811,7 +822,7 @@ pub async fn fork_session(
             );
             Ok((
                 StatusCode::CREATED,
-                Json(SessionResponse::from_db(new_session, 0)),
+                Json(SessionResponse::from_db(new_session, UnreadInfo::default())),
             ))
         }
         Err(e) => {
@@ -933,6 +944,11 @@ pub async fn get_message_history(
                 attachments: r.attachments,
                 artifacts: r.artifacts,
                 citations,
+                message_kind: match r.message_kind {
+                    DbMessageKind::Chat => MessageKind::Chat,
+                    DbMessageKind::Team => MessageKind::Team,
+                },
+                mentions: r.mentions,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1012,6 +1028,118 @@ pub async fn clear_message_history(
 
     tracing::info!(%session_id, "message history cleared");
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /sessions/{session_id}/team-messages
+///
+/// Persists a user-to-user team message ('@' mention) and broadcasts it over
+/// the WebSocket — no agent run starts, no agent lock is taken, and the message
+/// is excluded from LLM history replay (`resolve_agent_for`). Returns the
+/// persisted message (201) so the poster can reconcile immediately; the
+/// session's title is intentionally left alone (team chatter is not the task).
+pub async fn send_team_message(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(session_ref): Path<String>,
+    Json(payload): Json<SendTeamMessageRequest>,
+) -> ApiResult<(StatusCode, Json<SessionMessageResponse>)> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    let (session, access) = state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    if matches!(access, SessionAccess::ReadOnlyMember) {
+        return Err(AppError::forbidden("read-only access to this session"));
+    }
+    // A private session has no other viewers — a team message there would be a
+    // silent no-op for everyone mentioned, so reject it outright.
+    if matches!(session.share_mode, ShareMode::Private) {
+        return Err(AppError::bad_request(
+            "team messages require a shared session",
+        ));
+    }
+    // Defense in depth: the UI guards on a trimmed value, but a direct API call
+    // with blank content would persist an empty bubble (and still badge mentions).
+    if payload.content.trim().is_empty() {
+        return Err(AppError::bad_request("team message content must not be empty"));
+    }
+
+    let attachments = payload.attachments.clone().unwrap_or_default();
+    validate_attachments(
+        &state,
+        &auth_user,
+        session_id,
+        session.project_id,
+        &attachments,
+    )
+    .await?;
+
+    // Dedup mentions and require every mentioned id to be a project member —
+    // garbage ids would otherwise persist forever without ever badging anyone.
+    let mut mentions: Vec<Uuid> = Vec::new();
+    for id in payload.mentions.unwrap_or_default() {
+        if !mentions.contains(&id) {
+            mentions.push(id);
+        }
+    }
+    if !mentions.is_empty() {
+        let members: HashSet<Uuid> = state
+            .repository
+            .list_project_members(session.project_id)
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?
+            .into_iter()
+            .map(|(user, _)| user.id)
+            .collect();
+        if let Some(bad) = mentions.iter().find(|id| !members.contains(id)) {
+            return Err(AppError::bad_request(format!(
+                "mentioned user is not a project member: {bad}"
+            )));
+        }
+    }
+
+    let message = Message::new(Role::User).with_contents([Part::text(payload.content.clone())]);
+    let new_msg = NewSessionMessage {
+        message: message.clone(),
+        sender_kind: DbSenderKind::User,
+        sender_name: None,
+        sender_user_id: Some(auth_user.id),
+        attachments: attachments.clone(),
+        artifacts: vec![],
+        message_kind: DbMessageKind::Team,
+        mentions: mentions.clone(),
+    };
+    let seq = state
+        .repository
+        .append_messages(session_id, &[new_msg])
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let response = SessionMessageResponse {
+        seq,
+        message,
+        sender: MessageSender::User {
+            user_id: auth_user.id,
+        },
+        created_at: chrono::Utc::now(),
+        attachments,
+        artifacts: vec![],
+        // Team messages are user-to-user; they never carry Speedwagon citations.
+        citations: vec![],
+        message_kind: MessageKind::Team,
+        mentions,
+    };
+    let _ = state.ws_tx.send(WsEvent::TeamMessagePosted {
+        session_id: session_id.to_string(),
+        project_id: session.project_id.to_string(),
+        message: response.clone(),
+    });
+
+    tracing::info!(%session_id, sender = %auth_user.id, mentions = response.mentions.len(), "team message posted");
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 /// POST /sessions/{session_id}/messages
@@ -1298,6 +1426,8 @@ pub async fn send_message(
                     sender_user_id: None,
                     attachments: vec![],
                     artifacts: vec![],
+                    message_kind: DbMessageKind::Chat,
+                    mentions: vec![],
                 }),
         );
 

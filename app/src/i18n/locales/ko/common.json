@@ -76,6 +76,10 @@
       "settings": "설정"
     }
   },
+  "mention": {
+    "you_were_mentioned": "회원님이 멘션되었어요",
+    "unread_in_project": "이 프로젝트에 안 읽은 멘션이 있어요"
+  },
   "placeholders": {
     "untitled_session": "새 대화",
     "no_description": "설명 없음"

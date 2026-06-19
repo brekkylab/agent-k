@@ -52,6 +52,25 @@ export async function sendMessage(
   // 423/403 are thrown as ApiError by request() — caller should catch
 }
 
+// Team messages (user-to-user, '@' mentions) never reach the agent, so they
+// use a dedicated endpoint: no run starts and the persisted message comes back
+// directly (201) instead of a RunAck.
+export async function sendTeamMessage(
+  sessionId: string,
+  content: string,
+  mentions: string[],
+  attachments?: string[],
+): Promise<void> {
+  await request<unknown>(`/sessions/${sessionId}/team-messages`, {
+    method: 'POST',
+    body: {
+      content,
+      mentions,
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
+    },
+  });
+}
+
 export async function stopRun(sessionId: string, runId: string): Promise<void> {
   await request<unknown>(`/sessions/${sessionId}/runs/${runId}/stop`, { method: 'POST' });
 }

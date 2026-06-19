@@ -4,8 +4,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::repository::DbSession;
+use crate::repository::{DbSession, UnreadInfo};
 pub use crate::repository::{SessionOrigin, ShareMode};
+
+/// Message channel: 'chat' goes to the agent, 'team' is user-to-user only.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageKind {
+    Chat,
+    Team,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -41,12 +49,14 @@ pub struct SessionResponse {
     /// to an available model, so the UI can flag that `model` isn't what runs.
     pub model_available: bool,
     pub unread_count: u64,
+    /// True when an unread message mentions the requesting user.
+    pub unread_mention: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl SessionResponse {
-    pub fn from_db(s: DbSession, unread_count: u64) -> Self {
+    pub fn from_db(s: DbSession, unread: UnreadInfo) -> Self {
         Self {
             id: s.id,
             project_id: s.project_id,
@@ -63,7 +73,8 @@ impl SessionResponse {
                 .map_or(true, crate::model::provider_available),
             agent_type: s.agent_type,
             model: s.model,
-            unread_count,
+            unread_count: unread.count,
+            unread_mention: unread.mentioned,
             created_at: s.created_at,
             updated_at: s.updated_at,
         }
@@ -80,6 +91,15 @@ pub struct SessionListResponse {
 pub struct SendMessageRequest {
     pub content: String,
     pub attachments: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SendTeamMessageRequest {
+    pub content: String,
+    pub attachments: Option<Vec<String>>,
+    /// Project-member user ids mentioned in the message.
+    pub mentions: Option<Vec<Uuid>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -114,6 +134,10 @@ pub struct SessionMessageResponse {
     /// Empty for non-Speedwagon messages or answers without citations.
     #[serde(default)]
     pub citations: Vec<crate::handlers::knowledge::CitationCheck>,
+    /// Named message_kind (not `kind`) — `sender` already uses a `kind` tag.
+    pub message_kind: MessageKind,
+    /// User ids mentioned by a team message.
+    pub mentions: Vec<Uuid>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
