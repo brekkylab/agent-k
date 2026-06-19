@@ -134,6 +134,17 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             get(handlers::list_automations).post(handlers::create_automation),
         )
         .api_route(
+            // Static segment — must precede `/automations/{automation_id}` so
+            // matchit routes it here rather than treating "occurrences" as an id.
+            "/automations/occurrences",
+            get(handlers::list_occurrences),
+        )
+        .api_route(
+            // Static segment — precedes `/automations/{automation_id}`.
+            "/automations/runs",
+            get(handlers::list_runs_window),
+        )
+        .api_route(
             "/automations/{automation_id}",
             get(handlers::get_automation)
                 .patch(handlers::update_automation)

@@ -190,7 +190,11 @@ async fn fire_cron_trigger_once(
             automation.project_id,
             automation.created_by,
             trigger.id,
-            now,
+            // Stamp the exact cron instant (not the wake time) so scheduled_for
+            // is precise — keeps the calendar's per-minute dedupe aligned and
+            // the list's "scheduled at" exact. It's <= now (the due query
+            // gates on next_fire_at <= now), so it's still claimable at once.
+            trigger.next_fire_at.unwrap_or(now),
             next_fire,
             &payload,
         )

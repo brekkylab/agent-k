@@ -11,6 +11,8 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ArtifactsPanel } from '@/components/ArtifactsPanel';
 import { CopyToSharedDialog } from '@/components/CopyToSharedDialog';
+import { AutomationCalendar } from '@/components/AutomationCalendar';
+import { SegmentedControl } from '@/components/SegmentedControl';
 import { summarizeCron } from '@/components/SchedulePicker';
 import { cancelRun as cancelRunApi, createRun, listAutomations, listRunEvents, listRuns, listTriggers } from '@/api/automations';
 import { listMessages } from '@/api/messages';
@@ -22,7 +24,7 @@ import { formatMessageTime } from '@/lib/formatMessageTime';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 import { loadNs } from '@/i18n/loader';
-import type { Automation, Message, Run, Trigger } from '@/domain/types';
+import type { Automation, Message, Occurrence, Run, Trigger } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')({
   // 'session'/'dialogs' cover the artifacts panel + copy-to-shared dialog.
@@ -32,6 +34,9 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/automation/')(
 
 type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 type TriggerKind = 'cron' | 'webhook' | 'manual';
+// 'scheduled' is calendar-only: future predicted fires (occurrences), which
+// aren't runs and so have no run status.
+type StatusFilter = RunStatus | 'all' | 'scheduled';
 
 interface RunEventLike { id: number; ts: string; kind: string; detail?: string }
 
@@ -104,6 +109,11 @@ function shortRunId(run: Run): string {
   return run.id.slice(0, 6);
 }
 
+/** Identity for a single scheduled fire (a trigger fires at distinct instants). */
+function occurrenceKey(occ: Occurrence | null): string | null {
+  return occ ? `${occ.triggerId}@${occ.fireAt}` : null;
+}
+
 function formatEventTime(iso: string): string {
   // ISO → HH:MM:SS; fall back to first 19 chars if Date.parse fails.
   const t = Date.parse(iso);
@@ -137,9 +147,17 @@ function AutomationsPage() {
   const { t } = useTranslation('automation');
   const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<RunStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [triggerFilter, setTriggerFilter] = useState<TriggerKind | 'all'>('all');
   const [page, setPage] = useState(0);
+  const [view, setView] = useState<'list' | 'calendar'>('list');
+  const [selectedOccurrence, setSelectedOccurrence] = useState<Occurrence | null>(null);
+  // Run picked from the calendar — its window query is separate from the list
+  // view's run set, so keep the object to resolve detail even when it isn't in
+  // `displayRuns` (e.g. an old month not covered by the recent-run fetch).
+  const [pickedRun, setPickedRun] = useState<Run | null>(null);
+  // Anchor element for the narrow-layout calendar detail popover (speech bubble).
+  const [calAnchorEl, setCalAnchorEl] = useState<HTMLElement | null>(null);
 
   const catalogQuery = useQuery({
     queryKey: ['models', projectSlug],
@@ -154,6 +172,10 @@ function AutomationsPage() {
   const automations: Automation[] = automationsQuery.data ?? [];
   const automationById = useMemo(
     () => Object.fromEntries(automations.map((a) => [a.id, a])),
+    [automations],
+  );
+  const automationNameById = useMemo(
+    () => Object.fromEntries(automations.map((a) => [a.id, a.name])),
     [automations],
   );
   const queryClient = useQueryClient();
@@ -301,7 +323,8 @@ function AutomationsPage() {
 
   const selectedAutomation = selectedAutomationId ? automationById[selectedAutomationId] : null;
   const selectedRun: Run | null = selectedRunId
-    ? displayRuns.find((r) => r.id === selectedRunId) ?? null
+    ? displayRuns.find((r) => r.id === selectedRunId)
+      ?? (pickedRun?.id === selectedRunId ? pickedRun : null)
     : null;
   const selectedRunLive = selectedRun
     ? selectedRun.status === 'queued' || selectedRun.status === 'running'
@@ -380,9 +403,78 @@ function AutomationsPage() {
     setPendingManualRun(null);
   };
 
-  // Below this viewport, drop the right-side drawer column and expand the
-  // selected row inline within the runs list instead.
-  const isWide = useWideLayout('(min-width: 1440px)');
+  // Below this viewport, drop the right-side drawer column (list expands the
+  // selected row inline; calendar uses an anchored popover). The calendar's
+  // 7-column grid needs more room than the runs list, so it keeps full width
+  // until a wider breakpoint rather than sharing with a ~440px drawer.
+  const isWideList = useWideLayout('(min-width: 1440px)');
+  const isWideCalendar = useWideLayout('(min-width: 1680px)');
+  const isWide = view === 'calendar' ? isWideCalendar : isWideList;
+
+  const renderOccurrenceDetail = (occ: Occurrence) => {
+    const trigger = triggerById[occ.triggerId] ?? null;
+    const fire = new Date(occ.fireAt);
+    return (
+      <>
+        <header className="cw-run-drawer-head">
+          <div className="cw-run-drawer-title">
+            <Icon name="calendar" size={16} />
+            <strong>{occ.automationName}</strong>
+          </div>
+          <div className="cw-run-drawer-actions">
+            <button
+              type="button"
+              className="cw-run-drawer-close"
+              onClick={() => setSelectedOccurrence(null)}
+              aria-label={t('occ_detail.close_aria')}
+            >
+              <Icon name="x" size={16} />
+            </button>
+          </div>
+          <div className="cw-run-drawer-meta">
+            <TriggerBadge trigger={trigger} placement="below-start" />
+            <span>{formatScheduledAt(occ.fireAt, t)}</span>
+          </div>
+        </header>
+
+        <dl className="cw-occ-detail">
+          <div>
+            <dt>{t('occ_detail.fires_at')}</dt>
+            <dd>{fire.toLocaleString()}</dd>
+          </div>
+          {trigger?.spec.kind === 'cron' && (
+            <div>
+              <dt>{t('occ_detail.schedule')}</dt>
+              <dd>{summarizeCron(trigger.spec.expr, t)}</dd>
+            </div>
+          )}
+          {occ.tz && (
+            <div>
+              <dt>{t('occ_detail.tz')}</dt>
+              <dd>{occ.tz}</dd>
+            </div>
+          )}
+        </dl>
+
+        <div className="cw-occ-actions">
+          <button
+            type="button"
+            className="cw-btn-secondary"
+            onClick={() => { setView('list'); setSelectedAutomationId(occ.automationId); setSelectedOccurrence(null); }}
+          >
+            <Icon name="list" size={14} /> {t('occ_detail.view_runs')}
+          </button>
+          <button
+            type="button"
+            className="cw-btn-secondary"
+            onClick={() => openSettings(occ.automationId)}
+          >
+            <Icon name="settings" size={14} /> {t('occ_detail.settings')}
+          </button>
+        </div>
+      </>
+    );
+  };
 
   const renderRunDetail = (run: Run) => {
     const status = effectiveStatus(run);
@@ -559,7 +651,7 @@ function AutomationsPage() {
           <button
             type="button"
             className={`cw-rail-row ${selectedAutomationId === null ? 'is-active' : ''}`}
-            onClick={() => setSelectedAutomationId(null)}
+            onClick={() => { setSelectedAutomationId(null); setSelectedOccurrence(null); }}
           >
             <span className="cw-rail-name">{t('list.all_automations')}</span>
             <span className="cw-rail-count">{allRuns.length}</span>
@@ -572,7 +664,7 @@ function AutomationsPage() {
               <div
                 key={automation.id}
                 className={`cw-rail-row cw-rail-row-automation ${active ? 'is-active' : ''} ${isDisabled(automation.id) ? 'is-disabled' : ''}`}
-                onClick={() => { setSelectedAutomationId(automation.id); setSelectedRunId(null); }}
+                onClick={() => { setSelectedAutomationId(automation.id); setSelectedRunId(null); setSelectedOccurrence(null); }}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
@@ -580,6 +672,7 @@ function AutomationsPage() {
                     e.preventDefault();
                     setSelectedAutomationId(automation.id);
                     setSelectedRunId(null);
+                    setSelectedOccurrence(null);
                   }
                 }}
               >
@@ -629,18 +722,36 @@ function AutomationsPage() {
 
         <main className="cw-runs-pane">
           <div className="cw-runs-filterbar">
+            <SegmentedControl<'list' | 'calendar'>
+              value={view}
+              onChange={(v) => {
+                setView(v);
+                // 'scheduled' has no meaning for the runs list — clear it.
+                if (v === 'list' && statusFilter === 'scheduled') setStatusFilter('all');
+              }}
+              ariaLabel={t('view.aria')}
+              iconOnly
+              options={[
+                { value: 'list', label: t('view.list'), icon: 'list' },
+                { value: 'calendar', label: t('view.calendar'), icon: 'calendar' },
+              ]}
+            />
             {selectedAutomation && (
               <div className="cw-runs-context">
                 <strong>{selectedAutomation.name}</strong>
                 <span>{selectedAutomation.description ?? ''}</span>
               </div>
             )}
-            <FilterSelect<RunStatus | 'all'>
+            <FilterSelect<StatusFilter>
               label={t('list.context_status')}
               value={statusFilter}
               onChange={setStatusFilter}
               options={[
                 { value: 'all',       label: t('list.status_all') },
+                // Calendar-only: filter to upcoming predicted fires.
+                ...(view === 'calendar'
+                  ? [{ value: 'scheduled' as const, label: t('status.scheduled') }]
+                  : []),
                 { value: 'queued',    label: t('status.queued') },
                 { value: 'running',   label: t('status.running') },
                 { value: 'succeeded', label: t('status.succeeded') },
@@ -668,10 +779,39 @@ function AutomationsPage() {
                 <Icon name="rotate-ccw" size={12} /> {t('list.reset_filter')}
               </button>
             )}
-            <span className="cw-runs-count">{t('list.runs_count', { count: visibleRuns.length })}</span>
+            {view === 'list' && (
+              <span className="cw-runs-count">{t('list.runs_count', { count: visibleRuns.length })}</span>
+            )}
           </div>
 
-          {visibleRuns.length === 0 ? (
+          {view === 'calendar' ? (
+            <div className="cw-cal-pane">
+              <AutomationCalendar
+                projectSlug={projectSlug}
+                automationNameById={automationNameById}
+                triggerById={triggerById}
+                filterAutomationId={selectedAutomationId}
+                statusFilter={statusFilter}
+                triggerFilter={triggerFilter}
+                selectedKey={occurrenceKey(selectedOccurrence)}
+                selectedRunId={selectedRunId}
+                onSelectOccurrence={(occ, el) => {
+                  const willSelect = occurrenceKey(selectedOccurrence) !== occurrenceKey(occ);
+                  setSelectedRunId(null);
+                  setPickedRun(null);
+                  setSelectedOccurrence(willSelect ? occ : null);
+                  setCalAnchorEl(willSelect ? el : null);
+                }}
+                onSelectRun={(run, el) => {
+                  const willSelect = selectedRunId !== run.id;
+                  setSelectedOccurrence(null);
+                  setSelectedRunId(willSelect ? run.id : null);
+                  setPickedRun(willSelect ? run : null);
+                  setCalAnchorEl(willSelect ? el : null);
+                }}
+              />
+            </div>
+          ) : visibleRuns.length === 0 ? (
             <div className="cw-runs-empty">
               <Icon name="calendar" size={20} />
               <b>{t('list.empty_title')}</b>
@@ -723,7 +863,7 @@ function AutomationsPage() {
             </ul>
           )}
 
-          {visibleRuns.length > 0 && totalPages > 1 && (
+          {view === 'list' && visibleRuns.length > 0 && totalPages > 1 && (
             <footer className="cw-runs-pagination">
               <button
                 type="button"
@@ -750,7 +890,16 @@ function AutomationsPage() {
 
         {isWide && (
           <aside className="cw-run-drawer">
-            {selectedRun ? renderRunDetail(selectedRun) : (
+            {view === 'calendar' ? (
+              selectedOccurrence ? renderOccurrenceDetail(selectedOccurrence)
+              : selectedRun ? renderRunDetail(selectedRun) : (
+                <div className="cw-run-drawer-empty">
+                  <Icon name="calendar" size={22} />
+                  <b>{t('occ_detail.empty_title')}</b>
+                  <p>{t('occ_detail.empty_hint')}</p>
+                </div>
+              )
+            ) : selectedRun ? renderRunDetail(selectedRun) : (
               <div className="cw-run-drawer-empty">
                 <Icon name="message-square" size={22} />
                 <b>{t('list.select_run_title')}</b>
@@ -760,6 +909,15 @@ function AutomationsPage() {
           </aside>
         )}
       </div>
+
+      {!isWide && view === 'calendar' && calAnchorEl && (selectedOccurrence || selectedRun) && (
+        <CalendarDetailBubble
+          anchorEl={calAnchorEl}
+          onClose={() => { setSelectedOccurrence(null); setSelectedRunId(null); setCalAnchorEl(null); }}
+        >
+          {selectedOccurrence ? renderOccurrenceDetail(selectedOccurrence) : renderRunDetail(selectedRun!)}
+        </CalendarDetailBubble>
+      )}
 
       {pendingManualRun && (
         <ConfirmDialog
@@ -787,6 +945,100 @@ function AutomationsPage() {
         />
       )}
     </section>
+  );
+}
+
+/** Narrow-layout calendar detail rendered as a speech bubble anchored under
+ *  the clicked entry, floating over the calendar. Flips above when there's not
+ *  enough room below; scrolls internally when taller than the viewport. */
+function CalendarDetailBubble({
+  anchorEl,
+  onClose,
+  children,
+}: {
+  anchorEl: HTMLElement;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{
+    placement: 'below' | 'above';
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+    arrowLeft: number;
+  } | null>(null);
+
+  const recompute = useCallback(() => {
+    const r = anchorEl.getBoundingClientRect();
+    const margin = 12;
+    const gap = 10;
+    // Match the bubble's left/right to the calendar grid's edges; the tail
+    // still points at the clicked entry's center.
+    const grid = (anchorEl.closest('.cw-cal-grid') as HTMLElement | null) ?? anchorEl;
+    const cr = grid.getBoundingClientRect();
+    // Inset ~10px from each calendar edge.
+    const inset = 10;
+    const left = cr.left + inset;
+    const width = cr.width - inset * 2;
+    const arrowLeft = Math.max(18, Math.min(r.left + r.width / 2 - left, width - 18));
+    const spaceBelow = window.innerHeight - r.bottom - gap - margin;
+    const spaceAbove = r.top - gap - margin;
+    const placement = spaceBelow < 200 && spaceAbove > spaceBelow ? 'above' : 'below';
+    if (placement === 'below') {
+      setPos({ placement, top: r.bottom + gap, left, width, maxHeight: Math.max(160, spaceBelow), arrowLeft });
+    } else {
+      setPos({ placement, bottom: window.innerHeight - r.top + gap, left, width, maxHeight: Math.max(160, spaceAbove), arrowLeft });
+    }
+  }, [anchorEl]);
+
+  useLayoutEffect(() => { recompute(); }, [recompute]);
+
+  useEffect(() => {
+    const onScroll = () => recompute();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [recompute]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (bubbleRef.current?.contains(target) || anchorEl.contains(target)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [anchorEl, onClose]);
+
+  if (!pos) return null;
+  return createPortal(
+    <div
+      ref={bubbleRef}
+      className={`cw-cal-bubble is-${pos.placement}`}
+      role="dialog"
+      style={{
+        top: pos.top,
+        bottom: pos.bottom,
+        left: pos.left,
+        width: pos.width,
+        maxHeight: pos.maxHeight,
+        ['--arrow-left' as string]: `${pos.arrowLeft}px`,
+      }}
+    >
+      <div className="cw-cal-bubble-scroll">{children}</div>
+    </div>,
+    document.body,
   );
 }
 

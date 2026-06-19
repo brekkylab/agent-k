@@ -475,6 +475,20 @@ impl SqliteRepository {
         webhook_token_hash: Option<String>,
         next_fire_at: Option<DateTime<Utc>>,
     ) -> RepositoryResult<DbAutomationTrigger> {
+        self.create_trigger_with_enabled(automation_id, spec, true, webhook_token_hash, next_fire_at)
+            .await
+    }
+
+    /// Like `create_trigger`, but lets the caller create the trigger disabled
+    /// (e.g. duplicating a trigger so the clone doesn't double-fire).
+    pub async fn create_trigger_with_enabled(
+        &self,
+        automation_id: Uuid,
+        spec: &TriggerSpec,
+        enabled: bool,
+        webhook_token_hash: Option<String>,
+        next_fire_at: Option<DateTime<Utc>>,
+    ) -> RepositoryResult<DbAutomationTrigger> {
         let id = Uuid::new_v4();
         let now = Self::now_string();
         let kind = spec.kind();
@@ -484,12 +498,13 @@ impl SqliteRepository {
         sqlx::query(
             "INSERT INTO automation_triggers \
                (id, automation_id, kind, spec_json, enabled, next_fire_at, webhook_token_hash, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(automation_id.to_string())
         .bind(kind.as_str())
         .bind(&spec_json)
+        .bind(if enabled { 1i64 } else { 0i64 })
         .bind(&nfa_str)
         .bind(&webhook_token_hash)
         .bind(&now)
@@ -503,7 +518,7 @@ impl SqliteRepository {
             automation_id,
             kind,
             spec_json,
-            enabled: true,
+            enabled,
             next_fire_at,
             webhook_token_hash,
             created_at: Self::parse_timestamp(now.clone(), "automation_triggers.created_at")?,
@@ -660,6 +675,32 @@ impl SqliteRepository {
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(Self::row_to_db_trigger).collect()
+    }
+
+    /// Enabled cron triggers whose automation is also enabled, for one project,
+    /// each paired with its automation's name. Powers the calendar view, which
+    /// expands these into upcoming fire times in-memory (no persisted schedule).
+    pub async fn list_enabled_cron_triggers_in_project(
+        &self,
+        project_id: Uuid,
+    ) -> RepositoryResult<Vec<(DbAutomationTrigger, String)>> {
+        let rows = sqlx::query(
+            "SELECT t.id, t.automation_id, t.kind, t.spec_json, t.enabled, t.next_fire_at, t.webhook_token_hash, t.created_at, t.updated_at, a.name AS automation_name \
+             FROM automation_triggers t \
+             JOIN automations a ON a.id = t.automation_id \
+             WHERE a.project_id = ? AND t.kind = 'cron' AND t.enabled = 1 AND a.enabled = 1 \
+             ORDER BY a.name ASC, t.created_at ASC",
+        )
+        .bind(project_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let trigger = Self::row_to_db_trigger(row)?;
+                let name: String = row.get("automation_name");
+                Ok((trigger, name))
+            })
+            .collect()
     }
 
     // ── automation_runs ─────────────────────────────────────────────────────
@@ -1017,6 +1058,36 @@ impl SqliteRepository {
         .bind(automation_id.to_string())
         .bind(limit)
         .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(Self::row_to_db_run).collect()
+    }
+
+    /// All runs in a project whose `scheduled_for` falls in `[from, to)` — the
+    /// calendar's realized (past) slots, any trigger kind (the client filters
+    /// by kind/status). Capped at `limit`, keeping the most recent (DESC) so a
+    /// dense window drops the oldest rather than the newest.
+    pub async fn list_runs_in_window(
+        &self,
+        project_id: Uuid,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        limit: i64,
+    ) -> RepositoryResult<Vec<DbAutomationRun>> {
+        let from_s = Self::ts_string(from);
+        let to_s = Self::ts_string(to);
+        let rows = sqlx::query(
+            "SELECT r.id, r.automation_id, r.trigger_id, r.session_id, r.status, r.scheduled_for, r.lease_until, r.previous_run_id, r.idempotency_key, r.created_at, r.updated_at, s.agent_type, s.model \
+             FROM automation_runs r \
+             JOIN sessions s ON s.id = r.session_id \
+             JOIN automations a ON a.id = r.automation_id \
+             WHERE a.project_id = ? AND r.scheduled_for >= ? AND r.scheduled_for < ? \
+             ORDER BY r.scheduled_for DESC LIMIT ?",
+        )
+        .bind(project_id.to_string())
+        .bind(&from_s)
+        .bind(&to_s)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(Self::row_to_db_run).collect()

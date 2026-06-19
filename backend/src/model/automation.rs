@@ -189,9 +189,21 @@ impl TriggerResponse {
     }
 }
 
-/// Trigger creation body is `TriggerSpec` directly (avoids serde flatten +
-/// deny_unknown_fields conflict from a wrapper struct).
-pub type CreateTriggerRequest = TriggerSpec;
+fn default_true() -> bool {
+    true
+}
+
+/// Trigger creation body: the `TriggerSpec` fields (internally tagged by
+/// `kind`) flattened inline, plus an optional `enabled` (defaults to true) so a
+/// trigger can be created disabled in one request — e.g. duplicating a trigger.
+/// No `deny_unknown_fields` here: it's incompatible with `#[serde(flatten)]`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateTriggerRequest {
+    #[serde(flatten)]
+    pub spec: TriggerSpec,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -212,6 +224,29 @@ pub struct CreatedTriggerResponse {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TriggerListResponse {
     pub items: Vec<TriggerResponse>,
+}
+
+// ── occurrences (computed schedule preview) ──────────────────────────────────
+
+/// A single upcoming scheduled fire, expanded from a cron trigger's expression.
+/// Not persisted — computed on demand for the calendar view.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OccurrenceResponse {
+    pub trigger_id: Uuid,
+    pub automation_id: Uuid,
+    pub automation_name: String,
+    /// The exact fire instant (UTC). Clients localize for display.
+    pub fire_at: DateTime<Utc>,
+    /// The trigger's timezone (the cron expr is evaluated in this zone).
+    pub tz: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OccurrenceListResponse {
+    pub items: Vec<OccurrenceResponse>,
+    /// `true` if any trigger's expansion hit the per-trigger cap within the
+    /// window (the calendar is showing a partial set for at least one trigger).
+    pub truncated: bool,
 }
 
 // ── run ─────────────────────────────────────────────────────────────────────

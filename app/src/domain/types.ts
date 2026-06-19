@@ -137,6 +137,17 @@ export interface Trigger {
   updatedAt: string;
 }
 
+/** A single upcoming scheduled fire, computed from a cron trigger's expression.
+ *  Not persisted; expanded on demand for the calendar view. `fireAt` is a UTC
+ *  ISO instant — views localize it for display. */
+export interface Occurrence {
+  triggerId: TriggerId;
+  automationId: AutomationId;
+  automationName: string;
+  fireAt: string;
+  tz: string | null;
+}
+
 /** Returned only at trigger-creation time. `webhookToken` is the one-shot
  *  plaintext bearer token; subsequent reads from the API never expose it. */
 export interface CreatedTrigger {
