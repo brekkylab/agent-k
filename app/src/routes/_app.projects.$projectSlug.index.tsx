@@ -18,7 +18,7 @@ import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
 import { useFileDropzone } from '@/lib/useFileDropzone';
-import { MAX_ATTACHMENTS } from '@/domain/files';
+import { MAX_ATTACHMENTS, MAX_UPLOAD_BYTES } from '@/domain/files';
 import { ApiError } from '@/api/client';
 import { loadNs } from '@/i18n/loader';
 
@@ -176,11 +176,21 @@ function ProjectHome() {
   // first message can't exceed the backend's hard limit.
   const addFiles = (fs: File[]) => {
     if (fs.length === 0) return;
-    if (pendingFiles.length + fs.length > MAX_ATTACHMENTS) {
+    // Drop files over the upload size limit at stage time (the backend would
+    // reject them anyway; doing it here avoids a silent partial failure at send,
+    // since the first message auto-sends on arrival). Skip the oversized ones and
+    // stage the rest — matching the partial handling on the session/files surfaces.
+    const tooBig = fs.filter((f) => f.size > MAX_UPLOAD_BYTES);
+    const ok = fs.filter((f) => f.size <= MAX_UPLOAD_BYTES);
+    if (tooBig.length > 0) {
+      showToast(t('home.file_too_large', { max: Math.round(MAX_UPLOAD_BYTES / (1024 * 1024)) }), tooBig.map((f) => f.name));
+    }
+    if (ok.length === 0) return;
+    if (pendingFiles.length + ok.length > MAX_ATTACHMENTS) {
       showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
       return;
     }
-    setPendingFiles((prev) => [...prev, ...fs]);
+    setPendingFiles((prev) => [...prev, ...ok]);
   };
   // Drop computer files anywhere on the home page, mirroring the session's
   // full-surface drop zone — the whole page highlights uniformly.
