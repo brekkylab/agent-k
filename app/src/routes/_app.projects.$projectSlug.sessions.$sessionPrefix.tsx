@@ -741,9 +741,14 @@ function SessionPage() {
     const atts = initialAttachmentsRef.current ?? undefined;
     initialMessageRef.current = null;
     initialAttachmentsRef.current = null;
-    // Clear router state so a hard refresh doesn't resend, but don't block send on it.
-    void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined, initialAttachments: undefined }) });
-    void send(msg, atts);
+    // Clear router state BEFORE sending so a hard refresh can't resend: await the
+    // replace so history.state no longer carries the initial message/attachments by
+    // the time send (and the network round-trip it awaits) begins. The guards above
+    // already ran synchronously, so this stays StrictMode-safe.
+    void (async () => {
+      await navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined, initialAttachments: undefined }) });
+      await send(msg, atts);
+    })();
   }, [session.data, send, navigate]);
 
   // WS session subscription — subscribe/unsubscribe when sessionId changes.
