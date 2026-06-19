@@ -185,8 +185,10 @@ function FolderColumn({ entries, folderPath, headerLabel, openedFolder, previewe
                 <div
                   key={f.path}
                   className={`cw-folder-list-row${previewedFile === f.path ? ' is-active' : ''}`}
-                  // Shift-click anywhere on the row does the range-tick too (not just the checkbox); a plain click previews.
-                  onClick={(e) => (e.shiftKey ? onToggleFile(e, f.path) : onPreviewFile(f.path))}
+                  // Shift-click range-ticks; Cmd (mac) / Ctrl (win/linux) toggles just this
+                  // one into the selection — both anywhere on the row, not only the checkbox.
+                  // A plain click previews.
+                  onClick={(e) => (e.shiftKey || e.metaKey || e.ctrlKey ? onToggleFile(e, f.path) : onPreviewFile(f.path))}
                 >
                   {/* Checkbox = attached state: ticking it stages the file (shift = range). */}
                   <button
