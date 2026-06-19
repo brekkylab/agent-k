@@ -64,10 +64,13 @@ export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImpo
   };
 
   // Preview a file (name click) — show it as the trailing pane, collapsing any
-  // deeper columns. Does NOT change what's attached.
+  // deeper columns. Does NOT change what's attached, but DOES set the shift-range
+  // anchor (Finder-style: a plain click is the point a later shift-click extends
+  // from), so click file → shift-click another ticks the whole range.
   const previewFileAt = (col: number, path: string) => {
     setTrail((prev) => prev.slice(0, col + 1));
     setSelectedFile(path);
+    anchorRef.current = { col, path };
   };
 
   // Tick/un-tick a file's checkbox (= attach/un-stage). Shift ticks the range from
