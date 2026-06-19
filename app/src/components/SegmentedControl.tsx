@@ -16,6 +16,7 @@ export function SegmentedControl<T extends string>({
   options,
   ariaLabel,
   className,
+  iconOnly = false,
 }: {
   value: T;
   onChange: (value: T) => void;
@@ -23,9 +24,17 @@ export function SegmentedControl<T extends string>({
   ariaLabel?: string;
   // Extra class on the track (e.g. to size it as a flex item).
   className?: string;
+  // Icon-only variant: shrink to content and hide labels visually (kept for
+  // screen readers). Requires every option to carry an `icon`.
+  iconOnly?: boolean;
 }) {
+  const trackClass = [
+    'cw-segmented',
+    iconOnly ? 'cw-segmented--icononly' : '',
+    className ?? '',
+  ].filter(Boolean).join(' ');
   return (
-    <div className={`cw-segmented${className ? ` ${className}` : ''}`} role="tablist" aria-label={ariaLabel}>
+    <div className={trackClass} role="tablist" aria-label={ariaLabel}>
       {options.map((o) => (
         <button
           key={o.value}
