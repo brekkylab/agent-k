@@ -746,7 +746,12 @@ function SessionPage() {
     // the time send (and the network round-trip it awaits) begins. The guards above
     // already ran synchronously, so this stays StrictMode-safe.
     void (async () => {
-      await navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined, initialAttachments: undefined }) });
+      try {
+        await navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined, initialAttachments: undefined }) });
+      } catch {
+        // Clearing the state failed — still send. The worst case is the narrow
+        // resend-on-refresh window staying open, which beats dropping the message.
+      }
       await send(msg, atts);
     })();
   }, [session.data, send, navigate]);
