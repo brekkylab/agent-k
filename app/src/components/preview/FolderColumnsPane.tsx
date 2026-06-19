@@ -9,27 +9,28 @@ import { FilePreviewPane } from './FilePreviewPane';
 import { FileTypeIcon } from '../FileTypeIcon';
 import { Icon } from '../Icon';
 
+const basename = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
+
 interface Props {
   projectId: string;
   /** The first column — the shared root, or any folder to start from. */
   rootFolderPath: string;
   /** Label for the first column's header (e.g. the project name; the root's basename otherwise). */
   rootLabel?: string;
-  /** Attach files/folders picked from a row's "+". */
+  /** Attach files/folders (a checkbox tick, a shift-range, or a folder's "+"). */
   onImport: (items: SessionImportItem[]) => void;
-  /** Un-stage a file by global path — clicking the check on an added row toggles it off. */
+  /** Un-stage a file by global path (un-ticking its checkbox). */
   onRemove: (globalPath: string) => void;
-  /** Global paths already staged — file rows show a check instead of the "+". */
+  /** Global paths already staged — a file's checkbox is ticked. */
   addedPaths: Set<string>;
 }
 
 /**
- * macOS Finder-style column (miller) view for the picker's right pane. Each
- * folder opened adds a new column to the right; clicking a file collapses any
- * deeper columns and shows its preview as the trailing pane. The strip scrolls
- * horizontally as the chain grows. Rows carry the same "+" attach affordance and
- * added-check as the left browser. Reuses the browser's cached shared-dirents
- * query, so no extra fetch.
+ * macOS Finder-style column (miller) view for the picker's right pane. Each folder
+ * opened adds a column to the right; clicking a file's name previews it in the
+ * trailing pane. Attaching is a per-file checkbox (= staged state), so selecting
+ * IS attaching — no separate "add" step. Shift-clicking a checkbox ticks the whole
+ * range from the last one. Reuses the browser's cached shared-dirents query.
  */
 export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImport, onRemove, addedPaths }: Props) {
   const scope: DirentScope = { kind: 'shared', projectId };
@@ -42,7 +43,9 @@ export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImpo
   // Chain of folder paths, one per column (first = the activated folder).
   const [trail, setTrail] = useState<string[]>([rootFolderPath]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  useEffect(() => { setTrail([rootFolderPath]); setSelectedFile(null); }, [rootFolderPath]);
+  // Last checkbox ticked, for shift-range (scoped to its column).
+  const anchorRef = useRef<{ col: number; path: string } | null>(null);
+  useEffect(() => { setTrail([rootFolderPath]); setSelectedFile(null); anchorRef.current = null; }, [rootFolderPath]);
 
   // Reveal the newest column / preview as the chain grows.
   const stripRef = useRef<HTMLDivElement>(null);
@@ -51,13 +54,38 @@ export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImpo
     if (el) el.scrollLeft = el.scrollWidth;
   }, [trail, selectedFile]);
 
-  const openFolderAt = (colIndex: number, folderPath: string) => {
+  const fileOrderAt = (col: number) =>
+    listDirectChildren(entries, trail[col].split('/')).files.map((f) => f.path);
+
+  const openFolderAt = (col: number, folderPath: string) => {
     setSelectedFile(null);
-    setTrail((prev) => [...prev.slice(0, colIndex + 1), folderPath]);
+    anchorRef.current = null;
+    setTrail((prev) => [...prev.slice(0, col + 1), folderPath]);
   };
-  const selectFileAt = (colIndex: number, filePath: string) => {
-    setTrail((prev) => prev.slice(0, colIndex + 1)); // collapse columns to the right
-    setSelectedFile(filePath);
+
+  // Preview a file (name click) — show it as the trailing pane, collapsing any
+  // deeper columns. Does NOT change what's attached.
+  const previewFileAt = (col: number, path: string) => {
+    setTrail((prev) => prev.slice(0, col + 1));
+    setSelectedFile(path);
+  };
+
+  // Tick/un-tick a file's checkbox (= attach/un-stage). Shift ticks the range from
+  // the last-ticked checkbox in the same column. Never touches preview/columns.
+  const toggleFileAt = (col: number, e: React.MouseEvent, path: string) => {
+    if (e.shiftKey && anchorRef.current && anchorRef.current.col === col) {
+      const order = fileOrderAt(col);
+      const a = order.indexOf(anchorRef.current.path);
+      const b = order.indexOf(path);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        onImport(order.slice(lo, hi + 1).map((p) => ({ globalPath: p, filename: basename(p) })));
+        return;
+      }
+    }
+    if (addedPaths.has(path)) onRemove(path);
+    else onImport([{ globalPath: path, filename: basename(path) }]);
+    anchorRef.current = { col, path };
   };
 
   return (
@@ -68,13 +96,13 @@ export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImpo
           entries={entries}
           folderPath={folderPath}
           headerLabel={i === 0 ? rootLabel : undefined}
-          // The opened sub-folder (next column) or, on the last column, the picked file.
-          selectedChild={trail[i + 1] ?? (i === trail.length - 1 ? selectedFile : null)}
+          openedFolder={trail[i + 1] ?? null}
+          previewedFile={selectedFile}
           addedPaths={addedPaths}
           onOpenFolder={(p) => openFolderAt(i, p)}
-          onSelectFile={(p) => selectFileAt(i, p)}
+          onPreviewFile={(p) => previewFileAt(i, p)}
+          onToggleFile={(e, p) => toggleFileAt(i, e, p)}
           onImport={onImport}
-          onRemove={onRemove}
         />
       ))}
       {selectedFile && (
@@ -83,7 +111,7 @@ export function FolderColumnsPane({ projectId, rootFolderPath, rootLabel, onImpo
             globalPath={selectedFile}
             emptyHint=""
             added={addedPaths.has(selectedFile)}
-            onAttach={() => onImport([{ globalPath: selectedFile, filename: selectedFile.split('/').filter(Boolean).pop() ?? selectedFile }])}
+            onAttach={() => onImport([{ globalPath: selectedFile, filename: basename(selectedFile) }])}
             onRemove={() => onRemove(selectedFile)}
           />
         </div>
@@ -96,22 +124,25 @@ interface ColumnProps {
   entries: BackendDirent[];
   folderPath: string;
   headerLabel?: string;
-  selectedChild: string | null;
+  /** The sub-folder opened from this column (highlighted), if any. */
+  openedFolder: string | null;
+  /** The file currently previewed (highlighted), if it lives in this column. */
+  previewedFile: string | null;
   addedPaths: Set<string>;
   onOpenFolder: (globalPath: string) => void;
-  onSelectFile: (globalPath: string) => void;
+  onPreviewFile: (globalPath: string) => void;
+  onToggleFile: (e: React.MouseEvent, globalPath: string) => void;
   onImport: (items: SessionImportItem[]) => void;
-  onRemove: (globalPath: string) => void;
 }
 
-function FolderColumn({ entries, folderPath, headerLabel, selectedChild, addedPaths, onOpenFolder, onSelectFile, onImport, onRemove }: ColumnProps) {
+function FolderColumn({ entries, folderPath, headerLabel, openedFolder, previewedFile, addedPaths, onOpenFolder, onPreviewFile, onToggleFile, onImport }: ColumnProps) {
   const { t } = useTranslation('session');
   const { folders, files } = useMemo(
     () => listDirectChildren(entries, folderPath.split('/')),
     [entries, folderPath],
   );
   const total = folders.length + files.length;
-  const name = headerLabel ?? folderPath.split('/').filter(Boolean).pop() ?? folderPath;
+  const name = headerLabel ?? basename(folderPath);
 
   return (
     <div className="cw-folder-column">
@@ -127,12 +158,13 @@ function FolderColumn({ entries, folderPath, headerLabel, selectedChild, addedPa
             {folders.map((d) => (
               <div
                 key={d.path}
-                className={`cw-folder-list-row${selectedChild === d.path ? ' is-active' : ''}`}
+                className={`cw-folder-list-row${openedFolder === d.path ? ' is-active' : ''}`}
                 onClick={() => onOpenFolder(d.path)}
               >
+                <span className="cw-folder-chevron" aria-hidden="true"><Icon name="chevron-right" size={13} /></span>
                 <Icon name="folder" size={16} />
                 <span className="cw-folder-list-name">{nameOf(d)}</span>
-                {/* + attaches the folder's files (matches the left browser). */}
+                {/* + attaches every file in the folder (matches the left browser). */}
                 <button
                   type="button"
                   className="cw-folder-list-add"
@@ -144,39 +176,32 @@ function FolderColumn({ entries, folderPath, headerLabel, selectedChild, addedPa
                 </button>
               </div>
             ))}
-            {files.map((f) => (
-              <div
-                key={f.path}
-                className={`cw-folder-list-row${selectedChild === f.path ? ' is-active' : ''}${addedPaths.has(f.path) ? ' is-added' : ''}`}
-                onClick={() => onSelectFile(f.path)}
-              >
-                <FileTypeIcon filename={nameOf(f)} size={16} />
-                <span className="cw-folder-list-name">{nameOf(f)}</span>
-                {addedPaths.has(f.path) ? (
-                  // Click the check to un-stage (toggle off). Default check; an × on hover signals removal.
+            {files.map((f) => {
+              const checked = addedPaths.has(f.path);
+              return (
+                <div
+                  key={f.path}
+                  className={`cw-folder-list-row${previewedFile === f.path ? ' is-active' : ''}`}
+                  // Shift-click anywhere on the row does the range-tick too (not just the checkbox); a plain click previews.
+                  onClick={(e) => (e.shiftKey ? onToggleFile(e, f.path) : onPreviewFile(f.path))}
+                >
+                  {/* Checkbox = attached state: ticking it stages the file (shift = range). */}
                   <button
                     type="button"
-                    className="cw-folder-list-check"
-                    aria-label={t('shared_files.remove')}
-                    title={t('shared_files.remove')}
-                    onClick={(e) => { e.stopPropagation(); onRemove(f.path); }}
+                    role="checkbox"
+                    aria-checked={checked}
+                    className={`cw-folder-check${checked ? ' is-checked' : ''}`}
+                    aria-label={checked ? t('shared_files.remove') : t('shared_files.import')}
+                    title={checked ? t('shared_files.remove') : t('shared_files.import')}
+                    onClick={(e) => { e.stopPropagation(); onToggleFile(e, f.path); }}
                   >
-                    <Icon name="check" size={14} className="cw-folder-list-check-on" />
-                    <Icon name="x" size={14} className="cw-folder-list-check-off" />
+                    {checked && <Icon name="check" size={12} />}
                   </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="cw-folder-list-add"
-                    aria-label={t('shared_files.import')}
-                    title={t('shared_files.import')}
-                    onClick={(e) => { e.stopPropagation(); onImport([{ globalPath: f.path, filename: nameOf(f) }]); }}
-                  >
-                    <Icon name="plus" size={13} />
-                  </button>
-                )}
-              </div>
-            ))}
+                  <FileTypeIcon filename={nameOf(f)} size={16} />
+                  <span className="cw-folder-list-name">{nameOf(f)}</span>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
