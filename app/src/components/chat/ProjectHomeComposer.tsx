@@ -3,6 +3,7 @@
 // multiline textarea.
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 import { AttachmentChip } from '@/components/AttachmentChip';
 
@@ -53,6 +54,7 @@ export function ProjectHomeComposer({
   modelPicker,
   focusSignal,
 }: ProjectHomeComposerProps) {
+  const { t } = useTranslation('session');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canSubmit = value.trim().length > 0 && !disabled && !sendBlocked;
@@ -92,15 +94,15 @@ export function ProjectHomeComposer({
       className="cw-attach-button"
       onClick={() => fileInputRef.current?.click()}
       disabled={disabled}
-      aria-label="파일 추가"
-      title="파일 추가"
+      aria-label={t('ui.attach_file')}
+      title={t('ui.attach_file')}
     >
       <Icon name="paperclip" size={17} />
     </button>
   );
 
   const sendButton = (
-    <button type="submit" className="cw-send-button" aria-label="Send" disabled={!canSubmit || pending}>
+    <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!canSubmit || pending}>
       {pending ? <span className="cw-send-spinner" aria-hidden /> : <Icon name="send" size={12} />}
     </button>
   );
