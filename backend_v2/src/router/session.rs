@@ -20,6 +20,7 @@ use super::error::{ApiError, err};
 pub struct SessionResponse {
     pub id: Uuid,
     pub project_id: Uuid,
+    pub agent_id: Option<Uuid>,
     pub title: Option<String>,
     pub spec: AgentSpec,
     pub created_at: DateTime<Utc>,
@@ -31,6 +32,7 @@ impl From<Session> for SessionResponse {
         Self {
             id: s.id,
             project_id: s.project_id,
+            agent_id: s.agent_id,
             title: s.title,
             spec: s.spec,
             created_at: s.created_at,
@@ -83,7 +85,14 @@ fn build_spec(agent_type: AgentType, model: Option<&str>) -> AgentSpec {
 pub struct CreateSessionRequest {
     pub project_id: Uuid,
     pub title: Option<String>,
-    pub agent_type: AgentType,
+    /// Create the session from a stored, project-scoped agent. When set, the
+    /// agent's spec is copied into the session and `agent_type`/`model` are
+    /// ignored. Mutually exclusive with `agent_type`; exactly one is required.
+    #[serde(default)]
+    pub agent_id: Option<Uuid>,
+    /// Build the session's spec from a preset. Ignored when `agent_id` is set.
+    #[serde(default)]
+    pub agent_type: Option<AgentType>,
     /// Override the agent-type's default model. `None` falls back to the
     /// per-type default in [`build_spec`].
     #[serde(default)]
@@ -107,8 +116,45 @@ pub(super) async fn create_session(
         return Err(err(StatusCode::NOT_FOUND, "project not found"));
     }
 
-    let spec = build_spec(payload.agent_type, payload.model.as_deref());
+    // Source the spec either from a stored agent or from a preset. Exactly one
+    // of `agent_id` / `agent_type` must be supplied.
+    let (spec, agent_id) = match (payload.agent_id, payload.agent_type) {
+        (Some(_), Some(_)) => {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "provide exactly one of agent_id or agent_type",
+            ));
+        }
+        (Some(agent_id), None) => {
+            let agent = state
+                .agents
+                .get(agent_id)
+                .await?
+                .ok_or_else(|| err(StatusCode::NOT_FOUND, "agent not found"))?;
+            if agent.project_id != payload.project_id {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "agent does not belong to the given project",
+                ));
+            }
+            if !agent.active {
+                return Err(err(StatusCode::CONFLICT, "agent is not active"));
+            }
+            (agent.spec, Some(agent_id))
+        }
+        (None, Some(agent_type)) => (build_spec(agent_type, payload.model.as_deref()), None),
+        (None, None) => {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "provide exactly one of agent_id or agent_type",
+            ));
+        }
+    };
+
     let mut session = Session::new(payload.project_id, spec);
+    if let Some(aid) = agent_id {
+        session = session.with_agent_id(aid);
+    }
     if let Some(t) = payload.title {
         session = session.with_title(t);
     }

@@ -21,6 +21,11 @@ pub struct Session {
 
     pub project_id: Uuid,
 
+    /// The agent definition this session was created from, if any. `None` for
+    /// sessions built directly from a preset. Deleting the referenced agent
+    /// cascades to this session.
+    pub agent_id: Option<Uuid>,
+
     pub title: Option<String>,
 
     pub spec: AgentSpec,
@@ -39,12 +44,18 @@ impl Session {
         Self {
             id: Uuid::new_v4(),
             project_id,
+            agent_id: None,
             title: None,
             spec,
             runenv: false,
             created_at: now,
             updated_at: now,
         }
+    }
+
+    pub fn with_agent_id(mut self, agent_id: Uuid) -> Self {
+        self.agent_id = Some(agent_id);
+        self
     }
 
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
@@ -61,9 +72,14 @@ impl Session {
         let spec_raw: String = row.get("spec");
         let spec: AgentSpec = serde_json::from_str(&spec_raw)
             .map_err(|e| StateError::InvalidData(format!("sessions.spec: {e}")))?;
+        let agent_id = row
+            .get::<Option<String>, _>("agent_id")
+            .map(|raw| parse_uuid(raw, "sessions.agent_id"))
+            .transpose()?;
         Ok(Self {
             id: parse_uuid(row.get::<String, _>("id"), "sessions.id")?,
             project_id: parse_uuid(row.get::<String, _>("project_id"), "sessions.project_id")?,
+            agent_id,
             title: row.get("title"),
             spec,
             runenv: row.get("runenv"),
@@ -99,7 +115,7 @@ impl SessionsState {
 
     pub async fn list(&self) -> StateResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, project_id, title, spec, runenv, created_at, updated_at \
+            "SELECT id, project_id, agent_id, title, spec, runenv, created_at, updated_at \
              FROM sessions ORDER BY created_at ASC",
         )
         .fetch_all(&self.db)
@@ -109,7 +125,7 @@ impl SessionsState {
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, project_id, title, spec, runenv, created_at, updated_at \
+            "SELECT id, project_id, agent_id, title, spec, runenv, created_at, updated_at \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -127,11 +143,12 @@ impl SessionsState {
         item.runenv = runenv.is_some();
 
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, title, spec, runenv, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, project_id, agent_id, title, spec, runenv, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(item.id.to_string())
         .bind(item.project_id.to_string())
+        .bind(item.agent_id.map(|id| id.to_string()))
         .bind(&item.title)
         .bind(serde_json::to_string(&item.spec)?)
         .bind(item.runenv)

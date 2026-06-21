@@ -12,6 +12,7 @@ use crate::{
 
 pub(crate) mod error;
 
+mod agent;
 mod auth;
 mod message;
 mod project;
@@ -53,6 +54,16 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             get(project::get_project)
                 .patch(project::update_project)
                 .delete(project::delete_project),
+        )
+        .api_route(
+            "/agents",
+            get(agent::list_agents).post(agent::create_agent),
+        )
+        .api_route(
+            "/agents/{id}",
+            get(agent::get_agent)
+                .patch(agent::update_agent)
+                .delete(agent::delete_agent),
         )
         .api_route(
             "/sessions",

@@ -7,10 +7,12 @@ use uuid::Uuid;
 
 use crate::{auth::JwtConfig, event::EventQueue};
 
+mod agent;
 mod project;
 mod session;
 mod user;
 
+pub use agent::*;
 pub use project::*;
 pub use session::*;
 pub use user::*;
@@ -59,6 +61,7 @@ pub type StateResult<T> = Result<T, StateError>;
 
 pub struct AppState {
     pub projects: ProjectsState,
+    pub agents: AgentsState,
     pub sessions: SessionsState,
     pub users: UsersState,
     pub events: EventQueue,
@@ -87,6 +90,7 @@ impl AppState {
 
         Ok(Self {
             projects: ProjectsState::new(db.clone(), data_root.clone()),
+            agents: AgentsState::new(db.clone()),
             sessions: SessionsState::new(db.clone(), data_root, events.clone()),
             users: UsersState::new(db),
             events,

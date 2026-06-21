@@ -10,6 +10,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use agent_k::agents::get_coworker_agent_spec;
+
 use crate::state::{AppState, Project, StateError};
 
 use super::error::ApiError;
@@ -64,7 +66,8 @@ pub(super) async fn create_project(
     Json(payload): Json<CreateProjectRequest>,
 ) -> Result<(StatusCode, Json<ProjectResponse>), ApiError> {
     let project = Project::new(payload.title);
-    state.projects.upsert(project.clone()).await?;
+    state.projects.upsert(project).await?;
+
     Ok((StatusCode::CREATED, Json(ProjectResponse::from(project))))
 }
 
@@ -72,11 +75,7 @@ pub(super) async fn get_project(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ProjectResponse>, ApiError> {
-    let project = state
-        .projects
-        .get(id)
-        .await?
-        .ok_or(StateError::NotFound)?;
+    let project = state.projects.get(id).await?.ok_or(StateError::NotFound)?;
     Ok(Json(ProjectResponse::from(project)))
 }
 
@@ -85,11 +84,7 @@ pub(super) async fn update_project(
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateProjectRequest>,
 ) -> Result<Json<ProjectResponse>, ApiError> {
-    let existing = state
-        .projects
-        .get(id)
-        .await?
-        .ok_or(StateError::NotFound)?;
+    let existing = state.projects.get(id).await?.ok_or(StateError::NotFound)?;
     let updated = match payload.title {
         Some(t) => existing.with_title(t).with_updated_at(),
         None => existing,

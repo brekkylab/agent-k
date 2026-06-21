@@ -18,15 +18,24 @@ CREATE TABLE projects (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE project_permissions {
+CREATE TABLE agents (
     id TEXT PRIMARY KEY,
-    role TEXT NOT NULL,
-    user_id TEXT NOT NULL
-}
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    active BOOLEAN NOT NULL DEFAULT 1,
+    spec TEXT NOT NULL,
+    runenv BOOLEAN NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_agents_project ON agents(project_id);
+CREATE UNIQUE INDEX idx_agents_project_name ON agents(project_id, name);
 
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
     title TEXT,
     spec TEXT NOT NULL,
     runenv BOOLEAN NOT NULL,
@@ -34,6 +43,7 @@ CREATE TABLE sessions (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_sessions_project ON sessions(project_id);
+CREATE INDEX idx_sessions_agent ON sessions(agent_id);
 
 CREATE TABLE messages (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
