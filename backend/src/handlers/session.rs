@@ -605,6 +605,13 @@ pub async fn get_session(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
+    // Only user-originated sessions are reachable through this route.
+    // Automation-run sessions are viewed via the automation page, so deny direct
+    // access here with the same 404 as a missing session (don't leak existence).
+    if session.origin != SessionOrigin::User {
+        return Err(AppError::not_found("session not found or access denied"));
+    }
+
     let unread = state
         .repository
         .count_session_unread(session_id, auth_user.id)
