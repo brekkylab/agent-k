@@ -60,7 +60,32 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
         .strip_prefix(format!("/projects/{pid}/workspace"))
         .build_handler();
 
-    dav.handle(req).await.map(Body::new)
+    // Capture method + workspace-relative path before `req` is moved into dav,
+    // so we can fire the knowledge hook once dav reports the write succeeded.
+    let is_put = req.method().as_str() == "PUT";
+    let rel_path = req
+        .uri()
+        .path()
+        .strip_prefix(&format!("/projects/{pid}/workspace"))
+        .map(str::to_owned);
+
+    let res = dav.handle(req).await.map(Body::new);
+
+    if is_put && res.status().is_success() {
+        if let Some(rel) = rel_path {
+            if rel.trim_start_matches('/').starts_with("knowledge/") {
+                on_knowledge_file(pid, &rel);
+            }
+        }
+    }
+
+    res
+}
+
+/// Hook fired when a file lands in a project's `knowledge/` directory via
+/// WebDAV. Currently a stub — logs a greeting so we can confirm wiring.
+fn on_knowledge_file(pid: Uuid, rel_path: &str) {
+    tracing::info!("hello world (project={pid}, path={rel_path})");
 }
 
 fn parse_pid(path: &str) -> Option<Uuid> {

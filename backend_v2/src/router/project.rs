@@ -66,9 +66,10 @@ pub(super) async fn create_project(
     Json(payload): Json<CreateProjectRequest>,
 ) -> Result<(StatusCode, Json<ProjectResponse>), ApiError> {
     let project = Project::new(payload.title);
+    let response = ProjectResponse::from(project.clone());
     state.projects.upsert(project).await?;
 
-    Ok((StatusCode::CREATED, Json(ProjectResponse::from(project))))
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 pub(super) async fn get_project(

@@ -3628,21 +3628,19 @@ dependencies = [
 
 [[package]]
 name = "html-to-markdown-rs"
-version = "3.6.15"
+version = "3.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de0dd81706c600309dda21949e23a30344d0153d2325faeeaf1122839b93651d"
+checksum = "6cbbfb183e8634cb956309c6bbd781d9ddae068d376fb9eb1451ac49cf4cbba7"
 dependencies = [
  "ahash",
  "astral-tl",
  "base64",
- "bitflags 2.11.1",
  "html-escape",
  "html5ever 0.39.0",
  "image",
  "lru 0.18.0",
  "memchr",
  "once_cell",
- "phf 0.13.1",
  "regex",
  "serde",
  "serde_json",
@@ -5409,7 +5407,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "log",
- "lru 0.18.0",
+ "lru 0.12.5",
  "msb_krun_arch",
  "msb_krun_hvf",
  "msb_krun_polly",
@@ -6152,7 +6150,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
 dependencies = [
- "phf_macros 0.11.3",
+ "phf_macros",
  "phf_shared 0.11.3",
 ]
 
@@ -6171,7 +6169,6 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
 dependencies = [
- "phf_macros 0.13.1",
  "phf_shared 0.13.1",
  "serde",
 ]
@@ -6224,19 +6221,6 @@ checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
 dependencies = [
  "phf_generator 0.11.3",
  "phf_shared 0.11.3",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "phf_macros"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "812f032b54b1e759ccd5f8b6677695d5268c588701effba24601f6932f8269ef"
-dependencies = [
- "phf_generator 0.13.1",
- "phf_shared 0.13.1",
  "proc-macro2",
  "quote",
  "syn",
