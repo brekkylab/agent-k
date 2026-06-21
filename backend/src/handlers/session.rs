@@ -93,9 +93,10 @@ pub async fn build_session_agent(
             .map_err(|e| format!("failed to create dir {}: {e}", d.display()))?;
     }
     // Resolve the effective model from the session's agent_type + optional pin.
-    let (agent_type, model_pin) = match state.repository.get_session(session_id).await {
-        Ok(Some(s)) => (s.agent_type, s.model),
-        Ok(None) => (None, None),
+    // `creator_id` is the identity app-control tools act on behalf of.
+    let (agent_type, model_pin, creator_id) = match state.repository.get_session(session_id).await {
+        Ok(Some(s)) => (s.agent_type, s.model, Some(s.creator_id)),
+        Ok(None) => (None, None, None),
         Err(e) => return Err(e.to_string()),
     };
     // The same agent type drives both model resolution and dispatch; unknown → coworker.
@@ -134,8 +135,27 @@ pub async fn build_session_agent(
             .await
             .map_err(|e| e.to_string())?
         }
-        AgentType::Buddy => agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model)
-            .map_err(|e| e.to_string())?,
+        // Buddy is the app-control surface: hand it the read-only app tools,
+        // scoped to the session creator's permissions.
+        AgentType::Buddy => {
+            let extra_tools = creator_id.map(|uid| {
+                let resolver: std::sync::Arc<dyn crate::app_tools::PermissionResolver> =
+                    std::sync::Arc::new(crate::app_tools::RepoPermissionResolver::new(
+                        state.repository.clone(),
+                    ));
+                let ctx = std::sync::Arc::new(crate::app_tools::AppToolContext {
+                    repository: state.repository.clone(),
+                    resolver,
+                    agent_policy: crate::app_tools::AgentPolicy::for_user(uid),
+                    acting_user_id: uid,
+                    project_id,
+                    session_id,
+                });
+                crate::app_tools::build_app_tools(ctx)
+            });
+            agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model, extra_tools)
+                .map_err(|e| e.to_string())?
+        }
         // Speedwagon answers questions over this project's document corpus.
         // Tools bind to the project-scoped store; runs on a local RunEnv (not
         // the session sandbox). Shell is exposed as a secondary tool.
