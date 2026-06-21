@@ -11,11 +11,13 @@ mod agent;
 mod project;
 mod session;
 mod user;
+mod workspace;
 
 pub use agent::*;
 pub use project::*;
 pub use session::*;
 pub use user::*;
+pub use workspace::*;
 
 pub(crate) fn parse_uuid(raw: String, field: &str) -> StateResult<Uuid> {
     Uuid::parse_str(&raw).map_err(|e| StateError::InvalidData(format!("{field}: {e}")))
@@ -64,6 +66,7 @@ pub struct AppState {
     pub agents: AgentsState,
     pub sessions: SessionsState,
     pub users: UsersState,
+    pub workspace: WorkspaceState,
     pub events: EventQueue,
     pub jwt: JwtConfig,
 }
@@ -91,6 +94,7 @@ impl AppState {
         Ok(Self {
             projects: ProjectsState::new(db.clone(), data_root.clone()),
             agents: AgentsState::new(db.clone()),
+            workspace: WorkspaceState::new(data_root.clone()),
             sessions: SessionsState::new(db.clone(), data_root, events.clone()),
             users: UsersState::new(db),
             events,

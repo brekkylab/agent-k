@@ -1,3 +1,4 @@
+use std::io::SeekFrom;
 use std::sync::Arc;
 
 use axum::{
@@ -7,7 +8,16 @@ use axum::{
     http::{Response, StatusCode},
     response::IntoResponse,
 };
-use dav_server::{DavHandler, fakels::FakeLs, localfs::LocalFs};
+use dav_server::{
+    DavHandler,
+    davpath::DavPath,
+    fakels::FakeLs,
+    fs::{
+        DavDirEntry, DavFile, DavFileSystem, DavMetaData, FsFuture, FsStream, OpenOptions,
+        ReadDirMeta,
+    },
+    localfs::LocalFs,
+};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -48,44 +58,15 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
         }
     }
 
-    let root = state.projects.workspace_root(pid);
-    if let Err(e) = tokio::fs::create_dir_all(&root).await {
-        tracing::error!("workspace mkdir failed: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "mkdir failed").into_response();
-    }
-
+    // Wrap LocalFs so successful mutations get reported back to AppState for
+    // side-processing (see [`Filesystem`]).
     let dav = DavHandler::builder()
-        .filesystem(LocalFs::new(&root, false, false, false))
+        .filesystem(Box::new(Filesystem::new(state.clone(), pid)))
         .locksystem(FakeLs::new())
         .strip_prefix(format!("/projects/{pid}/workspace"))
         .build_handler();
 
-    // Capture method + workspace-relative path before `req` is moved into dav,
-    // so we can fire the knowledge hook once dav reports the write succeeded.
-    let is_put = req.method().as_str() == "PUT";
-    let rel_path = req
-        .uri()
-        .path()
-        .strip_prefix(&format!("/projects/{pid}/workspace"))
-        .map(str::to_owned);
-
-    let res = dav.handle(req).await.map(Body::new);
-
-    if is_put && res.status().is_success() {
-        if let Some(rel) = rel_path {
-            if rel.trim_start_matches('/').starts_with("knowledge/") {
-                on_knowledge_file(pid, &rel);
-            }
-        }
-    }
-
-    res
-}
-
-/// Hook fired when a file lands in a project's `knowledge/` directory via
-/// WebDAV. Currently a stub — logs a greeting so we can confirm wiring.
-fn on_knowledge_file(pid: Uuid, rel_path: &str) {
-    tracing::info!("hello world (project={pid}, path={rel_path})");
+    dav.handle(req).await.map(Body::new)
 }
 
 fn parse_pid(path: &str) -> Option<Uuid> {
@@ -98,4 +79,224 @@ fn extract_token(query: &str) -> Option<String> {
     url::form_urlencoded::parse(query.as_bytes())
         .find(|(k, _)| k == "token")
         .map(|(_, v)| v.into_owned())
+}
+
+/// A [`DavFileSystem`] over a project's workspace. Wraps [`LocalFs`] and reports
+/// every successful mutation — `PUT` (the file's `flush`), `MOVE`/`COPY`
+/// (`rename`/`copy`), and `DELETE` (`remove_file`) — back to [`AppState`] for
+/// side-processing, rather than guessing from the HTTP method/status after the
+/// fact. Each report is classified as insert/update/remove from prior path
+/// existence and dispatched to the matching `state.workspace` handler.
+///
+/// Only paths under `knowledge/` (see [`is_knowledge`]) are reported today;
+/// further handlers (other paths) are added at the callsites.
+///
+/// Cloneable and `Send + Sync` so it satisfies dav-server's
+/// `GuardedFileSystem<()>` blanket impl; clones share the inner `Arc`-backed
+/// `LocalFs` and the `AppState` handle.
+#[derive(Clone)]
+struct Filesystem {
+    inner: Box<LocalFs>,
+    state: Arc<AppState>,
+    pid: Uuid,
+}
+
+impl Filesystem {
+    pub fn new(state: Arc<AppState>, pid: Uuid) -> Self {
+        let root = state.workspace.root(pid);
+        Self {
+            inner: LocalFs::new(root, false, false, false),
+            state,
+            pid,
+        }
+    }
+}
+
+/// True when `rel_path` lives under the `knowledge/` directory. Component-wise
+/// match on the leading dir: `knowledge/x` hits, `knowledgebase/x` does not.
+fn is_knowledge(rel_path: &str) -> bool {
+    rel_path.trim_start_matches('/').starts_with("knowledge/")
+}
+
+/// Workspace-relative path (leading `/`) in the shape the `state.workspace`
+/// knowledge handlers expect.
+/// `as_rel_ospath` already drops the leading slash, so we re-add one.
+fn rel_path_string(path: &DavPath) -> String {
+    format!("/{}", path.as_rel_ospath().to_string_lossy())
+}
+
+impl DavFileSystem for Filesystem {
+    fn open<'a>(
+        &'a self,
+        path: &'a DavPath,
+        options: OpenOptions,
+    ) -> FsFuture<'a, Box<dyn DavFile>> {
+        Box::pin(async move {
+            let is_write = options.write || options.append || options.create || options.create_new;
+            // Probe before opening: a create/truncating open would make the
+            // file exist (or empty) regardless, so we must capture prior
+            // existence here to tell an insert from an overwrite at flush time.
+            let existed = is_write && self.inner.metadata(path).await.is_ok();
+            let file = self.inner.open(path, options).await?;
+            if is_write {
+                Ok(Box::new(ObservedFile {
+                    inner: file,
+                    state: self.state.clone(),
+                    pid: self.pid,
+                    rel_path: rel_path_string(path),
+                    existed,
+                    wrote: false,
+                }) as Box<dyn DavFile>)
+            } else {
+                Ok(file)
+            }
+        })
+    }
+
+    fn read_dir<'a>(
+        &'a self,
+        path: &'a DavPath,
+        meta: ReadDirMeta,
+    ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>> {
+        self.inner.read_dir(path, meta)
+    }
+
+    fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
+        self.inner.metadata(path)
+    }
+
+    fn symlink_metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
+        self.inner.symlink_metadata(path)
+    }
+
+    fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
+        self.inner.create_dir(path)
+    }
+
+    fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
+        self.inner.remove_dir(path)
+    }
+
+    fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
+        Box::pin(async move {
+            self.inner.remove_file(path).await?;
+            let rel = rel_path_string(path);
+            if is_knowledge(&rel) {
+                self.state.workspace.remove_knowledge(self.pid, &rel);
+            }
+            Ok(())
+        })
+    }
+
+    fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
+        Box::pin(async move {
+            // Probe the destination before the move so we can tell whether it
+            // landed on a fresh path (insert) or replaced one (update).
+            let to_existed = self.inner.metadata(to).await.is_ok();
+            self.inner.rename(from, to).await?;
+            // The source path left `knowledge/`; the destination arrived in it.
+            let from_rel = rel_path_string(from);
+            if is_knowledge(&from_rel) {
+                self.state.workspace.remove_knowledge(self.pid, &from_rel);
+            }
+            let to_rel = rel_path_string(to);
+            if is_knowledge(&to_rel) {
+                if to_existed {
+                    self.state.workspace.update_knowledge(self.pid, &to_rel);
+                } else {
+                    self.state.workspace.insert_knowledge(self.pid, &to_rel);
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn copy<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
+        Box::pin(async move {
+            let to_existed = self.inner.metadata(to).await.is_ok();
+            self.inner.copy(from, to).await?;
+            let to_rel = rel_path_string(to);
+            if is_knowledge(&to_rel) {
+                if to_existed {
+                    self.state.workspace.update_knowledge(self.pid, &to_rel);
+                } else {
+                    self.state.workspace.insert_knowledge(self.pid, &to_rel);
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+/// A [`DavFile`] that delegates to the underlying file and, once a write
+/// completes (`flush` after at least one `write_*`), reports it to
+/// `state.workspace` as an insert or update depending on prior existence.
+struct ObservedFile {
+    inner: Box<dyn DavFile>,
+    state: Arc<AppState>,
+    pid: Uuid,
+    rel_path: String,
+    /// Whether the file already existed when it was opened — distinguishes an
+    /// insert from an overwrite (update) at flush time.
+    existed: bool,
+    wrote: bool,
+}
+
+impl std::fmt::Debug for ObservedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ObservedFile")
+            .field("rel_path", &self.rel_path)
+            .field("wrote", &self.wrote)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DavFile for ObservedFile {
+    fn metadata(&mut self) -> FsFuture<'_, Box<dyn DavMetaData>> {
+        self.inner.metadata()
+    }
+
+    fn write_buf(&mut self, buf: Box<dyn bytes::Buf + Send>) -> FsFuture<'_, ()> {
+        self.wrote = true;
+        self.inner.write_buf(buf)
+    }
+
+    fn write_bytes(&mut self, buf: bytes::Bytes) -> FsFuture<'_, ()> {
+        self.wrote = true;
+        self.inner.write_bytes(buf)
+    }
+
+    fn read_bytes(&mut self, count: usize) -> FsFuture<'_, bytes::Bytes> {
+        self.inner.read_bytes(count)
+    }
+
+    fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64> {
+        self.inner.seek(pos)
+    }
+
+    fn flush(&mut self) -> FsFuture<'_, ()> {
+        Box::pin(async move {
+            self.inner.flush().await?;
+            if self.wrote {
+                // Clear first so a second flush on the same handle won't re-report.
+                self.wrote = false;
+                if is_knowledge(&self.rel_path) {
+                    if self.existed {
+                        self.state
+                            .workspace
+                            .update_knowledge(self.pid, &self.rel_path);
+                    } else {
+                        self.state
+                            .workspace
+                            .insert_knowledge(self.pid, &self.rel_path);
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn redirect_url(&mut self) -> FsFuture<'_, Option<String>> {
+        self.inner.redirect_url()
+    }
 }

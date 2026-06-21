@@ -10,8 +10,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use agent_k::agents::get_coworker_agent_spec;
-
 use crate::state::{AppState, Project, StateError};
 
 use super::error::ApiError;

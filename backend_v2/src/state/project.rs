@@ -74,8 +74,12 @@ impl ProjectsState {
     }
 
     /// Returns the prior row if one was overwritten, `None` if freshly inserted.
+    /// Also provisions the project's workspace directory on disk
+    /// (`workspace_root`); `create_dir_all` is idempotent, so a re-upsert is a
+    /// no-op there.
     pub async fn upsert(&self, item: Project) -> StateResult<Option<Project>> {
-        let prior = self.get(item.id).await?;
+        let id = item.id;
+        let prior = self.get(id).await?;
         sqlx::query(
             "INSERT INTO projects (id, title, created_at, updated_at) \
              VALUES (?, ?, ?, ?) \
@@ -89,6 +93,8 @@ impl ProjectsState {
         .bind(item.updated_at.to_rfc3339())
         .execute(&self.db)
         .await?;
+
+        tokio::fs::create_dir_all(self.workspace_root(id)).await?;
         Ok(prior)
     }
 

@@ -13,6 +13,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 1
         Case {
@@ -21,6 +22,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 2
         Case {
@@ -32,6 +34,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("payslips.pdf"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 3
         Case {
@@ -43,6 +46,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("payslips.pdf"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 4
         Case {
@@ -54,6 +58,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("co2.csv"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 5
         Case {
@@ -65,6 +70,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("co2.csv"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 6
         Case {
@@ -83,6 +89,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             ]),
             files: vec![],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 7
         Case {
@@ -101,6 +108,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             ]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 8
         Case {
@@ -112,6 +120,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("tax_invoice.jpg"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 9
         Case {
@@ -129,6 +138,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 )
             ],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 10 — xlsx create: 학생 성적 (skill is provided by the coworker agent; toggle via `--no-skill`)
         Case {
@@ -146,6 +156,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 11 — xlsx create: sales_dashboard.xlsx multi-sheet (skill from coworker agent)
         Case {
@@ -179,6 +190,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 12 — xlsx edit: sales_dashboard.xlsx with 수수료 column insert (skill from coworker agent)
         Case {
@@ -198,6 +210,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("sales_dashboard.xlsx"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 13 — xlsx create: financial_report.xlsx (skill from coworker agent)
         Case {
@@ -223,6 +236,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: vec![],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 14 — pptx create (source: comirnaty0.1mg.txt)
         Case {
@@ -245,6 +259,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("comirnaty0.1mg.txt"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 15 — pptx edit (source: comirnaty_deck gpt5.5 skills.pptx)
         Case {
@@ -272,6 +287,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("slides.pptx"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 16 — pptx create (Q2 business review for exec meeting)
         Case {
@@ -294,6 +310,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
             )]),
             files: Vec::new(),
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 17 — pptx create (team-meeting market review, startup feel)
         Case {
@@ -311,6 +328,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("market_research.txt"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 18 — pptx create (Q1 2026 실적보고서, gaming startup exec meeting)
         Case {
@@ -325,6 +343,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("2026_1분기_실적보고서.txt"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 19 — pptx create (NORTH AVENUE brand ops review, marketing/brand team internal)
         Case {
@@ -337,6 +356,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("브랜드 운영 기록 정리본.txt"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 20 — pptx create (English mirror of case 17, same market_research.txt source)
         Case {
@@ -353,6 +373,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("market_research.txt"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
         // Case 21 — pptx create (English mirror of case 18, same 2026_1분기_실적보고서.txt source)
         Case {
@@ -367,6 +388,7 @@ pub fn get_coworker_cases() -> Vec<Case> {
                 PathBuf::from("2026_Q1_Performance_Report.txt"),
             )],
             shared_files: Vec::new(),
+            corpus_files: Vec::new(),
         },
     ]
 }
