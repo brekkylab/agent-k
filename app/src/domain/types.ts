@@ -12,6 +12,8 @@ export interface User {
   avatar: string;
   color: string;
   preferredLanguage: PreferredLanguage;
+  /** Capability names granted to this user's agents (from /me). Empty when unknown. */
+  agentCapabilities?: string[];
 }
 
 export interface Project {

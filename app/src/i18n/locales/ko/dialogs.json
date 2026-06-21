@@ -2,6 +2,26 @@
   "user_settings": {
     "title": "사용자 설정",
     "fields": { "display_name": "표시 이름", "language": "언어" },
+    "agent_permissions": {
+      "title": "에이전트 권한",
+      "description": "에이전트가 나를 대신해 사용할 수 있는 기능입니다. 현재는 보기 전용입니다.",
+      "empty": "부여된 권한이 없습니다.",
+      "labels": {
+        "automation_read": "자동화 조회",
+        "automation_run_read": "자동화 실행 기록 조회",
+        "automation_create": "자동화 생성",
+        "automation_update": "자동화 수정",
+        "automation_run": "자동화 실행",
+        "automation_delete": "자동화 삭제",
+        "session_read": "채팅 세션 조회",
+        "project_read": "프로젝트 조회",
+        "member_read": "멤버 조회",
+        "member_manage": "멤버 관리",
+        "user_read_self": "내 프로필 조회",
+        "user_lookup": "사용자 조회",
+        "user_admin": "사용자 관리"
+      }
+    },
     "errors": { "generic": "문제가 발생했습니다. 다시 시도해주세요." }
   },
   "rename": {

@@ -12,6 +12,8 @@ export interface BackendUser {
   preferred_language?: string;
   created_at?: string;
   updated_at?: string;
+  /** Capability names granted to this user's agents; present on the /me payload. */
+  agent_capabilities?: string[];
 }
 
 export interface LoginResponse {

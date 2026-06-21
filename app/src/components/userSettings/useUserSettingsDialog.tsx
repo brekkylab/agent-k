@@ -38,6 +38,10 @@ function UserSettingsDialog({ onClose }: { onClose: () => void }) {
   const dirty = trimmed !== initialName.trim() || lang !== initialLang;
   const valid = trimmed.length > 0 && trimmed.length <= MAX_NAME_LEN;
 
+  // Read-only: capabilities the user's agents may use (from /me). Editing comes
+  // with per-user agent settings later.
+  const agentCapabilities = currentUser?.agentCapabilities ?? [];
+
   const langOptions: SelectOption<SupportedLanguage>[] = SUPPORTED_LANGUAGES.map((code) => ({
     value: code,
     label: LANG_LABEL[code],
@@ -119,6 +123,39 @@ function UserSettingsDialog({ onClose }: { onClose: () => void }) {
               </span>
             )}
           />
+        </div>
+
+        <div className="cw-field">
+          <span>{t('user_settings.agent_permissions.title')}</span>
+          <p style={{ margin: '0 0 var(--cw-space-2)', fontSize: 12, color: 'var(--cw-ink-soft)' }}>
+            {t('user_settings.agent_permissions.description')}
+          </p>
+          {agentCapabilities.length === 0 ? (
+            <span style={{ fontSize: 13, color: 'var(--cw-ink-soft)' }}>
+              {t('user_settings.agent_permissions.empty')}
+            </span>
+          ) : (
+            <ul
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 'var(--cw-space-2)',
+                margin: 0,
+                padding: 0,
+                listStyle: 'none',
+              }}
+            >
+              {agentCapabilities.map((cap) => (
+                <li
+                  key={cap}
+                  className="cw-chip"
+                  style={{ fontSize: 12, padding: '2px 8px', borderRadius: 6, background: 'var(--cw-surface-2)' }}
+                >
+                  {t(`user_settings.agent_permissions.labels.${cap.replace(/\./g, '_')}`, cap)}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         {error && (

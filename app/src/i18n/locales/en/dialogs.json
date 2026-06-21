@@ -2,6 +2,26 @@
   "user_settings": {
     "title": "User Settings",
     "fields": { "display_name": "Display name", "language": "Language" },
+    "agent_permissions": {
+      "title": "Agent permissions",
+      "description": "Capabilities your agents may use on your behalf. Read-only for now.",
+      "empty": "No permissions granted.",
+      "labels": {
+        "automation_read": "View automations",
+        "automation_run_read": "View automation runs",
+        "automation_create": "Create automations",
+        "automation_update": "Edit automations",
+        "automation_run": "Run automations",
+        "automation_delete": "Delete automations",
+        "session_read": "Read chat sessions",
+        "project_read": "View projects",
+        "member_read": "View members",
+        "member_manage": "Manage members",
+        "user_read_self": "Read own profile",
+        "user_lookup": "Look up users",
+        "user_admin": "Administer users"
+      }
+    },
     "errors": { "generic": "Something went wrong. Please try again." }
   },
   "rename": {

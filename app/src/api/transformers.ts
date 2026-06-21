@@ -78,6 +78,7 @@ export function toUser(backend: BackendUser): User {
     avatar: initials(name),
     color: deterministicColor(backend.id),
     preferredLanguage: normalizeLanguage(backend.preferred_language),
+    agentCapabilities: backend.agent_capabilities ?? [],
   };
 }
 
