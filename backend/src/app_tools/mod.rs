@@ -24,10 +24,10 @@ use std::sync::Arc;
 use agent_k::agents::ExtraTools;
 use ailoy::tool::{ToolDesc, ToolFunc};
 
+use crate::authz::Capability;
+
 pub use context::AppToolContext;
-pub use policy::{
-    AgentPolicy, Capability, PermissionResolver, RepoPermissionResolver, Resource, ResourceKind,
-};
+pub use policy::AgentPolicy;
 
 /// One registered app-control tool: its primary capability (for policy-gated
 /// advertisement), its description (shown to the model), and its function.

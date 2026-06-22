@@ -5,7 +5,8 @@ use std::sync::Arc;
 use ailoy::datatype::Value;
 use uuid::Uuid;
 
-use crate::app_tools::policy::{AgentPolicy, Capability, PermissionResolver, Resource};
+use crate::app_tools::policy::AgentPolicy;
+use crate::authz::{Capability, PermissionResolver, Resource};
 use crate::repository::AppRepository;
 
 /// Everything an app-control tool needs to authorize and execute, captured once

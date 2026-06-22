@@ -6,9 +6,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::app_tools::context::AppToolContext;
-use crate::app_tools::policy::{
-    AgentPolicy, Capability, PermissionResolver, RepoPermissionResolver, Resource,
-};
+use crate::app_tools::policy::AgentPolicy;
+use crate::authz::{Capability, PermissionResolver, RepoPermissionResolver, Resource};
 use crate::auth::Role;
 use crate::repository::{AppRepository, NewUser};
 

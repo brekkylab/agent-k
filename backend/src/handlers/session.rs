@@ -139,8 +139,8 @@ pub async fn build_session_agent(
         // scoped to the session creator's permissions.
         AgentType::Buddy => {
             let extra_tools = creator_id.map(|uid| {
-                let resolver: std::sync::Arc<dyn crate::app_tools::PermissionResolver> =
-                    std::sync::Arc::new(crate::app_tools::RepoPermissionResolver::new(
+                let resolver: std::sync::Arc<dyn crate::authz::PermissionResolver> =
+                    std::sync::Arc::new(crate::authz::RepoPermissionResolver::new(
                         state.repository.clone(),
                     ));
                 let ctx = std::sync::Arc::new(crate::app_tools::AppToolContext {

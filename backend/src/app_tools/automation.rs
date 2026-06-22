@@ -15,7 +15,7 @@ use serde_json::json;
 use crate::app_tools::context::{
     arg_bool, arg_str, arg_strings, arg_uuid, denied, ok, tool_error, AppToolContext,
 };
-use crate::app_tools::policy::{Capability, Resource};
+use crate::authz::{Capability, Resource};
 use crate::app_tools::AppTool;
 use crate::model::TriggerResponse;
 
