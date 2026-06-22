@@ -17,8 +17,10 @@ objects: editable text boxes (with FROZEN line breaks — `word_wrap=False`
 + hard `<a:br/>`, so the viewer can't re-wrap CJK), native autoshapes for
 simple boxes/borders/markers, a picture per chart/image, and a native
 solid slide-background fill. `fonts`/`sizes`/`page_numbers`/`overlap`
-apply to the text boxes; `palette` reflects text-run colors (advisory —
-lean on visual inspection).
+apply to the text boxes; `palette` checks DISCIPLINE — that the deck uses a
+small, locked set of colors (composed per deck, not a fixed gallery), not
+that it matches a known palette. Advisory; lean on visual inspection for
+whether the palette fits the subject.
 
 There is no `overflow` check (boxes are sized to browser-measured text,
 and frozen lines can't re-wrap), no `word_wrap` check (`word_wrap=False`
@@ -35,43 +37,8 @@ from pptx import Presentation
 from pptx.oxml.ns import qn
 
 
-# --- palette gallery (mirrors SKILL.md) ---------------------------------------
-
-GALLERY: dict[str, set[str]] = {
-    "Corporate Slate": {
-        "0F172A", "2563EB", "F59E0B", "F8FAFC", "FFFFFF",
-        "64748B", "E2E8F0", "10B981", "EF4444",
-    },
-    "Midnight Keynote": {
-        "0B1220", "818CF8", "22D3EE", "1F2937", "94A3B8",
-        "34D399", "F87171",
-    },
-    "Warm Editorial": {
-        "7C2D12", "EA580C", "FACC15", "FFF7ED", "FFFFFF",
-        "9A3412", "FED7AA", "15803D", "B91C1C",
-    },
-    "Forest Research": {
-        "1F2937", "047857", "D97706", "FFFFFF", "F9FAFB",
-        "6B7280", "E5E7EB", "059669", "DC2626",
-    },
-    "Mono Editorial": {
-        "111827", "FFFFFF", "6B7280", "E5E7EB", "059669", "DC2626",
-    },
-    "Playful Violet": {
-        "4C1D95", "14B8A6", "F472B6", "FAF5FF", "FFFFFF",
-        "6D28D9", "E9D5FF", "16A34A", "E11D48",
-    },
-    "Sand & Ink": {
-        "1C1917", "57534E", "B45309", "FAFAF9", "FFFFFF",
-        "78716C", "E7E5E4", "15803D", "B91C1C",
-    },
-    "Glacier": {
-        "0E7490", "0891B2", "F97316", "F0F9FF", "FFFFFF",
-        "475569", "BAE6FD", "16A34A", "DC2626",
-    },
-}
-
-# Pure white / black aren't brand colours; exclude from off-gallery.
+# Pure white / black are neutrals, not brand colours; excluded from the
+# palette-discipline count below.
 NEUTRAL_TOLERATED: set[str] = {"FFFFFF", "000000"}
 
 
@@ -116,72 +83,71 @@ def _iter_runs(slide):
                 yield shape, para, run
 
 
-def _collect_fills(prs) -> list[str]:
-    """All solid fill hex colors across the deck, uppercased."""
-    out: list[str] = []
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            try:
-                if shape.fill.type == 1:  # solid
-                    out.append(str(shape.fill.fore_color.rgb).upper())
-            except (AttributeError, TypeError):
-                # No fill / theme-based fill / placeholder without fill.
-                pass
-            if shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
-                    for run in para.runs:
-                        try:
-                            rgb = run.font.color.rgb
-                            if rgb is not None:
-                                out.append(str(rgb).upper())
-                        except (AttributeError, TypeError):
-                            # Run inherits color from theme — no rgb to read.
-                            pass
-    return out
+def _slide_colors(slide) -> set[str]:
+    """Distinct non-neutral solid-fill + text-run colors on one slide."""
+    cols: set[str] = set()
+    for shape in slide.shapes:
+        try:
+            if shape.fill.type == 1:  # solid
+                h = str(shape.fill.fore_color.rgb).upper()
+                if h not in NEUTRAL_TOLERATED:
+                    cols.add(h)
+        except (AttributeError, TypeError):
+            pass  # no fill / theme fill / placeholder
+        if shape.has_text_frame:
+            for para in shape.text_frame.paragraphs:
+                for run in para.runs:
+                    try:
+                        rgb = run.font.color.rgb
+                        if rgb is not None:
+                            h = str(rgb).upper()
+                            if h not in NEUTRAL_TOLERATED:
+                                cols.add(h)
+                    except (AttributeError, TypeError):
+                        pass  # inherits theme color
+    return cols
 
 
 # --- checks -------------------------------------------------------------------
 
+# A composed palette runs ~7-10 non-neutral colors (primary/secondary/accent/
+# muted/hairline/positive/negative, plus a tinted bg/surface and maybe a chart
+# tint — only pure #FFFFFF/#000000 are treated as neutral). Past this it reads
+# as palette sprawl, not a locked palette. Kept generous so a legitimately
+# composed warm/tinted palette isn't flagged.
+PALETTE_LIMIT = 12
+
+
 def check_palette(prs) -> dict[str, Any]:
-    """Detect which gallery palette is in use, and report off-gallery colors.
+    """Palette DISCIPLINE — a composed deck should use a small, locked set of
+    colors, consistent across slides. (There is no fixed gallery to match;
+    palettes are composed per deck from the subject — see SKILL.md.)
 
-    Coverage is *frequency-weighted* — each fill occurrence counts, so one
-    stray hex on one slide of a 30-slide deck stays near 1.0 (a set-based
-    score would crash). Compliant = coverage >= 0.85 against one palette.
+    Collects distinct non-neutral solid-fill + text-run colors per slide.
+    Reports the distinct count, the colors, and any `stray` color that appears
+    on only ONE slide (a new hex introduced mid-deck). Compliant when the
+    distinct count is small (<= PALETTE_LIMIT). Advisory — visual inspection
+    judges whether the palette actually fits the subject.
 
-    Returns {"matched": <name>|"custom"|"none", "coverage": float,
-              "off_gallery": [hex, ...]}.
+    Returns {"distinct": int, "colors": [hex,...], "stray": [hex,...],
+              "ok": bool}.
     """
     from collections import Counter
 
-    fills = [f for f in _collect_fills(prs) if f not in NEUTRAL_TOLERATED]
-    if not fills:
-        return {"matched": "none", "coverage": 0.0, "off_gallery": []}
+    n_slides = len(prs.slides)
+    appears_on: Counter = Counter()
+    for slide in prs.slides:
+        for h in _slide_colors(slide):
+            appears_on[h] += 1
 
-    counts = Counter(fills)
-    total = sum(counts.values())
-    best_name = "custom"
-    best_coverage = 0.0
-    best_off: set[str] = set(counts)
-
-    for name, palette in GALLERY.items():
-        matched = sum(c for h, c in counts.items() if h in palette)
-        coverage = matched / total if total else 0.0
-        if coverage > best_coverage:
-            best_coverage = coverage
-            best_name = name
-            best_off = {h for h in counts if h not in palette}
-
-    if best_coverage < 0.5:
-        return {
-            "matched": "custom",
-            "coverage": round(best_coverage, 2),
-            "off_gallery": sorted(counts),
-        }
+    distinct = sorted(appears_on)
+    # A color on a single slide of a multi-slide deck = introduced mid-deck.
+    stray = sorted(h for h, c in appears_on.items() if c == 1) if n_slides >= 3 else []
     return {
-        "matched": best_name,
-        "coverage": round(best_coverage, 2),
-        "off_gallery": sorted(best_off),
+        "distinct": len(distinct),
+        "colors": distinct,
+        "stray": stray,
+        "ok": len(distinct) <= PALETTE_LIMIT,
     }
 
 
@@ -508,8 +474,8 @@ def summarize(issues: dict[str, Any]) -> str:
     n = issues["slide_count"]
     p = issues["palette"]
     flags = []
-    if p["matched"] not in {"none"} and p["coverage"] < 0.85:
-        flags.append(f"palette drift ({p['coverage']:.0%})")
+    if not p.get("ok", True):
+        flags.append(f"palette sprawl ({p['distinct']} distinct colors)")
     if issues["fonts"]:
         flags.append(f"{len(issues['fonts'])} CJK runs missing EA typeface")
     if issues["sizes"]:
@@ -519,7 +485,7 @@ def summarize(issues: dict[str, Any]) -> str:
     if issues.get("overlap"):
         flags.append(f"{len(issues['overlap'])} text overlaps")
     if not flags:
-        return f"{n} slides — all checks passed ({p['matched']})."
+        return f"{n} slides — all checks passed ({p['distinct']} palette colors)."
     return f"{n} slides — issues: {' · '.join(flags)}"
 
 

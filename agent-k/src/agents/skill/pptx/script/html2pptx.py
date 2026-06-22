@@ -122,7 +122,9 @@ SCRAPE_SLIDE_JS = r"""
     return true;
   };
   const isSvgInternal = (el) => !!el.ownerSVGElement;        // inside an <svg>
-  const isMedia = (el) => ['CANVAS', 'IMG', 'SVG'].includes(el.tagName) && !el.ownerSVGElement;
+  // NB: an inline <svg> reports tagName "svg" (lowercase, not HTML-uppercased),
+  // so compare case-insensitively or SVG charts are silently dropped.
+  const isMedia = (el) => ['CANVAS', 'IMG', 'SVG'].includes((el.tagName || '').toUpperCase()) && !el.ownerSVGElement;
 
   const pics = [], shapes = [], texts = [];
   let order = 0;
@@ -223,7 +225,15 @@ SCRAPE_SLIDE_JS = r"""
             right: Math.max(bb.right, rr.right), bottom: Math.max(bb.bottom, rr.bottom),
           } : { left: rr.left, top: rr.top, right: rr.right, bottom: rr.bottom };
         };
-        const segs = [];   // ordered {text, top, style}
+        // Two vertical spans are on the same visual line when they overlap by
+        // more than half the shorter span's height. Same-line size mixes overlap
+        // ~fully (~1.0); even tight-leading wraps overlap little (≲0.15).
+        const samELine = (t1, b1, t2, b2) => {
+          const ov = Math.min(b1, b2) - Math.max(t1, t2);
+          const minH = Math.min(b1 - t1, b2 - t2);
+          return minH > 0 && ov > 0.5 * minH;
+        };
+        const segs = [];   // ordered {text, top, bottom, style}
         const addText = (tn, styleEl) => {
           const s = tn.textContent;
           if (!s) return;
@@ -231,20 +241,29 @@ SCRAPE_SLIDE_JS = r"""
           if (col0 && col0.a < 0.1) return;   // fully-transparent text → no text
           const st = mkStyle(styleEl);
           const rg = document.createRange();
-          let lineStart = 0, curTop = null;
+          let lineStart = 0, curTop = null, curBot = null;
           for (let i = 0; i < s.length; i++) {
             rg.setStart(tn, i); rg.setEnd(tn, i + 1);
             const rects = rg.getClientRects();
             if (!rects.length) continue;
             grow(rects[0]);
-            const top = Math.round(rects[0].top);
-            if (curTop === null) curTop = top;
-            else if (Math.abs(top - curTop) > 2) {
-              segs.push({ text: s.slice(lineStart, i), top: curTop, style: st });
-              lineStart = i; curTop = top;
+            const top = rects[0].top, bot = rects[0].bottom;
+            if (curTop === null) { curTop = top; curBot = bot; }
+            // A real wrap drops to a new line, so the glyph barely overlaps the
+            // current line vertically. A different font size on the SAME line
+            // overlaps heavily (the small run sits inside the tall one), so we
+            // split on overlap FRACTION, not on a raw top change — that keeps a
+            // big number + small unit on one line yet still catches tight-leading
+            // wraps that a plain band-overlap test would wrongly merge.
+            else if (samELine(top, bot, curTop, curBot)) {
+              curTop = Math.min(curTop, top); curBot = Math.max(curBot, bot);
+            } else {
+              segs.push({ text: s.slice(lineStart, i), top: curTop, bottom: curBot, style: st });
+              lineStart = i; curTop = top; curBot = bot;
             }
           }
-          segs.push({ text: s.slice(lineStart), top: curTop === null ? 0 : curTop, style: st });
+          segs.push({ text: s.slice(lineStart), top: curTop === null ? 0 : curTop,
+                      bottom: curBot === null ? 0 : curBot, style: st });
         };
         for (const n of el.childNodes) {
           if (n.nodeType === 3) { if (n.textContent.trim()) addText(n, el); }
@@ -254,15 +273,22 @@ SCRAPE_SLIDE_JS = r"""
               if (m.nodeType === 3 && m.textContent.trim()) { addText(m, n); any = true; }
             if (!any && n.textContent.trim()) {
               const rr = n.getBoundingClientRect(); grow(rr);
-              segs.push({ text: n.textContent, top: Math.round(rr.top), style: mkStyle(n) });
+              segs.push({ text: n.textContent, top: Math.round(rr.top),
+                          bottom: Math.round(rr.bottom), style: mkStyle(n) });
             }
           }
         }
         if (segs.length && bb) {
-          // Group segments into lines by y-top; merge adjacent same-style runs.
-          const rawLines = []; let cur = null, curTop = null;
+          // Group segments into visual lines by the same overlap-fraction test,
+          // then merge adjacent same-style runs. A big number + a small unit
+          // span share a line (heavy overlap); a real wrap starts a new one.
+          const rawLines = []; let cur = null, curTop = null, curBot = null;
           for (const sg of segs) {
-            if (curTop === null || Math.abs(sg.top - curTop) > 2) { cur = []; rawLines.push(cur); curTop = sg.top; }
+            if (cur !== null && samELine(sg.top, sg.bottom, curTop, curBot)) {
+              curTop = Math.min(curTop, sg.top); curBot = Math.max(curBot, sg.bottom);
+            } else {
+              cur = []; rawLines.push(cur); curTop = sg.top; curBot = sg.bottom;
+            }
             const last = cur[cur.length - 1];
             if (last && JSON.stringify(last.style) === JSON.stringify(sg.style)) last.text += sg.text;
             else cur.push({ text: sg.text, style: sg.style });
@@ -576,7 +602,12 @@ def _export_source_html(html_path: Path, out_path: Path) -> None:
         css = base / href.group(1)
         if not css.exists():
             return tag
-        return f"<style>\n{css.read_text(encoding='utf-8')}\n</style>"
+        text = css.read_text(encoding="utf-8")
+        # An inlined <style> is terminated by the FIRST "</style>" the HTML
+        # parser sees — even inside a CSS comment. Neutralize any such literal
+        # so the inlined stylesheet can't close itself early and break the page.
+        text = re.sub(r"</\s*style", r"<\\/style", text, flags=re.I)
+        return f"<style>\n{text}\n</style>"
 
     html = re.sub(r"<link\b[^>]*>", inline, html)
     dest = out_path.with_suffix(".source.html")
