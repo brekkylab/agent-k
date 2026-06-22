@@ -1,7 +1,7 @@
 use std::future::ready;
 use std::io::SeekFrom;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
     Router,
@@ -23,7 +23,7 @@ use futures_util::StreamExt;
 use uuid::Uuid;
 
 use crate::state::{
-    AppState, DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError, Metadata as WsMetadata,
+    AppState, DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError,
     OpenOptions as WsOpenOptions, ReadDirMeta as WsReadDirMeta, WorkspaceFs,
 };
 
@@ -101,6 +101,12 @@ fn to_dav_err(e: WsFsError) -> FsError {
         WsFsError::NotFound => FsError::NotFound,
         WsFsError::Forbidden => FsError::Forbidden,
     }
+}
+
+/// Map an `io::Error` from a `std::fs::Metadata` accessor onto a [`FsError`],
+/// routing through the workspace's own classification.
+fn io_to_dav_err(e: std::io::Error) -> FsError {
+    to_dav_err(WsFsError::from(e))
 }
 
 /// Adapts a [`WorkspaceFs`] onto `dav_server`'s [`DavFileSystem`]. Pure
@@ -265,9 +271,11 @@ impl DavFile for DavFileAdapter {
     }
 }
 
-/// Adapts a workspace [`WsMetadata`] onto [`DavMetaData`].
+/// Adapts a [`std::fs::Metadata`] onto [`DavMetaData`]. The WebDAV-specific
+/// projections (`status_changed`, `executable`) live here rather than in the
+/// protocol-agnostic filesystem layer.
 #[derive(Debug, Clone)]
-struct DavMetaAdapter(WsMetadata);
+struct DavMetaAdapter(std::fs::Metadata);
 
 impl DavMetaData for DavMetaAdapter {
     fn len(&self) -> u64 {
@@ -275,7 +283,7 @@ impl DavMetaData for DavMetaAdapter {
     }
 
     fn modified(&self) -> FsResult<SystemTime> {
-        self.0.modified().map_err(to_dav_err)
+        self.0.modified().map_err(io_to_dav_err)
     }
 
     fn is_dir(&self) -> bool {
@@ -291,19 +299,36 @@ impl DavMetaData for DavMetaAdapter {
     }
 
     fn accessed(&self) -> FsResult<SystemTime> {
-        self.0.accessed().map_err(to_dav_err)
+        self.0.accessed().map_err(io_to_dav_err)
     }
 
     fn created(&self) -> FsResult<SystemTime> {
-        self.0.created().map_err(to_dav_err)
+        self.0.created().map_err(io_to_dav_err)
     }
 
+    #[cfg(unix)]
     fn status_changed(&self) -> FsResult<SystemTime> {
-        self.0.status_changed().map_err(to_dav_err)
+        use std::os::unix::fs::MetadataExt;
+        Ok(UNIX_EPOCH + Duration::new(self.0.ctime() as u64, 0))
     }
 
+    #[cfg(not(unix))]
+    fn status_changed(&self) -> FsResult<SystemTime> {
+        Err(FsError::NotImplemented)
+    }
+
+    #[cfg(unix)]
     fn executable(&self) -> FsResult<bool> {
-        self.0.executable().map_err(to_dav_err)
+        use std::os::unix::fs::PermissionsExt;
+        if self.0.is_file() {
+            return Ok((self.0.permissions().mode() & 0o100) > 0);
+        }
+        Err(FsError::NotImplemented)
+    }
+
+    #[cfg(not(unix))]
+    fn executable(&self) -> FsResult<bool> {
+        Err(FsError::NotImplemented)
     }
 }
 

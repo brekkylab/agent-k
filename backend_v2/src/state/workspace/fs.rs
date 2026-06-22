@@ -1,6 +1,6 @@
 //! Protocol-agnostic filesystem primitives for a project's workspace.
 //!
-//! These types ([`WorkspaceFs`], [`File`], [`Metadata`], [`DirEntry`], …)
+//! These types ([`WorkspaceFs`], [`File`], [`DirEntry`], …)
 //! mirror the operations a WebDAV backend needs but carry **no** dependency on
 //! `dav_server`: they speak in workspace-relative path strings, owned byte
 //! buffers, and `std`/`tokio` types. The WebDAV protocol layer
@@ -15,7 +15,6 @@
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::{Buf, Bytes, BytesMut};
 use futures_util::{Stream, stream};
@@ -115,70 +114,11 @@ fn knowledge_removed(pid: Uuid, path: &Path) {
     tracing::info!("remove_knowledge (project={pid}, path={})", path.display());
 }
 
-/// Metadata of a workspace file or directory. Wraps [`std::fs::Metadata`].
-#[derive(Debug, Clone)]
-pub struct Metadata(std::fs::Metadata);
-
-impl Metadata {
-    pub fn len(&self) -> u64 {
-        self.0.len()
-    }
-
-    pub fn is_dir(&self) -> bool {
-        self.0.is_dir()
-    }
-
-    pub fn is_file(&self) -> bool {
-        self.0.is_file()
-    }
-
-    pub fn is_symlink(&self) -> bool {
-        self.0.file_type().is_symlink()
-    }
-
-    pub fn modified(&self) -> FsResult<SystemTime> {
-        self.0.modified().map_err(FsError::from)
-    }
-
-    pub fn created(&self) -> FsResult<SystemTime> {
-        self.0.created().map_err(FsError::from)
-    }
-
-    pub fn accessed(&self) -> FsResult<SystemTime> {
-        self.0.accessed().map_err(FsError::from)
-    }
-
-    #[cfg(unix)]
-    pub fn status_changed(&self) -> FsResult<SystemTime> {
-        use std::os::unix::fs::MetadataExt;
-        Ok(UNIX_EPOCH + Duration::new(self.0.ctime() as u64, 0))
-    }
-
-    #[cfg(not(unix))]
-    pub fn status_changed(&self) -> FsResult<SystemTime> {
-        Err(FsError::NotImplemented)
-    }
-
-    #[cfg(unix)]
-    pub fn executable(&self) -> FsResult<bool> {
-        use std::os::unix::fs::PermissionsExt;
-        if self.0.is_file() {
-            return Ok((self.0.permissions().mode() & 0o100) > 0);
-        }
-        Err(FsError::NotImplemented)
-    }
-
-    #[cfg(not(unix))]
-    pub fn executable(&self) -> FsResult<bool> {
-        Err(FsError::NotImplemented)
-    }
-}
-
 /// One entry yielded by [`WorkspaceFs::read_dir`]. Metadata is captured eagerly
 /// at listing time.
 pub struct DirEntry {
     name: Vec<u8>,
-    metadata: FsResult<Metadata>,
+    metadata: FsResult<std::fs::Metadata>,
 }
 
 impl DirEntry {
@@ -188,7 +128,7 @@ impl DirEntry {
     }
 
     /// Metadata captured when the directory was listed.
-    pub fn metadata(&self) -> FsResult<Metadata> {
+    pub fn metadata(&self) -> FsResult<std::fs::Metadata> {
         self.metadata.clone()
     }
 }
@@ -218,11 +158,11 @@ pub struct File {
 }
 
 impl File {
-    pub async fn metadata(&mut self) -> FsResult<Metadata> {
+    pub async fn metadata(&mut self) -> FsResult<std::fs::Metadata> {
         let file = self.file.take().unwrap();
         let (meta, file) = blocking(move || (file.metadata(), file)).await;
         self.file = Some(file);
-        Ok(Metadata(meta?))
+        meta.map_err(FsError::from)
     }
 
     pub async fn write_bytes(&mut self, buf: Bytes) -> FsResult<()> {
@@ -322,19 +262,14 @@ impl WorkspaceFs {
         self.root.join(rel_path.trim_start_matches('/'))
     }
 
-    pub async fn metadata(&self, rel_path: &str) -> FsResult<Metadata> {
+    pub async fn metadata(&self, rel_path: &str) -> FsResult<std::fs::Metadata> {
         let path = self.resolve(rel_path);
-        blocking(move || std::fs::metadata(&path).map(Metadata).map_err(FsError::from)).await
+        blocking(move || std::fs::metadata(&path).map_err(FsError::from)).await
     }
 
-    pub async fn symlink_metadata(&self, rel_path: &str) -> FsResult<Metadata> {
+    pub async fn symlink_metadata(&self, rel_path: &str) -> FsResult<std::fs::Metadata> {
         let path = self.resolve(rel_path);
-        blocking(move || {
-            std::fs::symlink_metadata(&path)
-                .map(Metadata)
-                .map_err(FsError::from)
-        })
-        .await
+        blocking(move || std::fs::symlink_metadata(&path).map_err(FsError::from)).await
     }
 
     pub async fn read_dir(&self, rel_path: &str, meta: ReadDirMeta) -> FsResult<DirStream> {
@@ -350,7 +285,7 @@ impl WorkspaceFs {
                         };
                         out.push(Ok(DirEntry {
                             name: dir_entry_name(&entry),
-                            metadata: md.map(Metadata).map_err(FsError::from),
+                            metadata: md.map_err(FsError::from),
                         }));
                     }
                     Err(e) => {
