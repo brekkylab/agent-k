@@ -38,11 +38,13 @@ Two non-negotiable rules:
 
 **Hard rules — if any of these slip, the deck fails:**
 
-- Install the toolchain before converting (the sandbox ships neither):
+- Install the toolchain before converting (the sandbox ships neither).
+  Run all three up front — **do not** wait for a launch failure to add
+  `install-deps`; the sandbox is always missing the browser's system
+  libraries, so skipping it just wastes a failed conversion:
   `pip install python-pptx playwright` then
-  `playwright install chromium --only-shell`
-  (add `playwright install-deps chromium` if the browser won't launch).
-- Write `outline.md` **before** any HTML (Process §1).
+  `playwright install chromium --only-shell` then
+  `playwright install-deps chromium`.
 - Each slide is a `<div class="slide">` sized **exactly 1280×720 px**
   (16:9). Author at 96 px/in. **No `transform: scale()` / `zoom`** on
   slide content — it breaks the px→inch mapping.
@@ -50,71 +52,48 @@ Two non-negotiable rules:
   `'Noto Sans CJK KR'` / `JP` / `SC` / `TC` (the `CJK` infix is
   mandatory — `'Noto Sans KR'` falls back to tofu).
 - Verify gate: `verify()` reports no issues AND the contact-sheet
-  overview `read` (+ any suspect slide deep-read) — both required (§4).
+  overview `read` (+ any suspect slide deep-read) — both required (§3).
 - Only the final `.pptx` (plus the `.source.html` sidecar the converter
-  auto-saves beside it) belong in `artifacts/` — your working `deck.html`,
-  intermediate PNGs, and `outline.md` stay in the working directory.
+  auto-saves beside it) belong in `artifacts/` — your working `deck.html`
+  and intermediate PNGs stay in the working directory.
 
 ---
 
-## Process — outline → HTML → convert → verify
+## Process — HTML → convert → verify
 
-**Separate content from layout.** Write everything as markdown first,
-then author HTML, then convert.
+### 1. Author the HTML
 
-### 1. Outline (`outline.md`) — verbatim slide content
-
-**Do not skip this step.** It is the source of truth the HTML copies
-*from*; without it, content drifts into free-improvisation.
-
-One section per slide, **including both bookends** — a "10 slides"
-request means 1 title + 8 content + 1 closing, *not* 10 content slides.
-Generate the bookends even when the prompt doesn't mention them.
-
-**Slide 1 — title slide (always)**:
-- `## Slide 1: <deck title>` — e.g. `## Slide 1: Q1 2026 Business Review`
-- `**Eyebrow**` sub-line (caption-tier label, e.g. `**Pixellife Inc.**`)
-- `**Subtitle**` sub-line (one-line framing). No bullets / tables / charts.
-
-**Slides 2 to N−1 — content slides**:
-- `## Slide N: <takeaway-headline>` — a *takeaway sentence*
-  ("Revenue grew 31.7%, margin improved in step"), not a topic
-  ("Q1 results"). Becomes the slide title.
-- A **bold sub-line** for the kicker / framing label.
-- Data as a **markdown table**; narrative as a **bulleted list**.
-- Explicit chart / visual hints inline
-  (e.g. `**Bar chart: revenue by quarter, free vs paid**`).
-
-**Slide N — closing slide (always)**:
-- `## Slide N: <closing message>` — e.g. `## Slide 10: Thank you. — Questions?`
-- No bullets / tables / charts (Action-plan variant aside).
-
-A 10-slide outline runs ~200–400 lines. Save as `outline.md` in the
-working directory (not under `artifacts/`).
-
-### 2. Author the HTML
+Work straight from the source material into `deck.html` — no separate
+outline file. Plan the deck first: **include both bookends** — a "10 slides"
+request means 1 title + 8 content + 1 closing, *not* 10 content slides;
+generate the bookends even when the prompt doesn't mention them. Give every
+content slide a **takeaway-sentence** title ("Revenue grew 31.7%, margin
+improved in step"), not a topic label ("Q1 results"). Title slide: deck title
++ eyebrow + one-line subtitle, no bullets/tables/charts. Closing slide: a
+closing message, no bullets/tables/charts (Action-plan variant aside).
 
 Create one `deck.html` linking `components.css` (copy it from the skill
-`script/` dir next to this file, or `<link>` it by path). Pick **one**
-palette theme on `<body>` (e.g. `class="theme-corporate-slate"`) and set
-`<html lang="ko">` for Korean. Emit one `<div class="slide">` per
-`outline.md` section, transcribing text **verbatim** — don't rewrite or
-shorten. Pick the layout grammar from the section's content shape
-(styled table or compact stat row for metrics, card grid for parallel
-items, asymmetric split for chart + sidebar) and vary across the deck.
+`script/` dir next to this file, or `<link>` it by path). At the top of
+the file, **define this deck's composed palette** — a `<style>` block (or
+`:root`) setting the nine role variables you derived in the Palette step. Set
+`<html lang="ko">` for Korean. Emit one `<div class="slide">` per slide,
+keeping text **verbatim** from the source — don't rewrite or shorten. Data as
+styled tables, narrative as bulleted lists. Pick the layout grammar from each
+slide's content shape (styled table or compact stat row for metrics, card grid
+for parallel items, asymmetric split for chart + sidebar) and vary across the deck.
 
-`script/template.html` is a working 4-slide reference (title + metrics
-stat-row + Chart.js chart + closing) — read it once and follow its
-structure.
+`script/template.html` is a **mechanics** reference (how to define the
+palette variables, structure a `.slide`, use the components, and signal
+Chart.js readiness) — **not a look to copy**. Read it once for the wiring,
+then compose your own palette and vary the layouts for your subject; don't
+reproduce its colors or slide order, or every deck ends up looking the same.
 
-**Charts carry no editability requirement** — each becomes its own
-raster picture object. Use Chart.js (`<canvas>`), inline SVG, or a static
-`<img>`. With Chart.js: set `animation:false`, use palette colors via
-`getComputedStyle(...).getPropertyValue('--secondary')`, set chart
-`font.family` to the CJK family, and set `window.__pptx_ready = true`
-after the chart paints (the converter waits for it). See `template.html`.
+**Charts carry no editability requirement** — each becomes its own raster
+picture object (Chart.js `<canvas>`, inline SVG, or static `<img>`). For the
+Chart.js settings (`animation:false`, palette colors, `font.family`,
+`__pptx_ready`) see *Authoring notes → Charts* and `template.html`.
 
-### 3. Convert to PPTX
+### 2. Convert to PPTX
 
 ```
 python /workspace/skills/pptx/script/html2pptx.py deck.html \
@@ -129,7 +108,7 @@ self-contained copy of the source HTML (linked CSS inlined) next to the
 `.pptx` as `<out>.source.html` for review (pass `--no-keep-html` to skip;
 `--dump-json out.json` to inspect the scraped geometry).
 
-### 4. Verify the output renders correctly
+### 3. Verify the output renders correctly
 
 **Gate: do not surface the `.pptx` until BOTH (A) every `verify()` check
 is clean AND (B) the contact sheet has been `read`-inspected (plus any
@@ -152,8 +131,9 @@ Five checks, on the emitted text boxes:
 - `page_numbers` — title (1) or closing (N) slide carrying `n / N`
 - `overlap` — text boxes whose bboxes collide (layered/stacked pairs
   filtered out)
-- `palette` — advisory: reflects text-run colors only (shape/bg fills
-  aside), so lean on visual inspection in B
+- `palette` — discipline: flags palette **sprawl** (too many distinct
+  non-neutral colors) and reports any color used on a single slide;
+  advisory — lean on B for whether the palette fits the subject
 
 `fonts`/`sizes`/`page_numbers`/`overlap` pass when their lists are empty.
 (No `overflow`/`word_wrap` check — boxes are sized to browser-measured
@@ -194,13 +174,19 @@ across all slides at once; zoom in only where needed. Check for
 
 …and for **design quality** (`verify_pptx` cannot catch these):
 
-- Slide 1 IS a title pattern (anchor + three-tier text + signature mark)
+- Slide 1 opens on something specific to THIS subject (not a generic
+  anchor + three-tier-text template), and the deck's **signature** is
+  present and recurring across slides
 - The last slide IS a closing pattern (mirrors the title)
 - Layouts vary — not every content slide using the same division
 - **No large dead space** — content fills the canvas; the bottom third
   isn't blank and content isn't all stacked to one side (Grid → "Fill
   the canvas"). Tall containers around short text are the usual cause
-- Palette fits the deck's subject/mood — not Corporate Slate by default
+- Palette is composed from the subject and actually shows its Accent — not
+  the default navy/blue/amber-on-white reflex
+- **Distinctiveness check** — would this exact palette + layout fit an
+  unrelated subject just as well? If yes, it's a default: push the accent /
+  signature toward something this subject justifies, and note what you changed
 - Slide titles are takeaway sentences, not topic labels
 
 **Fix at the source**: edit the HTML (position, size, font, content) and
@@ -220,55 +206,61 @@ Loop until both A and B pass — partial pass is failure.
 
 ---
 
-## Palette — color roles
+## Start from the subject (do this first)
 
-The *role structure* is fixed (and encoded as CSS variables in
-`components.css`). The *hex values* are chosen per deck (matched to
-subject and mood) and frozen for that deck's lifetime.
+Before any visual choices, write one line each: **what this deck is about,
+who's in the room, and the one thing it has to accomplish.** A Q1 review for
+a gaming studio's board and an H1 retrospective for a fragrance brand should
+not come out looking interchangeable. Pull the deck's look from the subject's
+own world — its product, materials, vocabulary, mood. If memory holds the
+user's context or past decks, treat it as a hint.
 
-**Colored fills** — Primary (anchor; titles, deepest text), Secondary
-(principal accent; edge strip, card top strips, 1st chart series,
-category tags), Accent (warm pop; eyebrows, corner blocks, quote strip —
-sparingly).
+Decide two things up front and hold them across every slide:
 
-**Surfaces** — Background (page), Surface (card/tile fill), Tinted Panel
-(Surface ~5–10% toward Accent; callout bands).
+- **A composed palette** (next section) — built for this subject, not lifted
+  from a stock theme.
+- **A signature** — the one element a viewer walks away remembering: a
+  recurring motif or treatment drawn from the subject (a marker shape, a
+  numeral style, a divider, how charts are framed). Put the deck's single
+  visual risk here and keep the rest restrained — one signature, not a
+  scatter of effects.
 
-**Structural** — Muted (subtitles, captions, footers, axis labels),
-Hairline (dividers, footer line, card borders, tracks).
+## Palette — compose per deck (no fixed gallery)
 
-**Status** — Positive (green, `+18%`), Negative (red, `-3d`). Deltas
-only, never a fill.
+The *role structure* is fixed; the *hex values are composed for THIS deck*
+and frozen for its lifetime. There is no gallery to pick from — derive one.
 
-**Rule of three.** Per slide, ≤ 3 colored fills from {Primary,
-Secondary, Accent}. A fourth turns it into a paint chart.
+**Roles** — set as CSS variables in the deck's `<style>`; `components.css`
+consumes them:
+- **Primary** — anchor: titles, deepest text.
+- **Secondary** — principal accent: edge strip, card strips, 1st chart
+  series, category tags.
+- **Accent** — one warm / contrasting pop: eyebrows, the signature, emphasis.
+  Use sparingly, but **do use it** — an unused accent reads as unfinished.
+- **Background** / **Surface** — page / card-tile fill.
+- **Muted** — subtitles, captions, axis labels.
+- **Hairline** — dividers, borders, tracks.
+- **Positive** / **Negative** — green / red deltas only, never a fill.
 
----
+**Compose like this:**
+1. Pick a **hue family from the subject's world** (its key art, packaging,
+   industry, mood) — not a reflex default.
+2. Set **Background + Surface** as near-neutral members of that family (a
+   warm off-white, a cool paper, a deliberate dark) — not plain `#FFFFFF`
+   unless that's a real choice.
+3. Choose **one Accent with genuine contrast** against the background.
+4. Keep hues **tonal, not pure-saturation** (`#2563EB`, not `#0000FF`).
+5. Confirm **text-on-background contrast** is comfortably readable.
+6. **Lock the nine values** for the whole deck. Rule of three: ≤ 3 colored
+   fills from {Primary, Secondary, Accent} per slide; a fourth turns it into
+   a paint chart. Never introduce a new hex mid-deck.
 
-## Palette gallery — choose by feel, never default
-
-At the start of every deck: read the title/subject, decide the mood
-(Authoritative? Cinematic? Editorial? Playful? Academic?), and pick the
-theme whose feel matches — or compose a new one in the same style. Lock
-those nine hex values. **Match the palette to *this* deck's mood, not to
-deck history** — reaching for Corporate Slate whenever the brief says
-"business" is anchoring. **Prefer tonal/pastel siblings over pure-
-saturation primaries** (`#2563EB` not `#0000FF`).
-
-Each maps to a `theme-*` class in `components.css` — the exact hex values
-live there, so apply the class (don't re-type hexes):
-
-- **Corporate Slate** `theme-corporate-slate` — restrained, authoritative, financial
-- **Midnight Keynote** `theme-midnight-keynote` — cinematic, bold, on-stage (dark)
-- **Warm Editorial** `theme-warm-editorial` — magazine-like, narrative, hospitable
-- **Forest Research** `theme-forest-research` — calm, considered, exact (academic)
-- **Mono Editorial** `theme-mono-editorial` — typographic, silent, luxury
-- **Playful Violet** `theme-playful-violet` — lively, contemporary, consumer
-- **Sand & Ink** `theme-sand-ink` — quiet, journalistic, considered
-- **Glacier** `theme-glacier` — clean, scientific, optimistic
-
-If none fits, compose a new theme in the same style (copy a block in
-`components.css`, change the hue family, keep the role distribution).
+**Avoid the templated look.** If your palette is the one you'd reach for on
+*any* business deck (navy + blue + amber on near-white is the usual reflex),
+that's anchoring — push the hue family and accent toward what the subject
+actually justifies. `components.css` ships an inert neutral fallback and a
+placeholder compose recipe (`<...>` slots) — fill the slots with hexes you
+derived; don't ship the placeholders or copy a previous deck's palette.
 
 ---
 
@@ -291,8 +283,8 @@ Pick faces that render identically in the sandbox and on opener machines:
 |---|---|---|---|---|
 | `.t-display` | 54 | 40 | Bold | Title/closing slides, large quotes |
 | `.t-title` | 32 | 24 | Bold | Slide titles, divider titles |
-| `.t-body` | 18 | 13.5 | Regular | Bullets, paragraphs, stat labels |
-| `.t-caption` | 11 | 8 | Bold UPPERCASE | Eyebrows, tags, footers, axis labels |
+| `.t-body` | 18 | 13.5 | Regular | Bullets, paragraphs, body text |
+| `.t-caption` | 11 | 8 | Bold UPPERCASE | Eyebrows, tags, footers, axis + stat labels |
 
 (Px values are what you author; the converter scales px×0.75 → pt.)
 
@@ -386,21 +378,14 @@ The converter decomposes each slide (see the four bullets at the top):
   frozen, so soffice won't re-wrap them; `verify_pptx` + visual `read`
   remain the safety net.)
 
-### CJK fonts — set the exact family
-Author CSS must use `'Noto Sans CJK KR'` (or JP/SC/TC) — the `CJK`
-infix is mandatory; `'Noto Sans KR'` will not resolve and renders tofu
-in both Chromium and soffice. The converter copies the computed
-font-family onto each run's Latin **and** EA typeface, so a correct CSS
-family is all you need. `verify_pptx`'s `fonts` check gates this.
-
 ### Charts — Chart.js / SVG (own raster picture)
 Native chart editability is **not** required. Render charts however
 looks best:
 - **Chart.js** (`<canvas>`): set `animation:false`, `responsive:true`,
   `maintainAspectRatio:false` inside a sized container; pull series
-  colors from the palette CSS variables; set `font.family` to the CJK
-  family on ticks/legend; signal `window.__pptx_ready = true` after
-  paint. (See `template.html`.)
+  colors from the palette CSS variables; set `font.family` on ticks/legend
+  to the deck's font (a Noto CJK family for CJK, else labels go tofu);
+  signal `window.__pptx_ready = true` after paint. (See `template.html`.)
 - **Inline SVG** or a **static `<img>`** also work and need no readiness
   flag (but still wait on `document.fonts.ready`, which the converter
   does).
@@ -421,11 +406,12 @@ box and keep narrative/insight text outside it.
 Pick by the slide's *job*, not by what looks pretty. Compose freshly
 within each — don't trace the same layout every deck.
 
-- **Title slide (slide 1)** — deck's visual signature: anchor shape +
-  three-tier text (eyebrow `.t-caption .c-accent` → `.t-display
-  .c-primary` title → `.t-body .c-muted` subtitle) + a small Accent
-  signature mark. Compose freshly; "filled rectangle in one corner" is
-  the AI tell. No page number.
+- **Title slide (slide 1)** — the deck's opening statement, led by something
+  concrete from THIS subject (a number, phrase, motif, or visual from its
+  world) plus the deck's signature, eyebrow, and title. The
+  eyebrow→`.t-display`→subtitle three-tier stack is a fallback, not the goal;
+  "filled rectangle in one corner + three lines of text" is the AI tell —
+  build something the subject earns. No page number.
 - **Section divider** — full-bleed Primary background, huge numeral
   ("01") at 3–4× title in lightened Secondary left, section title right
   (Display, Surface), Accent strip beneath. No page number.
@@ -472,14 +458,9 @@ within each — don't trace the same layout every deck.
   series colors from the palette)
 - Page number on title / divider / closing slides
 - Two patterns merged into one slide
-- New hex color introduced mid-deck (one locked theme)
+- New hex color introduced mid-deck (one locked palette)
 - Content extending past the 1280×720 canvas (right/bottom edge) — it
   gets clipped and reads as "cut off"; keep every element inside
 - Relying on chart `<canvas>` / SVG text being editable — it's baked
 
 (The geometry/font/artifact hard rules at the top also still apply.)
-
----
-
-A quiet, consistent deck reads as designed. A loud, varied deck reads as
-assembled.

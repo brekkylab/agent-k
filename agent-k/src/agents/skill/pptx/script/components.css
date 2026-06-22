@@ -1,11 +1,12 @@
 /* components.css — the design-system library for HTML-authored decks.
  *
- * Link this once, pick ONE palette theme on the <body> (or per .slide),
- * and compose slides from the variables + helper classes below. The
+ * Link this once, define a per-deck palette (the nine role variables — see
+ * the palette block below and SKILL.md), then compose slides from those
+ * variables + the helper classes below. The
  * html2pptx.py converter rasterises everything except text; text becomes
  * editable PowerPoint boxes. So you may add any extra HTML/CSS/SVG/Chart.js
- * you like — this file just locks the palette, type scale, and grid so the
- * deck reads "designed, not assembled".
+ * you like — this file locks the type scale, grid, and palette ROLES (you
+ * compose the colors per deck) so the deck reads "designed, not assembled".
  *
  * HARD GEOMETRY RULES (the converter depends on these):
  *   - Every slide is exactly 1280x720 px (16:9). Authored at 96 px/in.
@@ -18,50 +19,36 @@
 /* ----------------------------------------------------------------- reset */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-/* --------------------------------------------------------------- palettes
- * Role structure is fixed; pick the theme whose MOOD fits the deck.
- * Apply a theme class to <body>:  <body class="theme-corporate-slate">
- * Compose a new theme by copying a block and changing the hues. */
-
-.theme-corporate-slate {            /* restrained, authoritative, financial */
-  --primary:#0F172A; --secondary:#2563EB; --accent:#F59E0B;
-  --bg:#F8FAFC; --surface:#FFFFFF; --muted:#64748B;
-  --hairline:#E2E8F0; --positive:#10B981; --negative:#EF4444;
-}
-.theme-midnight-keynote {           /* cinematic, bold, on-stage (dark) */
-  --primary:#0B1220; --secondary:#818CF8; --accent:#22D3EE;
-  --bg:#0B1220; --surface:#1F2937; --muted:#94A3B8;
-  --hairline:#1F2937; --positive:#34D399; --negative:#F87171;
-}
-.theme-warm-editorial {             /* magazine-like, narrative, hospitable */
-  --primary:#7C2D12; --secondary:#EA580C; --accent:#FACC15;
-  --bg:#FFF7ED; --surface:#FFFFFF; --muted:#9A3412;
-  --hairline:#FED7AA; --positive:#15803D; --negative:#B91C1C;
-}
-.theme-forest-research {            /* calm, considered, exact (academic) */
-  --primary:#1F2937; --secondary:#047857; --accent:#D97706;
-  --bg:#FFFFFF; --surface:#F9FAFB; --muted:#6B7280;
-  --hairline:#E5E7EB; --positive:#059669; --negative:#DC2626;
-}
-.theme-mono-editorial {             /* typographic, silent, luxury */
-  --primary:#111827; --secondary:#111827; --accent:#111827;
-  --bg:#FFFFFF; --surface:#FFFFFF; --muted:#6B7280;
-  --hairline:#E5E7EB; --positive:#059669; --negative:#DC2626;
-}
-.theme-playful-violet {             /* lively, contemporary, consumer */
-  --primary:#4C1D95; --secondary:#14B8A6; --accent:#F472B6;
-  --bg:#FAF5FF; --surface:#FFFFFF; --muted:#6D28D9;
-  --hairline:#E9D5FF; --positive:#16A34A; --negative:#E11D48;
-}
-.theme-sand-ink {                   /* quiet, journalistic, considered */
-  --primary:#1C1917; --secondary:#57534E; --accent:#B45309;
-  --bg:#FAFAF9; --surface:#FFFFFF; --muted:#78716C;
-  --hairline:#E7E5E4; --positive:#15803D; --negative:#B91C1C;
-}
-.theme-glacier {                    /* clean, scientific, optimistic */
-  --primary:#0E7490; --secondary:#0891B2; --accent:#F97316;
-  --bg:#F0F9FF; --surface:#FFFFFF; --muted:#475569;
-  --hairline:#BAE6FD; --positive:#16A34A; --negative:#DC2626;
+/* ----------------------------------------------------------- palette roles
+ * COMPOSE a palette PER DECK from its subject (see SKILL.md "Palette") and
+ * define the nine role variables ONCE at the top of your deck, inside a
+ * style block in <head>. Do NOT reuse a stock set — colors derived from the
+ * subject are what make a deck its own. Fill every <...> with a real hex
+ * DERIVED FROM THE SUBJECT; these are placeholders, not a palette — don't
+ * ship them and don't copy a previous deck's palette (two decks on the same
+ * set look identical):
+ *
+ *       :root{
+ *         --primary:<deepest subject hue>;    --secondary:<principal accent>;
+ *         --accent:<one contrasting pop>;     --bg:<near-neutral of the family>;
+ *         --surface:<card fill>;              --muted:<quiet gray>;
+ *         --hairline:<faint rule>;            --positive:#16804A; --negative:#B23A30;
+ *       }
+ *
+ * Roles — primary: anchor / titles / deepest text · secondary: principal
+ * accent (edge strip, strips, 1st chart series, tags) · accent: one warm or
+ * contrasting pop (eyebrows, signature; use sparingly) · bg: page · surface:
+ * card / tile fill · muted: subtitles / captions / axis labels · hairline:
+ * dividers / borders · positive / negative: green / red deltas only.
+ * Rule of three: ≤ 3 colored fills per slide. Keep hues tonal (avoid pure
+ * saturation), and keep text-on-bg contrast clearly readable.
+ *
+ * The values below are an INERT neutral fallback so an unset deck still
+ * renders — always OVERRIDE them per deck with your composed palette. */
+:root{
+  --primary:#1B1B1B;  --secondary:#444444;  --accent:#B5532A;
+  --bg:#FAFAF8;       --surface:#FFFFFF;    --muted:#6B6B6B;
+  --hairline:#E4E2DC; --positive:#2F7D4F;   --negative:#B23A30;
 }
 
 /* ----------------------------------------------------------------- canvas
