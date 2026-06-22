@@ -390,8 +390,17 @@ async fn build_corpus_store(
 
 async fn stream_turn(agent: &mut Agent, query: Message, log_prefix: &str) -> anyhow::Result<()> {
     let mut stream = agent.run(query);
+    let (mut lm_calls, mut tok_in, mut tok_out, mut tok_cr, mut tok_cw) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
     while let Some(event) = stream.next().await {
         let event = event?;
+        if let Some(u) = &event.usage {
+            lm_calls += 1;
+            tok_in += u.input_tokens;
+            tok_out += u.output_tokens;
+            tok_cr += u.cache_read_input_tokens.unwrap_or(0);
+            tok_cw += u.cache_creation_input_tokens.unwrap_or(0);
+        }
         let msg = &event.message;
         match msg.role {
             Role::Assistant => {
@@ -426,6 +435,11 @@ async fn stream_turn(agent: &mut Agent, query: Message, log_prefix: &str) -> any
             _ => {}
         }
     }
+    println!(
+        "[{log_prefix}] TOKENS turn — lm_calls:{lm_calls} input:{tok_in} output:{tok_out} \
+         cache_read:{tok_cr} cache_write:{tok_cw} billable:{}",
+        tok_in + tok_out
+    );
     println!();
     Ok(())
 }
