@@ -66,7 +66,7 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
     // The filesystem (and its side-processing) lives in `state.workspace`; here
     // we only wrap it in the WebDAV protocol (see [`DavFs`]).
     let dav = DavHandler::builder()
-        .filesystem(Box::new(DavFs(state.workspace.fs(pid))))
+        .filesystem(Box::new(DavFs(state.workspace.get_fs(pid))))
         .locksystem(FakeLs::new())
         .strip_prefix(format!("/projects/{pid}/workspace"))
         .build_handler();

@@ -24,13 +24,13 @@ impl WorkspaceState {
     }
 
     /// A filesystem handle scoped to project `pid`'s workspace.
-    pub fn fs(&self, pid: Uuid) -> WorkspaceFs {
-        WorkspaceFs::new(self.root(pid), pid)
+    pub fn get_fs(&self, pid: Uuid) -> WorkspaceFs {
+        WorkspaceFs::new(self.get_root(pid), pid)
     }
 
     /// Absolute path of project `pid`'s workspace root on disk
     /// (`data_root/projects/{pid}/workspace`).
-    fn root(&self, pid: Uuid) -> PathBuf {
+    fn get_root(&self, pid: Uuid) -> PathBuf {
         self.data_root
             .join("projects")
             .join(pid.to_string())
