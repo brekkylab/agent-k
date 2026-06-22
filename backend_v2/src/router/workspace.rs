@@ -1,5 +1,7 @@
+use std::future::ready;
 use std::io::SeekFrom;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use axum::{
     Router,
@@ -13,14 +15,17 @@ use dav_server::{
     davpath::DavPath,
     fakels::FakeLs,
     fs::{
-        DavDirEntry, DavFile, DavFileSystem, DavMetaData, FsFuture, FsStream, OpenOptions,
-        ReadDirMeta,
+        DavDirEntry, DavFile, DavFileSystem, DavMetaData, FsError, FsFuture, FsResult, FsStream,
+        OpenOptions, ReadDirMeta,
     },
-    localfs::LocalFs,
 };
+use futures_util::StreamExt;
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::state::{
+    AppState, DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError, Metadata as WsMetadata,
+    OpenOptions as WsOpenOptions, ReadDirMeta as WsReadDirMeta, WorkspaceFs,
+};
 
 /// WebDAV workspace router. Mounted by [`super::get_router`] at
 /// `/projects/{pid}/workspace[/…]`; exposes `data_root/{pid}/workspace` as a
@@ -58,10 +63,10 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
         }
     }
 
-    // Wrap LocalFs so successful mutations get reported back to AppState for
-    // side-processing (see [`Filesystem`]).
+    // The filesystem (and its side-processing) lives in `state.workspace`; here
+    // we only wrap it in the WebDAV protocol (see [`DavFs`]).
     let dav = DavHandler::builder()
-        .filesystem(Box::new(Filesystem::new(state.clone(), pid)))
+        .filesystem(Box::new(DavFs(state.workspace.fs(pid))))
         .locksystem(FakeLs::new())
         .strip_prefix(format!("/projects/{pid}/workspace"))
         .build_handler();
@@ -81,75 +86,52 @@ fn extract_token(query: &str) -> Option<String> {
         .map(|(_, v)| v.into_owned())
 }
 
-/// A [`DavFileSystem`] over a project's workspace. Wraps [`LocalFs`] and reports
-/// every successful mutation — `PUT` (the file's `flush`), `MOVE`/`COPY`
-/// (`rename`/`copy`), and `DELETE` (`remove_file`) — back to [`AppState`] for
-/// side-processing, rather than guessing from the HTTP method/status after the
-/// fact. Each report is classified as insert/update/remove from prior path
-/// existence and dispatched to the matching `state.workspace` handler.
-///
-/// Only paths under `knowledge/` (see [`is_knowledge`]) are reported today;
-/// further handlers (other paths) are added at the callsites.
-///
-/// Cloneable and `Send + Sync` so it satisfies dav-server's
-/// `GuardedFileSystem<()>` blanket impl; clones share the inner `Arc`-backed
-/// `LocalFs` and the `AppState` handle.
-#[derive(Clone)]
-struct Filesystem {
-    inner: Box<LocalFs>,
-    state: Arc<AppState>,
-    pid: Uuid,
-}
-
-impl Filesystem {
-    pub fn new(state: Arc<AppState>, pid: Uuid) -> Self {
-        let root = state.workspace.root(pid);
-        Self {
-            inner: LocalFs::new(root, false, false, false),
-            state,
-            pid,
-        }
-    }
-}
-
-/// True when `rel_path` lives under the `knowledge/` directory. Component-wise
-/// match on the leading dir: `knowledge/x` hits, `knowledgebase/x` does not.
-fn is_knowledge(rel_path: &str) -> bool {
-    rel_path.trim_start_matches('/').starts_with("knowledge/")
-}
-
-/// Workspace-relative path (leading `/`) in the shape the `state.workspace`
-/// knowledge handlers expect.
+/// Workspace-relative path (leading `/`) in the shape [`WorkspaceFs`] expects.
 /// `as_rel_ospath` already drops the leading slash, so we re-add one.
 fn rel_path_string(path: &DavPath) -> String {
     format!("/{}", path.as_rel_ospath().to_string_lossy())
 }
 
-impl DavFileSystem for Filesystem {
+/// Map a workspace [`WsFsError`] onto the WebDAV [`FsError`].
+fn to_dav_err(e: WsFsError) -> FsError {
+    match e {
+        WsFsError::NotImplemented => FsError::NotImplemented,
+        WsFsError::GeneralFailure => FsError::GeneralFailure,
+        WsFsError::Exists => FsError::Exists,
+        WsFsError::NotFound => FsError::NotFound,
+        WsFsError::Forbidden => FsError::Forbidden,
+    }
+}
+
+/// Adapts a [`WorkspaceFs`] onto `dav_server`'s [`DavFileSystem`]. Pure
+/// translation: [`DavPath`] ↔ workspace-relative string, and the workspace's
+/// own file/metadata/dir-entry types onto the corresponding `dav_server`
+/// trait objects. All disk access and side-processing happen inside
+/// [`WorkspaceFs`].
+#[derive(Clone)]
+struct DavFs(WorkspaceFs);
+
+impl DavFileSystem for DavFs {
     fn open<'a>(
         &'a self,
         path: &'a DavPath,
         options: OpenOptions,
     ) -> FsFuture<'a, Box<dyn DavFile>> {
         Box::pin(async move {
-            let is_write = options.write || options.append || options.create || options.create_new;
-            // Probe before opening: a create/truncating open would make the
-            // file exist (or empty) regardless, so we must capture prior
-            // existence here to tell an insert from an overwrite at flush time.
-            let existed = is_write && self.inner.metadata(path).await.is_ok();
-            let file = self.inner.open(path, options).await?;
-            if is_write {
-                Ok(Box::new(ObservedFile {
-                    inner: file,
-                    state: self.state.clone(),
-                    pid: self.pid,
-                    rel_path: rel_path_string(path),
-                    existed,
-                    wrote: false,
-                }) as Box<dyn DavFile>)
-            } else {
-                Ok(file)
-            }
+            let opts = WsOpenOptions {
+                read: options.read,
+                write: options.write,
+                append: options.append,
+                truncate: options.truncate,
+                create: options.create,
+                create_new: options.create_new,
+            };
+            let file = self
+                .0
+                .open(&rel_path_string(path), opts)
+                .await
+                .map_err(to_dav_err)?;
+            Ok(Box::new(DavFileAdapter(file)) as Box<dyn DavFile>)
         })
     }
 
@@ -158,145 +140,187 @@ impl DavFileSystem for Filesystem {
         path: &'a DavPath,
         meta: ReadDirMeta,
     ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>> {
-        self.inner.read_dir(path, meta)
+        Box::pin(async move {
+            let meta = match meta {
+                ReadDirMeta::Data => WsReadDirMeta::Data,
+                ReadDirMeta::DataSymlink => WsReadDirMeta::DataSymlink,
+                ReadDirMeta::None => WsReadDirMeta::None,
+            };
+            let stream = self
+                .0
+                .read_dir(&rel_path_string(path), meta)
+                .await
+                .map_err(to_dav_err)?;
+            let mapped = stream.map(|res| {
+                res.map(|e| Box::new(DavDirEntryAdapter(e)) as Box<dyn DavDirEntry>)
+                    .map_err(to_dav_err)
+            });
+            Ok(Box::pin(mapped) as FsStream<Box<dyn DavDirEntry>>)
+        })
     }
 
     fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
-        self.inner.metadata(path)
+        Box::pin(async move {
+            let meta = self
+                .0
+                .metadata(&rel_path_string(path))
+                .await
+                .map_err(to_dav_err)?;
+            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
+        })
     }
 
     fn symlink_metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
-        self.inner.symlink_metadata(path)
+        Box::pin(async move {
+            let meta = self
+                .0
+                .symlink_metadata(&rel_path_string(path))
+                .await
+                .map_err(to_dav_err)?;
+            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
+        })
     }
 
     fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
-        self.inner.create_dir(path)
+        Box::pin(async move {
+            self.0
+                .create_dir(&rel_path_string(path))
+                .await
+                .map_err(to_dav_err)
+        })
     }
 
     fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
-        self.inner.remove_dir(path)
+        Box::pin(async move {
+            self.0
+                .remove_dir(&rel_path_string(path))
+                .await
+                .map_err(to_dav_err)
+        })
     }
 
     fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         Box::pin(async move {
-            self.inner.remove_file(path).await?;
-            let rel = rel_path_string(path);
-            if is_knowledge(&rel) {
-                self.state.workspace.remove_knowledge(self.pid, &rel);
-            }
-            Ok(())
+            self.0
+                .remove_file(&rel_path_string(path))
+                .await
+                .map_err(to_dav_err)
         })
     }
 
     fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
         Box::pin(async move {
-            // Probe the destination before the move so we can tell whether it
-            // landed on a fresh path (insert) or replaced one (update).
-            let to_existed = self.inner.metadata(to).await.is_ok();
-            self.inner.rename(from, to).await?;
-            // The source path left `knowledge/`; the destination arrived in it.
-            let from_rel = rel_path_string(from);
-            if is_knowledge(&from_rel) {
-                self.state.workspace.remove_knowledge(self.pid, &from_rel);
-            }
-            let to_rel = rel_path_string(to);
-            if is_knowledge(&to_rel) {
-                if to_existed {
-                    self.state.workspace.update_knowledge(self.pid, &to_rel);
-                } else {
-                    self.state.workspace.insert_knowledge(self.pid, &to_rel);
-                }
-            }
-            Ok(())
+            self.0
+                .rename(&rel_path_string(from), &rel_path_string(to))
+                .await
+                .map_err(to_dav_err)
         })
     }
 
     fn copy<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
         Box::pin(async move {
-            let to_existed = self.inner.metadata(to).await.is_ok();
-            self.inner.copy(from, to).await?;
-            let to_rel = rel_path_string(to);
-            if is_knowledge(&to_rel) {
-                if to_existed {
-                    self.state.workspace.update_knowledge(self.pid, &to_rel);
-                } else {
-                    self.state.workspace.insert_knowledge(self.pid, &to_rel);
-                }
-            }
-            Ok(())
+            self.0
+                .copy(&rel_path_string(from), &rel_path_string(to))
+                .await
+                .map_err(to_dav_err)
         })
     }
 }
 
-/// A [`DavFile`] that delegates to the underlying file and, once a write
-/// completes (`flush` after at least one `write_*`), reports it to
-/// `state.workspace` as an insert or update depending on prior existence.
-struct ObservedFile {
-    inner: Box<dyn DavFile>,
-    state: Arc<AppState>,
-    pid: Uuid,
-    rel_path: String,
-    /// Whether the file already existed when it was opened — distinguishes an
-    /// insert from an overwrite (update) at flush time.
-    existed: bool,
-    wrote: bool,
-}
+/// Adapts a workspace [`WsFile`] onto [`DavFile`].
+struct DavFileAdapter(WsFile);
 
-impl std::fmt::Debug for ObservedFile {
+impl std::fmt::Debug for DavFileAdapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ObservedFile")
-            .field("rel_path", &self.rel_path)
-            .field("wrote", &self.wrote)
-            .finish_non_exhaustive()
+        f.debug_struct("DavFileAdapter").finish_non_exhaustive()
     }
 }
 
-impl DavFile for ObservedFile {
+impl DavFile for DavFileAdapter {
     fn metadata(&mut self) -> FsFuture<'_, Box<dyn DavMetaData>> {
-        self.inner.metadata()
+        Box::pin(async move {
+            let meta = self.0.metadata().await.map_err(to_dav_err)?;
+            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
+        })
     }
 
     fn write_buf(&mut self, buf: Box<dyn bytes::Buf + Send>) -> FsFuture<'_, ()> {
-        self.wrote = true;
-        self.inner.write_buf(buf)
+        Box::pin(async move { self.0.write_buf(buf).await.map_err(to_dav_err) })
     }
 
     fn write_bytes(&mut self, buf: bytes::Bytes) -> FsFuture<'_, ()> {
-        self.wrote = true;
-        self.inner.write_bytes(buf)
+        Box::pin(async move { self.0.write_bytes(buf).await.map_err(to_dav_err) })
     }
 
     fn read_bytes(&mut self, count: usize) -> FsFuture<'_, bytes::Bytes> {
-        self.inner.read_bytes(count)
+        Box::pin(async move { self.0.read_bytes(count).await.map_err(to_dav_err) })
     }
 
     fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64> {
-        self.inner.seek(pos)
+        Box::pin(async move { self.0.seek(pos).await.map_err(to_dav_err) })
     }
 
     fn flush(&mut self) -> FsFuture<'_, ()> {
-        Box::pin(async move {
-            self.inner.flush().await?;
-            if self.wrote {
-                // Clear first so a second flush on the same handle won't re-report.
-                self.wrote = false;
-                if is_knowledge(&self.rel_path) {
-                    if self.existed {
-                        self.state
-                            .workspace
-                            .update_knowledge(self.pid, &self.rel_path);
-                    } else {
-                        self.state
-                            .workspace
-                            .insert_knowledge(self.pid, &self.rel_path);
-                    }
-                }
-            }
-            Ok(())
-        })
+        Box::pin(async move { self.0.flush().await.map_err(to_dav_err) })
+    }
+}
+
+/// Adapts a workspace [`WsMetadata`] onto [`DavMetaData`].
+#[derive(Debug, Clone)]
+struct DavMetaAdapter(WsMetadata);
+
+impl DavMetaData for DavMetaAdapter {
+    fn len(&self) -> u64 {
+        self.0.len()
     }
 
-    fn redirect_url(&mut self) -> FsFuture<'_, Option<String>> {
-        self.inner.redirect_url()
+    fn modified(&self) -> FsResult<SystemTime> {
+        self.0.modified().map_err(to_dav_err)
+    }
+
+    fn is_dir(&self) -> bool {
+        self.0.is_dir()
+    }
+
+    fn is_file(&self) -> bool {
+        self.0.is_file()
+    }
+
+    fn is_symlink(&self) -> bool {
+        self.0.is_symlink()
+    }
+
+    fn accessed(&self) -> FsResult<SystemTime> {
+        self.0.accessed().map_err(to_dav_err)
+    }
+
+    fn created(&self) -> FsResult<SystemTime> {
+        self.0.created().map_err(to_dav_err)
+    }
+
+    fn status_changed(&self) -> FsResult<SystemTime> {
+        self.0.status_changed().map_err(to_dav_err)
+    }
+
+    fn executable(&self) -> FsResult<bool> {
+        self.0.executable().map_err(to_dav_err)
+    }
+}
+
+/// Adapts a workspace [`WsDirEntry`] onto [`DavDirEntry`].
+struct DavDirEntryAdapter(WsDirEntry);
+
+impl DavDirEntry for DavDirEntryAdapter {
+    fn name(&self) -> Vec<u8> {
+        self.0.name()
+    }
+
+    fn metadata(&self) -> FsFuture<'_, Box<dyn DavMetaData>> {
+        let meta = self
+            .0
+            .metadata()
+            .map(|m| Box::new(DavMetaAdapter(m)) as Box<dyn DavMetaData>)
+            .map_err(to_dav_err);
+        Box::pin(ready(meta))
     }
 }
