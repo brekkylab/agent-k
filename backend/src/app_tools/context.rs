@@ -27,21 +27,11 @@ pub struct AppToolContext {
 impl AppToolContext {
     /// The single gate every tool calls before touching the repository.
     ///
-    /// Order: (1) `cap`/`resource` kind agreement — a mismatch is a *caller*
-    /// bug, not a user error, so it hard-fails; (2) agent scope (Layer B);
-    /// (3) user permission (Layer A). The agent can only ever do the
-    /// intersection of what it was granted and what the user could do.
+    /// The agent can only ever do the intersection of what it was granted
+    /// (agent scope, Layer B) and what the user could do (user permission,
+    /// Layer A). A mismatched `(cap, resource)` pair isn't accepted by any arm
+    /// of the resolver's match, so it resolves to `false` on its own.
     pub async fn authorize(&self, cap: Capability, resource: Resource) -> bool {
-        debug_assert_eq!(
-            cap.resource_kind(),
-            resource.kind(),
-            "capability/resource kind mismatch: {cap:?} vs {resource:?}",
-        );
-        if cap.resource_kind() != resource.kind() {
-            // Release-build backstop for the debug_assert above.
-            tracing::error!(?cap, ?resource, "app_tool authorize: kind mismatch");
-            return false;
-        }
         self.agent_policy.grants(cap)
             && self
                 .resolver

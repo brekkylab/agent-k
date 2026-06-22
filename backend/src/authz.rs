@@ -9,21 +9,14 @@
 //!
 //! [`Capability`] is the stable permission vocabulary (resource + action);
 //! [`Resource`] is the access target (`Some(id)` = one object, `None` = the
-//! collection, for `list_*`). The two must agree on [`ResourceKind`].
+//! collection, for `list_*`). The resolver's `(cap, resource)` match only
+//! accepts valid pairings — a mismatched pair (e.g. an automation capability
+//! with a session resource) falls through to `false`.
 
 use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::repository::AppRepository;
-
-/// The kind of entity a capability or resource refers to.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum ResourceKind {
-    Project,
-    Automation,
-    Session,
-    User,
-}
 
 /// The concrete target of a permission check.
 ///
@@ -37,19 +30,8 @@ pub enum Resource {
     User(Option<Uuid>),
 }
 
-impl Resource {
-    pub fn kind(&self) -> ResourceKind {
-        match self {
-            Resource::Project(_) => ResourceKind::Project,
-            Resource::Automation(_) => ResourceKind::Automation,
-            Resource::Session(_) => ResourceKind::Session,
-            Resource::User(_) => ResourceKind::User,
-        }
-    }
-}
-
 /// Stable permission vocabulary: one variant per (resource, action). Membership
-/// operations are project-scoped, so they map to [`ResourceKind::Project`].
+/// operations are project-scoped, so they pair with `Resource::Project`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Capability {
     // Automation configuration
@@ -110,20 +92,6 @@ impl Capability {
             UserReadSelf => "user.read_self",
             UserLookup => "user.lookup",
             UserAdmin => "user.admin",
-        }
-    }
-
-    /// The resource kind this capability applies to. Used by `authorize` to
-    /// assert the passed [`Resource`] matches.
-    pub fn resource_kind(&self) -> ResourceKind {
-        use Capability::*;
-        match self {
-            AutomationRead | AutomationCreate | AutomationUpdate | AutomationDelete
-            | AutomationRun | AutomationRunRead => ResourceKind::Automation,
-            SessionRead => ResourceKind::Session,
-            // Members live on a project, not a standalone entity.
-            ProjectRead | MemberRead | MemberManage => ResourceKind::Project,
-            UserReadSelf | UserLookup | UserAdmin => ResourceKind::User,
         }
     }
 }

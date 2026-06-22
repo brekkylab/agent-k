@@ -153,17 +153,16 @@ async fn user_read_self_is_self_only() {
     );
 }
 
-/// The capability/resource kind guard rejects mismatched pairings (release-mode
-/// backstop returns false; debug builds would assert).
+/// A mismatched (capability, resource) pair is denied: it matches no arm of the
+/// resolver, so user_can falls through to false.
 #[tokio::test]
-#[cfg(not(debug_assertions))]
-async fn kind_mismatch_is_denied() {
+async fn mismatched_pair_is_denied() {
     let repo = repo().await;
     let owner = make_user(&repo, "owner3").await;
     let project = repo.list_projects_for_user(owner).await.unwrap()[0].id;
     let c = ctx(&repo, AgentPolicy::new([Capability::AutomationRead]), owner, project);
 
-    // AutomationRead applied to a Session resource: kinds disagree → denied.
+    // AutomationRead applied to a Session resource: no matching arm → denied.
     assert!(
         !c.authorize(Capability::AutomationRead, Resource::Session(None))
             .await
