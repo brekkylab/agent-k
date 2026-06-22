@@ -1,0 +1,118 @@
+<!doctype html>
+<!-- template.html — a 4-slide reference deck for html2pptx.py.
+     Author your deck the same way: one <div class="slide"> per slide,
+     pick a theme on <body>, set lang for CJK, compose from components.css.
+     Convert:  python html2pptx.py template.html -o deck.pptx -->
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="components.css">
+  <!-- Chart.js is fine: it renders to <canvas>, which bakes into the slide
+       background as an image. Only text needs to stay editable. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body class="theme-corporate-slate">
+
+  <!-- ===== Slide 1 — title (no footer / page number) ===== -->
+  <div class="slide">
+    <div class="edge-strip"></div>
+    <div style="position:absolute; left:90px; top:250px; right:90px;">
+      <div class="t-caption c-accent" style="margin-bottom:18px;">Pixellife Inc.</div>
+      <div class="t-display c-primary">2026년 1분기 사업 리뷰</div>
+      <div class="t-body c-muted" style="margin-top:18px;">경영진 회의용 — 매출·수익성·다음 분기 계획</div>
+    </div>
+    <div style="position:absolute; right:90px; bottom:80px; width:60px; height:8px;
+                background:var(--accent);"></div>
+  </div>
+
+  <!-- ===== Slide 2 — metrics (compact stat row, NOT big KPI cards) ===== -->
+  <div class="slide">
+    <div class="band-title">
+      <div class="t-caption c-secondary" style="margin-bottom:8px;">Executive Summary</div>
+      <div class="t-title c-primary">매출 31.7% 성장, 수익성도 함께 개선됐다</div>
+    </div>
+    <div class="body-area">
+      <div class="stat-row">
+        <div>
+          <div class="stat-value">187억</div>
+          <div class="stat-label">1분기 매출</div>
+          <div class="stat-delta c-positive">+31.7%</div>
+        </div>
+        <div>
+          <div class="stat-value">24.1%</div>
+          <div class="stat-label">영업이익률</div>
+          <div class="stat-delta c-positive">+3.4pp</div>
+        </div>
+        <div>
+          <div class="stat-value">42만</div>
+          <div class="stat-label">월간 활성 사용자</div>
+          <div class="stat-delta c-positive">+18%</div>
+        </div>
+      </div>
+      <hr class="hairline" style="margin-top:44px;">
+      <ul class="bullets" style="margin-top:28px;">
+        <li>매출 성장과 수익성 개선이 같은 분기에 함께 일어났다.</li>
+        <li>활성 사용자 증가가 그 성장의 기반이 됐다.</li>
+      </ul>
+    </div>
+    <div class="footer"><span>2026 Q1 Review</span><span>2 / 4</span></div>
+  </div>
+
+  <!-- ===== Slide 3 — chart + narrative (chart = Chart.js canvas) ===== -->
+  <div class="slide">
+    <div class="band-title">
+      <div class="t-caption c-secondary" style="margin-bottom:8px;">Revenue by Quarter</div>
+      <div class="t-title c-primary">유료 전환이 4개 분기 연속 성장을 이끌었다</div>
+    </div>
+    <div class="body-area" style="display:flex; gap:32px;">
+      <div style="flex:1.4; position:relative;">
+        <canvas id="rev"></canvas>
+      </div>
+      <ul class="bullets" style="flex:1; align-self:center;">
+        <li>유료 사용자가 2분기에 무료를 추월했다.</li>
+        <li>객단가(ARPU)는 전년 대비 12% 상승.</li>
+        <li>이탈률은 3.1%로 역대 최저 수준.</li>
+      </ul>
+    </div>
+    <div class="footer"><span>2026 Q1 Review</span><span>3 / 4</span></div>
+  </div>
+
+  <!-- ===== Slide 4 — closing (mirrors title, no footer) ===== -->
+  <div class="slide">
+    <div style="position:absolute; right:90px; top:280px; left:90px; text-align:right;">
+      <div class="t-display c-primary">감사합니다.</div>
+      <div class="t-body c-muted" style="margin-top:16px;">질문이 있으신가요?</div>
+    </div>
+    <div style="position:absolute; left:90px; bottom:80px; width:60px; height:8px;
+                background:var(--accent);"></div>
+  </div>
+
+  <script>
+    // Render charts, then signal the converter that capture can proceed.
+    const css = getComputedStyle(document.body);
+    const secondary = css.getPropertyValue('--secondary').trim();
+    const accent = css.getPropertyValue('--accent').trim();
+    new Chart(document.getElementById('rev'), {
+      type: 'bar',
+      data: {
+        labels: ['1분기', '2분기', '3분기', '4분기'],
+        datasets: [
+          { label: '무료', data: [120, 110, 98, 90], backgroundColor: accent },
+          { label: '유료', data: [60, 115, 150, 180], backgroundColor: secondary },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: false,                       // must be off for a clean capture
+        plugins: { legend: { labels: { font: { family: 'Noto Sans CJK KR' } } } },
+        scales: {
+          x: { ticks: { font: { family: 'Noto Sans CJK KR' } } },
+          y: { ticks: { font: { family: 'Noto Sans CJK KR' } } },
+        },
+      },
+    });
+    // html2pptx.py waits for window.__pptx_ready before screenshotting.
+    requestAnimationFrame(() => requestAnimationFrame(() => { window.__pptx_ready = true; }));
+  </script>
+</body>
+</html>

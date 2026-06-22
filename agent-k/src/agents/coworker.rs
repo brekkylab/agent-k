@@ -182,6 +182,22 @@ pub async fn get_coworker_agent_with_opts(
                         pptx_dir.join("script/verify_pptx.py"),
                         include_bytes!("skill/pptx/script/verify_pptx.py").to_vec(),
                     ),
+                    FileEntry::new(
+                        pptx_dir.join("script/html2pptx.py"),
+                        include_bytes!("skill/pptx/script/html2pptx.py").to_vec(),
+                    ),
+                    FileEntry::new(
+                        pptx_dir.join("script/components.css"),
+                        include_bytes!("skill/pptx/script/components.css").to_vec(),
+                    ),
+                    FileEntry::new(
+                        pptx_dir.join("script/template.html"),
+                        include_bytes!("skill/pptx/script/template.html").to_vec(),
+                    ),
+                    FileEntry::new(
+                        pptx_dir.join("script/contact_sheet.py"),
+                        include_bytes!("skill/pptx/script/contact_sheet.py").to_vec(),
+                    ),
                 ],
             )
             .skill(

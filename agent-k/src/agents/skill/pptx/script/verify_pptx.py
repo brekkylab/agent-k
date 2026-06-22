@@ -8,10 +8,22 @@ Usage (inside the sandbox):
     issues = verify("/workspace/artifacts/deck.pptx")
     print(summarize(issues))
 
-`verify()` returns a dict with eight check keys: `palette`, `fonts`,
-`sizes`, `overflow`, `page_numbers`, `overlap`, `chart_strict`,
-`word_wrap`. An empty list per key = passed. Heuristic: catches the
-most-violated SKILL.md rules, not every nuance.
+`verify()` returns a dict with five check keys: `palette`, `fonts`,
+`sizes`, `page_numbers`, `overlap`. An empty list per key = passed.
+Heuristic: catches the most-violated SKILL.md rules, not every nuance.
+
+Decks are built by html2pptx.py, which DECOMPOSES each slide into native
+objects: editable text boxes (with FROZEN line breaks — `word_wrap=False`
++ hard `<a:br/>`, so the viewer can't re-wrap CJK), native autoshapes for
+simple boxes/borders/markers, a picture per chart/image, and a native
+solid slide-background fill. `fonts`/`sizes`/`page_numbers`/`overlap`
+apply to the text boxes; `palette` reflects text-run colors (advisory —
+lean on visual inspection).
+
+There is no `overflow` check (boxes are sized to browser-measured text,
+and frozen lines can't re-wrap), no `word_wrap` check (`word_wrap=False`
+is now the intended design everywhere), and no native-chart check (charts
+are raster pictures).
 """
 
 from __future__ import annotations
@@ -20,7 +32,6 @@ from pathlib import Path
 from typing import Any
 
 from pptx import Presentation
-from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.oxml.ns import qn
 
 
@@ -241,90 +252,6 @@ def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
     return issues
 
 
-def check_overflow(prs) -> list[tuple[int, str, str]]:
-    """Estimate text clipping in fixed-size text boxes.
-
-    A box overflows when the estimated rendered height exceeds the
-    drawable height (box minus internal margins). Korean glyphs count
-    as 2 ASCII widths. Autosize boxes are skipped — `SHAPE_TO_FIT_TEXT`
-    grows the box (geometric overlap is a visual-inspection question)
-    and `TEXT_TO_FIT_SHAPE` shrinks the text (our pt-based estimate
-    would always over-report clipping).
-
-    Returns list of (slide_idx, snippet, reason).
-    """
-    AUTOSIZE_SKIP = {MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT, MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE}
-    issues: list[tuple[int, str, str]] = []
-    for i, slide in enumerate(prs.slides, 1):
-        for shape in slide.shapes:
-            if not shape.has_text_frame:
-                continue
-            try:
-                w_in = shape.width / 914400 if shape.width else 0
-                h_in = shape.height / 914400 if shape.height else 0
-            except (AttributeError, TypeError):
-                continue
-            if w_in <= 0 or h_in <= 0:
-                continue
-            tf = shape.text_frame
-
-            # Skip autosize boxes (see docstring for why).
-            try:
-                if tf.auto_size in AUTOSIZE_SKIP:
-                    continue
-            except AttributeError:
-                pass
-
-            # Subtract internal margins so the estimate reflects drawable
-            # area. python-pptx default: L/R 0.1", T/B 0.05".
-            try:
-                ml = (tf.margin_left or 0) / 914400
-                mr = (tf.margin_right or 0) / 914400
-                mt = (tf.margin_top or 0) / 914400
-                mb = (tf.margin_bottom or 0) / 914400
-            except AttributeError:
-                ml = mr = 0.1
-                mt = mb = 0.05
-            effective_w = max(0.1, w_in - ml - mr)
-            effective_h = max(0.1, h_in - mt - mb)
-
-            total_h = 0.0
-            sample = ""
-            for para in tf.paragraphs:
-                run_texts = [r.text for r in para.runs if r.text]
-                if not run_texts:
-                    continue
-                text = "".join(run_texts)
-                font_pt = 14
-                for r in para.runs:
-                    try:
-                        if r.font.size:
-                            font_pt = max(font_pt, round(r.font.size.pt))
-                    except AttributeError:
-                        pass
-                ls = 1.2
-                try:
-                    if para.line_spacing and isinstance(para.line_spacing, float):
-                        ls = para.line_spacing
-                except AttributeError:
-                    pass
-                units = sum(2 if ord(ch) > 0x7F else 1 for ch in text)
-                chars_per_line = max(1, int(effective_w * 12 * 14 / font_pt))
-                lines = max(1, -(-units // chars_per_line))
-                total_h += lines * font_pt * ls / 72
-                if not sample:
-                    sample = text.strip()[:40]
-
-            grow_abs = total_h - effective_h
-            grow_ratio = total_h / effective_h if effective_h > 0 else 1
-            if grow_abs > 0.1 or grow_ratio > 1.25:
-                issues.append((
-                    i, sample,
-                    f"text needs {total_h:.2f}\" but box is {effective_h:.2f}\""
-                ))
-    return issues
-
-
 def check_page_numbers(prs) -> list[tuple[int, str]]:
     """Title (slide 1) and closing (slide N) must not carry a page number.
 
@@ -472,7 +399,9 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
         min_w = min(aw, bw)
         if min_h <= 0 or min_w <= 0:
             return False
-        return (y_overlap / min_h) < 0.30 and (x_overlap / min_w) > 0.80
+        # 0.45 tolerance absorbs the small CJK height cushion html2pptx
+        # adds, which would otherwise flag eyebrow+title stacks as collisions.
+        return (y_overlap / min_h) < 0.45 and (x_overlap / min_w) > 0.70
 
     def classify(sh, b):
         """Return (kind, label) or (None, None) if not a candidate."""
@@ -554,95 +483,6 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
     return issues
 
 
-def check_chart_strict(prs) -> list[tuple[int, str, str]]:
-    """Flag chart XML that strict-mode PowerPoint will reject.
-
-    Two known bits python-pptx (and per-slice-color helper code) leaves
-    out — Google Slides / LibreOffice / soffice ignore them, but
-    PowerPoint fires the recovery dialog and strips the chart,
-    leaving an apparently-blank slide:
-
-      1. `<a:endParaRPr>` missing `lang` (doughnut/pie templates).
-      2. `<c:dPt>` missing `<c:bubble3D>` (per-slice color setup).
-
-    Patch chart XML with `patch_chart_xml()` (see SKILL.md Charts
-    section) right after `add_chart()`.
-
-    Returns (slide_idx, chart_name, issue).
-    """
-    issues: list[tuple[int, str, str]] = []
-    for idx, slide in enumerate(prs.slides, start=1):
-        for sh in slide.shapes:
-            if not getattr(sh, "has_chart", False):
-                continue
-            cs = sh.chart._chartSpace
-            for ep in cs.iter(qn("a:endParaRPr")):
-                if ep.get("lang") is None:
-                    issues.append((idx, sh.name, "endParaRPr missing lang"))
-                    break
-            for dPt in cs.iter(qn("c:dPt")):
-                if dPt.find(qn("c:bubble3D")) is None:
-                    issues.append((idx, sh.name, "dPt missing bubble3D"))
-                    break
-    return issues
-
-
-def check_word_wrap(prs) -> list[tuple[int, str]]:
-    """Flag text frames with `word_wrap = False` whose text won't fit on one line.
-
-    strict-mode PowerPoint respects `word_wrap = False` literally and grows the
-    shape *horizontally* to fit text on a single line — pushing text
-    past the designed box width onto neighboring elements. soffice and
-    Google Slides force-wrap regardless, so the failure is invisible
-    in the sandbox PNG.
-
-    Short labels ("Q1", "3 / 10", "187억") fit on one line anyway and
-    pass; only multi-token bodies whose single-line estimate exceeds
-    box width are flagged.
-
-    Returns (slide_idx, snippet).
-    """
-    issues: list[tuple[int, str]] = []
-    for i, slide in enumerate(prs.slides, 1):
-        for shape in slide.shapes:
-            if not shape.has_text_frame:
-                continue
-            tf = shape.text_frame
-            if tf.word_wrap is not False:
-                continue
-            text = tf.text.strip()
-            if not text:
-                continue
-            try:
-                w_in = shape.width / 914400 if shape.width else 0
-            except (AttributeError, TypeError):
-                continue
-            if w_in <= 0:
-                continue
-            try:
-                ml = (tf.margin_left or 0) / 914400
-                mr = (tf.margin_right or 0) / 914400
-            except AttributeError:
-                ml = mr = 0.1
-            effective_w = max(0.1, w_in - ml - mr)
-            font_pt = 14
-            for para in tf.paragraphs:
-                for r in para.runs:
-                    try:
-                        if r.font.size:
-                            font_pt = max(font_pt, round(r.font.size.pt))
-                    except AttributeError:
-                        pass
-            # CJK glyphs count as 2 ASCII widths; ~12 ASCII units per inch at 14pt.
-            units = sum(2 if ord(ch) > 0x7F else 1 for ch in text)
-            chars_per_line = max(1, int(effective_w * 12 * 14 / font_pt))
-            # Flag only when the deficit is clear (>30% over). Borderline
-            # one-line labels (e.g. "32.4%" in a 0.45" box at 18pt) pass.
-            if units > chars_per_line * 1.3:
-                issues.append((i, text[:40].replace("\n", " ")))
-    return issues
-
-
 # --- top-level ----------------------------------------------------------------
 
 def verify(pptx_path: str | Path) -> dict[str, Any]:
@@ -658,11 +498,8 @@ def verify(pptx_path: str | Path) -> dict[str, Any]:
         "palette": check_palette(prs),
         "fonts": check_fonts(prs),
         "sizes": check_size_discipline(prs),
-        "overflow": check_overflow(prs),
         "page_numbers": check_page_numbers(prs),
         "overlap": check_overlap(prs),
-        "chart_strict": check_chart_strict(prs),
-        "word_wrap": check_word_wrap(prs),
     }
 
 
@@ -677,22 +514,10 @@ def summarize(issues: dict[str, Any]) -> str:
         flags.append(f"{len(issues['fonts'])} CJK runs missing EA typeface")
     if issues["sizes"]:
         flags.append(f"{len(issues['sizes'])} slides with 5+ scale sizes")
-    if issues["overflow"]:
-        flags.append(f"{len(issues['overflow'])} fixed-size text boxes clip")
     if issues["page_numbers"]:
         flags.append(f"{len(issues['page_numbers'])} page-number violations")
     if issues.get("overlap"):
-        flags.append(f"{len(issues['overlap'])} shape overlaps")
-    if issues.get("chart_strict"):
-        flags.append(
-            f"{len(issues['chart_strict'])} chart XML violations "
-            "(strict PowerPoint strips them)"
-        )
-    if issues.get("word_wrap"):
-        flags.append(
-            f"{len(issues['word_wrap'])} text boxes with word_wrap=False "
-            "overflow horizontally in strict-mode PowerPoint"
-        )
+        flags.append(f"{len(issues['overlap'])} text overlaps")
     if not flags:
         return f"{n} slides — all checks passed ({p['matched']})."
     return f"{n} slides — issues: {' · '.join(flags)}"
