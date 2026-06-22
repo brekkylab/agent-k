@@ -2,7 +2,7 @@ mod cli;
 
 use std::{path::PathBuf, sync::Arc};
 
-use agent_k_backend::{auth, repository, router, state::AppState, worker};
+use agent_k_backend::{authn, repository, router, state::AppState, worker};
 use aide::{
     axum::ApiRouter,
     openapi::{Info, OpenApi},
@@ -57,7 +57,7 @@ async fn run_server(mode: ServeMode) -> std::io::Result<()> {
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(604_800); // 7 days
-    let jwt = auth::JwtConfig::new(&jwt_secret, jwt_expiry);
+    let jwt = authn::JwtConfig::new(&jwt_secret, jwt_expiry);
 
     let repo = repository::create_repository_from_env()
         .await
@@ -65,7 +65,7 @@ async fn run_server(mode: ServeMode) -> std::io::Result<()> {
 
     // Admin bootstrap only meaningful when the API is exposed in this process.
     if mode.runs_api() {
-        auth::bootstrap_admin_if_needed(&repo).await;
+        authn::bootstrap_admin_if_needed(&repo).await;
     }
 
     let data_root = std::env::var("AGENT_K_DATA_ROOT")

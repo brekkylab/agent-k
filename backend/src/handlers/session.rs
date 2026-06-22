@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 use uuid::Uuid;
 
 use crate::{
-    auth::AuthUser,
+    authn::AuthUser,
     error::{ApiResult, AppError},
     events::{RunUserMessage, WsEvent},
     handlers::dirent::{

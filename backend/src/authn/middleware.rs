@@ -7,7 +7,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::{auth::role::Role, error::AppError, state::AppState};
+use crate::{authn::role::Role, error::AppError, state::AppState};
 
 #[derive(Debug, Clone)]
 pub struct AuthUser {

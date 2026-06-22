@@ -4,7 +4,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use uuid::Uuid;
 
 use crate::{
-    auth::{Role, hash_password, validate_password, verify_password},
+    authn::{Role, hash_password, validate_password, verify_password},
     error::{ApiResult, AppError},
     model::{LoginRequest, LoginResponse, SignupRequest, UserResponse},
     repository::{NewUser, RepositoryError},

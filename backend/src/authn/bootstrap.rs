@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use crate::{
-    auth::{Role, hash_password},
+    authn::{Role, hash_password},
     repository::{AppRepository, NewUser},
 };
 

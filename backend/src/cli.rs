@@ -1,4 +1,4 @@
-use agent_k_backend::{auth, repository};
+use agent_k_backend::{authn, repository};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 
@@ -58,7 +58,7 @@ pub async fn run_create_admin(username: String, password: String, display_name: 
         .await
         .expect("failed to initialise repository");
 
-    let password_hash = match auth::hash_password(&password) {
+    let password_hash = match authn::hash_password(&password) {
         Ok(h) => h,
         Err(_) => {
             eprintln!("error: failed to hash password");
@@ -71,7 +71,7 @@ pub async fn run_create_admin(username: String, password: String, display_name: 
             id: Uuid::new_v4(),
             username: username.clone(),
             password_hash,
-            role: auth::Role::Admin,
+            role: authn::Role::Admin,
             display_name,
             is_active: true,
             preferred_language: "en".to_string(),

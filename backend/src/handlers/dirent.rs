@@ -15,7 +15,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    auth::AuthUser,
+    authn::AuthUser,
     error::{ApiResult, AppError},
     model::{
         Dirent, DirentBatchOp, DirentBatchResult, DirentKind, DirentScopeQuery, FailedFile,

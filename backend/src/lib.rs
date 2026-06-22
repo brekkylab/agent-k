@@ -1,5 +1,5 @@
 pub mod app_tools;
-pub mod auth;
+pub mod authn;
 pub mod authz;
 pub mod cron;
 pub mod error;

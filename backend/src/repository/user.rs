@@ -3,7 +3,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::SqliteRepository;
-use crate::{auth::Role, repository::RepositoryResult};
+use crate::{authn::Role, repository::RepositoryResult};
 
 #[derive(Debug, Clone)]
 pub struct DbUser {

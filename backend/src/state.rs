@@ -22,7 +22,7 @@ struct StoreEntry {
 }
 
 use crate::{
-    auth::JwtConfig,
+    authn::JwtConfig,
     error::{ApiError, AppError},
     events::{RunUserMessage, WsEvent},
     repository::AppRepository,

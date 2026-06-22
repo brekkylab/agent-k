@@ -7,7 +7,7 @@ use aide::axum::{
 use axum::handler::Handler;
 
 use crate::{
-    auth::{admin_required, auth_required},
+    authn::{admin_required, auth_required},
     handlers,
     state::AppState,
 };

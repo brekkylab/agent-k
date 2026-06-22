@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::app_tools::context::AppToolContext;
 use crate::app_tools::policy::AgentPolicy;
 use crate::authz::{Capability, PermissionResolver, RepoPermissionResolver, Resource};
-use crate::auth::Role;
+use crate::authn::Role;
 use crate::repository::{AppRepository, NewUser};
 
 async fn repo() -> AppRepository {
