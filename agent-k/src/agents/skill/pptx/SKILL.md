@@ -38,6 +38,11 @@ Two non-negotiable rules:
 
 **Hard rules — if any of these slip, the deck fails:**
 
+- **The deliverable is the `.pptx`, not the HTML.** You are NOT done when
+  `deck.html` is written — that is step 1 of 3. The task is complete only
+  when `/workspace/artifacts/deck.pptx` exists AND verify (§3) passes. Never
+  end your turn after authoring; always run HTML → convert → verify through
+  to the end in one go.
 - Install the toolchain before converting (the sandbox ships neither).
   Run all three up front — **do not** wait for a launch failure to add
   `install-deps`; the sandbox is always missing the browser's system
@@ -92,6 +97,9 @@ reproduce its colors or slide order, or every deck ends up looking the same.
 picture object (Chart.js `<canvas>`, inline SVG, or static `<img>`). For the
 Chart.js settings (`animation:false`, palette colors, `font.family`,
 `__pptx_ready`) see *Authoring notes → Charts* and `template.html`.
+
+Once `deck.html` is written, **continue straight to §2 — do not stop here.**
+A finished `deck.html` is not a finished deck.
 
 ### 2. Convert to PPTX
 
