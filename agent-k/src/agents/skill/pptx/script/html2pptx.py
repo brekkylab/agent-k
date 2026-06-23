@@ -281,9 +281,14 @@ SCRAPE_SLIDE_JS = r"""
           }
         }
         if (segs.length && bb) {
-          // Group segments into visual lines by the same overlap-fraction test,
-          // then merge adjacent same-style runs. A big number + a small unit
-          // span share a line (heavy overlap); a real wrap starts a new one.
+          // Group THIS block's segments into visual lines by the same
+          // overlap-fraction test, then merge adjacent same-style runs. Inline
+          // runs of one block (e.g. a big number + its small unit span) overlap
+          // heavily → one line object; a real wrap starts a new one. Sibling
+          // blocks each become their own text box (promoted above) and are not
+          // merged here — they still share a baseline on render because their
+          // coordinates are preserved. The guarantee is "no spurious <a:br>,
+          // same baseline on render", not "one line object".
           const rawLines = []; let cur = null, curTop = null, curBot = null;
           for (const sg of segs) {
             if (cur !== null && samELine(sg.top, sg.bottom, curTop, curBot)) {
@@ -630,6 +635,7 @@ def _export_source_html(html_path: Path, out_path: Path) -> None:
 
     html = re.sub(r"<link\b[^>]*>", inline, html)
     dest = out_path.with_suffix(".source.html")
+    dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(html, encoding="utf-8")
     print(f"kept self-contained source HTML → {dest}")
 
@@ -661,6 +667,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         slides = render_and_scrape(args.html, work, args.scale)
         if args.dump_json:
+            args.dump_json.parent.mkdir(parents=True, exist_ok=True)
             args.dump_json.write_text(json.dumps(slides, indent=2, ensure_ascii=False),
                                       encoding="utf-8")
         build_pptx(slides, args.out)
