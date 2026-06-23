@@ -12,8 +12,6 @@ export interface BackendUser {
   preferred_language?: string;
   created_at?: string;
   updated_at?: string;
-  /** Capability names granted to this user's agents; present on the /me payload. */
-  agent_capabilities?: string[];
 }
 
 export interface LoginResponse {
@@ -33,6 +31,8 @@ export interface BackendProject {
   recommended_chains?: Record<string, string[]>;
   /** Knowledge-corpus PDF engine: "kreuzberg" | "docling". */
   pdf_engine?: string;
+  /** Max agent capabilities allowed in this project (names). `null`/absent = no limit. */
+  agent_capability_ceiling?: string[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -42,6 +42,8 @@ export interface BackendMember {
   username: string;
   display_name?: string | null;
   added_at: string;
+  /** This member's own per-project agent grant (names). `null`/absent = inherit ceiling. */
+  agent_capabilities?: string[] | null;
 }
 
 export type BackendSessionOrigin = 'user' | 'automation';

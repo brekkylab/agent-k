@@ -60,7 +60,7 @@ function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void
   const userSessions = sessions.data ?? [];
   const latestRaw = latestUpdated(userSessions);
   const latest = latestRaw === 'new' ? t('card.latest_new') : latestRaw;
-  const memberUsers: User[] = members.data ?? [];
+  const memberUsers: User[] = (members.data ?? []).map((m) => m.user);
 
   return (
     <button className="cw-project-card" onClick={onOpen}>

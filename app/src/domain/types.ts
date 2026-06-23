@@ -12,8 +12,6 @@ export interface User {
   avatar: string;
   color: string;
   preferredLanguage: PreferredLanguage;
-  /** Capability names granted to this user's agents (from /me). Empty when unknown. */
-  agentCapabilities?: string[];
 }
 
 export interface Project {
@@ -27,6 +25,17 @@ export interface Project {
   recommendedChains: Record<string, string[]>;
   /** Knowledge-corpus PDF engine: "kreuzberg" | "docling". */
   pdfEngine: string;
+  /** Max agent capabilities allowed in this project (names). `null` = no limit (all). */
+  agentCapabilityCeiling: string[] | null;
+}
+
+/**
+ * A project membership row. Pairs the member's identity with their per-project
+ * agent grant. `agentCapabilities === null` means "inherit the project ceiling".
+ */
+export interface ProjectMember {
+  user: User;
+  agentCapabilities: string[] | null;
 }
 
 export type SessionOrigin = 'user' | 'automation';

@@ -10,6 +10,7 @@ import type {
   Occurrence,
   PreferredLanguage,
   Project,
+  ProjectMember,
   Run,
   RunEvent,
   Session,
@@ -78,7 +79,6 @@ export function toUser(backend: BackendUser): User {
     avatar: initials(name),
     color: deterministicColor(backend.id),
     preferredLanguage: normalizeLanguage(backend.preferred_language),
-    agentCapabilities: backend.agent_capabilities ?? [],
   };
 }
 
@@ -92,6 +92,13 @@ export function toMemberUser(member: BackendMember): User {
     avatar: initials(name),
     color: deterministicColor(member.user_id),
     preferredLanguage: 'en',
+  };
+}
+
+export function toProjectMember(member: BackendMember): ProjectMember {
+  return {
+    user: toMemberUser(member),
+    agentCapabilities: member.agent_capabilities ?? null,
   };
 }
 
@@ -114,6 +121,7 @@ export function toProject(backend: BackendProject, memberIds: string[] = []): Pr
     memberIds: memberIds.length > 0 ? memberIds : [backend.owner_id],
     recommendedChains: backend.recommended_chains ?? {},
     pdfEngine: backend.pdf_engine ?? 'kreuzberg',
+    agentCapabilityCeiling: backend.agent_capability_ceiling ?? null,
   };
 }
 

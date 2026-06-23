@@ -1007,7 +1007,7 @@ function SessionPage() {
   });
 
   const sess = session.data;
-  const userList = members.data ?? [];
+  const userList = (members.data ?? []).map((m) => m.user);
   const creator = userList.find((u) => u.id === sess?.creatorId);
   const usersForRender: User[] = [...userList, AI_USER];
   const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');
