@@ -66,9 +66,11 @@
   },
   "home": {
     "preview_pill_aria": "Preview — not yet sent to the server",
-    "attach_coming_soon": "File attachment is coming soon.",
     "suggested_prompts_aria": "Suggested prompts (preview)",
-    "send_blocked_hint": "No available model. Set a provider API key or pick another model."
+    "send_blocked_hint": "No available model. Set a provider API key or pick another model.",
+    "upload_failed": "Some files couldn't be uploaded and weren't attached:",
+    "upload_failed_more": "+{{count}} more",
+    "file_too_large": "Skipped files over {{max}} MB:"
   },
   "settings_page": {
     "section_label": "Project settings",

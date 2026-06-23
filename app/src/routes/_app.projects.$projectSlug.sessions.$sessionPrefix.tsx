@@ -38,6 +38,7 @@ import { loadNs } from '@/i18n/loader';
 import { useDuplicateSession } from '@/lib/useDuplicateSession';
 import { shortSessionId } from '@/lib/sessionId';
 import { resolveComposerKeyAction } from '@/lib/composerKeys';
+import { useFileDropzone } from '@/lib/useFileDropzone';
 import { ToolCallDetails } from '@/components/chat/ToolCallDetails';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
@@ -49,6 +50,10 @@ export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sess
 function stripSubagentPrefix(name: string): string {
   return name.startsWith(SUBAGENT_PREFIX) ? name.slice(SUBAGENT_PREFIX.length) : name;
 }
+
+// Besides computer files, the chat dropzone also accepts shared-file references
+// dragged from the shared-files panel. Module-level so the dropzone handlers stay memoized.
+const SESSION_DROP_ACCEPT = [SESSION_IMPORT_MIME];
 
 // Scroll the message list to its tail. We scroll the container itself rather
 // than `scrollIntoView` on a sentinel: scrollIntoView walks every scrollable
@@ -143,6 +148,7 @@ function SessionPage() {
   // Auto-send initial message refs — useRef instead of module-level Set so each
   // component instance tracks its own state (StrictMode-safe, no cross-session leak).
   const initialMessageRef = useRef<string | null>(location.state.initialMessage ?? null);
+  const initialAttachmentsRef = useRef<string[] | null>(location.state.initialAttachments ?? null);
   const consumedInitialMessageRef = useRef(false);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -438,10 +444,6 @@ function SessionPage() {
     }
   }, [composerText, composerExpanded]);
 
-  // Highlight the chat surface while a shared file is dragged over it.
-  const [importDragOver, setImportDragOver] = useState(false);
-
-
   // Import shared files (dragged from SharedFilesBrowser, its inline button, or a
   // folder drop expanded to its files) as pending attachments. They already exist
   // in shared storage, so no upload is needed — we just carry the global path the
@@ -453,7 +455,7 @@ function SessionPage() {
     const fresh = items.filter((it) => !curPaths.has(it.globalPath));
     if (fresh.length === 0) return; // everything already attached
     if (pendingAttachments.length + fresh.length > MAX_ATTACHMENTS) {
-      showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+      showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
       return; // over the cap — don't attach any of them
     }
     // Dedupe against the authoritative `prev` inside the updater, so a repeated
@@ -461,9 +463,7 @@ function SessionPage() {
     // the same files twice.
     setPendingAttachments((prev) => {
       const existing = new Set(prev.map((a) => a.globalPath).filter(Boolean));
-      const toAdd = fresh
-        .filter((it) => !existing.has(it.globalPath))
-        .slice(0, Math.max(0, MAX_ATTACHMENTS - prev.length));
+      const toAdd = fresh.filter((it) => !existing.has(it.globalPath));
       if (toAdd.length === 0) return prev;
       return [
         ...prev,
@@ -477,57 +477,17 @@ function SessionPage() {
     });
   }, [pendingAttachments, showToast, t]);
 
-  const handleImportDrop = useCallback((e: React.DragEvent) => {
-    const raw = e.dataTransfer.getData(SESSION_IMPORT_MIME);
-    if (!raw) return;
-    e.preventDefault();
-    setImportDragOver(false);
-    // Clear any selection the drag formed underneath the overlay, so it doesn't
-    // reappear once the overlay is gone.
-    window.getSelection()?.removeAllRanges();
-    let items: SessionImportItem[];
-    try { items = JSON.parse(raw); } catch { return; }
-    if (Array.isArray(items)) importSharedFiles(items);
-  }, [importSharedFiles]);
-
-  // Files dragged from the Files page onto this session's row arrive as
-  // scope-relative shared paths in router state. Attach them once session/project
-  // resolve, then clear the state so a refresh doesn't re-attach. A dropped folder
-  // is expanded into the files it contains (recursively).
-  useEffect(() => {
-    const rels = location.state.attachShared;
-    if (!rels?.length || !projectId || !sessionId) return;
-    void navigate({ replace: true, state: (prev) => ({ ...prev, attachShared: undefined }) });
-    void (async () => {
-      const sharedScope: DirentScope = { kind: 'shared', projectId };
-      const root = scopeRoot(sharedScope);
-      let entries: Awaited<ReturnType<typeof listDirentsRaw>> = [];
-      try {
-        entries = await queryClient.fetchQuery({
-          queryKey: ['dirents', 'shared', projectId],
-          queryFn: () => listDirentsRaw(sharedScope, true),
-        });
-      } catch { /* fall back to treating each path as a file */ }
-      // Folders expand to their files (recursive, .keep/dotfiles skipped, deduped).
-      const items = expandDirentPaths(entries, rels.map((rel) => `${root}/${rel}`));
-      if (items.length) importSharedFiles(items);
-    })();
-  }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate, queryClient]);
-
-  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    if (files.length === 0) return;
-    // Reset input so same file can be selected again
-    e.target.value = '';
-
+  // Upload local (computer) files to this session's inputs/ and track each as a
+  // pending attachment. Shared by the composer clip button and chat drag-drop.
+  const uploadLocalFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0 || !projectId || !sessionId) return;
     // Cap like the shared-import path: if this batch would push the total past
     // MAX_ATTACHMENTS, reject the whole batch (upload nothing) and toast — so the
     // UI can't reach the backend's hard 400 on >MAX attachments.
     if (pendingAttachments.length + files.length > MAX_ATTACHMENTS) {
-      showToast(t('shared_files.attach_limit', { max: MAX_ATTACHMENTS }));
+      showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
       return;
     }
-
     for (const file of files) {
       const tempId = `${Date.now()}-${file.name}`;
       setPendingAttachments((prev) => [...prev, { tempId, filename: file.name, status: 'uploading' }]);
@@ -614,12 +574,63 @@ function SessionPage() {
     return () => clearInterval(id);
   }, [runDelayed, stopping, ownedRunId, sessionId, resetEndedRun]);
 
-  const send = useCallback(async (overrideText?: string) => {
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = ''; // reset so the same file can be selected again
+    void uploadLocalFiles(files);
+  }, [uploadLocalFiles]);
+
+  // Shared-file references dropped on the chat (SESSION_IMPORT_MIME, from the
+  // shared-files panel) → attach by path. Computer files go through onFiles below.
+  const onSharedDrop = useCallback((e: React.DragEvent) => {
+    // Clear any selection the drag formed underneath the overlay, so it doesn't
+    // reappear once the overlay is gone.
+    window.getSelection()?.removeAllRanges();
+    let items: SessionImportItem[];
+    try { items = JSON.parse(e.dataTransfer.getData(SESSION_IMPORT_MIME)); } catch { return; }
+    if (Array.isArray(items)) importSharedFiles(items);
+  }, [importSharedFiles]);
+
+  // Chat-surface dropzone — reuses useFileDropzone: computer files upload to
+  // inputs/ (onFiles), shared-file refs attach by path (onAcceptedDrop).
+  const importDropzone = useFileDropzone({
+    onFiles: uploadLocalFiles,
+    acceptTypes: SESSION_DROP_ACCEPT,
+    onAcceptedDrop: onSharedDrop,
+  });
+
+  // Files dragged from the Files page onto this session's row arrive as
+  // scope-relative shared paths in router state. Attach them once session/project
+  // resolve, then clear the state so a refresh doesn't re-attach. A dropped folder
+  // is expanded into the files it contains (recursively).
+  useEffect(() => {
+    const rels = location.state.attachShared;
+    if (!rels?.length || !projectId || !sessionId) return;
+    void navigate({ replace: true, state: (prev) => ({ ...prev, attachShared: undefined }) });
+    void (async () => {
+      const sharedScope: DirentScope = { kind: 'shared', projectId };
+      const root = scopeRoot(sharedScope);
+      let entries: Awaited<ReturnType<typeof listDirentsRaw>> = [];
+      try {
+        entries = await queryClient.fetchQuery({
+          queryKey: ['dirents', 'shared', projectId],
+          queryFn: () => listDirentsRaw(sharedScope, true),
+        });
+      } catch { /* fall back to treating each path as a file */ }
+      // Folders expand to their files (recursive, .keep/dotfiles skipped, deduped).
+      const items = expandDirentPaths(entries, rels.map((rel) => `${root}/${rel}`));
+      if (items.length) importSharedFiles(items);
+    })();
+  }, [location.state.attachShared, projectId, sessionId, importSharedFiles, navigate, queryClient]);
+
+  const send = useCallback(async (overrideText?: string, overrideAttachments?: string[]) => {
     const text = (overrideText ?? composerText).trim();
     const uploading = pendingAttachments.some((a) => a.status === 'uploading');
     if (!text || !sessionId || streaming || uploading) return;
 
-    const attachmentPaths = pendingAttachments
+    // overrideAttachments: files uploaded on the home composer, handed over via
+    // router state for the auto-sent first message.
+    const attachmentPaths = overrideAttachments ?? pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
       .map((a) => a.globalPath!);
 
@@ -735,10 +746,12 @@ function SessionPage() {
     if (!initialMessageRef.current) return;
     consumedInitialMessageRef.current = true;
     const msg = initialMessageRef.current;
+    const atts = initialAttachmentsRef.current ?? undefined;
     initialMessageRef.current = null;
+    initialAttachmentsRef.current = null;
     // Clear router state so a hard refresh doesn't resend, but don't block send on it.
-    void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined }) });
-    void send(msg);
+    void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined, initialAttachments: undefined }) });
+    void send(msg, atts);
   }, [session.data, send, navigate]);
 
   // WS session subscription — subscribe/unsubscribe when sessionId changes.
@@ -1012,19 +1025,8 @@ function SessionPage() {
   return (
     <div className="cw-session-layout cw-page-enter">
       <section
-        className={`cw-chat-surface${importDragOver ? ' is-import-target' : ''}`}
-        onDragOver={(e) => {
-          if (!e.dataTransfer.types.includes(SESSION_IMPORT_MIME)) return;
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'copy';
-          if (!importDragOver) setImportDragOver(true);
-        }}
-        onDragLeave={(e) => {
-          // Ignore leaves into descendant elements — only clear when leaving the surface.
-          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-          setImportDragOver(false);
-        }}
-        onDrop={handleImportDrop}
+        className={`cw-chat-surface${importDropzone.isOver ? ' is-import-target' : ''}`}
+        {...importDropzone.dropProps}
       >
         <div className="cw-chat-head">
           <div>
@@ -1134,7 +1136,7 @@ function SessionPage() {
 
         <form className="cw-composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
           {pendingAttachments.length > 0 && (
-            <div className="cw-attach-tray" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '6px 0', gridColumn: '1 / -1' }}>
+            <div className="cw-attach-tray">
               {pendingAttachments.map((a) => (
                 <AttachmentChip
                   key={a.tempId}

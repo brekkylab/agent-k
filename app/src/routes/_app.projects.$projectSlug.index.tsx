@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getProject, listMembers } from '@/api/projects';
 import { createSession } from '@/api/sessions';
+import { uploadFiles } from '@/api/dirents';
 import { getModelCatalog, recommendationFor } from '@/api/models';
 import { AvatarStack } from '@/components/uiPrimitives';
 import { ProjectHomeComposer, type ProjectHomeComposerSubmission } from '@/components/chat/ProjectHomeComposer';
@@ -16,12 +17,15 @@ import { DEFAULT_AGENT_ID, type AgentId, type SuggestedPrompt } from '@/domain/a
 import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
 import { shortSessionId } from '@/lib/sessionId';
+import { useFileDropzone } from '@/lib/useFileDropzone';
+import { MAX_ATTACHMENTS, MAX_UPLOAD_BYTES } from '@/domain/files';
 import { ApiError } from '@/api/client';
 import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/')({
   // Home composer + toasts live on `project`; `common` comes from parents.
-  loader: () => loadNs('project', 'automation'),
+  // `session` is needed by AttachmentChip (its remove label lives there).
+  loader: () => loadNs('project', 'automation', 'session'),
   component: ProjectHome,
 });
 
@@ -45,6 +49,8 @@ function ProjectHome() {
   });
 
   const [composerText, setComposerText] = useState('');
+  // Files staged on the home composer — uploaded to the new session's inputs/ on submit.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
   // Model selection is remembered per project + agent surface and persisted to
   // localStorage (see useModelPrefsStore): switching agents — or reloading —
@@ -99,22 +105,57 @@ function ProjectHome() {
   // Submit creates a session and hands the first message + selected agent to the
   // session page via router state, where it auto-streams on entry.
   const startSessionMutation = useMutation({
-    mutationFn: async (firstMessage: string) => {
+    mutationFn: async ({ firstMessage, files }: { firstMessage: string; files: File[] }) => {
       const session = await createSession(projectSlug, {
         agentType: selectedAgentId,
         model: selectedModel,
       });
-      return { session, firstMessage };
+      // Upload staged files into the new session's inputs/ and collect their paths.
+      // Use the created session's own projectId (always present) rather than the
+      // project query, which may not have resolved yet — otherwise staged files
+      // would be silently dropped when project.data is still loading.
+      let attachmentPaths: string[] = [];
+      let failed: { name: string; reason: string }[] = [];
+      const projectId = session.projectId;
+      if (files.length > 0) {
+        const scope = { kind: 'inputs' as const, projectId, sessionId: session.id };
+        try {
+          const result = await uploadFiles(scope, files.map((file) => ({ file, targetPath: file.name })));
+          attachmentPaths = result.succeeded.map((s) => s.path);
+          // Per-file failures (e.g. over the size limit) carry their own reason.
+          failed = result.failed.map((f) => ({ name: f.path, reason: f.error }));
+        } catch (e) {
+          // Upload threw entirely (network / multipart / access). The session was
+          // already created, so rejecting the mutation would orphan it (and a retry
+          // would create a duplicate). Instead keep the session: send the message
+          // without attachments and report every file with the shared failure reason.
+          const reason = e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'upload failed';
+          failed = files.map((f) => ({ name: f.name, reason }));
+        }
+      }
+      return { session, firstMessage, attachmentPaths, failed };
     },
-    onSuccess: async ({ session, firstMessage }) => {
+    onSuccess: async ({ session, firstMessage, attachmentPaths, failed }) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       setComposerText('');
+      setPendingFiles([]);
+      // Surface partial/total upload failures with the reason — the message still
+      // sends with whatever uploaded, but don't let failed files vanish silently.
+      // Each failure is a "name — reason" detail line; cap the list for a big batch.
+      if (failed.length > 0) {
+        const CAP = 5;
+        const lines = failed.slice(0, CAP).map((f) => `${f.name} — ${f.reason}`);
+        if (failed.length > CAP) lines.push(t('home.upload_failed_more', { count: failed.length - CAP }));
+        showToast(t('home.upload_failed'), lines);
+      }
       navigate({
         to: '/projects/$projectSlug/sessions/$sessionPrefix',
         params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
-        state: firstMessage
-          ? { initialMessage: firstMessage, initialAgentId: selectedAgentId }
-          : { initialAgentId: selectedAgentId },
+        state: {
+          ...(firstMessage ? { initialMessage: firstMessage } : {}),
+          initialAgentId: selectedAgentId,
+          ...(attachmentPaths.length > 0 ? { initialAttachments: attachmentPaths } : {}),
+        },
         // Morph the composer to its session position/shape (shared view-transition-name).
         viewTransition: true,
       });
@@ -127,12 +168,44 @@ function ProjectHome() {
 
   const handleSubmit = ({ text }: ProjectHomeComposerSubmission) => {
     if (startSessionMutation.isPending) return;
-    startSessionMutation.mutate(text);
+    startSessionMutation.mutate({ firstMessage: text, files: pendingFiles });
   };
+
+  // Cap staged files at MAX_ATTACHMENTS (clip + drag both land here). Reject the
+  // whole batch if it would push over — mirrors the session's attach cap so the
+  // first message can't exceed the backend's hard limit.
+  const addFiles = (fs: File[]) => {
+    if (fs.length === 0) return;
+    // Drop files over the upload size limit at stage time (the backend would
+    // reject them anyway; doing it here avoids a silent partial failure at send,
+    // since the first message auto-sends on arrival). Skip the oversized ones and
+    // stage the rest — matching the partial handling on the session/files surfaces.
+    const tooBig = fs.filter((f) => f.size > MAX_UPLOAD_BYTES);
+    const ok = fs.filter((f) => f.size <= MAX_UPLOAD_BYTES);
+    if (tooBig.length > 0) {
+      showToast(t('home.file_too_large', { max: Math.round(MAX_UPLOAD_BYTES / (1024 * 1024)) }), tooBig.map((f) => f.name));
+    }
+    if (ok.length === 0) return;
+    if (pendingFiles.length + ok.length > MAX_ATTACHMENTS) {
+      showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
+      return;
+    }
+    setPendingFiles((prev) => [...prev, ...ok]);
+  };
+  // Drop computer files anywhere on the home page, mirroring the session's
+  // full-surface drop zone — the whole page highlights uniformly.
+  const composerDropzone = useFileDropzone({
+    onFiles: addFiles,
+    disabled: startSessionMutation.isPending,
+  });
 
   const memberList = members.data ?? [];
 
   return (
+    <div
+      className={`cw-home-drop${composerDropzone.isOver ? ' is-drop-target' : ''}`}
+      {...composerDropzone.dropProps}
+    >
     <section className="cw-page cw-page-enter">
       <div className="cw-project-hero is-slim">
         <div>
@@ -165,7 +238,9 @@ function ProjectHome() {
             sendBlockedHint={t('home.send_blocked_hint')}
             placeholder={agentPlaceholder}
             focusSignal={focusNonce}
-            onAttachClick={() => showToast(t('home.attach_coming_soon'))}
+            files={pendingFiles}
+            onAddFiles={addFiles}
+            onRemoveFile={(i) => setPendingFiles((prev) => prev.filter((_, idx) => idx !== i))}
             modelPicker={
               <ComposerModelPicker
                 catalog={catalog.data}
@@ -198,5 +273,6 @@ function ProjectHome() {
         </div>
       </div>
     </section>
+    </div>
   );
 }

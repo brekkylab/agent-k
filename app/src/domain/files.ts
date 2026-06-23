@@ -32,6 +32,12 @@ export function nameOf(entry: BackendDirent): string {
  *  wholesale (frontend) and 400'd (backend). */
 export const MAX_ATTACHMENTS = 30;
 
+/** Max bytes for a single uploaded file. Mirrors the backend default
+ *  (`AGENT_K_MAX_UPLOAD_BYTES`, 50 MiB); used to reject oversized files at stage
+ *  time so a send doesn't partially fail. The backend stays the authority — if
+ *  it's configured to a different limit this is just a best-effort early reject. */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
 export interface ExpandedFile { globalPath: string; filename: string; }
 
 /**
