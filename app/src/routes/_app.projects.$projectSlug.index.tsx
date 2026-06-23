@@ -130,7 +130,7 @@ function ProjectHome() {
     startSessionMutation.mutate(text);
   };
 
-  const memberList = members.data ?? [];
+  const memberList = (members.data ?? []).map((m) => m.user);
 
   return (
     <section className="cw-page cw-page-enter">

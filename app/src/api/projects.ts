@@ -1,7 +1,7 @@
 import { request } from './client';
 import type { BackendMember, BackendProject } from './backend-types';
-import { toMemberUser, toProject } from './transformers';
-import type { Project, User } from '@/domain/types';
+import { toProject, toProjectMember } from './transformers';
+import type { Project, ProjectMember } from '@/domain/types';
 
 export async function listProjects(): Promise<Project[]> {
   const res = await request<{ items: BackendProject[] }>('/projects');
@@ -82,9 +82,39 @@ export async function deleteProject(projectRef: string): Promise<void> {
   await request(`/projects/${projectRef}`, { method: 'DELETE' });
 }
 
-export async function listMembers(projectRef: string): Promise<User[]> {
+export async function listMembers(projectRef: string): Promise<ProjectMember[]> {
   const res = await request<{ items: BackendMember[] }>(`/projects/${projectRef}/members`);
-  return res.items.map(toMemberUser);
+  return res.items.map(toProjectMember);
+}
+
+/**
+ * Set the project's agent-capability ceiling (owner only).
+ * `null` clears the ceiling (no limit — all capabilities allowed).
+ */
+export async function setProjectAgentCeiling(
+  projectRef: string,
+  capabilities: string[] | null,
+): Promise<Project> {
+  const raw = await request<BackendProject>(`/projects/${projectRef}/agent-ceiling`, {
+    method: 'PATCH',
+    body: { capabilities },
+  });
+  return toProject(raw);
+}
+
+/**
+ * Set the current member's own per-project agent grant (self only — 403 otherwise).
+ * `null` resets to inherit the project ceiling.
+ */
+export async function setMemberAgentCapabilities(
+  projectRef: string,
+  userId: string,
+  capabilities: string[] | null,
+): Promise<void> {
+  await request(`/projects/${projectRef}/members/${userId}/agent-capabilities`, {
+    method: 'PATCH',
+    body: { capabilities },
+  });
 }
 
 export async function addMember(projectRef: string, username: string): Promise<void> {

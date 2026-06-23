@@ -10,6 +10,7 @@ import type {
   Occurrence,
   PreferredLanguage,
   Project,
+  ProjectMember,
   Run,
   RunEvent,
   Session,
@@ -94,6 +95,13 @@ export function toMemberUser(member: BackendMember): User {
   };
 }
 
+export function toProjectMember(member: BackendMember): ProjectMember {
+  return {
+    user: toMemberUser(member),
+    agentCapabilities: member.agent_capabilities ?? null,
+  };
+}
+
 export const AI_USER: User = {
   id: 'ai',
   name: 'Cowork',
@@ -113,6 +121,7 @@ export function toProject(backend: BackendProject, memberIds: string[] = []): Pr
     memberIds: memberIds.length > 0 ? memberIds : [backend.owner_id],
     recommendedChains: backend.recommended_chains ?? {},
     pdfEngine: backend.pdf_engine ?? 'kreuzberg',
+    agentCapabilityCeiling: backend.agent_capability_ceiling ?? null,
   };
 }
 

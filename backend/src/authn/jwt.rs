@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    auth::role::Role,
+    authn::role::Role,
     error::{ApiError, AppError},
 };
 

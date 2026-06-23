@@ -159,6 +159,24 @@ function AutomationsPage() {
   // Anchor element for the narrow-layout calendar detail popover (speech bubble).
   const [calAnchorEl, setCalAnchorEl] = useState<HTMLElement | null>(null);
 
+  // Deep-link selection via URL hash so external links (e.g. an assistant's
+  // reply) can open the list focused on an automation or a run. The hash is a
+  // bare id (#{automationId} or #{runId}); which one it is gets resolved once
+  // data loads (see the resolution effect below). Read-only: the hash drives
+  // selection, but in-page clicks don't rewrite it.
+  const [hashTarget, setHashTarget] = useState<string | null>(() => {
+    const h = window.location.hash.replace(/^#/, '').trim();
+    return /^[0-9a-fA-F-]+$/.test(h) ? h : null;
+  });
+  useEffect(() => {
+    function onHash() {
+      const h = window.location.hash.replace(/^#/, '').trim();
+      setHashTarget(/^[0-9a-fA-F-]+$/.test(h) ? h : null);
+    }
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
   const catalogQuery = useQuery({
     queryKey: ['models', projectSlug],
     queryFn: () => getModelCatalog(projectSlug),
@@ -207,6 +225,43 @@ function AutomationsPage() {
     return sorted.slice(0, ALL_MODE_CAP);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runsDataKey]);
+
+  // Resolve a bare-id hash target once data has loaded: an automation id selects
+  // that automation; a run id selects its automation and opens the run. Cleared
+  // once matched so later in-page navigation isn't overridden. Re-runs as data
+  // arrives, so it still resolves if the hash lands before the queries finish.
+  useEffect(() => {
+    if (!hashTarget) return;
+    if (automationById[hashTarget]) {
+      setView('list');
+      setSelectedOccurrence(null);
+      setSelectedAutomationId(hashTarget);
+      setSelectedRunId(null);
+      setHashTarget(null);
+      return;
+    }
+    const run = allRuns.find((r) => r.id === hashTarget);
+    if (run) {
+      setView('list');
+      setSelectedOccurrence(null);
+      setSelectedAutomationId(run.automationId);
+      setSelectedRunId(run.id);
+      setHashTarget(null);
+    }
+  }, [hashTarget, automationById, allRuns]);
+
+  // Reflect the current selection back into the URL hash so the link is
+  // shareable: #{runId} when a run is open, else #{automationId}, and no hash
+  // when nothing is selected. replaceState keeps history clean and doesn't fire
+  // our hashchange listener. Skipped while an incoming hash is still resolving.
+  useEffect(() => {
+    if (hashTarget) return;
+    const target = selectedRunId ?? selectedAutomationId;
+    const desired = target ? `#${target}` : '';
+    if (desired !== window.location.hash) {
+      history.replaceState(null, '', `${window.location.pathname}${window.location.search}${desired}`);
+    }
+  }, [selectedAutomationId, selectedRunId, hashTarget]);
 
   const isSingleMode = selectedAutomationId !== null;
   const fanOutForSelected: Run[] = useMemo(() => {

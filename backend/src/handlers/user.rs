@@ -8,7 +8,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::{
-    auth::{AuthUser, Role, hash_password, validate_password, verify_password},
+    authn::{AuthUser, Role, hash_password, validate_password, verify_password},
     error::{ApiResult, AppError},
     model::{
         AdminCreateUserRequest, AdminUpdateUserRequest, UpdateMeRequest, UserListQuery,

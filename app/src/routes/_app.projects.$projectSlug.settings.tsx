@@ -6,12 +6,14 @@ import type { TFunction } from 'i18next';
 import { deleteProject, getProject, listMembers, listProjects, updateProject } from '@/api/projects';
 import { Avatar, SectionLabel } from '@/components/uiPrimitives';
 import { Icon } from '@/components/Icon';
-import type { User } from '@/domain/types';
+import type { ProjectMember, User } from '@/domain/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useToastStore } from '@/components/Toast';
 import { useAuthStore } from '@/stores/auth';
 import { canEditProject } from '@/lib/permissions';
 import { ProjectModelChainsEditor } from '@/components/settings/ProjectModelChainsEditor';
+import { ProjectAgentCeilingEditor } from '@/components/settings/ProjectAgentCeilingEditor';
+import { MemberAgentGrantEditor } from '@/components/settings/MemberAgentGrantEditor';
 import { ApiError } from '@/api/client';
 import { loadNs } from '@/i18n/loader';
 
@@ -49,10 +51,20 @@ function SettingsPage() {
 
   const editable = canEditProject(project.data, currentUser);
 
+  // The current user's own membership row — drives the "My agent permissions"
+  // editor. Works for the owner too (the owner is now a normal member row).
+  // Fall back to a synthetic row for the owner so the editor still shows even if
+  // the members list hasn't surfaced the owner row yet (e.g. pre-backfill data).
+  const myMembership: ProjectMember | null =
+    (members.data ?? []).find((m) => m.user.id === currentUser?.id)
+    ?? (project.data && currentUser && currentUser.id === project.data.ownerId
+      ? { user: currentUser, agentCapabilities: null }
+      : null);
+
   const ownerUser: User | null = (() => {
     if (!project.data) return null;
-    const fromMembers = (members.data ?? []).find((m) => m.id === project.data!.ownerId);
-    if (fromMembers) return fromMembers;
+    const fromMembers = (members.data ?? []).find((m) => m.user.id === project.data!.ownerId);
+    if (fromMembers) return fromMembers.user;
     if (currentUser?.id === project.data.ownerId) return currentUser;
     return null;
   })();
@@ -369,15 +381,46 @@ function SettingsPage() {
       )}
 
       {project.data && (
+        <>
         <ProjectModelChainsEditor
           key={project.data.id}
           projectSlug={projectSlug}
           overrides={project.data.recommendedChains}
           editable={editable}
         />
+        <hr/>
+        </>
+      )}
+
+      {project.data && editable && (
+        <>
+        <ProjectAgentCeilingEditor
+          key={`ceiling-${project.data.id}`}
+          projectSlug={projectSlug}
+          ceiling={project.data.agentCapabilityCeiling}
+          editable={editable}
+        />
+        <hr/>
+        </>
+      )}
+
+      {/* The current user's own per-project grant. Owner or member alike — the
+          only gate is "this is me"; the backend authorizes self-edits. */}
+      {project.data && currentUser && myMembership && (
+        <>
+        <MemberAgentGrantEditor
+          key={`grant-${project.data.id}-${currentUser.id}`}
+          projectSlug={projectSlug}
+          userId={currentUser.id}
+          ceiling={project.data.agentCapabilityCeiling}
+          capabilities={myMembership.agentCapabilities}
+        />
+        <hr/>
+        </>
       )}
 
       {project.data && (
+        <>
         <div style={{ marginTop: 24 }}>
           <SectionLabel>{t('settings_page.pdf_engine.heading')}</SectionLabel>
           <p style={{ margin: '4px 0 12px', color: 'var(--cw-ink-3)', fontSize: 12, lineHeight: 1.55 }}>
@@ -400,6 +443,8 @@ function SettingsPage() {
             })}
           </div>
         </div>
+        <hr/>
+        </>
       )}
 
       {submitError && (

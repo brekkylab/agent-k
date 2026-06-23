@@ -2,7 +2,7 @@
 // + composer) + right side (members, references, access, artifact).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
+import { createFileRoute, notFound, useLocation, useNavigate } from '@tanstack/react-router';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
@@ -42,7 +42,22 @@ import { ToolCallDetails } from '@/components/chat/ToolCallDetails';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/sessions/$sessionPrefix')({
   // CopyToSharedDialog + ConfirmDialog mounted inside → `dialogs`.
-  loader: () => loadNs('session', 'dialogs', 'automation'),
+  loader: async ({ params, context }) => {
+    await loadNs('session', 'dialogs', 'automation');
+    // Resolve the session up front, priming the same query key the component
+    // reads (no double fetch). The backend returns 404 for non-user sessions
+    // (automation-run sessions are viewed via the automation page) and for
+    // missing/inaccessible ones, which we surface as a route 404.
+    try {
+      await context.queryClient.ensureQueryData({
+        queryKey: ['session', params.sessionPrefix],
+        queryFn: () => getSession(params.sessionPrefix),
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) throw notFound();
+      throw err;
+    }
+  },
   component: SessionPage,
 });
 
@@ -992,7 +1007,7 @@ function SessionPage() {
   });
 
   const sess = session.data;
-  const userList = members.data ?? [];
+  const userList = (members.data ?? []).map((m) => m.user);
   const creator = userList.find((u) => u.id === sess?.creatorId);
   const usersForRender: User[] = [...userList, AI_USER];
   const hasUploadingAttachments = pendingAttachments.some((a) => a.status === 'uploading');

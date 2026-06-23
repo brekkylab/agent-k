@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::{
-    auth::AuthUser,
+    authn::AuthUser,
     error::{ApiResult, AppError},
     model::{ModelCatalogResponse, ProjectChains, catalog_response},
     state::AppState,

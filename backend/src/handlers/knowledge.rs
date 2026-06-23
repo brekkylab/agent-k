@@ -14,7 +14,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    auth::AuthUser,
+    authn::AuthUser,
     error::{ApiResult, AppError},
     state::AppState,
 };

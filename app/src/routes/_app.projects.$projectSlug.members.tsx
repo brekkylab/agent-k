@@ -16,7 +16,7 @@ import { useAuthStore } from '@/stores/auth';
 import { canInviteMembers, canLeaveProject, canRemoveMember } from '@/lib/permissions';
 import { ApiError } from '@/api/client';
 import { loadNs } from '@/i18n/loader';
-import type { User } from '@/domain/types';
+import type { ProjectMember, User } from '@/domain/types';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/members')({
   // InviteDialog + ConfirmDialog → `dialogs`. `members` is route-local.
@@ -70,15 +70,20 @@ function MembersPage() {
   // with an Owner badge. Backend's /members endpoint may or may not include
   // the owner row depending on how `add_project_member` is wired — we look it
   // up explicitly to be safe.
-  const owner: User | null = memberList.find((m) => m.id === proj?.ownerId)
-    ?? (proj && currentUser?.id === proj.ownerId ? currentUser : null);
+  const ownerMember: ProjectMember | null = memberList.find((m) => m.user.id === proj?.ownerId)
+    ?? (proj && currentUser?.id === proj.ownerId
+      ? { user: currentUser, agentCapabilities: null }
+      : null);
 
-  const ownerRow: User | null = owner ?? (proj
-    ? { id: proj.ownerId, name: '(owner)', roleLabel: 'Owner', avatar: 'OW', color: 'var(--cw-ink)', preferredLanguage: 'en' }
+  const ownerRow: ProjectMember | null = ownerMember ?? (proj
+    ? {
+        user: { id: proj.ownerId, name: '(owner)', roleLabel: 'Owner', avatar: 'OW', color: 'var(--cw-ink)', preferredLanguage: 'en' },
+        agentCapabilities: null,
+      }
     : null);
 
-  const rows: User[] = ownerRow
-    ? [ownerRow, ...memberList.filter((m) => m.id !== ownerRow.id)]
+  const rows: ProjectMember[] = ownerRow
+    ? [ownerRow, ...memberList.filter((m) => m.user.id !== ownerRow.user.id)]
     : memberList;
 
   const inviteAllowed = canInviteMembers(proj, currentUser);
@@ -130,18 +135,18 @@ function MembersPage() {
           <div style={{ padding: 16, color: 'var(--cw-ink-3)', fontSize: 12 }}>{t('loading')}</div>
         )}
 
-        {rows.map((user, idx) => (
+        {rows.map((member, idx) => (
           <MemberRow
-            key={user.id}
-            user={user}
-            isOwner={user.id === proj?.ownerId}
-            isMe={user.id === currentUser?.id}
+            key={member.user.id}
+            member={member}
+            isOwner={member.user.id === proj?.ownerId}
+            isMe={member.user.id === currentUser?.id}
             joinedAt={proj?.id ? '—' : '—'}
-            showMenu={canRemoveMember(proj, user, currentUser)}
+            showMenu={canRemoveMember(proj, member.user, currentUser)}
             isLastRow={idx === rows.length - 1}
             onRemove={() => setRemoveTarget({
-              user,
-              isSelfLeave: user.id === currentUser?.id,
+              user: member.user,
+              isSelfLeave: member.user.id === currentUser?.id,
             })}
           />
         ))}
@@ -227,7 +232,7 @@ function MembersPage() {
 }
 
 interface MemberRowProps {
-  user: User;
+  member: ProjectMember;
   isOwner: boolean;
   isMe: boolean;
   joinedAt: string;
@@ -236,8 +241,10 @@ interface MemberRowProps {
   onRemove: () => void;
 }
 
-function MemberRow({ user, isOwner, isMe, joinedAt, showMenu, isLastRow, onRemove }: MemberRowProps) {
+function MemberRow({ member, isOwner, isMe, joinedAt, showMenu, isLastRow, onRemove }: MemberRowProps) {
   const { t } = useTranslation('members');
+  const { user } = member;
+
   return (
     <div style={{
       display: 'grid',

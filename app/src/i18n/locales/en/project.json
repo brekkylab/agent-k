@@ -107,6 +107,49 @@
       "option_docling": "Docling (accurate · slower)"
     }
   },
+  "agent_ceiling": {
+    "section_label": "Agent capability ceiling",
+    "help": "The maximum actions any member's agent may take in this project. Each member's own grant is intersected with this ceiling. \"No limit\" allows every capability.",
+    "no_limit": "No limit (allow all)",
+    "no_limit_hint": "Members' agents may use any capability, capped only by each member's own grant.",
+    "save": "Save ceiling",
+    "saving": "Saving…",
+    "saved": "Saved the agent capability ceiling",
+    "save_failed": "Failed to save the agent capability ceiling"
+  },
+  "agent_grant": {
+    "section_label": "My agent permissions",
+    "help": "Actions your agent may take in this project. Your grant is intersected with the project ceiling — picks outside the ceiling are kept but stay inactive until an owner adds them to the ceiling.",
+    "inherit": "Inherit project ceiling",
+    "inherit_hint": "Your agent uses exactly what the project ceiling allows. Turn off to pick your own subset.",
+    "out_of_ceiling": "inactive",
+    "out_of_ceiling_hint": "Outside the project ceiling. It's saved, but your agent can't use it until an owner adds it to the ceiling.",
+    "save": "Save my permissions",
+    "saving": "Saving…",
+    "saved": "Agent permissions updated",
+    "save_failed": "Failed to save: {{message}}"
+  },
+  "agent_cap_groups": {
+    "automation": "Automation",
+    "session": "Sessions",
+    "project": "Project & members",
+    "user": "Users"
+  },
+  "agent_caps": {
+    "automation_read": "View automations",
+    "automation_run_read": "View automation runs",
+    "automation_create": "Create automations",
+    "automation_update": "Edit automations",
+    "automation_run": "Run automations",
+    "automation_delete": "Delete automations",
+    "session_read": "Read chat sessions",
+    "project_read": "View projects",
+    "member_read": "View members",
+    "member_manage": "Manage members",
+    "user_read_self": "Read own profile",
+    "user_lookup": "Look up users",
+    "user_admin": "Administer users"
+  },
   "chains_editor": {
     "section_label": "Model recommendations",
     "loading": "Loading model list…",

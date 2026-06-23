@@ -15,7 +15,7 @@ use futures_util::StreamExt;
 use uuid::Uuid;
 
 use crate::{
-    auth::AuthUser,
+    authn::AuthUser,
     error::{ApiResult, AppError},
     events::{RunUserMessage, WsEvent},
     handlers::dirent::{
@@ -93,9 +93,10 @@ pub async fn build_session_agent(
             .map_err(|e| format!("failed to create dir {}: {e}", d.display()))?;
     }
     // Resolve the effective model from the session's agent_type + optional pin.
-    let (agent_type, model_pin) = match state.repository.get_session(session_id).await {
-        Ok(Some(s)) => (s.agent_type, s.model),
-        Ok(None) => (None, None),
+    // `creator_id` is the identity app-control tools act on behalf of.
+    let (agent_type, model_pin, creator_id) = match state.repository.get_session(session_id).await {
+        Ok(Some(s)) => (s.agent_type, s.model, Some(s.creator_id)),
+        Ok(None) => (None, None, None),
         Err(e) => return Err(e.to_string()),
     };
     // The same agent type drives both model resolution and dispatch; unknown → coworker.
@@ -134,8 +135,49 @@ pub async fn build_session_agent(
             .await
             .map_err(|e| e.to_string())?
         }
-        AgentType::Buddy => agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model)
-            .map_err(|e| e.to_string())?,
+        // Buddy is the app-control surface: hand it the app tools, scoped to
+        // the effective agent policy for the session creator in this project
+        // (member grant ∩ project ceiling).
+        AgentType::Buddy => {
+            let extra_tools = if let Some(uid) = creator_id {
+                // Layer B1: project ceiling (None = no limit). Layer B2: this
+                // member's grant (None for owner/non-member → inherit ceiling).
+                let ceiling = state
+                    .repository
+                    .get_project(project_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|p| p.agent_capability_ceiling);
+                let member = state
+                    .repository
+                    .get_member_agent_capabilities(project_id, uid)
+                    .await
+                    .ok()
+                    .flatten();
+                let agent_policy = crate::app_tools::AgentPolicy::effective(
+                    member.as_deref(),
+                    ceiling.as_deref(),
+                );
+                let resolver: std::sync::Arc<dyn crate::authz::PermissionResolver> =
+                    std::sync::Arc::new(crate::authz::RepoPermissionResolver::new(
+                        state.repository.clone(),
+                    ));
+                let ctx = std::sync::Arc::new(crate::app_tools::AppToolContext {
+                    repository: state.repository.clone(),
+                    resolver,
+                    agent_policy,
+                    acting_user_id: uid,
+                    project_id,
+                    session_id,
+                });
+                Some(crate::app_tools::build_app_tools(ctx))
+            } else {
+                None
+            };
+            agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model, extra_tools)
+                .map_err(|e| e.to_string())?
+        }
         // Speedwagon answers questions over this project's document corpus.
         // Tools bind to the project-scoped store; runs on a local RunEnv (not
         // the session sandbox). Shell is exposed as a secondary tool.
@@ -585,6 +627,13 @@ pub async fn get_session(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
+    // Only user-originated sessions are reachable through this route.
+    // Automation-run sessions are viewed via the automation page, so deny direct
+    // access here with the same 404 as a missing session (don't leak existence).
+    if session.origin != SessionOrigin::User {
+        return Err(AppError::not_found("session not found or access denied"));
+    }
+
     let unread = state
         .repository
         .count_session_unread(session_id, auth_user.id)
@@ -627,7 +676,7 @@ pub async fn update_session(
             .list_project_members(session.project_id)
             .await
         {
-            for (member, _) in members {
+            for (member, _, _) in members {
                 if member.id == session.creator_id {
                     continue;
                 }
