@@ -440,8 +440,11 @@ within each — don't trace the same layout every deck.
 - **Metrics** — present numbers as a **styled table** or a **compact
   inline stat row** (`.stat-row` → `.stat-value` + uppercase
   `.stat-label` + optional `.stat-delta`). Do **not** use big "KPI
-  card" tiles — tall metric cards read as empty and monotonous. Vary
-  the metric treatment across the deck.
+  card" tiles — tall metric cards read as empty and monotonous. A stat row
+  alone (the usual exec-summary) leaves the lower half bare — pair it with a
+  supporting trend visual (a small chart/sparkline of the same numbers), a
+  bottom takeaway band, or vertical distribution so the body fills. Vary the
+  metric treatment across the deck.
 - **Quote slide** — oversized `"` glyph (~4× Display, Accent toward
   Background), quote at Title size ≤ 4 lines, attribution (Body, Muted)
   right-aligned below a short Accent strip.
