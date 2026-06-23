@@ -42,7 +42,7 @@ Two non-negotiable rules:
   Run all three up front — **do not** wait for a launch failure to add
   `install-deps`; the sandbox is always missing the browser's system
   libraries, so skipping it just wastes a failed conversion:
-  `pip install python-pptx playwright` then
+  `pip install python-pptx playwright pypdfium2` then
   `playwright install chromium --only-shell` then
   `playwright install-deps chromium`.
 - Each slide is a `<div class="slide">` sized **exactly 1280×720 px**
@@ -142,14 +142,14 @@ chart check — charts are raster.) **Do not `read` `verify_pptx.py`** —
 these checks are the full contract; only read the source on an
 unexpected exception.
 
-**B. Visual confirmation** — render to PDF + PNG, montage into ONE contact
-sheet, and look. Install `poppler-utils` first (provides `pdftoppm`):
+**B. Visual confirmation** — render the `.pptx` to a PDF, then to one
+montaged contact sheet, and look. `contact_sheet.py` renders the PDF's
+pages itself (via `pypdfium2`, installed up front) and writes a
+`slide-N.png` per page for deep-reads:
 
 ```
-apt-get install -y poppler-utils
 soffice --headless --convert-to pdf /workspace/artifacts/deck.pptx
-pdftoppm -r 75 -png deck.pdf slide
-python /workspace/skills/pptx/script/contact_sheet.py slide*.png -o contact.png
+python /workspace/skills/pptx/script/contact_sheet.py deck.pdf -o contact.png
 ```
 
 **`read` `contact.png` ONCE** for a whole-deck overview, then deep-`read`

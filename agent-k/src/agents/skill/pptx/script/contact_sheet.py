@@ -1,40 +1,48 @@
-"""contact_sheet.py — montage slide PNGs into ONE labelled grid image.
+"""contact_sheet.py — render a deck PDF into ONE labelled grid for visual QA.
 
 The verify-B visual pass is the most token-expensive step: reading every
-slide PNG individually is N multimodal inputs. Instead, build one contact
-sheet, `read` it ONCE for the whole-deck overview (tofu, empty space,
-alignment, off-canvas, chart colors), then deep-`read` only the slides that
-look suspect. Cuts vision inputs ~N→1 for the overview pass.
+slide individually is N multimodal inputs. Instead build one contact sheet,
+`read` it ONCE for the whole-deck overview (tofu, empty space, alignment,
+off-canvas, chart colors), then deep-`read` only the slides that look suspect.
 
-Usage (Pillow ships with python-pptx, so no extra install):
-    python contact_sheet.py slide-1.png slide-2.png ... -o contact.png
-    python contact_sheet.py --glob "slide*.png" -o contact.png --cols 3
+    python contact_sheet.py deck.pdf -o contact.png
 
-Each cell is labelled with its slide number so you can say "deep-read
-slide 7" and map it back to `slide-7.png`.
+Renders each PDF page with pypdfium2, writing a slide-N.png beside the PDF
+(so "deep-read slide 7" maps to slide-7.png) and montaging them into one
+sheet with each cell labelled by slide number.
 """
 
 from __future__ import annotations
 
 import argparse
-import glob as globmod
-import re
 import sys
 from pathlib import Path
 
 
-def _natkey(p: str):
-    """Sort slide-2.png before slide-10.png (natural numeric order)."""
-    nums = re.findall(r"\d+", Path(p).name)
-    return (int(nums[-1]) if nums else 0, p)
+def render_pdf(pdf_path: str, dpi: int) -> list[str]:
+    """Render each page to slide-N.png (1-based) beside the PDF; return paths."""
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(pdf_path)
+    scale = dpi / 72.0
+    out_dir = Path(pdf_path).parent
+    paths = []
+    try:
+        for i in range(len(pdf)):
+            img = pdf[i].render(scale=scale).to_pil()
+            out = out_dir / f"slide-{i + 1}.png"
+            img.save(out)
+            paths.append(str(out))
+    finally:
+        pdf.close()
+    return paths
 
 
 def build(paths: list[str], out: str, cols: int, thumb_w: int, pad: int = 16) -> int:
     from PIL import Image, ImageDraw
 
-    paths = sorted(paths, key=_natkey)
     if not paths:
-        print("contact_sheet: no input images", file=sys.stderr)
+        print("contact_sheet: no pages to montage", file=sys.stderr)
         return 2
 
     thumbs = []
@@ -66,20 +74,14 @@ def build(paths: list[str], out: str, cols: int, thumb_w: int, pad: int = 16) ->
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Montage slide PNGs into one contact sheet.")
-    ap.add_argument("images", nargs="*", help="slide PNG paths")
-    ap.add_argument("--glob", default=None, help="glob pattern instead of explicit paths")
+    ap = argparse.ArgumentParser(description="Render a deck PDF into one labelled contact sheet.")
+    ap.add_argument("pdf", help="the soffice-produced deck PDF")
     ap.add_argument("-o", "--out", default="contact.png", help="output PNG (default contact.png)")
     ap.add_argument("--cols", type=int, default=3, help="columns (default 3)")
     ap.add_argument("--thumb-w", type=int, default=560, help="per-slide thumbnail width px (default 560)")
+    ap.add_argument("--dpi", type=int, default=75, help="PDF render resolution (default 75)")
     args = ap.parse_args(argv)
-
-    paths = list(args.images)
-    if args.glob:
-        paths += globmod.glob(args.glob)
-    if not paths:
-        ap.error("provide image paths or --glob")
-    return build(paths, args.out, args.cols, args.thumb_w)
+    return build(render_pdf(args.pdf, args.dpi), args.out, args.cols, args.thumb_w)
 
 
 if __name__ == "__main__":
