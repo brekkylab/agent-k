@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use agent_k::knowledge_base::Store;
 use agent_k_backend::{
-    auth::JwtConfig,
+    authn::JwtConfig,
     repository::{self, DbSenderKind, NewSessionMessage},
     router,
     state::AppState,
@@ -79,15 +79,15 @@ pub fn make_app_with_state(state: Arc<AppState>) -> axum::Router {
 /// Creates an in-memory repo seeded with a single admin user, builds the app,
 /// and logs in as that admin. Returns (app, admin_token, admin_id).
 pub async fn make_admin_app() -> (axum::Router, String, uuid::Uuid) {
-    use agent_k_backend::{auth, repository::NewUser};
+    use agent_k_backend::{authn, repository::NewUser};
     let repo = make_repo().await;
     let admin_id = uuid::Uuid::new_v4();
-    let password_hash = auth::hash_password("adminpass1").unwrap();
+    let password_hash = authn::hash_password("adminpass1").unwrap();
     repo.create_user(NewUser {
         id: admin_id,
         username: "admin".to_string(),
         password_hash,
-        role: auth::Role::Admin,
+        role: authn::Role::Admin,
         display_name: None,
         is_active: true,
         preferred_language: "en".to_string(),

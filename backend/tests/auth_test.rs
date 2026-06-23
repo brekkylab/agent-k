@@ -414,7 +414,7 @@ async fn admin_cannot_deactivate_self() {
 
 #[tokio::test]
 async fn last_admin_cannot_be_demoted_by_another_admin() {
-    use agent_k_backend::{auth, repository::NewUser};
+    use agent_k_backend::{authn, repository::NewUser};
 
     // Two admins. admin2 demotes admin1 (count goes 2→1, fine).
     // Then admin2 tries to demote admin1 again — but admin1 is already a user.
@@ -430,13 +430,13 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
 
     let repo = common::make_repo().await;
 
-    let ph1 = auth::hash_password("adminpass1").unwrap();
+    let ph1 = authn::hash_password("adminpass1").unwrap();
     let admin1 = repo
         .create_user(NewUser {
             id: uuid::Uuid::new_v4(),
             username: "admin1".to_string(),
             password_hash: ph1,
-            role: auth::Role::Admin,
+            role: authn::Role::Admin,
             display_name: None,
             is_active: true,
             preferred_language: "en".to_string(),
@@ -444,12 +444,12 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
         .await
         .unwrap();
 
-    let ph2 = auth::hash_password("adminpass2").unwrap();
+    let ph2 = authn::hash_password("adminpass2").unwrap();
     repo.create_user(NewUser {
         id: uuid::Uuid::new_v4(),
         username: "admin2".to_string(),
         password_hash: ph2,
-        role: auth::Role::Admin,
+        role: authn::Role::Admin,
         display_name: None,
         is_active: true,
         preferred_language: "en".to_string(),
@@ -515,18 +515,18 @@ async fn last_admin_cannot_be_demoted_by_another_admin() {
 
 #[tokio::test]
 async fn count_admins_starts_at_zero_and_increments() {
-    use agent_k_backend::{auth, repository::NewUser};
+    use agent_k_backend::{authn, repository::NewUser};
 
     let repo = common::make_repo().await;
 
     assert_eq!(repo.count_admins().await.unwrap(), 0);
 
-    let password_hash = auth::hash_password("adminpass1").unwrap();
+    let password_hash = authn::hash_password("adminpass1").unwrap();
     repo.create_user(NewUser {
         id: uuid::Uuid::new_v4(),
         username: "admin".to_string(),
         password_hash,
-        role: auth::Role::Admin,
+        role: authn::Role::Admin,
         display_name: None,
         is_active: true,
         preferred_language: "en".to_string(),
