@@ -172,7 +172,8 @@ SCRAPE_SLIDE_JS = r"""
     if (complexPaint) hasComplex = true;
     if (el !== slide && !complexPaint && parseFloat(cs.opacity) >= 0.99) {
       const bg = rgba(cs.backgroundColor);
-      const fill = bg && bg.a > 0.1 ? bg.hex : null;
+      const fill = bg && bg.a > 0.04 ? bg.hex : null;
+      const fillAlpha = fill ? bg.a : 1;   // keep faint tints faint (rgba alpha)
       const sides = [];
       for (const sd of ['Top', 'Right', 'Bottom', 'Left']) {
         const w = parseFloat(cs['border' + sd + 'Width']) || 0;
@@ -191,7 +192,7 @@ SCRAPE_SLIDE_JS = r"""
       if (fill || border) {
         el.setAttribute('data-pptx-shape', '1');
         shapes.push({
-          order, ...rel(r), fill, border,
+          order, ...rel(r), fill, fillAlpha, border,
           radius: parseFloat(cs.borderTopLeftRadius) || 0,
         });
       }
@@ -425,6 +426,21 @@ def _set_ea(run, typeface: str) -> None:
         el.set("typeface", typeface)
 
 
+def _set_fill_alpha(shp, alpha: float) -> None:
+    """Apply transparency to a shape's solid fill (DrawingML <a:alpha>), so an
+    rgba()/faint tint in the HTML stays faint instead of rendering fully opaque."""
+    from pptx.oxml.ns import qn
+
+    solid = shp._element.spPr.find(qn("a:solidFill"))
+    if solid is None:
+        return
+    clr = solid.find(qn("a:srgbClr"))
+    if clr is None:
+        return
+    val = max(0, min(100000, int(round(alpha * 100000))))   # 100% = 100000
+    clr.append(clr.makeelement(qn("a:alpha"), {"val": str(val)}))
+
+
 def build_pptx(slides: list[dict], out_path: Path) -> None:
     from pptx import Presentation
     from pptx.dml.color import RGBColor
@@ -444,7 +460,7 @@ def build_pptx(slides: list[dict], out_path: Path) -> None:
     blank = prs.slide_layouts[6]
     warnings: list = []
 
-    def add_rect(slide, l, t, w, h, fill=None, line=None, line_w=0, radius=0, idx=None):
+    def add_rect(slide, l, t, w, h, fill=None, fill_alpha=1.0, line=None, line_w=0, radius=0, idx=None):
         c = _clip(l, t, w, h, warnings, idx, "shape")
         if c is None:
             return None
@@ -457,6 +473,8 @@ def build_pptx(slides: list[dict], out_path: Path) -> None:
         if fill:
             shp.fill.solid()
             shp.fill.fore_color.rgb = RGBColor.from_string(fill)
+            if fill_alpha < 0.97:
+                _set_fill_alpha(shp, fill_alpha)   # preserve rgba transparency
         else:
             shp.fill.background()
         if line:
@@ -476,7 +494,7 @@ def build_pptx(slides: list[dict], out_path: Path) -> None:
         fill, bd, rad = s.get("fill"), s.get("border"), s.get("radius") or 0
         uniform = bd and bd["kind"] == "all"
         if fill or uniform:
-            add_rect(slide, l, t, w, h, fill=fill,
+            add_rect(slide, l, t, w, h, fill=fill, fill_alpha=s.get("fillAlpha", 1.0),
                      line=(bd["color"] if uniform else None),
                      line_w=(bd["w"] if uniform else 0), radius=rad, idx=idx)
         if bd and bd["kind"] == "sides":
