@@ -132,21 +132,18 @@ issues = verify("/workspace/artifacts/deck.pptx")
 print(summarize(issues))
 ```
 
-Six checks:
+Five checks:
 
 - `fonts` — CJK runs with no East-Asian typeface (tofu risk)
 - `sizes` — 5+ distinct sizes on one slide (one off-scale dramatic beat allowed)
 - `page_numbers` — title (1) or closing (N) slide carrying `n / N`
 - `overlap` — text boxes whose bboxes collide (layered/stacked pairs
   filtered out)
-- `dead_bottom` — content slide whose body content ends high, leaving a large
-  empty band at the bottom (the recurring dead-bottom; fix per Grid → "Fill
-  the canvas")
 - `palette` — discipline: flags palette **sprawl** (too many distinct
   non-neutral colors) and reports any color used on a single slide;
   advisory — lean on B for whether the palette fits the subject
 
-`fonts`/`sizes`/`page_numbers`/`overlap`/`dead_bottom` pass when their lists are empty.
+`fonts`/`sizes`/`page_numbers`/`overlap` pass when their lists are empty.
 (No `overflow`/`word_wrap` check — boxes are sized to browser-measured
 text and line breaks are frozen, so clipping/re-wrap can't happen; no
 chart check — charts are raster.) **Do not `read` `verify_pptx.py`** —
@@ -190,8 +187,15 @@ across all slides at once; zoom in only where needed. Check for
   present and recurring across slides
 - The last slide IS a closing pattern (mirrors the title)
 - Layouts vary — not every content slide using the same division
-- **No large dead space** — content fills the canvas, no blank lower band or
-  hollow column (Grid → "Fill the canvas")
+- **Scan each slide's lower third — on the contact sheet, not by opening every
+  PNG.** A big empty bottom band shows clearly even at thumbnail size. If a
+  content slide's lower band is empty — content marooned at the top, or a
+  card/column stretched tall but hollow below its text — that's a defect (not a
+  deliberate full-bleed / divider / closing). Fix it: a supporting visual, a
+  bottom takeaway band, vertical distribution, or larger type (Grid → "Fill the
+  canvas"). You can SEE here what geometry can't — a card whose content
+  genuinely fills it is fine; a hollow one is not. (Deep-read an individual
+  slide only when the thumbnail is ambiguous.)
 - Palette is composed from the subject and actually shows its Accent (not a
   stock-theme reflex — see "Palette")
 - **Distinctiveness check** — would this exact palette + layout fit an

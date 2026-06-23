@@ -8,10 +8,11 @@ Usage (inside the sandbox):
     issues = verify("/workspace/artifacts/deck.pptx")
     print(summarize(issues))
 
-`verify()` returns a dict with `slide_count` plus six check keys:
-`palette`, `fonts`, `sizes`, `page_numbers`, `overlap`, `dead_bottom`.
-An empty list per check = passed.
-Heuristic: catches the most-violated SKILL.md rules, not every nuance.
+`verify()` returns a dict with `slide_count` plus five check keys:
+`palette`, `fonts`, `sizes`, `page_numbers`, `overlap`. An empty list
+per check = passed. Heuristic: catches the most-violated SKILL.md rules,
+not every nuance. (Empty lower bands / dead space are left to the visual
+contact-sheet read — geometry can't tell hollow from full.)
 
 Decks are built by html2pptx.py, which DECOMPOSES each slide into native
 objects: editable text boxes (with FROZEN line breaks — `word_wrap=False`
@@ -453,52 +454,6 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
     return issues
 
 
-def check_dead_bottom(prs) -> list[tuple[int, int]]:
-    """Flag content slides whose real content ends high, leaving a big empty
-    band at the bottom (the recurring "dead-bottom" — short content top-aligned,
-    lower third blank). "Real content" = text boxes (excluding the footer band)
-    plus pictures/charts; empty container shapes and edge strips don't count, so
-    a stretched-but-hollow card is still caught.
-
-    Conservative — skips slide 1 (title), slide N (closing), and dramatic-beat
-    slides (a >= 56pt run marks a divider / hero / quote, which use space on
-    purpose). Returns list of (slide_idx, content_bottom_px).
-    """
-    PICTURE = 13               # MSO_SHAPE_TYPE.PICTURE
-    EMU_PX = 9525              # EMU per px at 96 dpi
-    FOOTER_TOP_PX = 620        # text starting below this is footer / page number
-    CONTENT_FLOOR_PX = 640     # content should reach near here (above the footer)
-    DEAD_BAND_PX = 200         # empty band below content larger than this → flag
-
-    n = len(prs.slides)
-    issues: list[tuple[int, int]] = []
-    for i, slide in enumerate(prs.slides, 1):
-        if i == 1 or i == n:
-            continue
-        max_bottom = 0.0
-        max_font = 0.0
-        has_content = False
-        for sh in slide.shapes:
-            if sh.top is None or sh.height is None:
-                continue
-            top = sh.top / EMU_PX
-            bottom = top + sh.height / EMU_PX
-            has_text = sh.has_text_frame and sh.text_frame.text.strip()
-            if has_text:
-                for para in sh.text_frame.paragraphs:
-                    for run in para.runs:
-                        if run.font.size:
-                            max_font = max(max_font, run.font.size.pt)
-            if (has_text and top < FOOTER_TOP_PX) or sh.shape_type == PICTURE:
-                has_content = True
-                max_bottom = max(max_bottom, bottom)
-        if not has_content or max_font >= 56:
-            continue
-        if CONTENT_FLOOR_PX - max_bottom > DEAD_BAND_PX:
-            issues.append((i, round(max_bottom)))
-    return issues
-
-
 # --- top-level ----------------------------------------------------------------
 
 def verify(pptx_path: str | Path) -> dict[str, Any]:
@@ -516,7 +471,6 @@ def verify(pptx_path: str | Path) -> dict[str, Any]:
         "sizes": check_size_discipline(prs),
         "page_numbers": check_page_numbers(prs),
         "overlap": check_overlap(prs),
-        "dead_bottom": check_dead_bottom(prs),
     }
 
 
@@ -535,8 +489,6 @@ def summarize(issues: dict[str, Any]) -> str:
         flags.append(f"{len(issues['page_numbers'])} page-number violations")
     if issues.get("overlap"):
         flags.append(f"{len(issues['overlap'])} text overlaps")
-    if issues.get("dead_bottom"):
-        flags.append(f"{len(issues['dead_bottom'])} slides with a dead bottom band")
     if not flags:
         return f"{n} slides — all checks passed ({p['distinct']} palette colors)."
     return f"{n} slides — issues: {' · '.join(flags)}"
