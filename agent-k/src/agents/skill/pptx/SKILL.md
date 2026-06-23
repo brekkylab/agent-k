@@ -253,9 +253,12 @@ consumes them:
 **Compose like this:**
 1. Pick a **hue family from the subject's world** (its key art, packaging,
    industry, mood) — not a reflex default.
-2. Set **Background + Surface** as near-neutral members of that family (a
-   warm off-white, a cool paper, a deliberate dark) — not plain `#FFFFFF`
-   unless that's a real choice.
+2. **Background / Surface**: the ground is yours to choose from the subject —
+   white, a clean tint, or a deliberate dark all work. Keep Surface a touch
+   lighter than Background (often `#FFFFFF`) so cards read against it. The one
+   thing to avoid is a **muddy, dingy off-white** (a dull cream/beige that
+   reads "dirty" rather than intentional) — if you tint the ground, keep it
+   crisp; when in doubt, near-white reads clean.
 3. Choose **one Accent with genuine contrast** against the background.
 4. Keep hues **tonal, not pure-saturation** (`#2563EB`, not `#0000FF`).
 5. Confirm **text-on-background contrast** is comfortably readable.
