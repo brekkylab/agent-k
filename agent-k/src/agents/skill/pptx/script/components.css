@@ -59,6 +59,7 @@ body { background:#525659; }        /* viewer chrome only — never captured */
   background: var(--bg);
   color: var(--primary);
   font-family: 'Noto Sans CJK KR', Calibri, Arial, sans-serif;
+  word-break: keep-all;             /* break Korean at word (space) boundaries — never split a syllable run like "배|송" */
   margin: 24px auto;                /* gap between slides in the viewer */
 }
 
