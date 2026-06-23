@@ -41,7 +41,6 @@ export interface Session {
   lastMessageSnippet: string | null;
   unreadCount: number;
   references: FileAsset['id'][];
-  artifactId?: string;
   isAutoAppend?: boolean;
   agentType: string | null;
   model: string | null;
@@ -91,19 +90,6 @@ export interface FileAsset {
   type: 'pdf' | 'sheet' | 'doc' | 'image' | 'folder';
   sizeLabel: string;
   updatedAt: string;
-  summary: string;
-  groundTruth: string[];
-}
-
-export interface Artifact {
-  id: string;
-  sessionId: SessionId;
-  title: string;
-  kind: 'team_decision_record';
-  status: 'draft' | 'ready';
-  generatedFromFileIds: FileAsset['id'][];
-  sections: Array<{ label: string; body: string; evidence?: FileAsset['id'][] }>;
-  nextActions: string[];
 }
 
 // ── Automation domain types ────────────────────────────────────────────────
@@ -149,6 +135,17 @@ export interface Trigger {
   nextFireAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A single upcoming scheduled fire, computed from a cron trigger's expression.
+ *  Not persisted; expanded on demand for the calendar view. `fireAt` is a UTC
+ *  ISO instant — views localize it for display. */
+export interface Occurrence {
+  triggerId: TriggerId;
+  automationId: AutomationId;
+  automationName: string;
+  fireAt: string;
+  tz: string | null;
 }
 
 /** Returned only at trigger-creation time. `webhookToken` is the one-shot

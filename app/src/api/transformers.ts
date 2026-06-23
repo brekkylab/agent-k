@@ -7,6 +7,7 @@ import type {
   FileAsset,
   Message,
   MessageSender,
+  Occurrence,
   PreferredLanguage,
   Project,
   Run,
@@ -23,6 +24,7 @@ import type {
   BackendAutomation,
   BackendDirent,
   BackendMember,
+  BackendOccurrence,
   BackendProject,
   BackendRun,
   BackendRunEvent,
@@ -272,10 +274,6 @@ export function toFileAsset(entry: BackendDirent, projectId: string, projectName
     type: entry.kind === 'dir' ? 'folder' : inferFileType(entry.path),
     sizeLabel: entry.kind === 'dir' ? 'folder' : formatBytes(entry.bytes ?? 0),
     updatedAt: entry.modified_at ? compactDate(entry.modified_at) : '—',
-    summary: '',
-    groundTruth: entry.kind === 'dir'
-      ? ['Persisted directory']
-      : ['Persisted file in backend storage'],
   };
 }
 
@@ -333,6 +331,16 @@ export function toTrigger(backend: BackendTrigger): Trigger {
     nextFireAt: backend.next_fire_at,
     createdAt: backend.created_at,
     updatedAt: backend.updated_at,
+  };
+}
+
+export function toOccurrence(backend: BackendOccurrence): Occurrence {
+  return {
+    triggerId: backend.trigger_id,
+    automationId: backend.automation_id,
+    automationName: backend.automation_name,
+    fireAt: backend.fire_at,
+    tz: backend.tz,
   };
 }
 

@@ -41,12 +41,39 @@
     "manual_confirm_body": "'{{name}}' 자동화를 지금 한 번 실행할까요?",
     "manual_confirm_label": "실행"
   },
+  "view": {
+    "aria": "보기 방식",
+    "list": "목록",
+    "calendar": "캘린더"
+  },
+  "calendar": {
+    "prev_month": "이전 달",
+    "next_month": "다음 달",
+    "today": "오늘",
+    "fires_count": "총 {{count}}건",
+    "more": "+{{count}}건 더",
+    "truncated": "이 구간에 표시된 것보다 더 많이 실행되는 일정이 있습니다.",
+    "empty_title": "예정된 실행이 없습니다",
+    "empty_hint": "이번 달에 실행되는 활성 schedule 트리거가 없습니다.",
+    "tz_note": "시간은 사용자의 로컬 시간대로 표시됩니다."
+  },
+  "occ_detail": {
+    "close_aria": "닫기",
+    "fires_at": "실행 시각",
+    "schedule": "일정",
+    "tz": "시간대",
+    "view_runs": "실행 보기",
+    "settings": "설정",
+    "empty_title": "Run을 선택하세요",
+    "empty_hint": "캘린더에서 항목을 클릭하면 상세 정보가 여기에 표시됩니다."
+  },
   "status": {
     "queued": "대기 중",
     "running": "실행 중",
     "succeeded": "성공",
     "failed": "실패",
-    "cancelled": "취소"
+    "cancelled": "취소",
+    "scheduled": "예약됨"
   },
   "tier": {
     "light": "경량",
@@ -223,6 +250,7 @@
     "cancel_aria": "취소",
     "bearer_token": "bearer 토큰",
     "edit_trigger_aria": "트리거 편집",
+    "duplicate_trigger_aria": "트리거 복제",
     "webhook_not_editable": "웹훅은 편집 불가",
     "edit": "편집",
     "delete_again": "한 번 더 눌러 삭제",
@@ -244,20 +272,30 @@
     "trigger_save_failed": "트리거 수정 실패: {{message}}"
   },
   "sched": {
-    "weekdays": ["일", "월", "화", "수", "목", "금", "토"],
+    "weekdays_short": ["일", "월", "화", "수", "목", "금", "토"],
+    "weekdays": ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"],
     "nth": ["첫째", "둘째", "셋째", "넷째", "다섯째"],
     "repeat_every": "반복 주기",
-    "repeat_mode": "반복 방식",
+    "repeat_mode": "방식",
+    "monthly_mode": {
+      "day": "날짜",
+      "weekday": "요일"
+    },
     "day_of_month": "며칠",
-    "day_suffix": "일",
+    "day_label": "{{day}}일",
+    "last_day": "말일",
+    "nth_last": "마지막",
     "detail": "상세",
     "weekday_label": "요일",
     "run_time": "실행 시각",
     "timezone": "시간대",
-    "interval_hint": "cron으로는 매시간 단위에서만 N>1을 지원합니다.",
+    "interval_label": "간격",
+    "interval_suffix": "시간마다",
+    "minute_suffix": "분마다",
     "cron_preview_title": "생성될 cron 표현식",
     "opt": {
-      "hourly": "시간마다",
+      "minutely": "분 단위",
+      "hourly": "시간 단위",
       "daily": "매일",
       "weekly": "매주",
       "monthly": "매월",
@@ -266,14 +304,20 @@
     "monthly_day_opt": "매월 {{day}}일",
     "monthly_weekday_opt": "매월 {{nth}} {{weekday}}요일",
     "weekday_option": "{{day}}요일",
+    "weekday_implied": "{{day}} (기본값)",
     "summary": {
+      "every_minute": "매분",
+      "every_n_minutes": "{{n}}분마다",
       "every_hour": "매시간",
       "every_n_hours": "{{n}}시간마다",
+      "oclock": "{{h}}시",
       "daily": "매일 {{time}}",
       "weekly_all": "매주 {{time}}",
       "weekly": "매주 {{days}}요일 {{time}}",
       "monthly_day": "매월 {{day}}일 {{time}}",
-      "monthly_weekday": "매월 {{nth}} {{weekday}}요일 {{time}}"
+      "monthly_last": "매월 말일 {{time}}",
+      "monthly_weekday": "매월 {{nth}} {{weekday}}요일 {{time}}",
+      "monthly_weekday_last": "매월 마지막 {{weekday}}요일 {{time}}"
     }
   },
   "webhook_dialog": {

@@ -3,6 +3,7 @@
 // multiline textarea.
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 import { AttachmentChip } from '@/components/AttachmentChip';
 
@@ -19,12 +20,14 @@ interface ProjectHomeComposerProps {
   disabled?: boolean;
   // While the send is being processed (waiting for session creation / stream start): show a spinner on the send button to indicate "sending".
   pending?: boolean;
-  // 현재 모델 선택이 실행 불가(가용 provider 없음)일 때 send 를 막고 힌트를 표시.
+  // Block send and show a hint when the current model selection can't run (no available provider).
   sendBlocked?: boolean;
   sendBlockedHint?: string;
   placeholder?: string;
-  // Entry point for adding files (placeholder — to be wired up to PR #114's attachment tray).
-  onAttachClick?: () => void;
+  // Local files staged for upload (uploaded to the new session's inputs/ on submit).
+  files?: File[];
+  onAddFiles?: (files: File[]) => void;
+  onRemoveFile?: (index: number) => void;
   // Shared (server) files staged for attach, picked from the shared-file dialog.
   // Referenced by global path — already on the server, so no upload on send.
   sharedFiles?: { globalPath: string; filename: string }[];
@@ -51,14 +54,18 @@ export function ProjectHomeComposer({
   sendBlocked = false,
   sendBlockedHint,
   placeholder = DEFAULT_PLACEHOLDER,
-  onAttachClick,
+  files = [],
+  onAddFiles,
+  onRemoveFile,
   sharedFiles = [],
   onPickShared,
   onRemoveShared,
   modelPicker,
   focusSignal,
 }: ProjectHomeComposerProps) {
+  const { t } = useTranslation('session');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const canSubmit = value.trim().length > 0 && !disabled && !sendBlocked;
 
   useEffect(() => {
@@ -90,14 +97,14 @@ export function ProjectHomeComposer({
     }
   };
 
-  const attachButton = onAttachClick && (
+  const attachButton = onAddFiles && (
     <button
       type="button"
       className="cw-attach-button"
-      onClick={onAttachClick}
+      onClick={() => fileInputRef.current?.click()}
       disabled={disabled}
-      aria-label="파일 추가"
-      title="파일 추가"
+      aria-label={t('ui.attach_file')}
+      title={t('ui.attach_file')}
     >
       <Icon name="paperclip" size={17} />
     </button>
@@ -117,7 +124,7 @@ export function ProjectHomeComposer({
   );
 
   const sendButton = (
-    <button type="submit" className="cw-send-button" aria-label="Send" disabled={!canSubmit || pending}>
+    <button type="submit" className="cw-send-button" aria-label={t('ui.send_aria')} disabled={!canSubmit || pending}>
       {pending ? <span className="cw-send-spinner" aria-hidden /> : <Icon name="send" size={12} />}
     </button>
   );
@@ -131,8 +138,8 @@ export function ProjectHomeComposer({
       }}
     >
       <div className="cw-home-composer-box">
-        {sharedFiles.length > 0 && (
-          <div className="cw-attach-tray" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '0 0 6px' }}>
+        {(files.length > 0 || sharedFiles.length > 0) && (
+          <div className="cw-attach-tray">
             {sharedFiles.map((item, i) => (
               <AttachmentChip
                 key={`s-${item.globalPath}`}
@@ -140,6 +147,14 @@ export function ProjectHomeComposer({
                 status="uploaded"
                 shared
                 onRemove={() => onRemoveShared?.(i)}
+              />
+            ))}
+            {files.map((file, i) => (
+              <AttachmentChip
+                key={`${file.name}-${i}`}
+                filename={file.name}
+                status="staged"
+                onRemove={() => onRemoveFile?.(i)}
               />
             ))}
           </div>
@@ -154,6 +169,15 @@ export function ProjectHomeComposer({
           disabled={disabled}
           rows={3}
         />
+        {onAddFiles && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => { onAddFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+          />
+        )}
         <div className="cw-home-composer-actions">
           {modelPicker}
           <span className="cw-home-composer-actions-spacer" />

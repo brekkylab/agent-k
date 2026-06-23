@@ -6,6 +6,7 @@ import { request } from './client';
 import type {
   BackendAutomation,
   BackendAutomationList,
+  BackendOccurrenceList,
   BackendRun,
   BackendRunEventList,
   BackendRunList,
@@ -17,6 +18,7 @@ import type {
 import {
   toAutomation,
   toCreatedTrigger,
+  toOccurrence,
   toRun,
   toRunEvent,
   toTrigger,
@@ -25,6 +27,7 @@ import type {
   Automation,
   AutomationId,
   CreatedTrigger,
+  Occurrence,
   Run,
   RunEvent,
   RunId,
@@ -115,14 +118,34 @@ export async function listTriggers(automationId: AutomationId): Promise<Trigger[
   return res.items.map(toTrigger);
 }
 
+/**
+ * Expand upcoming scheduled fires for all enabled cron triggers in a project,
+ * within `[from, to)`. Computed server-side from cron expressions (nothing is
+ * persisted). `from`/`to` are ISO instants.
+ */
+export async function listOccurrences(
+  projectRef: string,
+  from: string,
+  to: string,
+): Promise<{ items: Occurrence[]; truncated: boolean }> {
+  const qs = new URLSearchParams({ project_ref: projectRef, from, to }).toString();
+  const res = await request<BackendOccurrenceList>(`/automations/occurrences?${qs}`);
+  return { items: res.items.map(toOccurrence), truncated: res.truncated };
+}
+
 /** Returns the created trigger plus the one-time `webhookToken` (webhook only). */
 export async function createTrigger(
   automationId: AutomationId,
   spec: TriggerSpec,
+  opts?: { enabled?: boolean },
 ): Promise<CreatedTrigger> {
+  const body = {
+    ...specToBody(spec),
+    ...(opts?.enabled !== undefined ? { enabled: opts.enabled } : {}),
+  };
   const raw = await request<CreatedTriggerResponse>(
     `/automations/${automationId}/triggers`,
-    { method: 'POST', body: specToBody(spec) },
+    { method: 'POST', body },
   );
   return toCreatedTrigger(raw);
 }
@@ -177,6 +200,20 @@ export async function listRuns(
   const res = await request<BackendRunList>(
     `/automations/${automationId}/runs${qs ? `?${qs}` : ''}`,
   );
+  return res.items.map(toRun);
+}
+
+/**
+ * Automation runs across a project whose scheduled time falls in `[from, to)`
+ * — the calendar's realized (past) slots. `from`/`to` are ISO.
+ */
+export async function listRunsInWindow(
+  projectRef: string,
+  from: string,
+  to: string,
+): Promise<Run[]> {
+  const qs = new URLSearchParams({ project_ref: projectRef, from, to }).toString();
+  const res = await request<BackendRunList>(`/automations/runs?${qs}`);
   return res.items.map(toRun);
 }
 

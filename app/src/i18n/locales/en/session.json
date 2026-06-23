@@ -56,7 +56,6 @@
     "remove": "Remove",
     "up": "Back",
     "drag_hint": "Drag into the chat to attach",
-    "attach_limit": "You can attach up to {{max}} files at once.",
     "drag_items": "{{count}} files",
     "empty_title": "No shared files",
     "empty_body": "Project shared files appear here. Drag one into the chat to attach it."

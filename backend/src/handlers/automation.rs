@@ -6,7 +6,7 @@ use axum::{
     extract::{Extension, Path, Query, State},
     http::{HeaderMap, StatusCode, header::AUTHORIZATION},
 };
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -17,9 +17,9 @@ use crate::{
     error::{ApiResult, AppError},
     model::{
         AutomationListResponse, AutomationResponse, CreateAutomationRequest, CreateTriggerRequest,
-        CreatedTriggerResponse, EventListResponse, EventResponse, RunListResponse, RunResponse,
-        TriggerListResponse, TriggerResponse, TriggerSpec, UpdateAutomationRequest,
-        UpdateTriggerRequest,
+        CreatedTriggerResponse, EventListResponse, EventResponse, OccurrenceListResponse,
+        OccurrenceResponse, RunListResponse, RunResponse, TriggerListResponse, TriggerResponse,
+        TriggerSpec, UpdateAutomationRequest, UpdateTriggerRequest,
     },
     repository::{DbAutomation, RepositoryError},
     state::AppState,
@@ -194,9 +194,10 @@ pub async fn create_trigger(
     State(state): State<Arc<AppState>>,
     Extension(auth_user): Extension<AuthUser>,
     Path(automation_id): Path<Uuid>,
-    Json(spec): Json<CreateTriggerRequest>,
+    Json(payload): Json<CreateTriggerRequest>,
 ) -> ApiResult<(StatusCode, Json<CreatedTriggerResponse>)> {
     require_automation_access(&state, auth_user.id, automation_id).await?;
+    let CreateTriggerRequest { spec, enabled } = payload;
 
     let (token_hash, plaintext) = if matches!(spec, TriggerSpec::Webhook { .. }) {
         let token = generate_webhook_token();
@@ -217,7 +218,7 @@ pub async fn create_trigger(
 
     let trigger = state
         .repository
-        .create_trigger(automation_id, &spec, token_hash, next_fire_at)
+        .create_trigger_with_enabled(automation_id, &spec, enabled, token_hash, next_fire_at)
         .await
         .map_err(|e| match e {
             RepositoryError::UniqueViolation(_) => {
@@ -334,6 +335,145 @@ pub async fn delete_trigger(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── occurrences (computed schedule preview) ──────────────────────────────────
+
+/// Hard caps so a dense cron (e.g. minutely) over a wide window can't blow up
+/// the response or CPU. Per-trigger so one busy trigger doesn't starve others.
+const OCCURRENCE_PER_TRIGGER_MAX: usize = 500;
+const OCCURRENCE_WINDOW_MAX_DAYS: i64 = 366;
+
+#[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct OccurrencesQuery {
+    /// Project UUID, active slug, or retired slug — required.
+    pub project_ref: Option<String>,
+    /// Window start (RFC3339); defaults to now.
+    pub from: Option<DateTime<Utc>>,
+    /// Window end (RFC3339, exclusive); defaults to `from` + 31 days.
+    pub to: Option<DateTime<Utc>>,
+}
+
+/// GET /automations/occurrences?project_ref=&from=&to=
+/// Expands every enabled cron trigger in the project into its upcoming fire
+/// times within the window. Nothing is persisted — the cron expression alone
+/// determines all future instants, so this is pure computation over the live
+/// trigger set. A malformed stored expression is skipped (logged), not fatal.
+pub async fn list_occurrences(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Query(q): Query<OccurrencesQuery>,
+) -> ApiResult<Json<OccurrenceListResponse>> {
+    let project_ref = q
+        .project_ref
+        .ok_or_else(|| AppError::bad_request("project_ref is required"))?;
+    let project_id = super::project::resolve_project_id(&state, &project_ref).await?;
+    require_member(&state, auth_user.id, project_id).await?;
+
+    let from = q.from.unwrap_or_else(Utc::now);
+    let to = q.to.unwrap_or_else(|| from + Duration::days(31));
+    if to <= from {
+        return Err(AppError::bad_request("`to` must be after `from`"));
+    }
+    if to - from > Duration::days(OCCURRENCE_WINDOW_MAX_DAYS) {
+        return Err(AppError::bad_request(format!(
+            "window too wide (max {OCCURRENCE_WINDOW_MAX_DAYS} days)"
+        )));
+    }
+
+    let triggers = state
+        .repository
+        .list_enabled_cron_triggers_in_project(project_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let default_tz = crate::cron::default_tz_name();
+    let mut items: Vec<OccurrenceResponse> = Vec::new();
+    let mut truncated = false;
+    for (trigger, automation_name) in triggers {
+        let spec = TriggerSpec::from_db(trigger.kind, &trigger.spec_json)
+            .map_err(|e| AppError::internal(format!("trigger spec decode: {e}")))?;
+        let TriggerSpec::Cron { expr, tz } = spec else {
+            continue; // defensive: query already filters kind = 'cron'
+        };
+        let tz_name = tz.as_deref().unwrap_or(default_tz);
+        let (fires, trig_truncated) = match crate::cron::occurrences_between(
+            &expr,
+            tz_name,
+            from,
+            to,
+            OCCURRENCE_PER_TRIGGER_MAX,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(trigger = %trigger.id, "occurrences expand skipped: {e}");
+                continue;
+            }
+        };
+        truncated |= trig_truncated;
+        items.extend(fires.into_iter().map(|fire_at| OccurrenceResponse {
+            trigger_id: trigger.id,
+            automation_id: trigger.automation_id,
+            automation_name: automation_name.clone(),
+            fire_at,
+            tz: tz.clone(),
+        }));
+    }
+    items.sort_by_key(|o| o.fire_at);
+
+    Ok(Json(OccurrenceListResponse { items, truncated }))
+}
+
+/// Cap on runs returned per window request (calendar buckets per day anyway).
+const RUN_WINDOW_MAX: i64 = 500;
+
+#[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct RunWindowQuery {
+    /// Project UUID, active slug, or retired slug — required.
+    pub project_ref: Option<String>,
+    /// Window start (RFC3339); defaults to now.
+    pub from: Option<DateTime<Utc>>,
+    /// Window end (RFC3339, exclusive); defaults to `from` + 31 days.
+    pub to: Option<DateTime<Utc>>,
+}
+
+/// GET /automations/runs?project_ref=&from=&to=
+/// Runs across the project whose `scheduled_for` falls in the window — the
+/// calendar's realized (past) slots, any trigger kind (the client filters).
+/// Pairs with `/automations/occurrences` (future predictions).
+pub async fn list_runs_window(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Query(q): Query<RunWindowQuery>,
+) -> ApiResult<Json<RunListResponse>> {
+    let project_ref = q
+        .project_ref
+        .ok_or_else(|| AppError::bad_request("project_ref is required"))?;
+    let project_id = super::project::resolve_project_id(&state, &project_ref).await?;
+    require_member(&state, auth_user.id, project_id).await?;
+
+    let from = q.from.unwrap_or_else(Utc::now);
+    let to = q.to.unwrap_or_else(|| from + Duration::days(31));
+    if to <= from {
+        return Err(AppError::bad_request("`to` must be after `from`"));
+    }
+    if to - from > Duration::days(OCCURRENCE_WINDOW_MAX_DAYS) {
+        return Err(AppError::bad_request(format!(
+            "window too wide (max {OCCURRENCE_WINDOW_MAX_DAYS} days)"
+        )));
+    }
+
+    let runs = state
+        .repository
+        .list_runs_in_window(project_id, from, to, RUN_WINDOW_MAX)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    Ok(Json(RunListResponse {
+        items: runs.into_iter().map(RunResponse::from).collect(),
+    }))
 }
 
 // ── runs / events (read-only) ────────────────────────────────────────────────
