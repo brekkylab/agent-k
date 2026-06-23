@@ -327,13 +327,18 @@ SCRAPE_SLIDE_JS = r"""
 
 # Visibility control injected as a single mutable <style id=pptx-ctl>.
 MODE_STYLES = {
-    # base picture: hide everything we emit natively, keep slide backdrop
+    # base picture: hide everything we emit natively, keep slide backdrop.
+    # The `[data-pptx-text] *` descendant rule matters: a child run such as
+    # <span style="color:…"> carries its own inline color, which a bare
+    # [data-pptx-text] rule would NOT override — so it leaks into the base
+    # raster and doubles the native text. The !important stylesheet rule wins
+    # over the inline (non-important) color.
     "base": "[data-pptx-shape]{background-color:transparent !important;border-color:transparent !important}"
-            "[data-pptx-text]{color:transparent !important;text-shadow:none !important}"
+            "[data-pptx-text],[data-pptx-text] *{color:transparent !important;text-shadow:none !important}"
             "[data-pptx-pic]{visibility:hidden !important}",
     # picture pass: media visible & isolated (transparent backdrop), shapes/text hidden
     "pics": "[data-pptx-shape]{background-color:transparent !important;border-color:transparent !important}"
-            "[data-pptx-text]{color:transparent !important;text-shadow:none !important}"
+            "[data-pptx-text],[data-pptx-text] *{color:transparent !important;text-shadow:none !important}"
             ".slide,body{background:transparent !important}",
 }
 SET_MODE_JS = """
