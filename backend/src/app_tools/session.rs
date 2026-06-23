@@ -42,9 +42,10 @@ fn list_sessions(ctx: &Arc<AppToolContext>) -> AppTool {
     let ctx = ctx.clone();
     let func = tool_func!(async |args: Value| -> Value with [ctx = ctx.clone()] {
         let project_id = arg_uuid(&args, "project_id").unwrap_or(ctx.project_id);
-        // Gate on project membership so a non-current project is only listed for
-        // members (resolver returns false otherwise).
-        if !ctx.authorize(Capability::ProjectRead, Resource::Project(Some(project_id))).await {
+        // Project-scoped session read: capability is SessionRead, scoped to the
+        // project so a non-current project is only listed for its members
+        // (resolver returns false otherwise).
+        if !ctx.authorize(Capability::SessionRead, Resource::Project(Some(project_id))).await {
             return denied("you cannot read sessions in that project");
         }
         let slug = ctx.project_slug(project_id).await;

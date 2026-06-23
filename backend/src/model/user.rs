@@ -55,17 +55,6 @@ impl From<DbUser> for UserResponse {
     }
 }
 
-/// `/me` payload: the user's profile plus the capabilities granted to their
-/// agents (read-only in the UI for now). Flattens [`UserResponse`] so existing
-/// clients that read user fields keep working.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct MeResponse {
-    #[serde(flatten)]
-    pub user: UserResponse,
-    /// Stable capability names (e.g. `automation.read`) the user's agents may use.
-    pub agent_capabilities: Vec<String>,
-}
-
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateMeRequest {

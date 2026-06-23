@@ -94,6 +94,12 @@ impl Capability {
             UserAdmin => "user.admin",
         }
     }
+
+    /// Parse a capability from its stable [`name`](Self::name). Unknown strings
+    /// (e.g. a stale persisted name) return `None` and are simply dropped.
+    pub fn from_name(s: &str) -> Option<Capability> {
+        Capability::ALL.into_iter().find(|c| c.name() == s)
+    }
 }
 
 /// Layer A: resolves whether the acting user is permitted, independent of any
@@ -153,6 +159,9 @@ impl PermissionResolver for RepoPermissionResolver {
             (MemberManage, Resource::Project(None)) => false,
 
             // ── Automation ──────────────────────────────────────────────────
+            // Project-scoped collection read (`list_automations` for a given
+            // project): gate on membership of that project.
+            (AutomationRead, Resource::Project(Some(pid))) => self.is_member(actor, *pid).await,
             (AutomationRead | AutomationRunRead, Resource::Automation(None)) => true,
             (AutomationRead | AutomationRunRead, Resource::Automation(Some(id))) => {
                 self.member_via_automation(actor, *id).await
@@ -174,6 +183,9 @@ impl PermissionResolver for RepoPermissionResolver {
             ) => self.member_via_automation(actor, *id).await,
 
             // ── Session (read-only) ─────────────────────────────────────────
+            // Project-scoped collection read (`list_sessions` for a given
+            // project): gate on membership of that project.
+            (SessionRead, Resource::Project(Some(pid))) => self.is_member(actor, *pid).await,
             (SessionRead, Resource::Session(None)) => true,
             (SessionRead, Resource::Session(Some(id))) => self
                 .repository

@@ -132,6 +132,19 @@ async fn non_member_denied_object_reads() {
             .authorize(Capability::ProjectRead, Resource::Project(Some(project)))
             .await
     );
+
+    // Project-scoped collection reads (list_automations / list_sessions) use the
+    // resource-specific capability, still gated on project membership.
+    for cap in [Capability::AutomationRead, Capability::SessionRead] {
+        assert!(
+            owner_ctx.authorize(cap, Resource::Project(Some(project))).await,
+            "member should pass {cap:?} on their project"
+        );
+        assert!(
+            !outsider_ctx.authorize(cap, Resource::Project(Some(project))).await,
+            "outsider should fail {cap:?} on a project they're not in"
+        );
+    }
 }
 
 /// Self-profile reads are scoped to the acting user.
@@ -230,4 +243,29 @@ fn read_only_policy_grants_expected_set() {
     ] {
         assert!(!p.grants(cap), "expected read-only policy to deny {cap:?}");
     }
+}
+
+#[test]
+fn effective_intersects_member_and_ceiling() {
+    use Capability::*;
+    // Both unset → no limit (all).
+    assert!(AgentPolicy::effective(None, None).grants(AutomationDelete));
+
+    // Ceiling limits to read; member unset inherits the ceiling.
+    let p = AgentPolicy::effective(None, Some(r#"["automation.read"]"#));
+    assert!(p.grants(AutomationRead));
+    assert!(!p.grants(AutomationDelete));
+
+    // Member narrows within an unlimited ceiling.
+    let p = AgentPolicy::effective(Some(r#"["session.read"]"#), None);
+    assert!(p.grants(SessionRead));
+    assert!(!p.grants(AutomationRead));
+
+    // Member asks for more than the ceiling allows → intersected away.
+    let p = AgentPolicy::effective(
+        Some(r#"["automation.delete","automation.read"]"#),
+        Some(r#"["automation.read"]"#),
+    );
+    assert!(p.grants(AutomationRead));
+    assert!(!p.grants(AutomationDelete));
 }

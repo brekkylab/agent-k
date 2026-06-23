@@ -224,9 +224,13 @@ def seed_rows(db: Path) -> None:
         (PROJECT_GTM, "gtm-2026-h2", "GTM 재설계 — 2026 H2", "메시지, ICP, launch sequence를 다시 묶는 team project", MILO_ID, ts(2), ts(2)),
     ]
     conn.executemany("INSERT INTO projects (id, slug, name, description, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", projects)
+    # The owner is a first-class member row (matches create_project + migration
+    # 0012's owner backfill). Each project lists its owner plus invited members.
     members = [
+        (PROJECT_KLIENT, OLIVE_ID, ts(1)),  # owner
         (PROJECT_KLIENT, MILO_ID, ts(3)),
         (PROJECT_KLIENT, OWEN_ID, ts(4)),
+        (PROJECT_GTM, MILO_ID, ts(2)),  # owner
         (PROJECT_GTM, OLIVE_ID, ts(5)),
     ]
     conn.executemany("INSERT INTO project_members (project_id, user_id, added_at) VALUES (?, ?, ?)", members)

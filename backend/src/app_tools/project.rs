@@ -69,7 +69,7 @@ fn list_members(ctx: &Arc<AppToolContext>) -> AppTool {
         match ctx.repository.list_project_members(project_id).await {
             Ok(rows) => ok(rows
                 .into_iter()
-                .map(|(u, _added_at)| json!({
+                .map(|(u, _added_at, _caps)| json!({
                     "user_id": u.id,
                     "username": u.username,
                     "display_name": u.display_name,

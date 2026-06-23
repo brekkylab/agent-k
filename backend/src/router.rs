@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aide::axum::{
     ApiRouter,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use axum::handler::Handler;
 
@@ -57,12 +57,20 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
                 .delete(handlers::delete_project),
         )
         .api_route(
+            "/projects/{project_ref}/agent-ceiling",
+            patch(handlers::set_project_agent_ceiling),
+        )
+        .api_route(
             "/projects/{project_ref}/members",
             get(handlers::list_members).post(handlers::add_member),
         )
         .api_route(
             "/projects/{project_ref}/members/{user_id}",
             delete(handlers::remove_member),
+        )
+        .api_route(
+            "/projects/{project_ref}/members/{user_id}/agent-capabilities",
+            patch(handlers::set_member_agent_capabilities),
         )
         .api_route(
             "/projects/{project_ref}/knowledge/status",

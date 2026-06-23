@@ -10,9 +10,8 @@ use uuid::Uuid;
 use crate::{
     authn::{AuthUser, Role, hash_password, validate_password, verify_password},
     error::{ApiResult, AppError},
-    app_tools::AgentPolicy,
     model::{
-        AdminCreateUserRequest, AdminUpdateUserRequest, MeResponse, UpdateMeRequest, UserListQuery,
+        AdminCreateUserRequest, AdminUpdateUserRequest, UpdateMeRequest, UserListQuery,
         UserListResponse, UserResponse,
     },
     repository::{NewUser, RepositoryError, UpdateUser},
@@ -34,7 +33,7 @@ fn validate_language(lang: &str) -> ApiResult<()> {
 pub async fn get_me(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
-) -> ApiResult<Json<MeResponse>> {
+) -> ApiResult<Json<UserResponse>> {
     let user = state
         .repository
         .get_user_by_id(auth.id)
@@ -42,17 +41,14 @@ pub async fn get_me(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("user not found"))?;
 
-    Ok(Json(MeResponse {
-        user: UserResponse::from(user),
-        agent_capabilities: AgentPolicy::for_user(auth.id).granted_names(),
-    }))
+    Ok(Json(UserResponse::from(user)))
 }
 
 pub async fn update_me(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
     Json(payload): Json<UpdateMeRequest>,
-) -> ApiResult<Json<MeResponse>> {
+) -> ApiResult<Json<UserResponse>> {
     let new_password_hash = if let Some(ref new_password) = payload.password {
         validate_password(new_password)?;
 
@@ -96,10 +92,7 @@ pub async fn update_me(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("user not found"))?;
 
-    Ok(Json(MeResponse {
-        user: UserResponse::from(updated),
-        agent_capabilities: AgentPolicy::for_user(auth.id).granted_names(),
-    }))
+    Ok(Json(UserResponse::from(updated)))
 }
 
 pub async fn list_users(

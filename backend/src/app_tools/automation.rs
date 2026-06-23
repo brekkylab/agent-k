@@ -70,9 +70,10 @@ fn list_automations(ctx: &Arc<AppToolContext>) -> AppTool {
     let ctx = ctx.clone();
     let func = tool_func!(async |args: Value| -> Value with [ctx = ctx.clone()] {
         let project_id = arg_uuid(&args, "project_id").unwrap_or(ctx.project_id);
-        // Membership is checked at the project level so a non-current project is
-        // only visible to members (resolver returns false otherwise).
-        if !ctx.authorize(Capability::ProjectRead, Resource::Project(Some(project_id))).await {
+        // Project-scoped automation read: capability is AutomationRead, scoped to
+        // the project so a non-current project is only visible to its members
+        // (resolver returns false otherwise).
+        if !ctx.authorize(Capability::AutomationRead, Resource::Project(Some(project_id))).await {
             return denied("you cannot read automations in that project");
         }
         let slug = ctx.project_slug(project_id).await;

@@ -18,6 +18,9 @@ pub struct DbProject {
     /// PDF engine for the knowledge corpus ("kreuzberg" | "docling");
     /// `None` = "kreuzberg".
     pub pdf_engine: Option<String>,
+    /// Project-level ceiling on agent capabilities (Layer B1) as a JSON array of
+    /// capability names; `None` = no limit (all capabilities allowed).
+    pub agent_capability_ceiling: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -41,6 +44,9 @@ impl SqliteRepository {
                 .try_get::<Option<String>, _>("recommended_chains")
                 .unwrap_or(None),
             pdf_engine: row.try_get::<Option<String>, _>("pdf_engine").unwrap_or(None),
+            agent_capability_ceiling: row
+                .try_get::<Option<String>, _>("agent_capability_ceiling")
+                .unwrap_or(None),
             created_at: Self::parse_timestamp(
                 row.get::<String, _>("created_at"),
                 "projects.created_at",
@@ -61,6 +67,7 @@ impl SqliteRepository {
     ) -> RepositoryResult<DbProject> {
         let id = Uuid::new_v4();
         let now = Self::now_string();
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO projects (id, slug, name, description, owner_id, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -72,9 +79,19 @@ impl SqliteRepository {
         .bind(owner_id.to_string())
         .bind(&now)
         .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| Self::map_db_error(e, "projects.slug"))?;
+
+        // The owner is a first-class member row (Layer B2 grant lives here too).
+        sqlx::query("INSERT INTO project_members (project_id, user_id, added_at) VALUES (?, ?, ?)")
+            .bind(id.to_string())
+            .bind(owner_id.to_string())
+            .bind(&now)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| Self::map_db_error(e, "project_members.user_id"))?;
+        tx.commit().await?;
 
         Ok(DbProject {
             id,
@@ -84,6 +101,7 @@ impl SqliteRepository {
             owner_id,
             recommended_chains: None,
             pdf_engine: None,
+            agent_capability_ceiling: None,
             created_at: Self::parse_timestamp(now.clone(), "projects.created_at")?,
             updated_at: Self::parse_timestamp(now, "projects.updated_at")?,
         })
@@ -91,7 +109,7 @@ impl SqliteRepository {
 
     pub async fn get_project(&self, id: Uuid) -> RepositoryResult<Option<DbProject>> {
         let row = sqlx::query(
-            "SELECT id, slug, name, description, owner_id, recommended_chains, pdf_engine, created_at, updated_at \
+            "SELECT id, slug, name, description, owner_id, recommended_chains, pdf_engine, agent_capability_ceiling, created_at, updated_at \
              FROM projects WHERE id = ?",
         )
         .bind(id.to_string())
@@ -102,7 +120,7 @@ impl SqliteRepository {
 
     pub async fn get_project_by_slug(&self, slug: &str) -> RepositoryResult<Option<DbProject>> {
         let row = sqlx::query(
-            "SELECT id, slug, name, description, owner_id, recommended_chains, pdf_engine, created_at, updated_at \
+            "SELECT id, slug, name, description, owner_id, recommended_chains, pdf_engine, agent_capability_ceiling, created_at, updated_at \
              FROM projects WHERE slug = ?",
         )
         .bind(slug)
@@ -114,7 +132,7 @@ impl SqliteRepository {
     pub async fn list_projects_for_user(&self, user_id: Uuid) -> RepositoryResult<Vec<DbProject>> {
         let uid = user_id.to_string();
         let rows = sqlx::query(
-            "SELECT DISTINCT p.id, p.slug, p.name, p.description, p.owner_id, p.recommended_chains, p.pdf_engine, p.created_at, p.updated_at
+            "SELECT DISTINCT p.id, p.slug, p.name, p.description, p.owner_id, p.recommended_chains, p.pdf_engine, p.agent_capability_ceiling, p.created_at, p.updated_at
              FROM projects p
              LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?1
              WHERE p.owner_id = ?1 OR pm.user_id IS NOT NULL
@@ -209,6 +227,61 @@ impl SqliteRepository {
             .ok_or_else(|| RepositoryError::InvalidData("project disappeared after update".into()))
     }
 
+    /// Set the project-level agent capability ceiling (Layer B1). `None` clears
+    /// it (no limit / all capabilities allowed). `caps` is a JSON array of
+    /// capability names.
+    pub async fn set_agent_capability_ceiling(
+        &self,
+        project_id: Uuid,
+        caps: Option<String>,
+    ) -> RepositoryResult<()> {
+        sqlx::query("UPDATE projects SET agent_capability_ceiling = ?, updated_at = ? WHERE id = ?")
+            .bind(&caps)
+            .bind(Self::now_string())
+            .bind(project_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// A member's per-project agent capability grant (Layer B2) as a JSON array
+    /// of capability names. `None` = unset (inherit the project ceiling). Also
+    /// `None` for the owner or a non-member (no `project_members` row).
+    pub async fn get_member_agent_capabilities(
+        &self,
+        project_id: Uuid,
+        user_id: Uuid,
+    ) -> RepositoryResult<Option<String>> {
+        let row = sqlx::query(
+            "SELECT agent_capabilities FROM project_members WHERE project_id = ? AND user_id = ?",
+        )
+        .bind(project_id.to_string())
+        .bind(user_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| r.get::<Option<String>, _>("agent_capabilities")))
+    }
+
+    /// Set a member's per-project agent capability grant. `None` resets it to
+    /// "inherit ceiling". Returns `false` if the user isn't a member row (e.g.
+    /// the owner, who has no `project_members` entry).
+    pub async fn set_member_agent_capabilities(
+        &self,
+        project_id: Uuid,
+        user_id: Uuid,
+        caps: Option<String>,
+    ) -> RepositoryResult<bool> {
+        let result = sqlx::query(
+            "UPDATE project_members SET agent_capabilities = ? WHERE project_id = ? AND user_id = ?",
+        )
+        .bind(&caps)
+        .bind(project_id.to_string())
+        .bind(user_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn delete_project(&self, id: Uuid) -> RepositoryResult<bool> {
         let result = sqlx::query("DELETE FROM projects WHERE id = ?")
             .bind(id.to_string())
@@ -247,24 +320,27 @@ impl SqliteRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn list_project_members(
         &self,
         project_id: Uuid,
-    ) -> RepositoryResult<Vec<(crate::repository::DbUser, chrono::DateTime<chrono::Utc>)>> {
+    ) -> RepositoryResult<
+        Vec<(
+            crate::repository::DbUser,
+            chrono::DateTime<chrono::Utc>,
+            Option<String>,
+        )>,
+    > {
         let pid = project_id.to_string();
+        // The owner is a normal project_members row (see create_project +
+        // migration 0012 backfill), so a single join covers everyone.
         let rows = sqlx::query(
             "SELECT u.id, u.username, u.password_hash, u.role, u.display_name, u.is_active,
-                    u.preferred_language, u.created_at, u.updated_at, p.created_at AS added_at
-             FROM projects p
-             JOIN users u ON u.id = p.owner_id
-             WHERE p.id = ?1
-             UNION ALL
-             SELECT u.id, u.username, u.password_hash, u.role, u.display_name, u.is_active,
-                    u.preferred_language, u.created_at, u.updated_at, pm.added_at
+                    u.preferred_language, u.created_at, u.updated_at, pm.added_at,
+                    pm.agent_capabilities
              FROM project_members pm
              JOIN users u ON u.id = pm.user_id
              WHERE pm.project_id = ?1
-               AND pm.user_id <> (SELECT owner_id FROM projects WHERE id = ?1)
              ORDER BY added_at ASC",
         )
         .bind(&pid)
@@ -275,8 +351,9 @@ impl SqliteRepository {
             .map(|r| {
                 let added_at =
                     Self::parse_timestamp(r.get::<String, _>("added_at"), "pm.added_at")?;
+                let caps = r.get::<Option<String>, _>("agent_capabilities");
                 let user = Self::row_to_db_user(&r)?;
-                Ok((user, added_at))
+                Ok((user, added_at, caps))
             })
             .collect()
     }

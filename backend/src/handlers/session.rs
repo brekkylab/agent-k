@@ -135,10 +135,30 @@ pub async fn build_session_agent(
             .await
             .map_err(|e| e.to_string())?
         }
-        // Buddy is the app-control surface: hand it the read-only app tools,
-        // scoped to the session creator's permissions.
+        // Buddy is the app-control surface: hand it the app tools, scoped to
+        // the effective agent policy for the session creator in this project
+        // (member grant ∩ project ceiling).
         AgentType::Buddy => {
-            let extra_tools = creator_id.map(|uid| {
+            let extra_tools = if let Some(uid) = creator_id {
+                // Layer B1: project ceiling (None = no limit). Layer B2: this
+                // member's grant (None for owner/non-member → inherit ceiling).
+                let ceiling = state
+                    .repository
+                    .get_project(project_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|p| p.agent_capability_ceiling);
+                let member = state
+                    .repository
+                    .get_member_agent_capabilities(project_id, uid)
+                    .await
+                    .ok()
+                    .flatten();
+                let agent_policy = crate::app_tools::AgentPolicy::effective(
+                    member.as_deref(),
+                    ceiling.as_deref(),
+                );
                 let resolver: std::sync::Arc<dyn crate::authz::PermissionResolver> =
                     std::sync::Arc::new(crate::authz::RepoPermissionResolver::new(
                         state.repository.clone(),
@@ -146,13 +166,15 @@ pub async fn build_session_agent(
                 let ctx = std::sync::Arc::new(crate::app_tools::AppToolContext {
                     repository: state.repository.clone(),
                     resolver,
-                    agent_policy: crate::app_tools::AgentPolicy::for_user(uid),
+                    agent_policy,
                     acting_user_id: uid,
                     project_id,
                     session_id,
                 });
-                crate::app_tools::build_app_tools(ctx)
-            });
+                Some(crate::app_tools::build_app_tools(ctx))
+            } else {
+                None
+            };
             agent_k::agents::get_buddy_agent(TOP_LEVEL_AGENT_NAME, &model, extra_tools)
                 .map_err(|e| e.to_string())?
         }
@@ -654,7 +676,7 @@ pub async fn update_session(
             .list_project_members(session.project_id)
             .await
         {
-            for (member, _) in members {
+            for (member, _, _) in members {
                 if member.id == session.creator_id {
                     continue;
                 }

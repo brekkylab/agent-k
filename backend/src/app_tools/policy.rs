@@ -7,8 +7,6 @@
 
 use std::collections::HashSet;
 
-use uuid::Uuid;
-
 use crate::authz::Capability;
 
 /// Layer B: the set of capabilities granted to a particular agent. Always a
@@ -47,12 +45,30 @@ impl AgentPolicy {
         Self::new(Capability::ALL)
     }
 
-    /// The policy granted to `_user_id`'s agents. The single source of truth for
-    /// both agent construction and the settings UI. Defaults to the full
-    /// capability set for everyone; this is the seam where per-user settings
-    /// (and later RBAC) will narrow it.
-    pub fn for_user(_user_id: Uuid) -> Self {
-        Self::all()
+    /// Parse a stored JSON array of capability names into a set. Unknown names
+    /// are dropped. `None` (unset) yields `None` so callers can apply their own
+    /// default. A malformed string is treated as an empty grant (logged).
+    pub fn from_stored(json: Option<&str>) -> Option<Self> {
+        let json = json?;
+        match serde_json::from_str::<Vec<String>>(json) {
+            Ok(names) => Some(Self::new(
+                names.iter().filter_map(|n| Capability::from_name(n)),
+            )),
+            Err(e) => {
+                tracing::warn!("invalid agent_capabilities JSON, treating as empty: {e}");
+                Some(Self::new([]))
+            }
+        }
+    }
+
+    /// The effective agent policy = member grant ∩ project ceiling (Layer B).
+    /// `member` / `ceiling` are the stored JSON arrays (`None` = unset):
+    ///   ceiling unset → no project limit (all capabilities)
+    ///   member unset  → inherit the (possibly all) ceiling
+    pub fn effective(member: Option<&str>, ceiling: Option<&str>) -> Self {
+        let ceiling = Self::from_stored(ceiling).unwrap_or_else(Self::all);
+        let member = Self::from_stored(member).unwrap_or_else(|| ceiling.clone());
+        Self::new(member.granted.intersection(&ceiling.granted).copied())
     }
 
     pub fn grants(&self, cap: Capability) -> bool {

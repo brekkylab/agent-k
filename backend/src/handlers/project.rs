@@ -14,7 +14,7 @@ use crate::{
     handlers::session::cleanup_session_resources,
     model::{
         AddMemberRequest, CreateProjectRequest, ProjectListResponse, ProjectMemberListResponse,
-        ProjectMemberResponse, ProjectResponse, UpdateProjectRequest,
+        ProjectMemberResponse, ProjectResponse, SetAgentCapabilitiesRequest, UpdateProjectRequest,
     },
     repository::{RepositoryError, RepositoryResult, SqliteRepository},
     state::AppState,
@@ -390,15 +390,92 @@ pub async fn list_members(
 
     let items = members
         .into_iter()
-        .map(|(u, added_at)| ProjectMemberResponse {
+        .map(|(u, added_at, caps)| ProjectMemberResponse {
             user_id: u.id,
             username: u.username,
             display_name: u.display_name,
             added_at,
+            agent_capabilities: caps
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok()),
         })
         .collect();
 
     Ok(Json(ProjectMemberListResponse { items }))
+}
+
+/// Validate + serialize a capability-name list to the stored JSON form.
+/// `None` (clear) stays `None`; unknown names are a client error.
+fn capabilities_to_json(caps: Option<Vec<String>>) -> ApiResult<Option<String>> {
+    match caps {
+        None => Ok(None),
+        Some(names) => {
+            for n in &names {
+                if crate::authz::Capability::from_name(n).is_none() {
+                    return Err(AppError::bad_request(format!("unknown capability: {n}")));
+                }
+            }
+            let json = serde_json::to_string(&names)
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            Ok(Some(json))
+        }
+    }
+}
+
+/// PATCH /projects/{project_ref}/agent-ceiling — owner only.
+/// Sets the project-level agent capability ceiling (`capabilities: null` = no limit).
+pub async fn set_project_agent_ceiling(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(project_ref): Path<String>,
+    Json(payload): Json<SetAgentCapabilitiesRequest>,
+) -> ApiResult<Json<ProjectResponse>> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
+    require_owner(&state, auth_user.id, project_id).await?;
+
+    let json = capabilities_to_json(payload.capabilities)?;
+    state
+        .repository
+        .set_agent_capability_ceiling(project_id, json)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+
+    let project = state
+        .repository
+        .get_project(project_id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("project not found"))?;
+    Ok(Json(ProjectResponse::from(project)))
+}
+
+/// PATCH /projects/{project_ref}/members/{user_id}/agent-capabilities
+/// A member sets their own per-project agent capability grant (`null` = inherit
+/// the ceiling). Only the member themselves may edit it.
+pub async fn set_member_agent_capabilities(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path((project_ref, user_id)): Path<(String, Uuid)>,
+    Json(payload): Json<SetAgentCapabilitiesRequest>,
+) -> ApiResult<StatusCode> {
+    let project_id = resolve_project_id(&state, &project_ref).await?;
+    if user_id != auth_user.id {
+        return Err(AppError::forbidden(
+            "you can only edit your own agent capabilities",
+        ));
+    }
+
+    let json = capabilities_to_json(payload.capabilities)?;
+    let updated = state
+        .repository
+        .set_member_agent_capabilities(project_id, user_id, json)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !updated {
+        // No member row — not a member, or the project owner (who has none).
+        return Err(AppError::not_found("not a member of this project"));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /projects/{project_ref}/members — owner only, body: { username }
