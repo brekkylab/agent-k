@@ -187,11 +187,10 @@ across all slides at once; zoom in only where needed. Check for
   present and recurring across slides
 - The last slide IS a closing pattern (mirrors the title)
 - Layouts vary — not every content slide using the same division
-- **No large dead space** — content fills the canvas; the bottom third
-  isn't blank and content isn't all stacked to one side (Grid → "Fill
-  the canvas"). Tall containers around short text are the usual cause
-- Palette is composed from the subject and actually shows its Accent — not
-  the default navy/blue/amber-on-white reflex
+- **No large dead space** — content fills the canvas, no blank lower band or
+  hollow column (Grid → "Fill the canvas")
+- Palette is composed from the subject and actually shows its Accent (not a
+  stock-theme reflex — see "Palette")
 - **Distinctiveness check** — would this exact palette + layout fit an
   unrelated subject just as well? If yes, it's a default: push the accent /
   signature toward something this subject justifies, and note what you changed
@@ -284,17 +283,26 @@ Pick faces that render identically in the sandbox and on opener machines:
   name isn't present. The EA typeface is set on every emitted run by the
   converter, so CJK survives the round-trip.
 
-`components.css` encodes the four-step scale as `.t-display` / `.t-title`
-/ `.t-body` / `.t-caption`:
+**Type scale — compose per deck, then lock it.** Like the palette, the four
+*roles* are fixed but the *sizes* are yours to set for THIS deck: define the
+four `--fs-*` variables once at the top (in the same `<style>` as the palette),
+then never deviate. `components.css` reads them via `.t-display` / `.t-title`
+/ `.t-body` / `.t-caption`.
 
-| Class | Px | Pt | Weight | Use |
+Size by the deck's density, and **size up to fill the canvas** — a slide is a
+big surface, so lean toward the larger end; a sparse deck reads empty with
+document-sized type:
+
+| Role | Var | Range (px) | Lean larger when… | Use |
 |---|---|---|---|---|
-| `.t-display` | 54 | 40 | Bold | Title/closing slides, large quotes |
-| `.t-title` | 32 | 24 | Bold | Slide titles, divider titles |
-| `.t-body` | 18 | 13.5 | Regular | Bullets, paragraphs, body text |
-| `.t-caption` | 11 | 8 | Bold UPPERCASE | Eyebrows, tags, footers, axis + stat labels |
+| Display | `--fs-display` | 48–72 | few words per slide | title/closing, large quotes |
+| Title | `--fs-title` | 30–44 | sparse decks | slide & divider titles |
+| Body | `--fs-body` | 18–24 | little body text | bullets, paragraphs |
+| Caption | `--fs-caption` | 10–13 | — | eyebrows, tags, footers, axis/stat labels |
 
-(Px values are what you author; the converter scales px×0.75 → pt.)
+Dense data deck → smaller end; message-light exec/cover deck → larger end.
+Whatever you pick, keep the four locked across every slide (the converter
+scales px×0.75 → pt; verify flags 5+ sizes on one slide).
 
 **Dramatic-beat sizes** sit *outside* the scale and are allowed on top
 of it — section-divider numerals (3–4× title), quote glyph (~4×
@@ -330,24 +338,23 @@ intentionally break the grid — those are the dramatic beats.
 *one* axis of asymmetry per deck and apply it consistently; don't
 randomize per slide.
 
-**Fill the canvas — the most common failure.** The body area is ~500 px
-tall (y 154 → 658); short content top-aligned in it leaves a dead bottom
-third. **That blank lower band is the #1 complaint — treat it as a
-defect to fix in verify-B, not a style choice.** Use the whole 1280×720:
+**Fill the canvas — the most common failure.** Short content marooned at the
+top with a dead band beneath is the #1 complaint. Treat empty space as a design
+material you place on purpose, not a gap left over:
 
-- **Never stretch a tall container around short content.** A `.card` or
-  column that spans the full `.body-area` height but holds 3 short lines
-  leaves a dead bottom. Either **size the container to its content**
-  (let it be short) or **distribute/vertically-center** the content
-  (`justify-content: space-between` / `center`) so it uses the height.
-- Spread content across **both axes**. If the left column is full and
-  the right is empty (or top full / bottom empty), rebalance: widen
-  columns, add a supporting visual, enlarge type, or increase spacing.
-- A two-column split should have **both columns roughly balanced** in
-  height — don't put 6 bullets left and 2 right with the rest blank.
-- Prefer fewer, larger, well-spaced elements over a tight cluster
-  floating in a sea of white. Generous *balanced* whitespace is design;
-  a blank lower half is a hole.
+- **Don't pool emptiness in one place.** A little air everywhere reads as
+  composed; one whole empty lower third reads as unfinished. If a region is
+  bare, the layout is unbalanced — redistribute until no single area is hollow.
+- **Use the space at scale.** When there's little to say, say it bigger —
+  larger type, a hero number, a bolder visual, more generous spacing. Don't
+  tuck a few lines into a corner and leave the rest blank; let the content
+  command the whole slide.
+- **Carry a sparse slide with a visual, not more white space.** If a slide is
+  becoming a short bullet list, reach for a **chart, table, timeline, or
+  diagram** instead — it fills the space *and* adds information. A text-only
+  slide that is also half-empty is the weakest slide in the deck.
+- **Balance the columns.** In a two-column or card layout both sides should
+  reach about the same depth and weight — never one full and one hollow.
 
 ---
 
@@ -427,7 +434,9 @@ within each — don't trace the same layout every deck.
   4–6 bullets max (3–4 for CJK). Title = takeaway sentence.
 - **Two-column comparison** — vertical hairline split, category tag atop
   each column (Secondary left, Accent right), 3–5 bullets each. Keep
-  left/right meaning consistent across all comparison slides.
+  left/right meaning consistent across all comparison slides. Give each column
+  a closing takeaway or key stat so it reads as substantial — not a tall box
+  with a few bullets floating at the top (the classic dead-bottom card).
 - **Metrics** — present numbers as a **styled table** or a **compact
   inline stat row** (`.stat-row` → `.stat-value` + uppercase
   `.stat-label` + optional `.stat-delta`). Do **not** use big "KPI
@@ -457,8 +466,7 @@ within each — don't trace the same layout every deck.
 - Third font, or 5+ sizes *from the four-step scale* on one slide
   (dramatic-beat sizes don't count)
 - Centered body text (only big stat values and divider numerals center)
-- Big "KPI card" metric tiles — use a styled table or a compact
-  `.stat-row` instead (tall metric cards read as empty / monotonous)
+- Big "KPI card" metric tiles — use a styled table or compact `.stat-row`
 - 7+ bullets on a content slide
 - Drop shadows, glow, gradients, 3D, clipart, SmartArt, default
   PowerPoint placeholders

@@ -13,14 +13,17 @@
 <head>
   <meta charset="utf-8">
   <link rel="stylesheet" href="components.css">
-  <!-- This deck's COMPOSED palette + a Latin font (override components.css).
-       For a calm, financial Q1 review we go deep-ink + slate teal with one
-       clay accent on warm paper — deliberately not the default navy/blue/amber. -->
+  <!-- This deck's COMPOSED palette + type scale + a Latin font (override
+       components.css). For a calm, financial Q1 review we go deep-ink + slate
+       teal with one clay accent on warm paper — deliberately not the default
+       navy/blue/amber — and a moderate scale (this deck is fairly data-dense). -->
   <style>
     :root{
       --primary:#16242B;   --secondary:#2F6E6A;  --accent:#C2542B;
       --bg:#F2EDE3;        --surface:#FFFFFF;    --muted:#6E7A78;
       --hairline:#DED8C9;  --positive:#2F7D4F;   --negative:#B23A30;
+      /* type scale composed for this deck (see SKILL.md "Type scale") */
+      --fs-display:58px;   --fs-title:34px;  --fs-body:19px;  --fs-caption:11px;
     }
     .slide{ font-family:'Calibri','Carlito',Arial,Helvetica,sans-serif; }
   </style>

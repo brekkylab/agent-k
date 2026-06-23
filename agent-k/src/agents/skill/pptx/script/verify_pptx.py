@@ -165,18 +165,19 @@ def check_fonts(prs) -> list[tuple[int, str]]:
             if _ea_typeface(run) is None:
                 snippet = text.strip()[:40]
                 issues.append((i, snippet))
-                # one report per run is enough; continue
     return issues
 
 
 def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
     """Flag slides that mix too many tier / out-of-tier sizes.
 
-    Tier bounds (~±30% around canonical pt): caption 8-15, body 16-24,
-    title 25-44, display 45-90. Sizes in the same tier collapse to one;
-    out-of-tier sizes count individually. Flag at 5+ distinct classes
-    per slide — with only four tiers, that requires all four plus a
-    stray size.
+    The scale is composed per deck (SKILL.md "Type scale"), so tiers are wide
+    bands covering its ranges: caption ≤11, body 12-20, title 21-35, display
+    36-90 pt. Sizes in the same tier collapse to one; out-of-tier sizes count
+    individually, except the first off-scale size per slide is a permitted
+    dramatic beat (hero number / divider numeral / quote glyph) and is not
+    counted. Flag at 5+ classes per slide — with only four tiers, that needs
+    all four plus 2+ off-scale sizes.
 
     Returns list of (slide_idx, sizes_found_on_slide).
     """
@@ -184,13 +185,13 @@ def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
     def tier(pt: int) -> str | None:
         if pt <= 0:
             return None
-        if 8 <= pt <= 15:
+        if pt <= 11:
             return "caption"
-        if 16 <= pt <= 24:
+        if pt <= 20:
             return "body"
-        if 25 <= pt <= 44:
+        if pt <= 35:
             return "title"
-        if 45 <= pt <= 90:
+        if pt <= 90:
             return "display"
         return None  # outside scale → dramatic-beat or out-of-range
 
@@ -212,7 +213,9 @@ def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
                         all_sizes.add(pt)
             except AttributeError:
                 continue
-        classes = len(tiers_used) + len(out_of_tier)
+        # One off-scale size per slide is an allowed dramatic beat (hero
+        # number, divider numeral, quote glyph) — don't count the first.
+        classes = len(tiers_used) + max(0, len(out_of_tier) - 1)
         if classes >= 5:
             issues.append((i, sorted(all_sizes)))
     return issues

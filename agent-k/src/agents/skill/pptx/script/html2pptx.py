@@ -11,10 +11,11 @@ than flattened into one image:
   - **Charts / images / SVG** (Chart.js `<canvas>`, `<img>`, inline
     `<svg>`) → each its OWN picture object (separate, movable), not
     fused into the slide. Their internal text is not editable (raster).
-  - **Page backdrop + anything not otherwise handled** → one full-bleed
-    base picture behind everything (a safety net so nothing vanishes).
+  - **Page backdrop** → the slide's solid background becomes a native
+    slide fill. Only un-modelable content (gradient / shadow /
+    background-image) falls back to a full-bleed base picture.
 
-Stacking follows document order (backdrop → shapes/pictures in DOM order
+Stacking follows document order (background → shapes/pictures in DOM order
 → text on top), so "photo behind cards behind chart, text on top" works.
 
 Usage (inside the sandbox):
