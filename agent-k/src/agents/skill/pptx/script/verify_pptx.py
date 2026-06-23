@@ -8,8 +8,9 @@ Usage (inside the sandbox):
     issues = verify("/workspace/artifacts/deck.pptx")
     print(summarize(issues))
 
-`verify()` returns a dict with five check keys: `palette`, `fonts`,
-`sizes`, `page_numbers`, `overlap`. An empty list per key = passed.
+`verify()` returns a dict with `slide_count` plus five check keys:
+`palette`, `fonts`, `sizes`, `page_numbers`, `overlap`. An empty list
+per check = passed.
 Heuristic: catches the most-violated SKILL.md rules, not every nuance.
 
 Decks are built by html2pptx.py, which DECOMPOSES each slide into native
@@ -24,7 +25,7 @@ whether the palette fits the subject.
 
 There is no `overflow` check (boxes are sized to browser-measured text,
 and frozen lines can't re-wrap), no `word_wrap` check (`word_wrap=False`
-is now the intended design everywhere), and no native-chart check (charts
+is the intended design everywhere), and no native-chart check (charts
 are raster pictures).
 """
 

@@ -135,7 +135,7 @@ print(summarize(issues))
 Five checks, on the emitted text boxes:
 
 - `fonts` — CJK runs with no East-Asian typeface (tofu risk)
-- `sizes` — 5+ distinct tier / out-of-tier sizes on one slide
+- `sizes` — 5+ distinct sizes on one slide (one off-scale dramatic beat allowed)
 - `page_numbers` — title (1) or closing (N) slide carrying `n / N`
 - `overlap` — text boxes whose bboxes collide (layered/stacked pairs
   filtered out)
@@ -205,9 +205,10 @@ visual passes total** — re-rendering after each tiny edit is the main
 reason a deck takes forever. In particular, **do not hand-chase CJK
 line-wrapping**: the converter **freezes the browser's exact line breaks**
 (text boxes are `word_wrap`-off with hard `<a:br/>` breaks), so
-soffice/PowerPoint render the same lines you saw in the browser — re-wrap
-and overflow can't happen. Intervene only on real layout issues
-(off-canvas overflow, element collisions, empty space).
+soffice/PowerPoint render the same lines you saw in the browser — the text
+can't re-wrap or reflow. (Off-canvas overflow is separate — that's the
+author placing content past the edge, and it still needs fixing.) Intervene
+only on real layout issues (off-canvas overflow, element collisions, empty space).
 
 Loop until both A and B pass — partial pass is failure.
 
@@ -312,7 +313,7 @@ display), Number-Cover hero (180–250 px). One per slide, sparingly.
 Korean reads "floaty." `components.css` applies `letter-spacing −1%`
 body / `−2%` titles and tighter line-height to `:lang(ko)`. **Assume
 content-slide titles wrap to 2 lines in Korean** — leave room in the
-title band, or step the title down to ~26–28 px.
+title band, or set `--fs-title` toward the lower end of its range.
 
 **One emphasis per slide** — bold *or* color, not both, one phrase max.
 
@@ -466,8 +467,8 @@ within each — don't trace the same layout every deck.
 
 - Text-only slide (no shapes doing work)
 - Default bullet characters (`●` `-` `>` `■`) — use `.bullets` markers
-- Third font, or 5+ sizes *from the four-step scale* on one slide
-  (dramatic-beat sizes don't count)
+- Third font, or 5+ distinct sizes on one slide (the four-step scale plus
+  more than one dramatic-beat size)
 - Centered body text (only big stat values and divider numerals center)
 - Big "KPI card" metric tiles — use a styled table or compact `.stat-row`
 - 7+ bullets on a content slide
