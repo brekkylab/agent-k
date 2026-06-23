@@ -132,18 +132,21 @@ issues = verify("/workspace/artifacts/deck.pptx")
 print(summarize(issues))
 ```
 
-Five checks, on the emitted text boxes:
+Six checks:
 
 - `fonts` — CJK runs with no East-Asian typeface (tofu risk)
 - `sizes` — 5+ distinct sizes on one slide (one off-scale dramatic beat allowed)
 - `page_numbers` — title (1) or closing (N) slide carrying `n / N`
 - `overlap` — text boxes whose bboxes collide (layered/stacked pairs
   filtered out)
+- `dead_bottom` — content slide whose body content ends high, leaving a large
+  empty band at the bottom (the recurring dead-bottom; fix per Grid → "Fill
+  the canvas")
 - `palette` — discipline: flags palette **sprawl** (too many distinct
   non-neutral colors) and reports any color used on a single slide;
   advisory — lean on B for whether the palette fits the subject
 
-`fonts`/`sizes`/`page_numbers`/`overlap` pass when their lists are empty.
+`fonts`/`sizes`/`page_numbers`/`overlap`/`dead_bottom` pass when their lists are empty.
 (No `overflow`/`word_wrap` check — boxes are sized to browser-measured
 text and line breaks are frozen, so clipping/re-wrap can't happen; no
 chart check — charts are raster.) **Do not `read` `verify_pptx.py`** —
