@@ -1,5 +1,6 @@
-//! Read-only automation tools: inspect automations, triggers, and run history
-//! for the projects the acting user can access.
+//! Automation tools: inspect automations, triggers, and run history, and
+//! create/update/run/delete automations for the projects the acting user can
+//! access. Each call is gated by the two-layer policy.
 //!
 //! Outputs are trimmed to what an agent needs to reason and report: `list_*`
 //! returns a brief summary per item; the `get_*` variant adds the detail.

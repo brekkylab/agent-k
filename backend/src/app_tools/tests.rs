@@ -1,5 +1,6 @@
 //! Permission-gate tests for app-control tools: the two layers (agent policy ∩
-//! user permission) and the capability/resource kind guard.
+//! user permission) and the resolver's (capability, resource) pairing — invalid
+//! pairs fall through to deny.
 
 use std::sync::Arc;
 

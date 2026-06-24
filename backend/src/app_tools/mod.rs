@@ -6,8 +6,9 @@
 //! against the session creator's identity. See [`policy`] for the two-layer
 //! permission model and [`context::AppToolContext`] for the per-call gate.
 //!
-//! v1 exposes **read-only** tools. Write/run/manage tools are deferred until
-//! per-user agent permission settings exist.
+//! The toolset spans read, write/run, and manage operations; which ones an
+//! agent actually sees is decided per call by its [`AgentPolicy`] (the
+//! per-(user, project) effective grant). Sessions remain read-only by design.
 
 mod automation;
 mod context;
@@ -43,9 +44,9 @@ impl AppTool {
     }
 }
 
-/// Build the read-only (v1) app-control toolset for `ctx`, filtered by the
-/// agent's policy. Returns [`ExtraTools`] ready to inject into an agent builder:
-/// only tools whose capability the policy grants are advertised and registered.
+/// Build the app-control toolset for `ctx`, filtered by the agent's policy.
+/// Returns [`ExtraTools`] ready to inject into an agent builder: only tools
+/// whose capability the policy grants are advertised and registered.
 pub fn build_app_tools(ctx: Arc<AppToolContext>) -> ExtraTools {
     let mut all: Vec<AppTool> = Vec::new();
     all.extend(automation::tools(&ctx));

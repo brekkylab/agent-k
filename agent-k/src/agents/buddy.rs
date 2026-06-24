@@ -4,8 +4,9 @@ use crate::agents::ExtraTools;
 
 /// Buddy is the lightweight conversational surface and the project's
 /// **app-control specialist**: brainstorming, casual chat, quick explanations,
-/// translation — plus, when the host injects them, read-only tools to inspect
-/// the app (automations, sessions, projects, members). Unlike
+/// translation — plus, when the host injects them, tools to operate the app
+/// (automations, sessions, projects, members), gated by the agent's policy.
+/// Unlike
 /// coworker/deep-research it runs without a sandbox — it owns no files and runs
 /// no code — so it is cheap to spin up and answers directly (with web search
 /// when a fact is needed).

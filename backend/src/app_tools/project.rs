@@ -1,5 +1,6 @@
-//! Read-only project tools: list the user's projects and a project's members.
-//! Outputs carry only what an agent needs to identify and reference them.
+//! Project tools: list the user's projects and a project's members, and
+//! add/remove members (owner-gated). Outputs carry only what an agent needs to
+//! identify and reference them.
 
 use std::sync::Arc;
 

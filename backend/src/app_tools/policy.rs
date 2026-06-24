@@ -2,8 +2,9 @@
 //!
 //! Always a subset of what the acting user can do — the user-level resolver
 //! ([`crate::authz::PermissionResolver`], Layer A) intersects on top in
-//! [`super::context::AppToolContext::authorize`]. The future home of this config
-//! is per-user settings.
+//! [`super::context::AppToolContext::authorize`]. The live policy is computed
+//! per (user, project) via [`AgentPolicy::effective`] from the project ceiling
+//! and the member's grant.
 
 use std::collections::HashSet;
 
@@ -23,8 +24,9 @@ impl AgentPolicy {
         }
     }
 
-    /// v1 default: read-only. No create/update/run/delete/member-manage/admin.
-    /// This is the fixed policy until per-user agent settings exist.
+    /// Read-only preset: grants reads only — no create/update/run/delete/
+    /// member-manage/admin. Used as a sensible fallback/default; the live policy
+    /// is normally `effective(member, ceiling)` from per-(user, project) settings.
     pub fn read_only() -> Self {
         use Capability::*;
         Self::new([

@@ -1,7 +1,8 @@
 // The current user's own per-project agent grant. "Inherit ceiling" sends null;
-// otherwise the explicitly checked subset. Capabilities outside the ceiling are
-// disabled — they'd be intersected away by the backend anyway (a null ceiling
-// means "all", so nothing is disabled then).
+// otherwise the explicitly checked subset, including picks outside the ceiling —
+// those are preserved (saved) but inert at runtime, since the backend intersects
+// the grant with the ceiling. The checklist keeps them selectable and flags them
+// (strikethrough + "inactive") rather than disabling them.
 //
 // The only gate is "is this the current user?" — the backend allows the member
 // themselves (owner or not) to edit their own grant, and 403s for anyone else.
