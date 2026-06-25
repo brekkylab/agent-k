@@ -235,7 +235,7 @@ function ProjectHome() {
       showToast(t('home.file_too_large', { max: Math.round(MAX_UPLOAD_BYTES / (1024 * 1024)) }), tooBig.map((f) => f.name));
     }
     if (ok.length === 0) return;
-    if (pendingFiles.length + ok.length > MAX_ATTACHMENTS) {
+    if (pendingFiles.length + pendingSharedRef.current.length + ok.length > MAX_ATTACHMENTS) {
       showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
       return;
     }

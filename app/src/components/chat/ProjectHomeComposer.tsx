@@ -116,8 +116,8 @@ export function ProjectHomeComposer({
       className="cw-attach-button"
       onClick={onPickShared}
       disabled={disabled}
-      aria-label="공유 파일 첨부"
-      title="공유 파일 첨부"
+      aria-label={t('ui.attach_shared')}
+      title={t('ui.attach_shared')}
     >
       <Icon name="folder" size={17} />
     </button>

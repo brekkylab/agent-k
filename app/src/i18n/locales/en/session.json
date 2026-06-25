@@ -17,6 +17,7 @@
     "response_delayed": "Response is taking longer than usual… You can stop it anytime with Esc.",
     "loading_history": "Loading earlier messages…",
     "attach_file": "Attach file",
+    "attach_shared": "Attach shared files",
     "self_label": "Me",
     "tool_running": "Running…",
     "send_aria": "Send",
