@@ -628,8 +628,9 @@ function SessionPage() {
     const uploading = pendingAttachments.some((a) => a.status === 'uploading');
     if (!text || !sessionId || streaming || uploading) return;
 
-    // overrideAttachments: files uploaded on the home composer, handed over via
-    // router state for the auto-sent first message.
+    // overrideAttachments: files attached on the home composer (uploaded files
+    // and/or shared-file paths), handed over via router state for the auto-sent
+    // first message.
     const attachmentPaths = overrideAttachments ?? pendingAttachments
       .filter((a) => a.status === 'uploaded' && a.globalPath)
       .map((a) => a.globalPath!);
@@ -749,9 +750,19 @@ function SessionPage() {
     const atts = initialAttachmentsRef.current ?? undefined;
     initialMessageRef.current = null;
     initialAttachmentsRef.current = null;
-    // Clear router state so a hard refresh doesn't resend, but don't block send on it.
-    void navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined, initialAttachments: undefined }) });
-    void send(msg, atts);
+    // Clear router state BEFORE sending so a hard refresh can't resend: await the
+    // replace so history.state no longer carries the initial message/attachments by
+    // the time send (and the network round-trip it awaits) begins. The guards above
+    // already ran synchronously, so this stays StrictMode-safe.
+    void (async () => {
+      try {
+        await navigate({ replace: true, state: (prev) => ({ ...prev, initialMessage: undefined, initialAttachments: undefined }) });
+      } catch {
+        // Clearing the state failed — still send. The worst case is the narrow
+        // resend-on-refresh window staying open, which beats dropping the message.
+      }
+      await send(msg, atts);
+    })();
   }, [session.data, send, navigate]);
 
   // WS session subscription — subscribe/unsubscribe when sessionId changes.

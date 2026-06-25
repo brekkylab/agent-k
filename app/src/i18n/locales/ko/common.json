@@ -13,6 +13,7 @@
     "move": "이동",
     "retry": "다시 시도",
     "logout": "로그아웃",
+    "done": "완료",
     "user_menu": "계정 메뉴",
     "user_settings": "사용자 설정"
   },

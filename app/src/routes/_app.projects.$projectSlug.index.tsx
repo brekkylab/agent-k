@@ -1,7 +1,7 @@
 // Project Home — a "new conversation" surface. Browsing past sessions lives in the
 // sidebar SESSIONS list + its "View all" overlay, not here.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +13,8 @@ import { AvatarStack } from '@/components/uiPrimitives';
 import { ProjectHomeComposer, type ProjectHomeComposerSubmission } from '@/components/chat/ProjectHomeComposer';
 import { ComposerModelPicker } from '@/components/chat/ComposerModelPicker';
 import { ComposerAgentPicker } from '@/components/chat/ComposerAgentPicker';
+import { SharedFilePickerDialog } from '@/components/SharedFilePickerDialog';
+import { type SessionImportItem } from '@/components/SharedFilesPanel';
 import { DEFAULT_AGENT_ID, type AgentId, type SuggestedPrompt } from '@/domain/agentSurfaces';
 import { useModelPrefsStore } from '@/stores/modelPrefs';
 import { useToastStore } from '@/components/Toast';
@@ -24,7 +26,8 @@ import { loadNs } from '@/i18n/loader';
 
 export const Route = createFileRoute('/_app/projects/$projectSlug/')({
   // Home composer + toasts live on `project`; `common` comes from parents.
-  // `session` is needed by AttachmentChip (its remove label lives there).
+  // `session` supplies the shared-file labels (import/added/…) the picker's column
+  // view reuses, and AttachmentChip's remove label.
   loader: () => loadNs('project', 'automation', 'session'),
   component: ProjectHome,
 });
@@ -49,8 +52,17 @@ function ProjectHome() {
   });
 
   const [composerText, setComposerText] = useState('');
-  // Files staged on the home composer — uploaded to the new session's inputs/ on submit.
+  // Local files staged on the home composer — uploaded to the new session's inputs/ on submit.
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  // Shared (server) files staged for attach — referenced by global path, no upload.
+  const [pendingShared, setPendingShared] = useState<SessionImportItem[]>([]);
+  // Synchronous mirror of pendingShared. addShared's cap/dedupe decision must see
+  // additions made earlier in the same tick (a closure over the state value can't),
+  // so it reads/advances this ref. Re-synced from state after every commit, so the
+  // other mutation paths (remove/clear) keep it correct too.
+  const pendingSharedRef = useRef<SessionImportItem[]>([]);
+  useEffect(() => { pendingSharedRef.current = pendingShared; }, [pendingShared]);
+  const [sharedPickerOpen, setSharedPickerOpen] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<AgentId>(DEFAULT_AGENT_ID);
   // Model selection is remembered per project + agent surface and persisted to
   // localStorage (see useModelPrefsStore): switching agents — or reloading —
@@ -105,40 +117,47 @@ function ProjectHome() {
   // Submit creates a session and hands the first message + selected agent to the
   // session page via router state, where it auto-streams on entry.
   const startSessionMutation = useMutation({
-    mutationFn: async ({ firstMessage, files }: { firstMessage: string; files: File[] }) => {
+    mutationFn: async (
+      { firstMessage, files, shared }: { firstMessage: string; files: File[]; shared: SessionImportItem[] },
+    ) => {
       const session = await createSession(projectSlug, {
         agentType: selectedAgentId,
         model: selectedModel,
       });
-      // Upload staged files into the new session's inputs/ and collect their paths.
+      // Shared files already live on the server, so just reference their global
+      // paths. Local files are uploaded into the new session's inputs/ and
+      // contribute their resulting paths. Both ride initialAttachments to the
+      // auto-sent first message (shared first, then uploaded).
+      let uploadedPaths: string[] = [];
+      let failed: { name: string; reason: string }[] = [];
       // Use the created session's own projectId (always present) rather than the
       // project query, which may not have resolved yet — otherwise staged files
       // would be silently dropped when project.data is still loading.
-      let attachmentPaths: string[] = [];
-      let failed: { name: string; reason: string }[] = [];
       const projectId = session.projectId;
       if (files.length > 0) {
         const scope = { kind: 'inputs' as const, projectId, sessionId: session.id };
         try {
           const result = await uploadFiles(scope, files.map((file) => ({ file, targetPath: file.name })));
-          attachmentPaths = result.succeeded.map((s) => s.path);
+          uploadedPaths = result.succeeded.map((s) => s.path);
           // Per-file failures (e.g. over the size limit) carry their own reason.
           failed = result.failed.map((f) => ({ name: f.path, reason: f.error }));
         } catch (e) {
           // Upload threw entirely (network / multipart / access). The session was
           // already created, so rejecting the mutation would orphan it (and a retry
           // would create a duplicate). Instead keep the session: send the message
-          // without attachments and report every file with the shared failure reason.
+          // without the uploads and report every file with the shared failure reason.
           const reason = e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'upload failed';
           failed = files.map((f) => ({ name: f.name, reason }));
         }
       }
+      const attachmentPaths = [...shared.map((s) => s.globalPath), ...uploadedPaths];
       return { session, firstMessage, attachmentPaths, failed };
     },
     onSuccess: async ({ session, firstMessage, attachmentPaths, failed }) => {
       await queryClient.invalidateQueries({ queryKey: ['sessions', projectSlug] });
       setComposerText('');
       setPendingFiles([]);
+      setPendingShared([]);
       // Surface partial/total upload failures with the reason — the message still
       // sends with whatever uploaded, but don't let failed files vanish silently.
       // Each failure is a "name — reason" detail line; cap the list for a big batch.
@@ -152,9 +171,13 @@ function ProjectHome() {
         to: '/projects/$projectSlug/sessions/$sessionPrefix',
         params: { projectSlug, sessionPrefix: shortSessionId(session.id) },
         state: {
-          ...(firstMessage ? { initialMessage: firstMessage } : {}),
+          // Attachments only ride along with a message — the session auto-sends on
+          // `initialMessage`, so handing over attachments without one would just drop
+          // them. Gate both together so that case can't arise.
+          ...(firstMessage
+            ? { initialMessage: firstMessage, ...(attachmentPaths.length > 0 ? { initialAttachments: attachmentPaths } : {}) }
+            : {}),
           initialAgentId: selectedAgentId,
-          ...(attachmentPaths.length > 0 ? { initialAttachments: attachmentPaths } : {}),
         },
         // Morph the composer to its session position/shape (shared view-transition-name).
         viewTransition: true,
@@ -168,7 +191,33 @@ function ProjectHome() {
 
   const handleSubmit = ({ text }: ProjectHomeComposerSubmission) => {
     if (startSessionMutation.isPending) return;
-    startSessionMutation.mutate({ firstMessage: text, files: pendingFiles });
+    startSessionMutation.mutate({ firstMessage: text, files: pendingFiles, shared: pendingShared });
+  };
+
+  // Attach shared files picked from the dialog. Dedupe against what's already
+  // staged; if the batch would push the combined total (uploads + shared) past
+  // MAX_ATTACHMENTS, reject the whole batch (attach nothing) and toast — mirrors
+  // the session's importSharedFiles so picking a 30+ folder behaves like not
+  // picking it at all. Both the dedupe and the cap are decided against
+  // pendingSharedRef (not the closure's state value) so two calls in the same tick
+  // see each other's additions and can't blow past the cap; the toast stays out
+  // here, not inside the updater, so it's a clean side effect rather than one fired
+  // during render.
+  const addShared = (items: SessionImportItem[]) => {
+    if (items.length === 0) return;
+    const cur = pendingSharedRef.current;
+    const curPaths = new Set(cur.map((s) => s.globalPath));
+    const fresh = items.filter((it) => !curPaths.has(it.globalPath));
+    if (fresh.length === 0) return; // everything already attached
+    if (pendingFiles.length + cur.length + fresh.length > MAX_ATTACHMENTS) {
+      showToast(t('home.shared_picker.attach_limit', { max: MAX_ATTACHMENTS }));
+      return; // over the cap — don't attach any of them
+    }
+    // Advance the ref synchronously so a same-tick repeat sees these additions; the
+    // sync effect will re-affirm it from state after the commit.
+    const next = [...cur, ...fresh];
+    pendingSharedRef.current = next;
+    setPendingShared(next);
   };
 
   // Cap staged files at MAX_ATTACHMENTS (clip + drag both land here). Reject the
@@ -186,7 +235,7 @@ function ProjectHome() {
       showToast(t('home.file_too_large', { max: Math.round(MAX_UPLOAD_BYTES / (1024 * 1024)) }), tooBig.map((f) => f.name));
     }
     if (ok.length === 0) return;
-    if (pendingFiles.length + ok.length > MAX_ATTACHMENTS) {
+    if (pendingFiles.length + pendingSharedRef.current.length + ok.length > MAX_ATTACHMENTS) {
       showToast(t('common:attach_limit', { max: MAX_ATTACHMENTS }));
       return;
     }
@@ -241,6 +290,9 @@ function ProjectHome() {
             files={pendingFiles}
             onAddFiles={addFiles}
             onRemoveFile={(i) => setPendingFiles((prev) => prev.filter((_, idx) => idx !== i))}
+            sharedFiles={pendingShared}
+            onPickShared={project.data?.id ? () => setSharedPickerOpen(true) : undefined}
+            onRemoveShared={(i) => setPendingShared((prev) => prev.filter((_, idx) => idx !== i))}
             modelPicker={
               <ComposerModelPicker
                 catalog={catalog.data}
@@ -273,6 +325,16 @@ function ProjectHome() {
         </div>
       </div>
     </section>
+    {sharedPickerOpen && project.data?.id && (
+      <SharedFilePickerDialog
+        projectId={project.data.id}
+        projectName={project.data.name}
+        onImport={addShared}
+        staged={pendingShared}
+        onRemove={(globalPath) => setPendingShared((prev) => prev.filter((s) => s.globalPath !== globalPath))}
+        onClose={() => setSharedPickerOpen(false)}
+      />
+    )}
     </div>
   );
 }

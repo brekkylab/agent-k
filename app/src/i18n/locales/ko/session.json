@@ -17,6 +17,7 @@
     "response_delayed": "응답이 평소보다 지연되고 있습니다… Esc로 언제든 중지할 수 있어요.",
     "loading_history": "이전 메시지를 불러오는 중…",
     "attach_file": "파일 첨부",
+    "attach_shared": "공유 파일 첨부",
     "self_label": "나",
     "tool_running": "실행 중…",
     "send_aria": "전송",
@@ -52,6 +53,7 @@
   "shared_files_header": "공유 파일",
   "shared_files": {
     "import": "메시지에 추가",
+    "added": "추가됨",
     "remove": "제거",
     "up": "뒤로가기",
     "drag_hint": "채팅으로 끌어다 놓으면 첨부돼요",

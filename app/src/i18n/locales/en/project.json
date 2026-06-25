@@ -68,6 +68,13 @@
     "preview_pill_aria": "Preview — not yet sent to the server",
     "suggested_prompts_aria": "Suggested prompts (preview)",
     "send_blocked_hint": "No available model. Set a provider API key or pick another model.",
+    "shared_picker": {
+      "title": "Attach shared files",
+      "subtitle": "Pick files from the project's shared folder to attach to your first message.",
+      "attach_limit": "You can attach up to {{max}} files at once.",
+      "staged_count": "{{count}} attached",
+      "staged_none": "No files attached yet — click + on a file to attach it."
+    },
     "upload_failed": "Some files couldn't be uploaded and weren't attached:",
     "upload_failed_more": "+{{count}} more",
     "file_too_large": "Skipped files over {{max}} MB:"
