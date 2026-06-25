@@ -1,0 +1,128 @@
+/* components.css — the design-system library for HTML-authored decks.
+ *
+ * Link this once, define a per-deck palette (the nine role variables — see
+ * the palette block below and SKILL.md), then compose slides from those
+ * variables + the helper classes below. The
+ * html2pptx.py converter rasterises everything except text; text becomes
+ * editable PowerPoint boxes. So you may add any extra HTML/CSS/SVG/Chart.js
+ * you like — this file fixes the grid and the palette/type-scale ROLES (you
+ * compose the colors and sizes per deck) so the deck reads "designed, not
+ * assembled".
+ *
+ * HARD GEOMETRY RULES (the converter depends on these):
+ *   - Every slide is exactly 1280x720 px (16:9). Authored at 96 px/in.
+ *   - No `transform: scale()` / `zoom` on slide content (breaks px->inch).
+ *   - Use the CJK family names with the `CJK` infix exactly:
+ *       'Noto Sans CJK KR' / 'JP' / 'SC' / 'TC'
+ *     ('Noto Sans KR' will NOT match in the sandbox → tofu).
+ */
+
+/* ----------------------------------------------------------------- reset */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ----------------------------------------------------------- palette roles
+ * Compose a 9-role palette PER DECK (rules in SKILL.md "Palette") and define
+ * these variables ONCE in a <style> in your deck's <head>. Fill every <...>
+ * with a real hex derived from the subject — these are placeholders, not a
+ * palette to ship:
+ *
+ *       :root{
+ *         --primary:<deepest subject hue>;    --secondary:<principal accent>;
+ *         --accent:<one contrasting pop>;     --bg:<near-neutral of the family>;
+ *         --surface:<card fill>;              --muted:<quiet gray>;
+ *         --hairline:<faint rule>;            --positive:#16804A; --negative:#B23A30;
+ *       }
+ *
+ * The values below are an INERT neutral fallback so an unset deck still
+ * renders — always OVERRIDE them per deck. */
+:root{
+  --primary:#1B1B1B;  --secondary:#444444;  --accent:#B5532A;
+  --bg:#FAFAF8;       --surface:#FFFFFF;    --muted:#6B6B6B;
+  --hairline:#E4E2DC; --positive:#2F7D4F;   --negative:#B23A30;
+  /* Type scale — COMPOSE per deck (see SKILL.md "Type scale"): set these four
+   * to fit the deck's density (dense data → smaller, sparse/exec → larger),
+   * then leave them locked. Ranges: display 48–72 / title 30–44 / body 18–24
+   * / caption 10–13 px. These slide-appropriate defaults apply if unset. */
+  --fs-display:60px;  --fs-title:38px;  --fs-body:20px;  --fs-caption:12px;
+}
+
+/* ----------------------------------------------------------------- canvas
+ * One slide = one 1280x720 box. Stack slides vertically in the document;
+ * the converter screenshots each .slide separately. */
+body { background:#525659; }        /* viewer chrome only — never captured */
+
+.slide {
+  position: relative;
+  width: 1280px;
+  height: 720px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--primary);
+  font-family: 'Noto Sans CJK KR', Calibri, Arial, sans-serif;
+  word-break: keep-all;             /* break Korean at word (space) boundaries — never split a syllable run like "배|송" */
+  margin: 24px auto;                /* gap between slides in the viewer */
+}
+
+/* ------------------------------------------------------------ type scale
+ * Four steps only, sizes from the per-deck variables above. Dramatic-beat
+ * sizes (divider numerals, hero numbers, quote glyphs) sit OUTSIDE the scale
+ * and are allowed on top of it. */
+.t-display { font-size: var(--fs-display); font-weight: 700; line-height: 1.05; }
+.t-title   { font-size: var(--fs-title);   font-weight: 700; line-height: 1.05; }
+.t-body    { font-size: var(--fs-body);    font-weight: 400; line-height: 1.15; }
+.t-caption { font-size: var(--fs-caption); font-weight: 700; line-height: 1.2;
+             text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Korean reads "floaty" untuned — tighten tracking/leading on CJK runs. */
+:lang(ko) .t-title, :lang(ko) .t-display { letter-spacing: -0.02em; line-height: 1.05; }
+:lang(ko) .t-body { letter-spacing: -0.01em; }
+
+/* ------------------------------------------------------------------- grid
+ * Content area inside margins: 0.6" L/R, 0.5" T, 0.45" B → in px:
+ * L/R 57.6, T 48, B 43.2. Title band ~1.1" (106px). Body starts y~154px. */
+.pad   { padding: 48px 58px 43px; }
+.band-title { position:absolute; left:58px; right:58px; top:48px; }
+.body-area  { position:absolute; left:58px; right:58px; top:154px; bottom:62px; }
+
+/* color helpers */
+.c-primary{color:var(--primary)} .c-secondary{color:var(--secondary)}
+.c-accent{color:var(--accent)}   .c-muted{color:var(--muted)}
+.c-surface{color:var(--surface)} .c-positive{color:var(--positive)}
+.c-negative{color:var(--negative)}
+.bg-primary{background:var(--primary)} .bg-secondary{background:var(--secondary)}
+.bg-accent{background:var(--accent)}   .bg-surface{background:var(--surface)}
+
+/* ------------------------------------------------------- shape vocabulary
+ * These do "work" so slides are never text-only. */
+.edge-strip { position:absolute; left:0; top:0; bottom:0; width:8px;
+              background:var(--secondary); }
+.hairline   { border:none; border-top:1px solid var(--hairline); }
+.card       { background:var(--surface); border:1px solid var(--hairline);
+              border-radius:8px; }
+.card-strip { border-top:4px solid var(--secondary); }   /* on a .card */
+.tag        { display:inline-block; padding:5px 12px; border-radius:999px;
+              background:var(--secondary); color:var(--surface);
+              font-size:var(--fs-caption); font-weight:700; text-transform:uppercase;
+              letter-spacing:0.06em; }
+
+/* Metrics — use a styled table or this COMPACT inline stat row.
+ * (No big "KPI cards": tall metric tiles read as empty and monotonous.) */
+.stat-row   { display:flex; gap:56px; align-items:flex-start; }
+.stat-value { font-size:40px; font-weight:700; color:var(--primary); line-height:1; }
+.stat-label { font-size:var(--fs-caption); font-weight:700; text-transform:uppercase;
+              letter-spacing:0.06em; color:var(--muted); margin-top:10px; }
+.stat-delta { font-size:14px; font-weight:700; margin-top:6px; }
+
+/* bullets with markers that do work (no default • - > ■) */
+.bullets { list-style:none; }
+.bullets li { position:relative; padding-left:22px; margin-bottom:12px;
+              font-size:var(--fs-body); line-height:1.3; }
+.bullets li::before { content:''; position:absolute; left:0; top:9px;
+              width:8px; height:8px; background:var(--accent); border-radius:2px; }
+
+/* footer (content slides only — never on title/divider/closing) */
+.footer { position:absolute; left:58px; right:58px; bottom:30px;
+          display:flex; justify-content:space-between; align-items:center;
+          border-top:1px solid var(--hairline); padding-top:8px;
+          font-size:var(--fs-caption); font-weight:700; text-transform:uppercase;
+          letter-spacing:0.06em; color:var(--muted); }

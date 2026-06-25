@@ -8,10 +8,26 @@ Usage (inside the sandbox):
     issues = verify("/workspace/artifacts/deck.pptx")
     print(summarize(issues))
 
-`verify()` returns a dict with eight check keys: `palette`, `fonts`,
-`sizes`, `overflow`, `page_numbers`, `overlap`, `chart_strict`,
-`word_wrap`. An empty list per key = passed. Heuristic: catches the
-most-violated SKILL.md rules, not every nuance.
+`verify()` returns a dict with `slide_count` plus five check keys:
+`palette`, `fonts`, `sizes`, `page_numbers`, `overlap`. An empty list
+per check = passed. Heuristic: catches the most-violated SKILL.md rules,
+not every nuance. (Empty lower bands / dead space are left to the visual
+contact-sheet read — geometry can't tell hollow from full.)
+
+Decks are built by html2pptx.py, which DECOMPOSES each slide into native
+objects: editable text boxes (with FROZEN line breaks — `word_wrap=False`
++ hard `<a:br/>`, so the viewer can't re-wrap CJK), native autoshapes for
+simple boxes/borders/markers, a picture per chart/image, and a native
+solid slide-background fill. `fonts`/`sizes`/`page_numbers`/`overlap`
+apply to the text boxes; `palette` checks DISCIPLINE — that the deck uses a
+small, locked set of colors (composed per deck, not a fixed gallery), not
+that it matches a known palette. Advisory; lean on visual inspection for
+whether the palette fits the subject.
+
+There is no `overflow` check (boxes are sized to browser-measured text,
+and frozen lines can't re-wrap), no `word_wrap` check (`word_wrap=False`
+is the intended design everywhere), and no native-chart check (charts
+are raster pictures).
 """
 
 from __future__ import annotations
@@ -20,47 +36,11 @@ from pathlib import Path
 from typing import Any
 
 from pptx import Presentation
-from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.oxml.ns import qn
 
 
-# --- palette gallery (mirrors SKILL.md) ---------------------------------------
-
-GALLERY: dict[str, set[str]] = {
-    "Corporate Slate": {
-        "0F172A", "2563EB", "F59E0B", "F8FAFC", "FFFFFF",
-        "64748B", "E2E8F0", "10B981", "EF4444",
-    },
-    "Midnight Keynote": {
-        "0B1220", "818CF8", "22D3EE", "1F2937", "94A3B8",
-        "34D399", "F87171",
-    },
-    "Warm Editorial": {
-        "7C2D12", "EA580C", "FACC15", "FFF7ED", "FFFFFF",
-        "9A3412", "FED7AA", "15803D", "B91C1C",
-    },
-    "Forest Research": {
-        "1F2937", "047857", "D97706", "FFFFFF", "F9FAFB",
-        "6B7280", "E5E7EB", "059669", "DC2626",
-    },
-    "Mono Editorial": {
-        "111827", "FFFFFF", "6B7280", "E5E7EB", "059669", "DC2626",
-    },
-    "Playful Violet": {
-        "4C1D95", "14B8A6", "F472B6", "FAF5FF", "FFFFFF",
-        "6D28D9", "E9D5FF", "16A34A", "E11D48",
-    },
-    "Sand & Ink": {
-        "1C1917", "57534E", "B45309", "FAFAF9", "FFFFFF",
-        "78716C", "E7E5E4", "15803D", "B91C1C",
-    },
-    "Glacier": {
-        "0E7490", "0891B2", "F97316", "F0F9FF", "FFFFFF",
-        "475569", "BAE6FD", "16A34A", "DC2626",
-    },
-}
-
-# Pure white / black aren't brand colours; exclude from off-gallery.
+# Pure white / black are neutrals, not brand colours; excluded from the
+# palette-discipline count below.
 NEUTRAL_TOLERATED: set[str] = {"FFFFFF", "000000"}
 
 
@@ -105,72 +85,71 @@ def _iter_runs(slide):
                 yield shape, para, run
 
 
-def _collect_fills(prs) -> list[str]:
-    """All solid fill hex colors across the deck, uppercased."""
-    out: list[str] = []
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            try:
-                if shape.fill.type == 1:  # solid
-                    out.append(str(shape.fill.fore_color.rgb).upper())
-            except (AttributeError, TypeError):
-                # No fill / theme-based fill / placeholder without fill.
-                pass
-            if shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
-                    for run in para.runs:
-                        try:
-                            rgb = run.font.color.rgb
-                            if rgb is not None:
-                                out.append(str(rgb).upper())
-                        except (AttributeError, TypeError):
-                            # Run inherits color from theme — no rgb to read.
-                            pass
-    return out
+def _slide_colors(slide) -> set[str]:
+    """Distinct non-neutral solid-fill + text-run colors on one slide."""
+    cols: set[str] = set()
+    for shape in slide.shapes:
+        try:
+            if shape.fill.type == 1:  # solid
+                h = str(shape.fill.fore_color.rgb).upper()
+                if h not in NEUTRAL_TOLERATED:
+                    cols.add(h)
+        except (AttributeError, TypeError):
+            pass  # no fill / theme fill / placeholder
+        if shape.has_text_frame:
+            for para in shape.text_frame.paragraphs:
+                for run in para.runs:
+                    try:
+                        rgb = run.font.color.rgb
+                        if rgb is not None:
+                            h = str(rgb).upper()
+                            if h not in NEUTRAL_TOLERATED:
+                                cols.add(h)
+                    except (AttributeError, TypeError):
+                        pass  # inherits theme color
+    return cols
 
 
 # --- checks -------------------------------------------------------------------
 
+# A composed palette runs ~7-10 non-neutral colors (primary/secondary/accent/
+# muted/hairline/positive/negative, plus a tinted bg/surface and maybe a chart
+# tint — only pure #FFFFFF/#000000 are treated as neutral). Past this it reads
+# as palette sprawl, not a locked palette. Kept generous so a legitimately
+# composed warm/tinted palette isn't flagged.
+PALETTE_LIMIT = 12
+
+
 def check_palette(prs) -> dict[str, Any]:
-    """Detect which gallery palette is in use, and report off-gallery colors.
+    """Palette DISCIPLINE — a composed deck should use a small, locked set of
+    colors, consistent across slides. (There is no fixed gallery to match;
+    palettes are composed per deck from the subject — see SKILL.md.)
 
-    Coverage is *frequency-weighted* — each fill occurrence counts, so one
-    stray hex on one slide of a 30-slide deck stays near 1.0 (a set-based
-    score would crash). Compliant = coverage >= 0.85 against one palette.
+    Collects distinct non-neutral solid-fill + text-run colors per slide.
+    Reports the distinct count, the colors, and any `stray` color that appears
+    on only ONE slide (a new hex introduced mid-deck). Compliant when the
+    distinct count is small (<= PALETTE_LIMIT). Advisory — visual inspection
+    judges whether the palette actually fits the subject.
 
-    Returns {"matched": <name>|"custom"|"none", "coverage": float,
-              "off_gallery": [hex, ...]}.
+    Returns {"distinct": int, "colors": [hex,...], "stray": [hex,...],
+              "ok": bool}.
     """
     from collections import Counter
 
-    fills = [f for f in _collect_fills(prs) if f not in NEUTRAL_TOLERATED]
-    if not fills:
-        return {"matched": "none", "coverage": 0.0, "off_gallery": []}
+    n_slides = len(prs.slides)
+    appears_on: Counter = Counter()
+    for slide in prs.slides:
+        for h in _slide_colors(slide):
+            appears_on[h] += 1
 
-    counts = Counter(fills)
-    total = sum(counts.values())
-    best_name = "custom"
-    best_coverage = 0.0
-    best_off: set[str] = set(counts)
-
-    for name, palette in GALLERY.items():
-        matched = sum(c for h, c in counts.items() if h in palette)
-        coverage = matched / total if total else 0.0
-        if coverage > best_coverage:
-            best_coverage = coverage
-            best_name = name
-            best_off = {h for h in counts if h not in palette}
-
-    if best_coverage < 0.5:
-        return {
-            "matched": "custom",
-            "coverage": round(best_coverage, 2),
-            "off_gallery": sorted(counts),
-        }
+    distinct = sorted(appears_on)
+    # A color on a single slide of a multi-slide deck = introduced mid-deck.
+    stray = sorted(h for h, c in appears_on.items() if c == 1) if n_slides >= 3 else []
     return {
-        "matched": best_name,
-        "coverage": round(best_coverage, 2),
-        "off_gallery": sorted(best_off),
+        "distinct": len(distinct),
+        "colors": distinct,
+        "stray": stray,
+        "ok": len(distinct) <= PALETTE_LIMIT,
     }
 
 
@@ -188,18 +167,19 @@ def check_fonts(prs) -> list[tuple[int, str]]:
             if _ea_typeface(run) is None:
                 snippet = text.strip()[:40]
                 issues.append((i, snippet))
-                # one report per run is enough; continue
     return issues
 
 
 def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
     """Flag slides that mix too many tier / out-of-tier sizes.
 
-    Tier bounds (~±30% around canonical pt): caption 8-15, body 16-24,
-    title 25-44, display 45-90. Sizes in the same tier collapse to one;
-    out-of-tier sizes count individually. Flag at 5+ distinct classes
-    per slide — with only four tiers, that requires all four plus a
-    stray size.
+    The scale is composed per deck (SKILL.md "Type scale"), so tiers are wide
+    bands covering its ranges: caption ≤11, body 12-20, title 21-35, display
+    36-90 pt. Sizes in the same tier collapse to one; out-of-tier sizes count
+    individually, except the first off-scale size per slide is a permitted
+    dramatic beat (hero number / divider numeral / quote glyph) and is not
+    counted. Flag at 5+ classes per slide — with only four tiers, that needs
+    all four plus 2+ off-scale sizes.
 
     Returns list of (slide_idx, sizes_found_on_slide).
     """
@@ -207,13 +187,13 @@ def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
     def tier(pt: int) -> str | None:
         if pt <= 0:
             return None
-        if 8 <= pt <= 15:
+        if pt <= 11:
             return "caption"
-        if 16 <= pt <= 24:
+        if pt <= 20:
             return "body"
-        if 25 <= pt <= 44:
+        if pt <= 35:
             return "title"
-        if 45 <= pt <= 90:
+        if pt <= 90:
             return "display"
         return None  # outside scale → dramatic-beat or out-of-range
 
@@ -235,93 +215,11 @@ def check_size_discipline(prs) -> list[tuple[int, list[int]]]:
                         all_sizes.add(pt)
             except AttributeError:
                 continue
-        classes = len(tiers_used) + len(out_of_tier)
+        # One off-scale size per slide is an allowed dramatic beat (hero
+        # number, divider numeral, quote glyph) — don't count the first.
+        classes = len(tiers_used) + max(0, len(out_of_tier) - 1)
         if classes >= 5:
             issues.append((i, sorted(all_sizes)))
-    return issues
-
-
-def check_overflow(prs) -> list[tuple[int, str, str]]:
-    """Estimate text clipping in fixed-size text boxes.
-
-    A box overflows when the estimated rendered height exceeds the
-    drawable height (box minus internal margins). Korean glyphs count
-    as 2 ASCII widths. Autosize boxes are skipped — `SHAPE_TO_FIT_TEXT`
-    grows the box (geometric overlap is a visual-inspection question)
-    and `TEXT_TO_FIT_SHAPE` shrinks the text (our pt-based estimate
-    would always over-report clipping).
-
-    Returns list of (slide_idx, snippet, reason).
-    """
-    AUTOSIZE_SKIP = {MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT, MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE}
-    issues: list[tuple[int, str, str]] = []
-    for i, slide in enumerate(prs.slides, 1):
-        for shape in slide.shapes:
-            if not shape.has_text_frame:
-                continue
-            try:
-                w_in = shape.width / 914400 if shape.width else 0
-                h_in = shape.height / 914400 if shape.height else 0
-            except (AttributeError, TypeError):
-                continue
-            if w_in <= 0 or h_in <= 0:
-                continue
-            tf = shape.text_frame
-
-            # Skip autosize boxes (see docstring for why).
-            try:
-                if tf.auto_size in AUTOSIZE_SKIP:
-                    continue
-            except AttributeError:
-                pass
-
-            # Subtract internal margins so the estimate reflects drawable
-            # area. python-pptx default: L/R 0.1", T/B 0.05".
-            try:
-                ml = (tf.margin_left or 0) / 914400
-                mr = (tf.margin_right or 0) / 914400
-                mt = (tf.margin_top or 0) / 914400
-                mb = (tf.margin_bottom or 0) / 914400
-            except AttributeError:
-                ml = mr = 0.1
-                mt = mb = 0.05
-            effective_w = max(0.1, w_in - ml - mr)
-            effective_h = max(0.1, h_in - mt - mb)
-
-            total_h = 0.0
-            sample = ""
-            for para in tf.paragraphs:
-                run_texts = [r.text for r in para.runs if r.text]
-                if not run_texts:
-                    continue
-                text = "".join(run_texts)
-                font_pt = 14
-                for r in para.runs:
-                    try:
-                        if r.font.size:
-                            font_pt = max(font_pt, round(r.font.size.pt))
-                    except AttributeError:
-                        pass
-                ls = 1.2
-                try:
-                    if para.line_spacing and isinstance(para.line_spacing, float):
-                        ls = para.line_spacing
-                except AttributeError:
-                    pass
-                units = sum(2 if ord(ch) > 0x7F else 1 for ch in text)
-                chars_per_line = max(1, int(effective_w * 12 * 14 / font_pt))
-                lines = max(1, -(-units // chars_per_line))
-                total_h += lines * font_pt * ls / 72
-                if not sample:
-                    sample = text.strip()[:40]
-
-            grow_abs = total_h - effective_h
-            grow_ratio = total_h / effective_h if effective_h > 0 else 1
-            if grow_abs > 0.1 or grow_ratio > 1.25:
-                issues.append((
-                    i, sample,
-                    f"text needs {total_h:.2f}\" but box is {effective_h:.2f}\""
-                ))
     return issues
 
 
@@ -472,7 +370,9 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
         min_w = min(aw, bw)
         if min_h <= 0 or min_w <= 0:
             return False
-        return (y_overlap / min_h) < 0.30 and (x_overlap / min_w) > 0.80
+        # 0.45 tolerance absorbs the small CJK height cushion html2pptx
+        # adds, which would otherwise flag eyebrow+title stacks as collisions.
+        return (y_overlap / min_h) < 0.45 and (x_overlap / min_w) > 0.70
 
     def classify(sh, b):
         """Return (kind, label) or (None, None) if not a candidate."""
@@ -554,95 +454,6 @@ def check_overlap(prs) -> list[tuple[int, str, str, float]]:
     return issues
 
 
-def check_chart_strict(prs) -> list[tuple[int, str, str]]:
-    """Flag chart XML that strict-mode PowerPoint will reject.
-
-    Two known bits python-pptx (and per-slice-color helper code) leaves
-    out — Google Slides / LibreOffice / soffice ignore them, but
-    PowerPoint fires the recovery dialog and strips the chart,
-    leaving an apparently-blank slide:
-
-      1. `<a:endParaRPr>` missing `lang` (doughnut/pie templates).
-      2. `<c:dPt>` missing `<c:bubble3D>` (per-slice color setup).
-
-    Patch chart XML with `patch_chart_xml()` (see SKILL.md Charts
-    section) right after `add_chart()`.
-
-    Returns (slide_idx, chart_name, issue).
-    """
-    issues: list[tuple[int, str, str]] = []
-    for idx, slide in enumerate(prs.slides, start=1):
-        for sh in slide.shapes:
-            if not getattr(sh, "has_chart", False):
-                continue
-            cs = sh.chart._chartSpace
-            for ep in cs.iter(qn("a:endParaRPr")):
-                if ep.get("lang") is None:
-                    issues.append((idx, sh.name, "endParaRPr missing lang"))
-                    break
-            for dPt in cs.iter(qn("c:dPt")):
-                if dPt.find(qn("c:bubble3D")) is None:
-                    issues.append((idx, sh.name, "dPt missing bubble3D"))
-                    break
-    return issues
-
-
-def check_word_wrap(prs) -> list[tuple[int, str]]:
-    """Flag text frames with `word_wrap = False` whose text won't fit on one line.
-
-    strict-mode PowerPoint respects `word_wrap = False` literally and grows the
-    shape *horizontally* to fit text on a single line — pushing text
-    past the designed box width onto neighboring elements. soffice and
-    Google Slides force-wrap regardless, so the failure is invisible
-    in the sandbox PNG.
-
-    Short labels ("Q1", "3 / 10", "187억") fit on one line anyway and
-    pass; only multi-token bodies whose single-line estimate exceeds
-    box width are flagged.
-
-    Returns (slide_idx, snippet).
-    """
-    issues: list[tuple[int, str]] = []
-    for i, slide in enumerate(prs.slides, 1):
-        for shape in slide.shapes:
-            if not shape.has_text_frame:
-                continue
-            tf = shape.text_frame
-            if tf.word_wrap is not False:
-                continue
-            text = tf.text.strip()
-            if not text:
-                continue
-            try:
-                w_in = shape.width / 914400 if shape.width else 0
-            except (AttributeError, TypeError):
-                continue
-            if w_in <= 0:
-                continue
-            try:
-                ml = (tf.margin_left or 0) / 914400
-                mr = (tf.margin_right or 0) / 914400
-            except AttributeError:
-                ml = mr = 0.1
-            effective_w = max(0.1, w_in - ml - mr)
-            font_pt = 14
-            for para in tf.paragraphs:
-                for r in para.runs:
-                    try:
-                        if r.font.size:
-                            font_pt = max(font_pt, round(r.font.size.pt))
-                    except AttributeError:
-                        pass
-            # CJK glyphs count as 2 ASCII widths; ~12 ASCII units per inch at 14pt.
-            units = sum(2 if ord(ch) > 0x7F else 1 for ch in text)
-            chars_per_line = max(1, int(effective_w * 12 * 14 / font_pt))
-            # Flag only when the deficit is clear (>30% over). Borderline
-            # one-line labels (e.g. "32.4%" in a 0.45" box at 18pt) pass.
-            if units > chars_per_line * 1.3:
-                issues.append((i, text[:40].replace("\n", " ")))
-    return issues
-
-
 # --- top-level ----------------------------------------------------------------
 
 def verify(pptx_path: str | Path) -> dict[str, Any]:
@@ -658,11 +469,8 @@ def verify(pptx_path: str | Path) -> dict[str, Any]:
         "palette": check_palette(prs),
         "fonts": check_fonts(prs),
         "sizes": check_size_discipline(prs),
-        "overflow": check_overflow(prs),
         "page_numbers": check_page_numbers(prs),
         "overlap": check_overlap(prs),
-        "chart_strict": check_chart_strict(prs),
-        "word_wrap": check_word_wrap(prs),
     }
 
 
@@ -671,30 +479,18 @@ def summarize(issues: dict[str, Any]) -> str:
     n = issues["slide_count"]
     p = issues["palette"]
     flags = []
-    if p["matched"] not in {"none"} and p["coverage"] < 0.85:
-        flags.append(f"palette drift ({p['coverage']:.0%})")
+    if not p.get("ok", True):
+        flags.append(f"palette sprawl ({p['distinct']} distinct colors)")
     if issues["fonts"]:
         flags.append(f"{len(issues['fonts'])} CJK runs missing EA typeface")
     if issues["sizes"]:
         flags.append(f"{len(issues['sizes'])} slides with 5+ scale sizes")
-    if issues["overflow"]:
-        flags.append(f"{len(issues['overflow'])} fixed-size text boxes clip")
     if issues["page_numbers"]:
         flags.append(f"{len(issues['page_numbers'])} page-number violations")
     if issues.get("overlap"):
-        flags.append(f"{len(issues['overlap'])} shape overlaps")
-    if issues.get("chart_strict"):
-        flags.append(
-            f"{len(issues['chart_strict'])} chart XML violations "
-            "(strict PowerPoint strips them)"
-        )
-    if issues.get("word_wrap"):
-        flags.append(
-            f"{len(issues['word_wrap'])} text boxes with word_wrap=False "
-            "overflow horizontally in strict-mode PowerPoint"
-        )
+        flags.append(f"{len(issues['overlap'])} text overlaps")
     if not flags:
-        return f"{n} slides — all checks passed ({p['matched']})."
+        return f"{n} slides — all checks passed ({p['distinct']} palette colors)."
     return f"{n} slides — issues: {' · '.join(flags)}"
 
 

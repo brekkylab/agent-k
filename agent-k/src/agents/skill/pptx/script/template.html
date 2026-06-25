@@ -1,0 +1,141 @@
+<!doctype html>
+<!-- template.html — a MECHANICS reference for html2pptx.py, NOT a look to copy.
+     It shows the WIRING: one <div class="slide"> per slide (any number — the
+     converter processes them all), how to define a per-deck palette (<style>
+     below), the components.css classes, and the Chart.js readiness flag.
+     Do NOT reproduce this deck's palette, slide order, or layouts — if every
+     deck copies this, every deck looks the same. Compose your own palette and
+     vary the layouts to fit YOUR subject (see SKILL.md "Ground it in the
+     subject" + "Palette"). For a CJK deck, set <html lang="ko"> and a
+     'Noto Sans CJK KR/JP/SC/TC' font instead of the Latin stack here.
+     Convert:  python html2pptx.py template.html -o deck.pptx -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="components.css">
+  <!-- This deck's COMPOSED palette + type scale + a Latin font (override
+       components.css). For a calm, financial Q1 review we go deep-ink + slate
+       teal with one clay accent on a near-white ground — deliberately not the
+       default navy/blue/amber — and a moderate scale (fairly data-dense). The
+       ground is a barely-there off-white so white cards still read. -->
+  <style>
+    :root{
+      --primary:#16242B;   --secondary:#2F6E6A;  --accent:#C2542B;
+      --bg:#FAFAFA;        --surface:#FFFFFF;    --muted:#6E7A78;
+      --hairline:#E6E4E0;  --positive:#2F7D4F;   --negative:#B23A30;
+      /* type scale composed for this deck (see SKILL.md "Type scale") */
+      --fs-display:58px;   --fs-title:34px;  --fs-body:19px;  --fs-caption:11px;
+    }
+    .slide{ font-family:'Calibri','Carlito',Arial,Helvetica,sans-serif; }
+  </style>
+  <!-- Chart.js is fine: it renders to <canvas>, which bakes into the slide
+       as its own image. Only text needs to stay editable. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+
+  <!-- ===== Slide 1 — title (no footer / page number) ===== -->
+  <div class="slide">
+    <div class="edge-strip"></div>
+    <div style="position:absolute; left:90px; top:250px; right:90px;">
+      <div class="t-caption c-accent" style="margin-bottom:18px;">Pixellife Inc.</div>
+      <div class="t-display c-primary">2026 Q1 Business Review</div>
+      <div class="t-body c-muted" style="margin-top:18px;">For the exec meeting — revenue, margin, and the next-quarter plan</div>
+    </div>
+    <div style="position:absolute; right:90px; bottom:80px; width:60px; height:8px;
+                background:var(--accent);"></div>
+  </div>
+
+  <!-- ===== Slide 2 — metrics (compact stat row, NOT big KPI cards) ===== -->
+  <div class="slide">
+    <div class="band-title">
+      <div class="t-caption c-secondary" style="margin-bottom:8px;">Executive Summary</div>
+      <div class="t-title c-primary">Revenue grew 31.7%, with margin improving in step</div>
+    </div>
+    <div class="body-area">
+      <div class="stat-row">
+        <div>
+          <div class="stat-value">$14.2M</div>
+          <div class="stat-label">Q1 revenue</div>
+          <div class="stat-delta c-positive">+31.7%</div>
+        </div>
+        <div>
+          <div class="stat-value">24.1%</div>
+          <div class="stat-label">Operating margin</div>
+          <div class="stat-delta c-positive">+3.4pp</div>
+        </div>
+        <div>
+          <div class="stat-value">420K</div>
+          <div class="stat-label">Monthly active users</div>
+          <div class="stat-delta c-positive">+18%</div>
+        </div>
+      </div>
+      <hr class="hairline" style="margin-top:44px;">
+      <ul class="bullets" style="margin-top:28px;">
+        <li>Revenue growth and margin improvement landed in the same quarter.</li>
+        <li>Active-user growth was the base under that revenue.</li>
+      </ul>
+    </div>
+    <div class="footer"><span>2026 Q1 Review</span><span>2 / 4</span></div>
+  </div>
+
+  <!-- ===== Slide 3 — chart + narrative (chart = Chart.js canvas) ===== -->
+  <div class="slide">
+    <div class="band-title">
+      <div class="t-caption c-secondary" style="margin-bottom:8px;">Revenue by Quarter</div>
+      <div class="t-title c-primary">Paid conversion drove four straight quarters of growth</div>
+    </div>
+    <div class="body-area" style="display:flex; gap:32px;">
+      <div style="flex:1.4; position:relative;">
+        <canvas id="rev"></canvas>
+      </div>
+      <ul class="bullets" style="flex:1; align-self:center;">
+        <li>Paid users overtook free in Q2.</li>
+        <li>ARPU rose 12% year over year.</li>
+        <li>Churn fell to 3.1% — an all-time low.</li>
+      </ul>
+    </div>
+    <div class="footer"><span>2026 Q1 Review</span><span>3 / 4</span></div>
+  </div>
+
+  <!-- ===== Slide 4 — closing (mirrors title, no footer) ===== -->
+  <div class="slide">
+    <div style="position:absolute; right:90px; top:280px; left:90px; text-align:right;">
+      <div class="t-display c-primary">Thank you.</div>
+      <div class="t-body c-muted" style="margin-top:16px;">Questions?</div>
+    </div>
+    <div style="position:absolute; left:90px; bottom:80px; width:60px; height:8px;
+                background:var(--accent);"></div>
+  </div>
+
+  <script>
+    // Render charts, then signal the converter that capture can proceed.
+    const css = getComputedStyle(document.body);
+    const secondary = css.getPropertyValue('--secondary').trim();
+    const accent = css.getPropertyValue('--accent').trim();
+    new Chart(document.getElementById('rev'), {
+      type: 'bar',
+      data: {
+        labels: ['Q1', 'Q2', 'Q3', 'Q4'],
+        datasets: [
+          { label: 'Free', data: [120, 110, 98, 90], backgroundColor: accent },
+          { label: 'Paid', data: [60, 115, 150, 180], backgroundColor: secondary },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: false,                       // must be off for a clean capture
+        // Latin deck → 'Arial'. For a CJK deck use 'Noto Sans CJK KR'
+        // (or JP/SC/TC) here, or the chart's axis/legend labels render as tofu.
+        plugins: { legend: { labels: { font: { family: 'Arial' } } } },
+        scales: {
+          x: { ticks: { font: { family: 'Arial' } } },
+          y: { ticks: { font: { family: 'Arial' } } },
+        },
+      },
+    });
+    // html2pptx.py waits for window.__pptx_ready before screenshotting.
+    requestAnimationFrame(() => requestAnimationFrame(() => { window.__pptx_ready = true; }));
+  </script>
+</body>
+</html>

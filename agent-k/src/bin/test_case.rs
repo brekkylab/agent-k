@@ -165,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let case = cases.swap_remove(case_no);
 
+    sweep_orphan_sandboxes();
     prepare_dir(ARTIFACT_DIR);
     prepare_dir(DATA_DIR);
     prepare_dir(SHARED_DATA_DIR);
@@ -318,6 +319,51 @@ fn prepare_dir(dir: &str) {
     }
 }
 
+/// Prune leftover `ailoy-*` sandbox dirs from prior runs that were force-killed
+/// before `Sandbox`'s `Drop` (the only place non-persist cleanup happens) could
+/// run. Skips entirely if any `msb` process is alive, and only removes dirs that
+/// haven't been touched for a few minutes — so a concurrent run's freshly-created
+/// sandbox is never deleted, even in the gap between `pgrep` and a real launch.
+/// Best-effort: failures are logged, never fatal.
+fn sweep_orphan_sandboxes() {
+    const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let dir = std::path::Path::new(&home).join(".microsandbox/sandboxes");
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let msb_alive = std::process::Command::new("pgrep")
+        .args(["-f", "microsandbox/bin/msb"])
+        .output()
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(true);
+    if msb_alive {
+        return;
+    }
+    let now = std::time::SystemTime::now();
+    let mut pruned = 0;
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with("ailoy-") {
+            continue;
+        }
+        // Only sweep dirs idle for STALE_AFTER — never a sandbox mid-startup.
+        let recent = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .map(|age| age < STALE_AFTER)
+            .unwrap_or(true);
+        if recent {
+            continue;
+        }
+        if std::fs::remove_dir_all(entry.path()).is_ok() {
+            pruned += 1;
+        }
+    }
+    if pruned > 0 {
+        println!("[sweep] pruned {pruned} orphan sandbox dir(s)");
+    }
+}
+
 fn write_case_files(case: &Case) -> anyhow::Result<()> {
     write_files(DATA_DIR, &case.files)?;
     write_files(SHARED_DATA_DIR, &case.shared_files)?;
@@ -390,8 +436,17 @@ async fn build_corpus_store(
 
 async fn stream_turn(agent: &mut Agent, query: Message, log_prefix: &str) -> anyhow::Result<()> {
     let mut stream = agent.run(query);
+    let (mut lm_calls, mut tok_in, mut tok_out, mut tok_cr, mut tok_cw) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
     while let Some(event) = stream.next().await {
         let event = event?;
+        if let Some(u) = &event.usage {
+            lm_calls += 1;
+            tok_in += u.input_tokens;
+            tok_out += u.output_tokens;
+            tok_cr += u.cache_read_input_tokens.unwrap_or(0);
+            tok_cw += u.cache_creation_input_tokens.unwrap_or(0);
+        }
         let msg = &event.message;
         match msg.role {
             Role::Assistant => {
@@ -426,6 +481,11 @@ async fn stream_turn(agent: &mut Agent, query: Message, log_prefix: &str) -> any
             _ => {}
         }
     }
+    println!(
+        "[{log_prefix}] TOKENS turn — lm_calls:{lm_calls} input:{tok_in} output:{tok_out} \
+         cache_read:{tok_cr} cache_write:{tok_cw} billable:{}",
+        tok_in + tok_out
+    );
     println!();
     Ok(())
 }
