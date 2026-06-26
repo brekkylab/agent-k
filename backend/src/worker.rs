@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::{
     cron::next_fire_after,
-    handlers::session::{attribute_messages, build_session_agent},
+    handlers::session::{attribute_messages, build_session_agent, inject_attachment_note},
     model::{EventKind, RunStatus, TriggerSpec},
     repository::DbAutomationRun,
     state::AppState,
@@ -399,12 +399,47 @@ async fn execute_run(
         .await
         .map_err(|e| e.to_string())?;
 
-    let agent = build_session_agent(state, automation.project_id, run.session_id)
+    // Resume cursor: skip steps already completed in a prior attempt of THIS
+    // run (re-claimed after a lease loss). Derived from the event log so no
+    // schema/migration is needed — the highest `step_finished{idx}` marks the
+    // last durably-completed step, and a step's messages are persisted iff that
+    // event was written (see the persist ordering below), so the cursor and the
+    // session messages never disagree except across a crash between the two.
+    let resume_from = repo
+        .list_events_for_run(run.id)
+        .await
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter(|e| e.kind == EventKind::StepFinished)
+        .filter_map(|e| {
+            e.payload
+                .as_ref()
+                .and_then(|p| p.get("step_index"))
+                .and_then(serde_json::Value::as_i64)
+        })
+        .max()
+        .map_or(0usize, |last| (last + 1) as usize);
+
+    let mut agent = build_session_agent(state, automation.project_id, run.session_id)
         .await
         .map_err(|e| e.to_string())?;
+    // On a resumed run, restore the messages from already-completed steps so
+    // the remaining prompts see their context (e.g. step 1 sees step 0's
+    // answer). No-op on a fresh first attempt — the session has no messages.
+    if resume_from > 0 {
+        let history: Vec<Message> = repo
+            .get_messages(run.session_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|r| inject_attachment_note(r.message, &r.attachments))
+            .collect();
+        agent.state.history.extend(history);
+        tracing::info!(run = %run.id, resume_from, "resuming run from step cursor");
+    }
     state.insert_agent(run.session_id, agent);
 
-    for (idx, prompt) in automation.prompts.iter().enumerate() {
+    for (idx, prompt) in automation.prompts.iter().enumerate().skip(resume_from) {
         if cancel.is_cancelled() {
             return Err("cancelled".into());
         }
@@ -454,20 +489,24 @@ async fn execute_run(
         let new_msgs = agent.get_history()[prev_len..].to_vec();
         drop(agent);
 
-        // Attribute the prompt to the automation's creator (User-kind) and any
-        // agent outputs to the agent (Agent-kind), via the same helper that
-        // session.send_message uses.
-        let to_persist = attribute_messages(new_msgs, &outputs, automation.created_by, vec![]);
-        repo.append_messages(run.session_id, &to_persist)
-            .await
-            .map_err(|e| e.to_string())?;
-
+        // A step that did not finish cleanly persists NOTHING. The resume cursor
+        // only advances on `step_finished`, so writing a half-run step's prompt
+        // here would let the re-claim replay the same step and duplicate the
+        // user message — exactly the bug this guards against. Bail first.
         if cancelled {
             return Err("cancelled".into());
         }
         if let Some(err) = step_err {
             return Err(format!("step {step_index} failed: {err}"));
         }
+
+        // Clean completion: persist the prompt (User-kind) + agent outputs
+        // (Agent-kind) via the same helper session.send_message uses, then write
+        // `step_finished` — the durable cursor a resumed run reads back.
+        let to_persist = attribute_messages(new_msgs, &outputs, automation.created_by, vec![]);
+        repo.append_messages(run.session_id, &to_persist)
+            .await
+            .map_err(|e| e.to_string())?;
 
         repo.append_event(
             run.id,
