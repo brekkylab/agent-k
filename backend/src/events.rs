@@ -27,6 +27,14 @@ pub enum WsEvent {
         seq: u64,
         output: ailoy::message::MessageOutput,
     },
+    /// Live token fragment for the in-progress assistant turn. Ephemeral: not
+    /// persisted and carries no seq — the client accumulates deltas for live
+    /// rendering and is reconciled by the completed `AgentMessage` that follows.
+    AgentDelta {
+        session_id: String,
+        run_id: String,
+        delta: ailoy::message::MessageDeltaOutput,
+    },
     AgentError {
         session_id: String,
         run_id: String,

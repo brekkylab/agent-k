@@ -98,6 +98,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                         }
                         WsEvent::AgentRunStarted { session_id, .. }
                         | WsEvent::AgentMessage { session_id, .. }
+                        | WsEvent::AgentDelta { session_id, .. }
                         | WsEvent::AgentError { session_id, .. }
                         | WsEvent::AgentRunDone { session_id, .. } => {
                             match Uuid::parse_str(session_id) {

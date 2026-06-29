@@ -2,7 +2,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use ailoy::{
-    agent::Agent,
+    agent::{Agent, AgentEvent},
     message::{FinishReason, Message, MessageOutput, Part, Role},
     runenv::{Sandbox, SandboxConfig},
 };
@@ -881,8 +881,7 @@ pub async fn get_message_history(
             Some(summary) => (*summary).clone(),
             None => match state.store_for(session.project_id).await {
                 Ok(store) => {
-                    let summary =
-                        crate::handlers::knowledge::corpus_summary(&*store.read().await);
+                    let summary = crate::handlers::knowledge::corpus_summary(&*store.read().await);
                     state.set_corpus_summary(session.project_id, summary.clone());
                     summary
                 }
@@ -912,19 +911,31 @@ pub async fn get_message_history(
             // cached result when present; otherwise verify once and cache it.
             // The cache is dropped per project whenever the corpus changes, so a
             // hit always reflects the current corpus.
-            let citations = if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_docs.is_empty() {
-                match state.citation_checks(session.project_id, session.id, r.seq) {
-                    Some(cached) => (*cached).clone(),
-                    None => {
-                        let text: String = r.message.contents.iter().filter_map(|p| p.as_text()).collect();
-                        let checks = crate::handlers::knowledge::verify_citations(&text, &corpus_docs);
-                        state.set_citation_checks(session.project_id, session.id, r.seq, checks.clone());
-                        checks
+            let citations =
+                if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_docs.is_empty() {
+                    match state.citation_checks(session.project_id, session.id, r.seq) {
+                        Some(cached) => (*cached).clone(),
+                        None => {
+                            let text: String = r
+                                .message
+                                .contents
+                                .iter()
+                                .filter_map(|p| p.as_text())
+                                .collect();
+                            let checks =
+                                crate::handlers::knowledge::verify_citations(&text, &corpus_docs);
+                            state.set_citation_checks(
+                                session.project_id,
+                                session.id,
+                                r.seq,
+                                checks.clone(),
+                            );
+                            checks
+                        }
                     }
-                }
-            } else {
-                Vec::new()
-            };
+                } else {
+                    Vec::new()
+                };
             Ok(SessionMessageResponse {
                 seq: r.seq,
                 message: r.message,
@@ -1116,7 +1127,7 @@ pub async fn send_message(
         let mut agent = guard; // OwnedMutexGuard — held for the run's lifetime
         let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
         let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
-        let mut run = agent.run(msg);
+        let mut run = agent.run_stream(msg);
 
         let mut run_error: Option<String> = None;
         let mut stopped = false;
@@ -1150,7 +1161,18 @@ pub async fn send_message(
                 item = run.next() => item,
             };
             match item {
-                Some(Ok(output)) => {
+                // Live token fragment: forward for client-side live rendering.
+                // Ephemeral — not persisted, no seq, never breaks the stop loop
+                // (we let the in-flight turn complete into its `Message` first).
+                Some(Ok(AgentEvent::Delta(delta))) => {
+                    let _ = state2.ws_tx.send(WsEvent::AgentDelta {
+                        session_id: session_id.to_string(),
+                        run_id: run_id.to_string(),
+                        delta,
+                    });
+                }
+                // Completed turn: identical to what `run()` used to yield.
+                Some(Ok(AgentEvent::Message(output))) => {
                     if matches!(output.depth, None | Some(0)) {
                         if output.message.role == Role::Tool {
                             pending_tool_results = pending_tool_results.saturating_sub(1);
@@ -1242,7 +1264,11 @@ pub async fn send_message(
                 // add a paired one (via synthetic_msgs) if none was produced yet.
                 const INTERRUPT_NOTE: &str =
                     "[Interrupted: the user manually stopped response generation here]";
-                if let Some(last) = new_msgs.iter_mut().rev().find(|m| m.role == Role::Assistant) {
+                if let Some(last) = new_msgs
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.role == Role::Assistant)
+                {
                     last.contents.push(Part::text(INTERRUPT_NOTE));
                     if let Some(warm) = agent.state.history[prev_len..]
                         .iter_mut()
@@ -1252,14 +1278,12 @@ pub async fn send_message(
                         warm.contents.push(Part::text(INTERRUPT_NOTE));
                     }
                 } else {
-                    synthetic_msgs
-                        .push(Message::new(Role::Assistant).with_contents([Part::text(INTERRUPT_NOTE)]));
+                    synthetic_msgs.push(
+                        Message::new(Role::Assistant).with_contents([Part::text(INTERRUPT_NOTE)]),
+                    );
                 }
             }
-            agent
-                .state
-                .history
-                .extend(synthetic_msgs.iter().cloned());
+            agent.state.history.extend(synthetic_msgs.iter().cloned());
         }
 
         // Strip the attachment note before persisting — clean content is stored in DB and the
@@ -1288,18 +1312,14 @@ pub async fn send_message(
             }
         }
 
-        to_persist.extend(
-            synthetic_msgs
-                .into_iter()
-                .map(|message| NewSessionMessage {
-                    message,
-                    sender_kind: crate::repository::DbSenderKind::Agent,
-                    sender_name: Some(TOP_LEVEL_AGENT_NAME.to_string()),
-                    sender_user_id: None,
-                    attachments: vec![],
-                    artifacts: vec![],
-                }),
-        );
+        to_persist.extend(synthetic_msgs.into_iter().map(|message| NewSessionMessage {
+            message,
+            sender_kind: crate::repository::DbSenderKind::Agent,
+            sender_name: Some(TOP_LEVEL_AGENT_NAME.to_string()),
+            sender_user_id: None,
+            attachments: vec![],
+            artifacts: vec![],
+        }));
 
         // [A] Persist before releasing the agent lock. On failure: roll back in-memory history,
         // send AgentError (not AgentRunDone), and return — the DB remains consistent.
