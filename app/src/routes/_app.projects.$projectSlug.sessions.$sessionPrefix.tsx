@@ -193,6 +193,13 @@ function SessionPage() {
   // resets, so each turn streams from empty. The committed agent_message is the
   // source of truth — deltas only drive the live "typing" preview.
   const pendingDeltaRef = useRef<string>('');
+  // Smooth reveal: pendingDeltaRef is the *target* (text received so far);
+  // revealedTextRef is what's actually painted. A rAF loop walks the revealed
+  // text toward the target a few chars per frame so bursty network chunks
+  // surface as a steady typewriter effect instead of jumping in blocks.
+  const revealedTextRef = useRef<string>('');
+  const revealRafRef = useRef<number | null>(null);
+  const lastRevealTsRef = useRef<number>(0);
 
   const [composerText, setComposerText] = useState('');
   // Composer layout — false = compact pill (textarea + buttons inline),
@@ -791,6 +798,46 @@ function SessionPage() {
   useEffect(() => {
     if (!sessionId) return;
 
+    const aiId = `live-ai-${sessionId}`;
+
+    // Walk revealedTextRef toward pendingDeltaRef (the target) a few chars at a
+    // time. Self-healing: when a new turn replaces the target, the old revealed
+    // text is no longer a prefix, so we restart the reveal from empty — no
+    // explicit reset needed at run-reset points.
+    const stepReveal = (ts: number) => {
+      // Throttle to ~33fps so a long streaming message isn't re-rendered (and
+      // re-parsed as markdown) 60×/sec.
+      if (ts - lastRevealTsRef.current < 28) {
+        revealRafRef.current = requestAnimationFrame(stepReveal);
+        return;
+      }
+      lastRevealTsRef.current = ts;
+
+      const target = pendingDeltaRef.current;
+      let shown = revealedTextRef.current;
+      if (!target.startsWith(shown)) shown = ''; // new turn → restart
+
+      if (shown.length >= target.length) {
+        revealedTextRef.current = shown;
+        revealRafRef.current = null; // caught up; next delta restarts the loop
+        return;
+      }
+
+      // Reveal proportional to the backlog (with a floor) so a fast stream
+      // never lags far behind, while a trickle still types out smoothly.
+      const remaining = target.length - shown.length;
+      const step = Math.max(3, Math.ceil(remaining / 5));
+      const next = target.slice(0, shown.length + step);
+      revealedTextRef.current = next;
+      setLiveMessages((prev) =>
+        prev.map((m) => (m.id === aiId ? { ...m, body: next, status: 'streaming' as const } : m)),
+      );
+      revealRafRef.current = requestAnimationFrame(stepReveal);
+    };
+    const kickReveal = () => {
+      if (revealRafRef.current === null) revealRafRef.current = requestAnimationFrame(stepReveal);
+    };
+
     const unsubscribe = appWs.subscribe((event: AppWsEvent) => {
       // Ignore events unrelated to this session
       if (!('session_id' in event) || event.session_id !== sessionId) return;
@@ -874,9 +921,15 @@ function SessionPage() {
         armWatchdog(run_id);
         wsOutputsRef.current.set(seq, output);
         // This turn just committed — its full text is now in wsOutputsRef and
-        // becomes the source of truth. Clear the live delta buffer so the next
-        // turn streams from empty (and we don't double-render the same text).
+        // becomes the source of truth. Stop the reveal loop and clear the live
+        // delta buffers so the next turn streams from empty (the setLiveMessages
+        // below snaps the bubble to the committed text).
         pendingDeltaRef.current = '';
+        revealedTextRef.current = '';
+        if (revealRafRef.current !== null) {
+          cancelAnimationFrame(revealRafRef.current);
+          revealRafRef.current = null;
+        }
 
         // Fast path: if seq is strictly greater than maxSeqRef (the common
         // in-order case), Map insertion order is already sorted — no sort needed.
@@ -941,18 +994,12 @@ function SessionPage() {
           .join('');
         if (!frag) return;
 
+        // Append to the target and let the rAF reveal loop paint it smoothly.
+        // The bubble body (current turn's text, replace semantics) is driven by
+        // stepReveal; toolCalls are left untouched — they belong to committed
+        // messages.
         pendingDeltaRef.current += frag;
-        const liveText = pendingDeltaRef.current;
-
-        // Replace the bubble body with the in-progress turn's text (matching
-        // deriveStreamState's replace semantics). toolCalls are left untouched —
-        // they belong to already-committed messages.
-        const aiId = `live-ai-${sessionId}`;
-        setLiveMessages((prev) =>
-          prev.map((m) =>
-            m.id === aiId ? { ...m, body: liveText, status: 'streaming' as const } : m,
-          ),
-        );
+        kickReveal();
       }
 
       if (event.type === 'agent_error') {
@@ -1046,6 +1093,10 @@ function SessionPage() {
       if (wsInactivityTimerRef.current) {
         clearTimeout(wsInactivityTimerRef.current);
         wsInactivityTimerRef.current = null;
+      }
+      if (revealRafRef.current !== null) {
+        cancelAnimationFrame(revealRafRef.current);
+        revealRafRef.current = null;
       }
     };
   }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t, armWatchdog, fetchPreviousPage]);
