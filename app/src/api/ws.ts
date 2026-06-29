@@ -1,6 +1,6 @@
 import { ApiError, BASE_URL, getToken, notifyUnauthorized } from './client';
 import { getMe } from './auth';
-import type { MessageOutput } from './backend-types';
+import type { MessageOutput, MessageDeltaOutput } from './backend-types';
 
 export interface SessionTitleUpdatedEvent {
   type: 'session_title_updated';
@@ -31,6 +31,16 @@ export interface AgentMessageEvent {
   output: MessageOutput;
 }
 
+// Live token fragment for the in-progress assistant turn. Ephemeral — not
+// persisted and carries no seq; the client accumulates deltas for live
+// rendering and is reconciled by the completed `agent_message` that follows.
+export interface AgentDeltaEvent {
+  type: 'agent_delta';
+  session_id: string;
+  run_id: string;
+  delta: MessageDeltaOutput;
+}
+
 export interface AgentErrorEvent {
   type: 'agent_error';
   session_id: string;
@@ -50,7 +60,7 @@ export interface AgentRunIdleEvent {
   session_id: string;
 }
 
-export type AppWsEvent = SessionTitleUpdatedEvent | AgentRunStartedEvent | AgentMessageEvent | AgentErrorEvent | AgentRunDoneEvent | AgentRunIdleEvent;
+export type AppWsEvent = SessionTitleUpdatedEvent | AgentRunStartedEvent | AgentMessageEvent | AgentDeltaEvent | AgentErrorEvent | AgentRunDoneEvent | AgentRunIdleEvent;
 
 type Handler = (event: AppWsEvent) => void;
 

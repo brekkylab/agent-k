@@ -188,6 +188,11 @@ function SessionPage() {
   // doneRunIdsRef: set of run_ids we've already processed a Done for.
   const currentRunIdRef = useRef<string | null>(null);
   const doneRunIdsRef = useRef<Set<string>>(new Set());
+  // Accumulates streamed text fragments (agent_delta) for the in-progress
+  // assistant turn. Reset whenever a turn commits (agent_message) or the run
+  // resets, so each turn streams from empty. The committed agent_message is the
+  // source of truth — deltas only drive the live "typing" preview.
+  const pendingDeltaRef = useRef<string>('');
 
   const [composerText, setComposerText] = useState('');
   // Composer layout — false = compact pill (textarea + buttons inline),
@@ -245,6 +250,7 @@ function SessionPage() {
     setShowScrollDown(false);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
+    pendingDeltaRef.current = '';
     optimisticUserIdRef.current = null;
     currentRunIdRef.current = null;
     doneRunIdsRef.current.clear();
@@ -523,6 +529,7 @@ function SessionPage() {
     setLiveMessages([]);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
+    pendingDeltaRef.current = '';
     currentRunIdRef.current = null;
     optimisticUserIdRef.current = null;
     if (sessionId) void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
@@ -679,6 +686,7 @@ function SessionPage() {
       setOwnedRunId(null);
       setLiveMessages([]);
       wsOutputsRef.current.clear();
+      pendingDeltaRef.current = '';
       optimisticUserIdRef.current = null;
     }
     // On success: the WS event (agent_run_done) handles completion. No finally block.
@@ -802,6 +810,7 @@ function SessionPage() {
         if (isNewRun) {
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
+          pendingDeltaRef.current = '';
         }
         currentRunIdRef.current = run_id;
 
@@ -864,6 +873,10 @@ function SessionPage() {
         }
         armWatchdog(run_id);
         wsOutputsRef.current.set(seq, output);
+        // This turn just committed — its full text is now in wsOutputsRef and
+        // becomes the source of truth. Clear the live delta buffer so the next
+        // turn streams from empty (and we don't double-render the same text).
+        pendingDeltaRef.current = '';
 
         // Fast path: if seq is strictly greater than maxSeqRef (the common
         // in-order case), Map insertion order is already sorted — no sort needed.
@@ -910,6 +923,38 @@ function SessionPage() {
         });
       }
 
+      if (event.type === 'agent_delta') {
+        const { run_id, delta } = event;
+        // Claim the run on first event, or ignore deltas from a stale/other run
+        // (same guard as agent_message).
+        if (currentRunIdRef.current === null) {
+          currentRunIdRef.current = run_id;
+        } else if (run_id !== currentRunIdRef.current) {
+          return;
+        }
+        armWatchdog(run_id);
+
+        // Only text fragments drive the live preview. Tool-call/value fragments
+        // are ignored here — tool calls render from the committed agent_message.
+        const frag = (delta.delta?.contents ?? [])
+          .map((p) => (p.type === 'text' && typeof p.text === 'string' ? p.text : ''))
+          .join('');
+        if (!frag) return;
+
+        pendingDeltaRef.current += frag;
+        const liveText = pendingDeltaRef.current;
+
+        // Replace the bubble body with the in-progress turn's text (matching
+        // deriveStreamState's replace semantics). toolCalls are left untouched —
+        // they belong to already-committed messages.
+        const aiId = `live-ai-${sessionId}`;
+        setLiveMessages((prev) =>
+          prev.map((m) =>
+            m.id === aiId ? { ...m, body: liveText, status: 'streaming' as const } : m,
+          ),
+        );
+      }
+
       if (event.type === 'agent_error') {
         const { run_id } = event;
         // [R2-3] Ignore stale errors from a previous run — same guard as agent_run_done.
@@ -927,6 +972,7 @@ function SessionPage() {
         setLiveMessages([]);
         wsOutputsRef.current.clear();
         maxSeqRef.current = -1;
+        pendingDeltaRef.current = '';
         currentRunIdRef.current = null;
         optimisticUserIdRef.current = null;
       }
@@ -956,6 +1002,7 @@ function SessionPage() {
           setLiveMessages([]);
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
+          pendingDeltaRef.current = '';
           currentRunIdRef.current = null;
           optimisticUserIdRef.current = null;
           setStreaming(false);
@@ -983,6 +1030,7 @@ function SessionPage() {
           setLiveMessages([]);
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
+          pendingDeltaRef.current = '';
           optimisticUserIdRef.current = null;
           currentRunIdRef.current = null;
           setStreaming(false);
