@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use ailoy::{
     agent::{Agent, AgentEvent},
-    message::{FinishReason, Message, MessageOutput, Part, Role},
+    message::{FinishReason, Message, MessageOutput, Part, PartDelta, Role},
     runenv::{Sandbox, SandboxConfig},
 };
 use axum::{
@@ -35,7 +35,6 @@ use crate::{
 
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
-const STOP_RUN_GRACE_SECS: u64 = 10;
 
 pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
@@ -1132,39 +1131,35 @@ pub async fn send_message(
         let mut run_error: Option<String> = None;
         let mut stopped = false;
         let mut depth0_outputs: Vec<MessageOutput> = Vec::new();
-        let mut pending_tool_results: usize = 0;
+        // Accumulates streamed assistant text for the in-flight turn. ailoy drops
+        // its own accumulator when the stream is dropped, so if a stop cuts a turn
+        // short before it commits a Message, this is the only copy of the partial
+        // answer. Cleared whenever a depth-0 assistant Message commits.
+        let mut partial_text = String::new();
         loop {
             let item = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => {
+                    // Stop promptly: drop the stream (aborting the in-flight model
+                    // request) instead of draining the rest of the turn. Whatever
+                    // text streamed so far is in `partial_text` and gets persisted
+                    // below, so the partial answer survives without finishing.
                     stopped = true;
-                    if pending_tool_results == 0 {
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(STOP_RUN_GRACE_SECS),
-                            run.next(),
-                        )
-                        .await
-                        {
-                            Ok(item) => item,
-                            Err(_) => {
-                                tracing::warn!(
-                                    %session_id,
-                                    "stop: in-flight model call exceeded {STOP_RUN_GRACE_SECS}s grace period; discarding"
-                                );
-                                break;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
+                    break;
                 }
                 item = run.next() => item,
             };
             match item {
                 // Live token fragment: forward for client-side live rendering.
-                // Ephemeral — not persisted, no seq, never breaks the stop loop
-                // (we let the in-flight turn complete into its `Message` first).
+                // Ephemeral — not persisted and carries no seq.
                 Some(Ok(AgentEvent::Delta(delta))) => {
+                    // Accumulate text so a mid-turn stop can still persist the
+                    // partial answer (see `partial_text` above).
+                    for part in &delta.delta.contents {
+                        if let PartDelta::Text { text } = part {
+                            partial_text.push_str(text);
+                        }
+                    }
                     let _ = state2.ws_tx.send(WsEvent::AgentDelta {
                         session_id: session_id.to_string(),
                         run_id: run_id.to_string(),
@@ -1174,11 +1169,12 @@ pub async fn send_message(
                 // Completed turn: identical to what `run()` used to yield.
                 Some(Ok(AgentEvent::Message(output))) => {
                     if matches!(output.depth, None | Some(0)) {
-                        if output.message.role == Role::Tool {
-                            pending_tool_results = pending_tool_results.saturating_sub(1);
-                        } else if matches!(output.finish_reason, FinishReason::ToolCall {}) {
-                            pending_tool_results =
-                                output.message.tool_calls.as_ref().map_or(0, |tc| tc.len());
+                        if output.message.role == Role::Assistant {
+                            // This turn committed as a real Message; the partial
+                            // buffer is now redundant — clear it so the next turn
+                            // accumulates from empty (and a later stop doesn't
+                            // re-persist already-committed text).
+                            partial_text.clear();
                         }
                         depth0_outputs.push(output.clone());
                     }
@@ -1260,11 +1256,22 @@ pub async fn send_message(
                 // completion so the client doesn't see a spurious "Run stopped" toast.
                 stopped = false;
             } else {
-                // Mark the turn as cut short: append to the last assistant message, or
-                // add a paired one (via synthetic_msgs) if none was produced yet.
+                // Mark the turn as cut short.
                 const INTERRUPT_NOTE: &str =
                     "[Interrupted: the user manually stopped response generation here]";
-                if let Some(last) = new_msgs
+                if !partial_text.is_empty() {
+                    // The interrupted turn streamed text but never committed a
+                    // Message (ailoy dropped its accumulator). Persist what we
+                    // accumulated as a fresh assistant message so the partial
+                    // answer survives a refresh. Routed through synthetic_msgs so
+                    // it is both persisted and pushed into history (keeping the
+                    // agent's in-memory state consistent with the DB).
+                    partial_text.push_str("\n\n");
+                    partial_text.push_str(INTERRUPT_NOTE);
+                    synthetic_msgs.push(
+                        Message::new(Role::Assistant).with_contents([Part::text(partial_text)]),
+                    );
+                } else if let Some(last) = new_msgs
                     .iter_mut()
                     .rev()
                     .find(|m| m.role == Role::Assistant)
