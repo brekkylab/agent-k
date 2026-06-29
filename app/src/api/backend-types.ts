@@ -138,33 +138,6 @@ export interface MessageOutput {
   usage?: { input_tokens?: number; output_tokens?: number };
 }
 
-// ── Streaming deltas ─────────────────────────────────────────────────────────
-// Incremental fragments emitted by the agent's run_stream loop. Mirror of
-// ailoy's PartDelta/MessageDelta/MessageDeltaOutput (serde tag = "type").
-// Ephemeral: never persisted — the completed MessageOutput is the source of truth.
-
-export type PartDelta =
-  | { type: 'text'; text: string }
-  | { type: 'function'; id?: string | null; function?: unknown }
-  | { type: 'value'; value: unknown }
-  | { type: 'null' }
-  | { type?: string; [k: string]: unknown };
-
-export interface MessageDelta {
-  role?: string | null;
-  contents?: PartDelta[];
-  id?: string | null;
-  thinking?: string | null;
-  tool_calls?: PartDelta[];
-  signature?: string | null;
-}
-
-export interface MessageDeltaOutput {
-  delta: MessageDelta;
-  finish_reason?: { type?: string } | null;
-  usage?: { input_tokens?: number; output_tokens?: number } | null;
-}
-
 // ── Automation ─────────────────────────────────────────────────────────────
 // Mirrors backend/src/model/automation.rs. snake_case is preserved here;
 // transformers.ts maps these onto camelCase domain types.

@@ -176,7 +176,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                     inbound_sessions.lock().await.insert(session_id);
 
                     // Replay any in-progress run so the spectator catches up.
-                    if let Some((run_id, user_message, outputs)) =
+                    if let Some((run_id, user_message, outputs, partial)) =
                         inbound_state.snapshot(&session_id).await
                     {
                         let started = WsEvent::AgentRunStarted {
@@ -196,6 +196,26 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                                 run_id: run_id.to_string(),
                                 seq,
                                 output,
+                            };
+                            if let Ok(json) = serde_json::to_string(&event) {
+                                if inbound_tx.send(Message::Text(json.into())).await.is_err() {
+                                    break 'inbound;
+                                }
+                            }
+                        }
+
+                        // Resume the in-flight turn: replay the partial-text
+                        // snapshot after the committed messages so the client
+                        // picks up mid-turn instead of waiting for the next live
+                        // delta. Snapshot semantics make this idempotent with the
+                        // live deltas that follow.
+                        if !partial.is_empty() {
+                            let cum_len = partial.encode_utf16().count() as u64;
+                            let event = WsEvent::AgentDelta {
+                                session_id: session_id.to_string(),
+                                run_id: run_id.to_string(),
+                                delta: partial,
+                                cum_len,
                             };
                             if let Ok(json) = serde_json::to_string(&event) {
                                 if inbound_tx.send(Message::Text(json.into())).await.is_err() {

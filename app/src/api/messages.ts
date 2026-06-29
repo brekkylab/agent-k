@@ -61,6 +61,20 @@ export async function getRunActive(sessionId: string, runId: string): Promise<bo
   return res.active;
 }
 
+// Snapshot of the session's in-flight run (or null). Mirrors what the WS replays
+// (run_started + messages + partial), so the client can render the in-progress
+// turn immediately on load instead of waiting for the WS replay round-trip.
+export interface ActiveRunSnapshot {
+  run_id: string;
+  user_message: { sender_user_id: string; content: string; attachments: string[]; created_at: string };
+  outputs: { seq: number; output: MessageOutput }[];
+  partial: string;
+}
+
+export async function getActiveRunSnapshot(sessionId: string): Promise<ActiveRunSnapshot | null> {
+  return request<ActiveRunSnapshot | null>(`/sessions/${sessionId}/active-run`);
+}
+
 export interface StreamToolCall {
   id: string;
   name: string;

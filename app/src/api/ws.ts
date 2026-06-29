@@ -1,6 +1,6 @@
 import { ApiError, BASE_URL, getToken, notifyUnauthorized } from './client';
 import { getMe } from './auth';
-import type { MessageOutput, MessageDeltaOutput } from './backend-types';
+import type { MessageOutput } from './backend-types';
 
 export interface SessionTitleUpdatedEvent {
   type: 'session_title_updated';
@@ -31,14 +31,18 @@ export interface AgentMessageEvent {
   output: MessageOutput;
 }
 
-// Live token fragment for the in-progress assistant turn. Ephemeral — not
-// persisted and carries no seq; the client accumulates deltas for live
-// rendering and is reconciled by the completed `agent_message` that follows.
+// Incremental text delta for the in-progress assistant turn. Ephemeral — not
+// persisted, no seq. `delta` is the new text; `cum_len` is the turn's total
+// length (UTF-16 units, matching String.length) after it. The client dedups via
+// cum_len across the replay↔live boundary (skip if already applied, slice off
+// overlap). The resume path sends the whole turn as one delta. Reconciled by the
+// completed `agent_message` that follows.
 export interface AgentDeltaEvent {
   type: 'agent_delta';
   session_id: string;
   run_id: string;
-  delta: MessageDeltaOutput;
+  delta: string;
+  cum_len: number;
 }
 
 export interface AgentErrorEvent {

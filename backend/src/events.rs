@@ -1,6 +1,7 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RunUserMessage {
     pub sender_user_id: String,
     pub content: String,
@@ -27,13 +28,18 @@ pub enum WsEvent {
         seq: u64,
         output: ailoy::message::MessageOutput,
     },
-    /// Live token fragment for the in-progress assistant turn. Ephemeral: not
-    /// persisted and carries no seq — the client accumulates deltas for live
-    /// rendering and is reconciled by the completed `AgentMessage` that follows.
+    /// Incremental text delta for the in-progress assistant turn. Ephemeral: not
+    /// persisted, no seq. `delta` is the newly produced text; `cum_len` is the
+    /// turn's total length (in UTF-16 code units, matching JS `String.length`)
+    /// after appending it. The client uses `cum_len` to dedup/order across the
+    /// replay↔live boundary: skip if already applied, slice off any overlap. The
+    /// resume path (subscribe replay / load) sends the whole turn as one delta.
+    /// Reconciled by the completed `AgentMessage` that follows.
     AgentDelta {
         session_id: String,
         run_id: String,
-        delta: ailoy::message::MessageDeltaOutput,
+        delta: String,
+        cum_len: u64,
     },
     AgentError {
         session_id: String,

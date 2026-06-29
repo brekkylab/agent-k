@@ -123,6 +123,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/sessions/{session_id}/runs/{run_id}/active",
             get(handlers::run_active),
         )
+        .api_route(
+            "/sessions/{session_id}/active-run",
+            get(handlers::get_active_run),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,

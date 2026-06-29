@@ -22,9 +22,9 @@ use crate::{
         DirentScope, copy_dir_recursive, enforce_scope_access, parse_dirent_path, scope_root,
     },
     model::{
-        CreateSessionRequest, MessageSender, RunAck, RunActiveResponse, SendMessageRequest,
-        SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
-        UpdateSessionRequest,
+        ActiveRunOutput, ActiveRunSnapshot, CreateSessionRequest, MessageSender, RunAck,
+        RunActiveResponse, SendMessageRequest, SessionListResponse, SessionMessageListResponse,
+        SessionMessageResponse, SessionResponse, UpdateSessionRequest,
     },
     repository::{
         DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, SessionOrigin, ShareMode,
@@ -1150,21 +1150,32 @@ pub async fn send_message(
                 item = run.next() => item,
             };
             match item {
-                // Live token fragment: forward for client-side live rendering.
-                // Ephemeral — not persisted and carries no seq.
+                // Live text fragment. Broadcast it incrementally (cheap — small
+                // payload even with many subscribers) with the running total so
+                // the client can dedup at the replay↔live boundary. Keep the full
+                // text in `partial_text` for stop-persist and mid-turn resume.
+                // Ephemeral — not persisted, no seq.
                 Some(Ok(AgentEvent::Delta(delta))) => {
-                    // Accumulate text so a mid-turn stop can still persist the
-                    // partial answer (see `partial_text` above).
+                    let mut fragment = String::new();
                     for part in &delta.delta.contents {
                         if let PartDelta::Text { text } = part {
-                            partial_text.push_str(text);
+                            fragment.push_str(text);
                         }
                     }
-                    let _ = state2.ws_tx.send(WsEvent::AgentDelta {
-                        session_id: session_id.to_string(),
-                        run_id: run_id.to_string(),
-                        delta,
-                    });
+                    if !fragment.is_empty() {
+                        partial_text.push_str(&fragment);
+                        // UTF-16 units so cum_len matches the client's String.length.
+                        let cum_len = partial_text.encode_utf16().count() as u64;
+                        // Keep the resume snapshot exact so a (re)subscribe never
+                        // lands in a hole (cheap: in-process, not per-subscriber).
+                        state2.set_partial(&session_id, partial_text.clone()).await;
+                        let _ = state2.ws_tx.send(WsEvent::AgentDelta {
+                            session_id: session_id.to_string(),
+                            run_id: run_id.to_string(),
+                            delta: fragment,
+                            cum_len,
+                        });
+                    }
                 }
                 // Completed turn: identical to what `run()` used to yield.
                 Some(Ok(AgentEvent::Message(output))) => {
@@ -1173,8 +1184,10 @@ pub async fn send_message(
                             // This turn committed as a real Message; the partial
                             // buffer is now redundant — clear it so the next turn
                             // accumulates from empty (and a later stop doesn't
-                            // re-persist already-committed text).
+                            // re-persist already-committed text). Also clear the
+                            // replayable snapshot so a resume doesn't double it.
                             partial_text.clear();
+                            state2.set_partial(&session_id, String::new()).await;
                         }
                         depth0_outputs.push(output.clone());
                     }
@@ -1446,4 +1459,35 @@ pub async fn run_active(
         Some((active_run_id, _, _)) if active_run_id == run_id
     );
     Ok(Json(RunActiveResponse { active }))
+}
+
+/// Snapshot of the session's in-flight run (or `null` if none), so a client
+/// loading the page mid-stream can render the in-progress turn immediately
+/// rather than waiting for the WebSocket replay. The completed run is in the DB
+/// via the normal message history; this only covers the not-yet-persisted run.
+pub async fn get_active_run(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(session_ref): Path<String>,
+) -> ApiResult<Json<Option<ActiveRunSnapshot>>> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    let snapshot = state.snapshot(&session_id).await.map(
+        |(run_id, user_message, outputs, partial)| ActiveRunSnapshot {
+            run_id: run_id.to_string(),
+            user_message,
+            outputs: outputs
+                .into_iter()
+                .map(|(seq, output)| ActiveRunOutput { seq, output })
+                .collect(),
+            partial,
+        },
+    );
+    Ok(Json(snapshot))
 }

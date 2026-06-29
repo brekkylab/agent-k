@@ -34,6 +34,10 @@ pub struct ActiveAgentRun {
     pub cancel: CancellationToken,
     pub(crate) next_seq: u64,
     pub(crate) outputs: Vec<(u64, MessageOutput)>,
+    /// Accumulated text of the in-flight (not-yet-committed) assistant turn,
+    /// snapshotted from the stream so a client that (re)subscribes mid-turn can
+    /// resume the partial answer. Cleared when the turn commits as an output.
+    pub(crate) partial: String,
 }
 
 pub struct AppState {
@@ -77,7 +81,8 @@ pub struct AppState {
     /// Cached citation-verification results, keyed by `(project, session, seq)`.
     /// Lets the message-fetch path reuse a check instead of recomputing it each
     /// poll; dropped per project when the corpus changes so it never goes stale.
-    citation_checks: DashMap<(Uuid, Uuid, i64), Arc<Vec<crate::handlers::knowledge::CitationCheck>>>,
+    citation_checks:
+        DashMap<(Uuid, Uuid, i64), Arc<Vec<crate::handlers::knowledge::CitationCheck>>>,
     pub jwt: JwtConfig,
     pub data_root: PathBuf,
     pub max_upload_bytes: usize,
@@ -133,7 +138,10 @@ impl AppState {
 
     /// Whether a knowledge resync is currently in flight for `project_id`.
     pub fn is_indexing(&self, project_id: Uuid) -> bool {
-        self.knowledge_indexing.get(&project_id).map(|n| *n > 0).unwrap_or(false)
+        self.knowledge_indexing
+            .get(&project_id)
+            .map(|n| *n > 0)
+            .unwrap_or(false)
     }
 
     /// Per-project resync lock; the caller holds it across the whole resync.
@@ -161,7 +169,9 @@ impl AppState {
     /// The last knowledge-resync error for `project_id`, if the most recent
     /// resync failed and none has succeeded since.
     pub fn resync_error(&self, project_id: Uuid) -> Option<String> {
-        self.knowledge_resync_error.get(&project_id).map(|e| e.clone())
+        self.knowledge_resync_error
+            .get(&project_id)
+            .map(|e| e.clone())
     }
 
     /// Replace the set of scope-relative paths that failed to index.
@@ -169,7 +179,8 @@ impl AppState {
         if paths.is_empty() {
             self.knowledge_failed_files.remove(&project_id);
         } else {
-            self.knowledge_failed_files.insert(project_id, Arc::new(paths));
+            self.knowledge_failed_files
+                .insert(project_id, Arc::new(paths));
         }
     }
 
@@ -183,7 +194,13 @@ impl AppState {
     /// Cached content id for a knowledge file, valid only if `(mtime, size)`
     /// still match what was cached — otherwise `None` and the caller must
     /// re-hash. Lets the per-file status poll avoid re-reading unchanged files.
-    pub fn cached_file_id(&self, project_id: Uuid, path: &std::path::Path, mtime: SystemTime, size: u64) -> Option<Uuid> {
+    pub fn cached_file_id(
+        &self,
+        project_id: Uuid,
+        path: &std::path::Path,
+        mtime: SystemTime,
+        size: u64,
+    ) -> Option<Uuid> {
         self.knowledge_file_ids
             .get(&(project_id, path.to_path_buf()))
             .and_then(|e| {
@@ -193,7 +210,14 @@ impl AppState {
     }
 
     /// Record a knowledge file's content id alongside its `(mtime, size)`.
-    pub fn cache_file_id(&self, project_id: Uuid, path: &std::path::Path, mtime: SystemTime, size: u64, id: Uuid) {
+    pub fn cache_file_id(
+        &self,
+        project_id: Uuid,
+        path: &std::path::Path,
+        mtime: SystemTime,
+        size: u64,
+        id: Uuid,
+    ) {
         self.knowledge_file_ids
             .insert((project_id, path.to_path_buf()), (mtime, size, id));
     }
@@ -224,7 +248,9 @@ impl AppState {
         session_id: Uuid,
         seq: i64,
     ) -> Option<Arc<Vec<crate::handlers::knowledge::CitationCheck>>> {
-        self.citation_checks.get(&(project_id, session_id, seq)).map(|e| e.clone())
+        self.citation_checks
+            .get(&(project_id, session_id, seq))
+            .map(|e| e.clone())
     }
 
     /// Cache the citation checks for one message.
@@ -318,7 +344,10 @@ impl AppState {
         Ok(self
             .document_stores
             .entry(project_id)
-            .or_insert(StoreEntry { store: shared, last_access: Instant::now() })
+            .or_insert(StoreEntry {
+                store: shared,
+                last_access: Instant::now(),
+            })
             .store
             .clone())
     }
@@ -366,6 +395,7 @@ impl AppState {
             cancel: cancel.clone(),
             next_seq: 0,
             outputs: vec![],
+            partial: String::new(),
         }));
         if self.active_agent_runs.insert(session_id, fresh).is_some() {
             // Caller holds the agent lock, so no real run is executing.
@@ -401,15 +431,31 @@ impl AppState {
         Some(seq)
     }
 
+    /// Update the in-flight turn's accumulated text (for mid-turn resume). Pass
+    /// an empty string to clear it once the turn commits as an output.
+    pub async fn set_partial(&self, session_id: &Uuid, text: String) {
+        let Some(entry) = self.active_agent_runs.get(session_id) else {
+            return;
+        };
+        let run_arc = entry.value().clone();
+        drop(entry);
+        run_arc.write().await.partial = text;
+    }
+
     pub async fn snapshot(
         &self,
         session_id: &Uuid,
-    ) -> Option<(Uuid, RunUserMessage, Vec<(u64, MessageOutput)>)> {
+    ) -> Option<(Uuid, RunUserMessage, Vec<(u64, MessageOutput)>, String)> {
         let entry = self.active_agent_runs.get(session_id)?;
         let run_arc = entry.value().clone();
         drop(entry);
         let run = run_arc.read().await;
-        Some((run.run_id, run.user_message.clone(), run.outputs.clone()))
+        Some((
+            run.run_id,
+            run.user_message.clone(),
+            run.outputs.clone(),
+            run.partial.clone(),
+        ))
     }
 
     pub fn has_active_run(&self, session_id: &Uuid) -> bool {

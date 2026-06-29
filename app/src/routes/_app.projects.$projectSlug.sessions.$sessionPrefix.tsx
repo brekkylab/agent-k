@@ -7,7 +7,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
 import { getSession, markSessionRead, updateSessionShareMode } from '@/api/sessions';
-import { listMessageItems, sendMessage, stopRun, getRunActive, deriveStreamState } from '@/api/messages';
+import { listMessageItems, sendMessage, stopRun, getRunActive, getActiveRunSnapshot, deriveStreamState } from '@/api/messages';
 import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
@@ -200,6 +200,11 @@ function SessionPage() {
   const revealedTextRef = useRef<string>('');
   const revealRafRef = useRef<number | null>(null);
   const lastRevealTsRef = useRef<number>(0);
+  // Whether the current turn's first text chunk has been painted. The first
+  // chunk is shown instantly (no animation) — for a fresh turn it's tiny, but on
+  // a mid-stream resume it's the whole backlog, which should appear at once
+  // rather than slowly retyping. Subsequent chunks animate. Reset per turn.
+  const revealSeededRef = useRef<boolean>(false);
 
   const [composerText, setComposerText] = useState('');
   // Composer layout — false = compact pill (textarea + buttons inline),
@@ -841,7 +846,7 @@ function SessionPage() {
       if (revealRafRef.current === null) revealRafRef.current = requestAnimationFrame(stepReveal);
     };
 
-    const unsubscribe = appWs.subscribe((event: AppWsEvent) => {
+    const processEvent = (event: AppWsEvent) => {
       // Ignore events unrelated to this session
       if (!('session_id' in event) || event.session_id !== sessionId) return;
 
@@ -861,6 +866,8 @@ function SessionPage() {
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
           pendingDeltaRef.current = '';
+          revealedTextRef.current = '';
+          revealSeededRef.current = false;
         }
         currentRunIdRef.current = run_id;
 
@@ -929,6 +936,7 @@ function SessionPage() {
         // below snaps the bubble to the committed text).
         pendingDeltaRef.current = '';
         revealedTextRef.current = '';
+        revealSeededRef.current = false;
         if (revealRafRef.current !== null) {
           cancelAnimationFrame(revealRafRef.current);
           revealRafRef.current = null;
@@ -980,7 +988,7 @@ function SessionPage() {
       }
 
       if (event.type === 'agent_delta') {
-        const { run_id, delta } = event;
+        const { run_id, delta, cum_len } = event;
         // Claim the run on first event, or ignore deltas from a stale/other run
         // (same guard as agent_message).
         if (currentRunIdRef.current === null) {
@@ -990,19 +998,33 @@ function SessionPage() {
         }
         armWatchdog(run_id);
 
-        // Only text fragments drive the live preview. Tool-call/value fragments
-        // are ignored here — tool calls render from the committed agent_message.
-        const frag = (delta.delta?.contents ?? [])
-          .map((p) => (p.type === 'text' && typeof p.text === 'string' ? p.text : ''))
-          .join('');
-        if (!frag) return;
+        // Append the delta, deduping across the replay↔live boundary via cum_len
+        // (the turn's total length after this delta). pendingDeltaRef holds the
+        // text applied so far, so its .length is what we've applied.
+        const applied = pendingDeltaRef.current.length;
+        if (cum_len <= applied) return; // already have this text (replay overlap)
+        const cumStart = cum_len - delta.length; // length before this delta
+        if (cumStart > applied) {
+          // Hole: we missed an earlier delta (e.g. broadcast lag). Can't fill it
+          // safely — leave it; the completed agent_message reconciles the turn.
+          return;
+        }
+        // Slice off any overlap already applied, then append the new tail.
+        pendingDeltaRef.current += cumStart === applied ? delta : delta.slice(applied - cumStart);
 
-        // Append to the target and let the rAF reveal loop paint it smoothly.
-        // The bubble body (current turn's text, replace semantics) is driven by
-        // stepReveal; toolCalls are left untouched — they belong to committed
-        // messages.
-        pendingDeltaRef.current += frag;
-        kickReveal();
+        if (!revealSeededRef.current) {
+          // First chunk of this turn: paint instantly. Tiny for a fresh turn; for
+          // a mid-stream resume it's the whole backlog, which should appear at
+          // once rather than slowly retyping. Later chunks animate.
+          revealSeededRef.current = true;
+          revealedTextRef.current = pendingDeltaRef.current;
+          const body = pendingDeltaRef.current;
+          setLiveMessages((prev) =>
+            prev.map((m) => (m.id === aiId ? { ...m, body, status: 'streaming' as const } : m)),
+          );
+        } else {
+          kickReveal();
+        }
       }
 
       if (event.type === 'agent_error') {
@@ -1089,7 +1111,40 @@ function SessionPage() {
           setStopping(false);
         }
       }
-    });
+    };
+
+    const unsubscribe = appWs.subscribe(processEvent);
+
+    // Seed the in-flight run from the HTTP snapshot so a refresh mid-stream
+    // renders the in-progress turn immediately (the WS replay arrives a
+    // round-trip later). Feeds the same event shapes through processEvent; it's
+    // idempotent with the replay (run claimed by id, messages keyed by seq,
+    // delta is a length-guarded snapshot).
+    void getActiveRunSnapshot(sessionId)
+      .then((snap) => {
+        if (!snap) return;
+        processEvent({
+          type: 'agent_run_started',
+          session_id: sessionId,
+          run_id: snap.run_id,
+          user_message: snap.user_message,
+        });
+        for (const { seq, output } of snap.outputs) {
+          processEvent({ type: 'agent_message', session_id: sessionId, run_id: snap.run_id, seq, output });
+        }
+        if (snap.partial) {
+          processEvent({
+            type: 'agent_delta',
+            session_id: sessionId,
+            run_id: snap.run_id,
+            delta: snap.partial,
+            cum_len: snap.partial.length,
+          });
+        }
+      })
+      .catch(() => {
+        /* best-effort seed; the WS replay is the fallback */
+      });
 
     return () => {
       unsubscribe();
