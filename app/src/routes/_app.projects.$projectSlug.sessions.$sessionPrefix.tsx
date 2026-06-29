@@ -823,10 +823,13 @@ function SessionPage() {
         return;
       }
 
-      // Reveal proportional to the backlog (with a floor) so a fast stream
-      // never lags far behind, while a trickle still types out smoothly.
+      // Reveal proportional to the backlog so a fast stream still catches up,
+      // but with a *gentle* divisor and low floor: this intentionally lags a
+      // little, draining each burst over many frames so the gaps between a slow
+      // model's bursts are filled with steady typing instead of stutter. A cap
+      // keeps a huge backlog (or whole-message arrival) from snapping at once.
       const remaining = target.length - shown.length;
-      const step = Math.max(3, Math.ceil(remaining / 5));
+      const step = Math.min(Math.max(1, Math.ceil(remaining / 10)), 8);
       const next = target.slice(0, shown.length + step);
       revealedTextRef.current = next;
       setLiveMessages((prev) =>
