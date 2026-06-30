@@ -167,6 +167,12 @@ function SessionPage() {
   // Id of the first rendered message. When it changes the list grew from the
   // top (older-page prepend), not the tail — used to suppress auto-follow there.
   const prevFirstIdRef = useRef<string | undefined>(undefined);
+  // Whether streaming/new-message growth should stick the viewport to the
+  // bottom. Stays true while the user rides the tail; a deliberate upward
+  // scroll (wheel/touch) turns it off so tokens stop yanking them down
+  // mid-read, and returning to the bottom re-engages it. See the scroll
+  // listener below.
+  const autoFollowRef = useRef(true);
 
   // WS-driven: outputs map keyed by seq (for idempotent catch-up + live merging)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
@@ -271,6 +277,7 @@ function SessionPage() {
     prevFirstIdRef.current = undefined;
     prependAnchorRef.current = null;
     didInitialScrollRef.current = false;
+    autoFollowRef.current = true;
   }
 
   // On entering a session, mark it read on the server with a lightweight POST
@@ -340,6 +347,7 @@ function SessionPage() {
     // Own send — jump to the bottom immediately, even if scrolled far up.
     if (forceScrollRef.current) {
       forceScrollRef.current = false;
+      autoFollowRef.current = true;
       scrollToTail(el, 'instant');
       setShowNewMsgPill(false);
       return;
@@ -358,11 +366,17 @@ function SessionPage() {
       return;
     }
 
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom <= 700) {
-      scrollToTail(el, 'smooth');
+    // Follow the tail only while the user hasn't deliberately scrolled up. The
+    // scroll listener flips `autoFollowRef` off on an upward wheel/touch gesture
+    // and back on once they return to the bottom — so a streaming reply no
+    // longer drags the viewport down while they're reading earlier text.
+    if (autoFollowRef.current) {
+      // Instant (not smooth) while streaming: a per-token smooth animation is
+      // always in flight and fights a user trying to scroll up — they'd have to
+      // outrun it. Instant means a small upward scroll sticks immediately.
+      scrollToTail(el, streaming ? 'instant' : 'smooth');
     } else if (allMessages.length > prevCount) {
-      // Scrolled too far up to auto-follow — surface a "new message" pill instead.
+      // Opted out of follow — surface a "new message" pill instead.
       setShowNewMsgPill(true);
     }
   }, [allMessages.length, streaming, contentVersion]);
@@ -372,11 +386,23 @@ function SessionPage() {
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    let lastTop = el.scrollTop;
     const onScroll = () => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (distanceFromBottom <= 40) {
-        setShowNewMsgPill(false);
+      const top = el.scrollTop;
+      const distanceFromBottom = el.scrollHeight - top - el.clientHeight;
+      // Direction-based follow detection. The streaming auto-scroll only ever
+      // moves scrollTop *down* (toward the tail) and growing content fires no
+      // scroll event, so any decrease in scrollTop is the user scrolling up —
+      // by any means (wheel, trackpad, scrollbar, keys). Stop following on the
+      // slightest upward move; re-engage only once they're back at the very
+      // bottom. The 0.5px epsilon ignores sub-pixel jitter at rest.
+      if (top < lastTop - 0.5) {
+        autoFollowRef.current = false;
+      } else if (distanceFromBottom <= 1) {
+        autoFollowRef.current = true;
       }
+      lastTop = top;
+      if (distanceFromBottom <= 40) setShowNewMsgPill(false);
       setShowScrollDown(distanceFromBottom > 700);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
@@ -385,6 +411,7 @@ function SessionPage() {
 
   const scrollToBottom = useCallback(() => {
     setShowNewMsgPill(false);
+    autoFollowRef.current = true;
     scrollToTail(scrollContainerRef.current, 'instant');
   }, []);
 
