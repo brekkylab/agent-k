@@ -1235,8 +1235,10 @@ pub async fn send_message(
                 tracing::error!(%session_id, "agent run failed: {err}");
                 // Truncate in-memory history to match DB state so the agent stays consistent.
                 agent.state.history.truncate(prev_len);
+                // End the run before releasing the lock so no newer run can slot
+                // in between drop and cleanup.
+                state2.end_run(&session_id, run_id);
                 drop(agent);
-                state2.end_run(&session_id);
                 let _ = state2.ws_tx.send(WsEvent::AgentError {
                     session_id: session_id.to_string(),
                     run_id: run_id.to_string(),
@@ -1363,8 +1365,8 @@ pub async fn send_message(
         {
             tracing::error!(%session_id, "failed to persist messages: {e}");
             agent.state.history.truncate(prev_len);
+            state2.end_run(&session_id, run_id);
             drop(agent);
-            state2.end_run(&session_id);
             let _ = state2.ws_tx.send(WsEvent::AgentError {
                 session_id: session_id.to_string(),
                 run_id: run_id.to_string(),
@@ -1372,7 +1374,11 @@ pub async fn send_message(
             });
             return;
         }
-        drop(agent); // Release OwnedMutexGuard only after successful persist
+        // End the run before releasing the lock: while the OwnedMutexGuard is
+        // held no other request can acquire it and start a replacement run, so
+        // this can never delete a newer run's record.
+        state2.end_run(&session_id, run_id);
+        drop(agent); // Release OwnedMutexGuard only after successful persist + cleanup
 
         // Intentionally NOT calling mark_session_read here: the sender should
         // only be considered to have read the agent's reply when they actually
@@ -1381,7 +1387,6 @@ pub async fn send_message(
         // messages, so unread_count is always 0 — breaking cross-session
         // unread badges for users who navigated away before the agent finished.
 
-        state2.end_run(&session_id);
         let _ = state2.ws_tx.send(WsEvent::AgentRunDone {
             session_id: session_id.to_string(),
             run_id: run_id.to_string(),
@@ -1399,7 +1404,10 @@ pub async fn send_message(
                 err = %join_err,
                 "agent background task panicked; forcing end_run and AgentError"
             );
-            state_mon.end_run(&session_id);
+            // run_id-guarded: unwind released the agent lock before this task
+            // ran, so a newer run may already own the session's entry — only
+            // remove ours.
+            state_mon.end_run(&session_id, run_id);
             let _ = state_mon.ws_tx.send(WsEvent::AgentError {
                 session_id: session_id.to_string(),
                 run_id: run_id.to_string(),

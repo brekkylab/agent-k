@@ -464,13 +464,32 @@ impl AppState {
         self.active_agent_runs.contains_key(session_id)
     }
 
-    /// Removes the active run record for `session_id`.
+    /// Removes the active run record for `session_id`, but only if it still
+    /// belongs to `run_id`.
+    ///
+    /// The `run_id` guard matters because a run releases its agent lock before
+    /// this is called (and a panicking run releases it during unwind, well
+    /// before the monitor task runs cleanup). In that window a newer run can
+    /// acquire the lock and replace this session's entry via [`Self::start_run`].
+    /// A blind `remove(session_id)` would then delete the *newer* run's record,
+    /// orphaning it (no live stream, unstoppable). `remove_if` runs the
+    /// predicate under the shard lock, so the check-and-remove is atomic.
     ///
     /// # Invariant
     /// Must be called exactly once per `start_run`, on both success and error paths.
     /// Failing to call this leaks the in-memory run buffer indefinitely.
-    pub fn end_run(&self, session_id: &Uuid) {
-        self.active_agent_runs.remove(session_id);
+    pub fn end_run(&self, session_id: &Uuid, run_id: Uuid) {
+        // `try_read` is sufficient: only the run's own task ever write-locks the
+        // entry (push_output/set_partial), and it is no longer streaming by the
+        // time it ends its run — so no writer contends here. A newer run holding
+        // its own write lock only fails the predicate, which is the correct
+        // outcome (don't remove someone else's entry).
+        self.active_agent_runs.remove_if(session_id, |_, run_arc| {
+            run_arc
+                .try_read()
+                .map(|run| run.run_id == run_id)
+                .unwrap_or(false)
+        });
     }
 }
 

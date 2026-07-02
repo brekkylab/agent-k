@@ -427,7 +427,7 @@ async fn stop_run_authz_and_lifecycle() {
         StatusCode::FORBIDDEN,
         "only the sender may stop their run"
     );
-    state.end_run(&session.id);
+    state.end_run(&session.id, other_run_id);
 
     let own_user_msg = RunUserMessage {
         sender_user_id: user_id.to_string(),
