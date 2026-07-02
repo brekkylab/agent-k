@@ -10,8 +10,8 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 
 use agent_k::agents::get_coworker_agent;
 use ailoy::{
-    agent::Agent,
-    message::{Message, Part, Role},
+    agent::{Agent, AgentEvent},
+    message::{Message, Part, PartDelta, Role},
 };
 use futures::StreamExt;
 
@@ -194,42 +194,62 @@ fn prepare_dir(dir: &str) {
 
 async fn stream_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<()> {
     let query = Message::new(Role::User).with_contents([Part::text(user_input)]);
-    let mut stream = agent.run(query);
+    let mut stream = agent.run_stream(query);
+    // Track whether the current assistant line has streamed text so we can
+    // terminate it with a newline before tool calls / the next turn.
+    let mut line_open = false;
     while let Some(event) = stream.next().await {
-        let event = event?;
-        let msg = &event.message;
-        match msg.role {
-            Role::Assistant => {
-                for part in &msg.contents {
-                    if let Some(t) = part.as_text() {
-                        if !t.is_empty() {
-                            println!("{t}");
+        match event? {
+            // Live token fragments: print assistant text as it arrives.
+            AgentEvent::Delta(d) => {
+                for part in &d.delta.contents {
+                    if let PartDelta::Text { text } = part {
+                        if !text.is_empty() {
+                            print!("{text}");
                             io::stdout().flush().ok();
-                        }
-                    }
-                }
-                if let Some(tcs) = &msg.tool_calls {
-                    for tc in tcs {
-                        if let Some((_id, name, args)) = tc.as_function() {
-                            let args_json = serde_json::to_string(args)
-                                .unwrap_or_else(|_| "<unprintable>".into());
-                            println!("[coworker] tool: {name} {args_json}");
+                            line_open = true;
                         }
                     }
                 }
             }
-            Role::Tool => {
-                for part in &msg.contents {
-                    if let Some(t) = part.as_text() {
-                        println!("[coworker] tool result: {t}");
-                    } else if let Some(v) = part.as_value() {
-                        let s = serde_json::to_string(v).unwrap_or_else(|_| "<unprintable>".into());
-                        println!("[coworker] tool result: {s}");
+            // Completed turn: assistant text already streamed above, so here we
+            // only close the line and surface tool calls / tool results.
+            AgentEvent::Message(event) => {
+                let msg = &event.message;
+                match msg.role {
+                    Role::Assistant => {
+                        if line_open {
+                            println!();
+                            line_open = false;
+                        }
+                        if let Some(tcs) = &msg.tool_calls {
+                            for tc in tcs {
+                                if let Some((_id, name, args)) = tc.as_function() {
+                                    let args_json = serde_json::to_string(args)
+                                        .unwrap_or_else(|_| "<unprintable>".into());
+                                    println!("[coworker] tool: {name} {args_json}");
+                                }
+                            }
+                        }
                     }
+                    Role::Tool => {
+                        for part in &msg.contents {
+                            if let Some(t) = part.as_text() {
+                                println!("[coworker] tool result: {t}");
+                            } else if let Some(v) = part.as_value() {
+                                let s = serde_json::to_string(v)
+                                    .unwrap_or_else(|_| "<unprintable>".into());
+                                println!("[coworker] tool result: {s}");
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
-            _ => {}
         }
+    }
+    if line_open {
+        println!();
     }
     println!();
     Ok(())

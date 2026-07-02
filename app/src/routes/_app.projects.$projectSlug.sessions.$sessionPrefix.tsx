@@ -7,7 +7,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
 import { getSession, markSessionRead, updateSessionShareMode } from '@/api/sessions';
-import { listMessageItems, sendMessage, stopRun, getRunActive, deriveStreamState } from '@/api/messages';
+import { listMessageItems, sendMessage, stopRun, getRunActive, getActiveRunSnapshot, deriveStreamState } from '@/api/messages';
 import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
@@ -167,6 +167,12 @@ function SessionPage() {
   // Id of the first rendered message. When it changes the list grew from the
   // top (older-page prepend), not the tail — used to suppress auto-follow there.
   const prevFirstIdRef = useRef<string | undefined>(undefined);
+  // Whether streaming/new-message growth should stick the viewport to the
+  // bottom. Stays true while the user rides the tail; a deliberate upward
+  // scroll (wheel/touch) turns it off so tokens stop yanking them down
+  // mid-read, and returning to the bottom re-engages it. See the scroll
+  // listener below.
+  const autoFollowRef = useRef(true);
 
   // WS-driven: outputs map keyed by seq (for idempotent catch-up + live merging)
   const wsOutputsRef = useRef<Map<number, MessageOutput>>(new Map());
@@ -188,6 +194,28 @@ function SessionPage() {
   // doneRunIdsRef: set of run_ids we've already processed a Done for.
   const currentRunIdRef = useRef<string | null>(null);
   const doneRunIdsRef = useRef<Set<string>>(new Set());
+  // Accumulates streamed text fragments (agent_delta) for the in-progress
+  // assistant turn. Reset whenever a turn commits (agent_message) or the run
+  // resets, so each turn streams from empty. The committed agent_message is the
+  // source of truth — deltas only drive the live "typing" preview.
+  const pendingDeltaRef = useRef<string>('');
+  // Smooth reveal: pendingDeltaRef is the *target* (text received so far);
+  // revealedTextRef is what's actually painted. A rAF loop walks the revealed
+  // text toward the target a few chars per frame so bursty network chunks
+  // surface as a steady typewriter effect instead of jumping in blocks.
+  const revealedTextRef = useRef<string>('');
+  const revealRafRef = useRef<number | null>(null);
+  const lastRevealTsRef = useRef<number>(0);
+  // Whether the current turn's first text chunk has been painted. The first
+  // chunk is shown instantly (no animation) — for a fresh turn it's tiny, but on
+  // a mid-stream resume it's the whole backlog, which should appear at once
+  // rather than slowly retyping. Subsequent chunks animate. Reset per turn.
+  const revealSeededRef = useRef<boolean>(false);
+  // True while a hole-recovery resync (refetch of the server-side partial) is in
+  // flight. After a dropped delta every subsequent delta also reads as a hole,
+  // so this gates the refetch to one at a time — otherwise a fast stream would
+  // fire an HTTP snapshot per token until the first one lands.
+  const resyncingRef = useRef<boolean>(false);
 
   const [composerText, setComposerText] = useState('');
   // Composer layout — false = compact pill (textarea + buttons inline),
@@ -245,6 +273,8 @@ function SessionPage() {
     setShowScrollDown(false);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
+    pendingDeltaRef.current = '';
+    resyncingRef.current = false;
     optimisticUserIdRef.current = null;
     currentRunIdRef.current = null;
     doneRunIdsRef.current.clear();
@@ -253,6 +283,7 @@ function SessionPage() {
     prevFirstIdRef.current = undefined;
     prependAnchorRef.current = null;
     didInitialScrollRef.current = false;
+    autoFollowRef.current = true;
   }
 
   // On entering a session, mark it read on the server with a lightweight POST
@@ -322,6 +353,7 @@ function SessionPage() {
     // Own send — jump to the bottom immediately, even if scrolled far up.
     if (forceScrollRef.current) {
       forceScrollRef.current = false;
+      autoFollowRef.current = true;
       scrollToTail(el, 'instant');
       setShowNewMsgPill(false);
       return;
@@ -340,11 +372,17 @@ function SessionPage() {
       return;
     }
 
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom <= 700) {
-      scrollToTail(el, 'smooth');
+    // Follow the tail only while the user hasn't deliberately scrolled up. The
+    // scroll listener flips `autoFollowRef` off on an upward wheel/touch gesture
+    // and back on once they return to the bottom — so a streaming reply no
+    // longer drags the viewport down while they're reading earlier text.
+    if (autoFollowRef.current) {
+      // Instant (not smooth) while streaming: a per-token smooth animation is
+      // always in flight and fights a user trying to scroll up — they'd have to
+      // outrun it. Instant means a small upward scroll sticks immediately.
+      scrollToTail(el, streaming ? 'instant' : 'smooth');
     } else if (allMessages.length > prevCount) {
-      // Scrolled too far up to auto-follow — surface a "new message" pill instead.
+      // Opted out of follow — surface a "new message" pill instead.
       setShowNewMsgPill(true);
     }
   }, [allMessages.length, streaming, contentVersion]);
@@ -354,11 +392,23 @@ function SessionPage() {
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
+    let lastTop = el.scrollTop;
     const onScroll = () => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (distanceFromBottom <= 40) {
-        setShowNewMsgPill(false);
+      const top = el.scrollTop;
+      const distanceFromBottom = el.scrollHeight - top - el.clientHeight;
+      // Direction-based follow detection. The streaming auto-scroll only ever
+      // moves scrollTop *down* (toward the tail) and growing content fires no
+      // scroll event, so any decrease in scrollTop is the user scrolling up —
+      // by any means (wheel, trackpad, scrollbar, keys). Stop following on the
+      // slightest upward move; re-engage only once they're back at the very
+      // bottom. The 0.5px epsilon ignores sub-pixel jitter at rest.
+      if (top < lastTop - 0.5) {
+        autoFollowRef.current = false;
+      } else if (distanceFromBottom <= 1) {
+        autoFollowRef.current = true;
       }
+      lastTop = top;
+      if (distanceFromBottom <= 40) setShowNewMsgPill(false);
       setShowScrollDown(distanceFromBottom > 700);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
@@ -367,6 +417,7 @@ function SessionPage() {
 
   const scrollToBottom = useCallback(() => {
     setShowNewMsgPill(false);
+    autoFollowRef.current = true;
     scrollToTail(scrollContainerRef.current, 'instant');
   }, []);
 
@@ -523,6 +574,7 @@ function SessionPage() {
     setLiveMessages([]);
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
+    pendingDeltaRef.current = '';
     currentRunIdRef.current = null;
     optimisticUserIdRef.current = null;
     if (sessionId) void queryClient.refetchQueries({ queryKey: ['messages', sessionId] });
@@ -679,6 +731,7 @@ function SessionPage() {
       setOwnedRunId(null);
       setLiveMessages([]);
       wsOutputsRef.current.clear();
+      pendingDeltaRef.current = '';
       optimisticUserIdRef.current = null;
     }
     // On success: the WS event (agent_run_done) handles completion. No finally block.
@@ -783,7 +836,50 @@ function SessionPage() {
   useEffect(() => {
     if (!sessionId) return;
 
-    const unsubscribe = appWs.subscribe((event: AppWsEvent) => {
+    const aiId = `live-ai-${sessionId}`;
+
+    // Walk revealedTextRef toward pendingDeltaRef (the target) a few chars at a
+    // time. Self-healing: when a new turn replaces the target, the old revealed
+    // text is no longer a prefix, so we restart the reveal from empty — no
+    // explicit reset needed at run-reset points.
+    const stepReveal = (ts: number) => {
+      // Throttle to ~33fps so a long streaming message isn't re-rendered (and
+      // re-parsed as markdown) 60×/sec.
+      if (ts - lastRevealTsRef.current < 28) {
+        revealRafRef.current = requestAnimationFrame(stepReveal);
+        return;
+      }
+      lastRevealTsRef.current = ts;
+
+      const target = pendingDeltaRef.current;
+      let shown = revealedTextRef.current;
+      if (!target.startsWith(shown)) shown = ''; // new turn → restart
+
+      if (shown.length >= target.length) {
+        revealedTextRef.current = shown;
+        revealRafRef.current = null; // caught up; next delta restarts the loop
+        return;
+      }
+
+      // Reveal proportional to the backlog so a fast stream still catches up,
+      // but with a *gentle* divisor and low floor: this intentionally lags a
+      // little, draining each burst over many frames so the gaps between a slow
+      // model's bursts are filled with steady typing instead of stutter. A cap
+      // keeps a huge backlog (or whole-message arrival) from snapping at once.
+      const remaining = target.length - shown.length;
+      const step = Math.min(Math.max(1, Math.ceil(remaining / 10)), 8);
+      const next = target.slice(0, shown.length + step);
+      revealedTextRef.current = next;
+      setLiveMessages((prev) =>
+        prev.map((m) => (m.id === aiId ? { ...m, body: next, status: 'streaming' as const } : m)),
+      );
+      revealRafRef.current = requestAnimationFrame(stepReveal);
+    };
+    const kickReveal = () => {
+      if (revealRafRef.current === null) revealRafRef.current = requestAnimationFrame(stepReveal);
+    };
+
+    const processEvent = (event: AppWsEvent) => {
       // Ignore events unrelated to this session
       if (!('session_id' in event) || event.session_id !== sessionId) return;
 
@@ -802,6 +898,10 @@ function SessionPage() {
         if (isNewRun) {
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
+          pendingDeltaRef.current = '';
+          revealedTextRef.current = '';
+          revealSeededRef.current = false;
+          resyncingRef.current = false;
         }
         currentRunIdRef.current = run_id;
 
@@ -864,6 +964,18 @@ function SessionPage() {
         }
         armWatchdog(run_id);
         wsOutputsRef.current.set(seq, output);
+        // This turn just committed — its full text is now in wsOutputsRef and
+        // becomes the source of truth. Stop the reveal loop and clear the live
+        // delta buffers so the next turn streams from empty (the setLiveMessages
+        // below snaps the bubble to the committed text).
+        pendingDeltaRef.current = '';
+        revealedTextRef.current = '';
+        revealSeededRef.current = false;
+        resyncingRef.current = false;
+        if (revealRafRef.current !== null) {
+          cancelAnimationFrame(revealRafRef.current);
+          revealRafRef.current = null;
+        }
 
         // Fast path: if seq is strictly greater than maxSeqRef (the common
         // in-order case), Map insertion order is already sorted — no sort needed.
@@ -910,6 +1022,73 @@ function SessionPage() {
         });
       }
 
+      if (event.type === 'agent_delta') {
+        const { run_id, delta, cum_len } = event;
+        // Claim the run on first event, or ignore deltas from a stale/other run
+        // (same guard as agent_message).
+        if (currentRunIdRef.current === null) {
+          currentRunIdRef.current = run_id;
+        } else if (run_id !== currentRunIdRef.current) {
+          return;
+        }
+        armWatchdog(run_id);
+
+        // Append the delta, deduping across the replay↔live boundary via cum_len
+        // (the turn's total length after this delta). pendingDeltaRef holds the
+        // text applied so far, so its .length is what we've applied.
+        const applied = pendingDeltaRef.current.length;
+        if (cum_len <= applied) return; // already have this text (replay overlap)
+        const cumStart = cum_len - delta.length; // length before this delta
+        if (cumStart > applied) {
+          // Hole: an earlier delta was dropped (broadcast lag). Leaving it would
+          // freeze the whole reveal — every later delta reads as a hole too —
+          // until the commit reconciles. Instead refetch the exact server-side
+          // partial and replay it as one catch-up delta (cum_len == length →
+          // cumStart 0 → the append below trims the overlap), so the reveal
+          // recovers now. Guard against a refetch storm: only one resync in
+          // flight, since every post-hole delta lands here until it completes.
+          if (resyncingRef.current) return;
+          resyncingRef.current = true;
+          // Paint the recovered backlog at once instead of slowly retyping it.
+          revealSeededRef.current = false;
+          void getActiveRunSnapshot(sessionId)
+            .then((snap) => {
+              if (snap?.partial && currentRunIdRef.current === run_id) {
+                processEvent({
+                  type: 'agent_delta',
+                  session_id: sessionId,
+                  run_id,
+                  delta: snap.partial,
+                  cum_len: snap.partial.length,
+                });
+              }
+            })
+            .catch(() => {
+              /* best-effort recovery; the commit still reconciles the turn */
+            })
+            .finally(() => {
+              resyncingRef.current = false;
+            });
+          return;
+        }
+        // Slice off any overlap already applied, then append the new tail.
+        pendingDeltaRef.current += cumStart === applied ? delta : delta.slice(applied - cumStart);
+
+        if (!revealSeededRef.current) {
+          // First chunk of this turn: paint instantly. Tiny for a fresh turn; for
+          // a mid-stream resume it's the whole backlog, which should appear at
+          // once rather than slowly retyping. Later chunks animate.
+          revealSeededRef.current = true;
+          revealedTextRef.current = pendingDeltaRef.current;
+          const body = pendingDeltaRef.current;
+          setLiveMessages((prev) =>
+            prev.map((m) => (m.id === aiId ? { ...m, body, status: 'streaming' as const } : m)),
+          );
+        } else {
+          kickReveal();
+        }
+      }
+
       if (event.type === 'agent_error') {
         const { run_id } = event;
         // [R2-3] Ignore stale errors from a previous run — same guard as agent_run_done.
@@ -927,6 +1106,7 @@ function SessionPage() {
         setLiveMessages([]);
         wsOutputsRef.current.clear();
         maxSeqRef.current = -1;
+        pendingDeltaRef.current = '';
         currentRunIdRef.current = null;
         optimisticUserIdRef.current = null;
       }
@@ -956,6 +1136,7 @@ function SessionPage() {
           setLiveMessages([]);
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
+          pendingDeltaRef.current = '';
           currentRunIdRef.current = null;
           optimisticUserIdRef.current = null;
           setStreaming(false);
@@ -983,6 +1164,7 @@ function SessionPage() {
           setLiveMessages([]);
           wsOutputsRef.current.clear();
           maxSeqRef.current = -1;
+          pendingDeltaRef.current = '';
           optimisticUserIdRef.current = null;
           currentRunIdRef.current = null;
           setStreaming(false);
@@ -991,13 +1173,50 @@ function SessionPage() {
           setStopping(false);
         }
       }
-    });
+    };
+
+    const unsubscribe = appWs.subscribe(processEvent);
+
+    // Seed the in-flight run from the HTTP snapshot so a refresh mid-stream
+    // renders the in-progress turn immediately (the WS replay arrives a
+    // round-trip later). Feeds the same event shapes through processEvent; it's
+    // idempotent with the replay (run claimed by id, messages keyed by seq,
+    // delta is a length-guarded snapshot).
+    void getActiveRunSnapshot(sessionId)
+      .then((snap) => {
+        if (!snap) return;
+        processEvent({
+          type: 'agent_run_started',
+          session_id: sessionId,
+          run_id: snap.run_id,
+          user_message: snap.user_message,
+        });
+        for (const { seq, output } of snap.outputs) {
+          processEvent({ type: 'agent_message', session_id: sessionId, run_id: snap.run_id, seq, output });
+        }
+        if (snap.partial) {
+          processEvent({
+            type: 'agent_delta',
+            session_id: sessionId,
+            run_id: snap.run_id,
+            delta: snap.partial,
+            cum_len: snap.partial.length,
+          });
+        }
+      })
+      .catch(() => {
+        /* best-effort seed; the WS replay is the fallback */
+      });
 
     return () => {
       unsubscribe();
       if (wsInactivityTimerRef.current) {
         clearTimeout(wsInactivityTimerRef.current);
         wsInactivityTimerRef.current = null;
+      }
+      if (revealRafRef.current !== null) {
+        cancelAnimationFrame(revealRafRef.current);
+        revealRafRef.current = null;
       }
     };
   }, [sessionId, sessionPrefix, projectSlug, projectId, queryClient, showToast, t, armWatchdog, fetchPreviousPage]);

@@ -1,9 +1,10 @@
-use ailoy::message::Message;
+use ailoy::message::{Message, MessageOutput};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::events::RunUserMessage;
 use crate::repository::DbSession;
 pub use crate::repository::{SessionOrigin, ShareMode};
 
@@ -91,6 +92,25 @@ pub struct RunAck {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct RunActiveResponse {
     pub active: bool,
+}
+
+/// Snapshot of the in-flight run for a session, used to seed the client on load
+/// so a refresh mid-stream resumes immediately instead of waiting for the WS
+/// replay. Mirrors what the WebSocket replays (started + messages + partial).
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ActiveRunOutput {
+    pub seq: u64,
+    pub output: MessageOutput,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ActiveRunSnapshot {
+    pub run_id: String,
+    pub user_message: RunUserMessage,
+    /// Completed depth-0 messages of the in-flight run (not yet persisted to DB).
+    pub outputs: Vec<ActiveRunOutput>,
+    /// Accumulated text of the current streaming turn (empty if none in flight).
+    pub partial: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]

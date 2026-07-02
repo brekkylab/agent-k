@@ -2,8 +2,8 @@ use std::{collections::HashSet, sync::Arc};
 
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use ailoy::{
-    agent::Agent,
-    message::{FinishReason, Message, MessageOutput, Part, Role},
+    agent::{Agent, AgentEvent},
+    message::{FinishReason, Message, MessageOutput, Part, PartDelta, Role},
     runenv::{Sandbox, SandboxConfig},
 };
 use axum::{
@@ -11,7 +11,7 @@ use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use uuid::Uuid;
 
 use crate::{
@@ -22,9 +22,9 @@ use crate::{
         DirentScope, copy_dir_recursive, enforce_scope_access, parse_dirent_path, scope_root,
     },
     model::{
-        CreateSessionRequest, MessageSender, RunAck, RunActiveResponse, SendMessageRequest,
-        SessionListResponse, SessionMessageListResponse, SessionMessageResponse, SessionResponse,
-        UpdateSessionRequest,
+        ActiveRunOutput, ActiveRunSnapshot, CreateSessionRequest, MessageSender, RunAck,
+        RunActiveResponse, SendMessageRequest, SessionListResponse, SessionMessageListResponse,
+        SessionMessageResponse, SessionResponse, UpdateSessionRequest,
     },
     repository::{
         DbSenderKind, NewSessionMessage, PrefixLookup, SessionAccess, SessionOrigin, ShareMode,
@@ -35,7 +35,6 @@ use crate::{
 
 const TOP_LEVEL_AGENT_NAME: &str = "agent-k";
 const SANDBOX_IMAGE: &str = "brekkylab/agent-k:latest";
-const STOP_RUN_GRACE_SECS: u64 = 10;
 
 pub(crate) fn sandbox_name_for(id: &Uuid) -> String {
     let s = id.simple().to_string();
@@ -881,8 +880,7 @@ pub async fn get_message_history(
             Some(summary) => (*summary).clone(),
             None => match state.store_for(session.project_id).await {
                 Ok(store) => {
-                    let summary =
-                        crate::handlers::knowledge::corpus_summary(&*store.read().await);
+                    let summary = crate::handlers::knowledge::corpus_summary(&*store.read().await);
                     state.set_corpus_summary(session.project_id, summary.clone());
                     summary
                 }
@@ -912,19 +910,31 @@ pub async fn get_message_history(
             // cached result when present; otherwise verify once and cache it.
             // The cache is dropped per project whenever the corpus changes, so a
             // hit always reflects the current corpus.
-            let citations = if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_docs.is_empty() {
-                match state.citation_checks(session.project_id, session.id, r.seq) {
-                    Some(cached) => (*cached).clone(),
-                    None => {
-                        let text: String = r.message.contents.iter().filter_map(|p| p.as_text()).collect();
-                        let checks = crate::handlers::knowledge::verify_citations(&text, &corpus_docs);
-                        state.set_citation_checks(session.project_id, session.id, r.seq, checks.clone());
-                        checks
+            let citations =
+                if matches!(r.sender_kind, DbSenderKind::Agent) && !corpus_docs.is_empty() {
+                    match state.citation_checks(session.project_id, session.id, r.seq) {
+                        Some(cached) => (*cached).clone(),
+                        None => {
+                            let text: String = r
+                                .message
+                                .contents
+                                .iter()
+                                .filter_map(|p| p.as_text())
+                                .collect();
+                            let checks =
+                                crate::handlers::knowledge::verify_citations(&text, &corpus_docs);
+                            state.set_citation_checks(
+                                session.project_id,
+                                session.id,
+                                r.seq,
+                                checks.clone(),
+                            );
+                            checks
+                        }
                     }
-                }
-            } else {
-                Vec::new()
-            };
+                } else {
+                    Vec::new()
+                };
             Ok(SessionMessageResponse {
                 seq: r.seq,
                 message: r.message,
@@ -1116,47 +1126,81 @@ pub async fn send_message(
         let mut agent = guard; // OwnedMutexGuard — held for the run's lifetime
         let prev_artifacts = collect_artifact_paths(&artifacts_dir).await;
         let msg = Message::new(Role::User).with_contents([Part::text(content_with_note)]);
-        let mut run = agent.run(msg);
+        let mut run = agent.run_stream(msg);
 
         let mut run_error: Option<String> = None;
         let mut stopped = false;
         let mut depth0_outputs: Vec<MessageOutput> = Vec::new();
-        let mut pending_tool_results: usize = 0;
+        // Accumulates streamed assistant text for the in-flight turn. ailoy drops
+        // its own accumulator when the stream is dropped, so if a stop cuts a turn
+        // short before it commits a Message, this is the only copy of the partial
+        // answer. Cleared whenever a depth-0 assistant Message commits.
+        let mut partial_text = String::new();
         loop {
-            let item = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    stopped = true;
-                    if pending_tool_results == 0 {
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(STOP_RUN_GRACE_SECS),
-                            run.next(),
-                        )
-                        .await
-                        {
-                            Ok(item) => item,
-                            Err(_) => {
-                                tracing::warn!(
-                                    %session_id,
-                                    "stop: in-flight model call exceeded {STOP_RUN_GRACE_SECS}s grace period; discarding"
-                                );
-                                break;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
+            let item = if stopped {
+                // Drain mode (entered on cancel). Take only what ailoy has already
+                // produced, never awaiting new output, so a turn that finished at
+                // the exact cancel instant still commits its terminal Message
+                // (→ completed_naturally) instead of being mistagged [Interrupted].
+                // Nothing ready → drop the stream below, aborting the in-flight
+                // request, so stop stays prompt.
+                match run.next().now_or_never() {
+                    Some(item) => item, // Some(x) ready, or None if the stream ended
+                    None => break,      // would block → nothing buffered, stop now
                 }
-                item = run.next() => item,
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        // Switch to drain mode rather than breaking immediately, so
+                        // an already-produced terminal Message isn't discarded.
+                        // Whatever text streamed so far is in `partial_text` and is
+                        // persisted below if the turn truly didn't finish.
+                        stopped = true;
+                        continue;
+                    }
+                    item = run.next() => item,
+                }
             };
             match item {
-                Some(Ok(output)) => {
+                // Live text fragment. Broadcast it incrementally (cheap — small
+                // payload even with many subscribers) with the running total so
+                // the client can dedup at the replay↔live boundary. Keep the full
+                // text in `partial_text` for stop-persist and mid-turn resume.
+                // Ephemeral — not persisted, no seq.
+                Some(Ok(AgentEvent::Delta(delta))) => {
+                    let mut fragment = String::new();
+                    for part in &delta.delta.contents {
+                        if let PartDelta::Text { text } = part {
+                            fragment.push_str(text);
+                        }
+                    }
+                    if !fragment.is_empty() {
+                        partial_text.push_str(&fragment);
+                        // UTF-16 units so cum_len matches the client's String.length.
+                        let cum_len = partial_text.encode_utf16().count() as u64;
+                        // Keep the resume snapshot exact so a (re)subscribe never
+                        // lands in a hole (cheap: in-process, not per-subscriber).
+                        state2.set_partial(&session_id, partial_text.clone()).await;
+                        let _ = state2.ws_tx.send(WsEvent::AgentDelta {
+                            session_id: session_id.to_string(),
+                            run_id: run_id.to_string(),
+                            delta: fragment,
+                            cum_len,
+                        });
+                    }
+                }
+                // Completed turn: identical to what `run()` used to yield.
+                Some(Ok(AgentEvent::Message(output))) => {
                     if matches!(output.depth, None | Some(0)) {
-                        if output.message.role == Role::Tool {
-                            pending_tool_results = pending_tool_results.saturating_sub(1);
-                        } else if matches!(output.finish_reason, FinishReason::ToolCall {}) {
-                            pending_tool_results =
-                                output.message.tool_calls.as_ref().map_or(0, |tc| tc.len());
+                        if output.message.role == Role::Assistant {
+                            // This turn committed as a real Message; the partial
+                            // buffer is now redundant — clear it so the next turn
+                            // accumulates from empty (and a later stop doesn't
+                            // re-persist already-committed text). Also clear the
+                            // replayable snapshot so a resume doesn't double it.
+                            partial_text.clear();
+                            state2.set_partial(&session_id, String::new()).await;
                         }
                         depth0_outputs.push(output.clone());
                     }
@@ -1168,9 +1212,9 @@ pub async fn send_message(
                             output,
                         });
                     }
-                    if stopped {
-                        break;
-                    }
+                    // No early break in drain mode: keep taking already-ready items
+                    // until the stream ends (`None`) or nothing is buffered
+                    // (`now_or_never` → break above), so a finish-line turn commits.
                 }
                 Some(Err(e)) => {
                     run_error = Some(e.to_string());
@@ -1191,8 +1235,10 @@ pub async fn send_message(
                 tracing::error!(%session_id, "agent run failed: {err}");
                 // Truncate in-memory history to match DB state so the agent stays consistent.
                 agent.state.history.truncate(prev_len);
+                // End the run before releasing the lock so no newer run can slot
+                // in between drop and cleanup.
+                state2.end_run(&session_id, run_id);
                 drop(agent);
-                state2.end_run(&session_id);
                 let _ = state2.ws_tx.send(WsEvent::AgentError {
                     session_id: session_id.to_string(),
                     run_id: run_id.to_string(),
@@ -1238,11 +1284,26 @@ pub async fn send_message(
                 // completion so the client doesn't see a spurious "Run stopped" toast.
                 stopped = false;
             } else {
-                // Mark the turn as cut short: append to the last assistant message, or
-                // add a paired one (via synthetic_msgs) if none was produced yet.
+                // Mark the turn as cut short.
                 const INTERRUPT_NOTE: &str =
                     "[Interrupted: the user manually stopped response generation here]";
-                if let Some(last) = new_msgs.iter_mut().rev().find(|m| m.role == Role::Assistant) {
+                if !partial_text.is_empty() {
+                    // The interrupted turn streamed text but never committed a
+                    // Message (ailoy dropped its accumulator). Persist what we
+                    // accumulated as a fresh assistant message so the partial
+                    // answer survives a refresh. Routed through synthetic_msgs so
+                    // it is both persisted and pushed into history (keeping the
+                    // agent's in-memory state consistent with the DB).
+                    partial_text.push_str("\n\n");
+                    partial_text.push_str(INTERRUPT_NOTE);
+                    synthetic_msgs.push(
+                        Message::new(Role::Assistant).with_contents([Part::text(partial_text)]),
+                    );
+                } else if let Some(last) = new_msgs
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.role == Role::Assistant)
+                {
                     last.contents.push(Part::text(INTERRUPT_NOTE));
                     if let Some(warm) = agent.state.history[prev_len..]
                         .iter_mut()
@@ -1252,14 +1313,12 @@ pub async fn send_message(
                         warm.contents.push(Part::text(INTERRUPT_NOTE));
                     }
                 } else {
-                    synthetic_msgs
-                        .push(Message::new(Role::Assistant).with_contents([Part::text(INTERRUPT_NOTE)]));
+                    synthetic_msgs.push(
+                        Message::new(Role::Assistant).with_contents([Part::text(INTERRUPT_NOTE)]),
+                    );
                 }
             }
-            agent
-                .state
-                .history
-                .extend(synthetic_msgs.iter().cloned());
+            agent.state.history.extend(synthetic_msgs.iter().cloned());
         }
 
         // Strip the attachment note before persisting — clean content is stored in DB and the
@@ -1288,18 +1347,14 @@ pub async fn send_message(
             }
         }
 
-        to_persist.extend(
-            synthetic_msgs
-                .into_iter()
-                .map(|message| NewSessionMessage {
-                    message,
-                    sender_kind: crate::repository::DbSenderKind::Agent,
-                    sender_name: Some(TOP_LEVEL_AGENT_NAME.to_string()),
-                    sender_user_id: None,
-                    attachments: vec![],
-                    artifacts: vec![],
-                }),
-        );
+        to_persist.extend(synthetic_msgs.into_iter().map(|message| NewSessionMessage {
+            message,
+            sender_kind: crate::repository::DbSenderKind::Agent,
+            sender_name: Some(TOP_LEVEL_AGENT_NAME.to_string()),
+            sender_user_id: None,
+            attachments: vec![],
+            artifacts: vec![],
+        }));
 
         // [A] Persist before releasing the agent lock. On failure: roll back in-memory history,
         // send AgentError (not AgentRunDone), and return — the DB remains consistent.
@@ -1310,8 +1365,8 @@ pub async fn send_message(
         {
             tracing::error!(%session_id, "failed to persist messages: {e}");
             agent.state.history.truncate(prev_len);
+            state2.end_run(&session_id, run_id);
             drop(agent);
-            state2.end_run(&session_id);
             let _ = state2.ws_tx.send(WsEvent::AgentError {
                 session_id: session_id.to_string(),
                 run_id: run_id.to_string(),
@@ -1319,7 +1374,11 @@ pub async fn send_message(
             });
             return;
         }
-        drop(agent); // Release OwnedMutexGuard only after successful persist
+        // End the run before releasing the lock: while the OwnedMutexGuard is
+        // held no other request can acquire it and start a replacement run, so
+        // this can never delete a newer run's record.
+        state2.end_run(&session_id, run_id);
+        drop(agent); // Release OwnedMutexGuard only after successful persist + cleanup
 
         // Intentionally NOT calling mark_session_read here: the sender should
         // only be considered to have read the agent's reply when they actually
@@ -1328,7 +1387,6 @@ pub async fn send_message(
         // messages, so unread_count is always 0 — breaking cross-session
         // unread badges for users who navigated away before the agent finished.
 
-        state2.end_run(&session_id);
         let _ = state2.ws_tx.send(WsEvent::AgentRunDone {
             session_id: session_id.to_string(),
             run_id: run_id.to_string(),
@@ -1346,7 +1404,10 @@ pub async fn send_message(
                 err = %join_err,
                 "agent background task panicked; forcing end_run and AgentError"
             );
-            state_mon.end_run(&session_id);
+            // run_id-guarded: unwind released the agent lock before this task
+            // ran, so a newer run may already own the session's entry — only
+            // remove ours.
+            state_mon.end_run(&session_id, run_id);
             let _ = state_mon.ws_tx.send(WsEvent::AgentError {
                 session_id: session_id.to_string(),
                 run_id: run_id.to_string(),
@@ -1419,4 +1480,35 @@ pub async fn run_active(
         Some((active_run_id, _, _)) if active_run_id == run_id
     );
     Ok(Json(RunActiveResponse { active }))
+}
+
+/// Snapshot of the session's in-flight run (or `null` if none), so a client
+/// loading the page mid-stream can render the in-progress turn immediately
+/// rather than waiting for the WebSocket replay. The completed run is in the DB
+/// via the normal message history; this only covers the not-yet-persisted run.
+pub async fn get_active_run(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_user): Extension<AuthUser>,
+    Path(session_ref): Path<String>,
+) -> ApiResult<Json<Option<ActiveRunSnapshot>>> {
+    let session_id = resolve_session_id(&state, &session_ref).await?;
+    state
+        .repository
+        .get_session_with_authz(session_id, auth_user.id)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+        .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
+
+    let snapshot = state.snapshot(&session_id).await.map(
+        |(run_id, user_message, outputs, partial)| ActiveRunSnapshot {
+            run_id: run_id.to_string(),
+            user_message,
+            outputs: outputs
+                .into_iter()
+                .map(|(seq, output)| ActiveRunOutput { seq, output })
+                .collect(),
+            partial,
+        },
+    );
+    Ok(Json(snapshot))
 }

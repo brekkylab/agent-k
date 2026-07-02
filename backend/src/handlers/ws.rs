@@ -98,6 +98,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                         }
                         WsEvent::AgentRunStarted { session_id, .. }
                         | WsEvent::AgentMessage { session_id, .. }
+                        | WsEvent::AgentDelta { session_id, .. }
                         | WsEvent::AgentError { session_id, .. }
                         | WsEvent::AgentRunDone { session_id, .. } => {
                             match Uuid::parse_str(session_id) {
@@ -125,7 +126,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(missed = n, "ws broadcast lagged; spectator may miss events");
+                    // This connection fell behind the shared broadcast ring and
+                    // missed `n` events. Dropped deltas leave a hole the client
+                    // recovers from by refetching the active-run partial, so this
+                    // is a degraded-live-reveal signal, not data loss.
+                    tracing::warn!(
+                        missed = n,
+                        user_id = %broadcast_user_id,
+                        "ws broadcast lagged; client will resync from active-run snapshot"
+                    );
                     continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -175,7 +184,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                     inbound_sessions.lock().await.insert(session_id);
 
                     // Replay any in-progress run so the spectator catches up.
-                    if let Some((run_id, user_message, outputs)) =
+                    if let Some((run_id, user_message, outputs, partial)) =
                         inbound_state.snapshot(&session_id).await
                     {
                         let started = WsEvent::AgentRunStarted {
@@ -195,6 +204,26 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                                 run_id: run_id.to_string(),
                                 seq,
                                 output,
+                            };
+                            if let Ok(json) = serde_json::to_string(&event) {
+                                if inbound_tx.send(Message::Text(json.into())).await.is_err() {
+                                    break 'inbound;
+                                }
+                            }
+                        }
+
+                        // Resume the in-flight turn: replay the partial-text
+                        // snapshot after the committed messages so the client
+                        // picks up mid-turn instead of waiting for the next live
+                        // delta. Snapshot semantics make this idempotent with the
+                        // live deltas that follow.
+                        if !partial.is_empty() {
+                            let cum_len = partial.encode_utf16().count() as u64;
+                            let event = WsEvent::AgentDelta {
+                                session_id: session_id.to_string(),
+                                run_id: run_id.to_string(),
+                                delta: partial,
+                                cum_len,
                             };
                             if let Ok(json) = serde_json::to_string(&event) {
                                 if inbound_tx.send(Message::Text(json.into())).await.is_err() {
