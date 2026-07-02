@@ -3,7 +3,7 @@ use std::sync::Arc;
 use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
 use ailoy::agent::AgentSpec;
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, State},
     http::StatusCode,
 };
@@ -12,14 +12,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::state::{AppState, Session, StateError};
+use crate::{
+    auth::AuthUser,
+    state::{AppState, Session},
+};
 
-use super::error::{ApiError, err};
+use super::{
+    error::{ApiError, err},
+    workspace::{require_owned_session, require_owned_workspace},
+};
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SessionResponse {
     pub id: Uuid,
-    pub project_id: Uuid,
+    pub workspace_id: Uuid,
     pub agent_id: Option<Uuid>,
     pub title: Option<String>,
     pub spec: AgentSpec,
@@ -31,7 +37,7 @@ impl From<Session> for SessionResponse {
     fn from(s: Session) -> Self {
         Self {
             id: s.id,
-            project_id: s.project_id,
+            workspace_id: s.workspace_id,
             agent_id: s.agent_id,
             title: s.title,
             spec: s.spec,
@@ -83,9 +89,9 @@ fn build_spec(agent_type: AgentType, model: Option<&str>) -> AgentSpec {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSessionRequest {
-    pub project_id: Uuid,
+    pub workspace_id: Uuid,
     pub title: Option<String>,
-    /// Create the session from a stored, project-scoped agent. When set, the
+    /// Create the session from a stored, workspace-scoped agent. When set, the
     /// agent's spec is copied into the session and `agent_type`/`model` are
     /// ignored. Mutually exclusive with `agent_type`; exactly one is required.
     #[serde(default)]
@@ -101,8 +107,9 @@ pub struct CreateSessionRequest {
 
 pub(super) async fn list_sessions(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
 ) -> Result<Json<SessionListResponse>, ApiError> {
-    let sessions = state.sessions.list().await?;
+    let sessions = state.sessions.list_by_workspace(auth.id).await?;
     Ok(Json(SessionListResponse {
         items: sessions.into_iter().map(SessionResponse::from).collect(),
     }))
@@ -110,11 +117,10 @@ pub(super) async fn list_sessions(
 
 pub(super) async fn create_session(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Json(payload): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionResponse>), ApiError> {
-    if state.projects.get(payload.project_id).await?.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "project not found"));
-    }
+    require_owned_workspace(&state, &auth, payload.workspace_id).await?;
 
     // Source the spec either from a stored agent or from a preset. Exactly one
     // of `agent_id` / `agent_type` must be supplied.
@@ -131,10 +137,10 @@ pub(super) async fn create_session(
                 .get(agent_id)
                 .await?
                 .ok_or_else(|| err(StatusCode::NOT_FOUND, "agent not found"))?;
-            if agent.project_id != payload.project_id {
+            if agent.workspace_id != payload.workspace_id {
                 return Err(err(
                     StatusCode::BAD_REQUEST,
-                    "agent does not belong to the given project",
+                    "agent does not belong to the given workspace",
                 ));
             }
             if !agent.active {
@@ -151,7 +157,7 @@ pub(super) async fn create_session(
         }
     };
 
-    let mut session = Session::new(payload.project_id, spec);
+    let mut session = Session::new(payload.workspace_id, spec);
     if let Some(aid) = agent_id {
         session = session.with_agent_id(aid);
     }
@@ -164,16 +170,19 @@ pub(super) async fn create_session(
 
 pub(super) async fn get_session(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SessionResponse>, ApiError> {
-    let session = state.sessions.get(id).await?.ok_or(StateError::NotFound)?;
+    let session = require_owned_session(&state, &auth, id).await?;
     Ok(Json(SessionResponse::from(session)))
 }
 
 pub(super) async fn delete_session(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    require_owned_session(&state, &auth, id).await?;
     state.sessions.remove(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

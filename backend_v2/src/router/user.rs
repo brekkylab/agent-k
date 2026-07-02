@@ -283,10 +283,15 @@ pub(super) async fn delete_user_admin(
         ));
     }
 
-    let deleted = state.users.delete(id).await?;
-    if !deleted {
+    if state.users.get(id).await?.is_none() {
         return Err(StateError::NotFound.into());
     }
+
+    // Remove the default workspace's files first; only if that succeeds do we
+    // delete the user and workspace rows atomically. A filesystem failure aborts
+    // before any row is removed, and the two row deletes never diverge.
+    state.workspaces.remove_files(id).await?;
+    state.users.delete_with_default_workspace(id).await?;
 
     tracing::info!(target_user_id = %id, by = %auth.id, "admin deleted user");
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ailoy::message::{Message, Part};
 use axum::{
-    Json,
+    Extension, Json,
     extract::{
         Path, Query, State,
         ws::{Message as WsMessage, WebSocketUpgrade},
@@ -16,11 +16,12 @@ use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 use crate::{
+    auth::{AuthUser, authenticate},
     event::{MessageEvent, message_channel},
     state::AppState,
 };
 
-use super::error::{ApiError, err};
+use super::{error::{ApiError, err}, workspace::require_owned_session};
 
 /// A single persisted message together with its session-local sequence
 /// number. Mirrors the `message/{id}` channel's [`MessageEvent`] shape so HTTP
@@ -60,11 +61,10 @@ pub struct MessagesWsQuery {
 /// for a session, ordered by `seq` ascending.
 pub(super) async fn list_messages(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<MessageListResponse>, ApiError> {
-    if state.sessions.get(id).await?.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "session not found"));
-    }
+    require_owned_session(&state, &auth, id).await?;
     let messages = state.sessions.list_messages(id).await?;
     Ok(Json(MessageListResponse {
         items: messages
@@ -76,20 +76,21 @@ pub(super) async fn list_messages(
 
 pub(super) async fn start_run(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
     Json(payload): Json<PostMessageRequest>,
 ) -> Result<StatusCode, ApiError> {
-    if state.sessions.get(id).await?.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "session not found"));
-    }
+    require_owned_session(&state, &auth, id).await?;
     state.sessions.run(id, payload.query).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
 pub(super) async fn stop_run(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    require_owned_session(&state, &auth, id).await?;
     if state.sessions.cancel(id).await {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -108,11 +109,26 @@ pub(super) async fn stream_messages(
     Query(query): Query<MessagesWsQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    // Mirrors `auth_required` on HTTP routes: JWT must decode. Token is
-    // passed via query because browser WebSockets can't set headers.
-    state.jwt.decode(&query.token)?;
+    // Mirrors `auth_required` on HTTP routes via the shared `authenticate`
+    // gate (token must decode to an active user). Token is passed via query
+    // because browser WebSockets can't set headers. The session must live in
+    // the caller's default workspace (whose id equals the user's id);
+    // otherwise it's reported as 404 so it can't be probed.
+    let user = authenticate(&state, &query.token).await?;
 
-    if state.sessions.get(sid).await?.is_none() {
+    let session = state
+        .sessions
+        .get(sid)
+        .await?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "session not found"))?;
+    // Same access gate as the HTTP routes: the session's workspace must be one
+    // the caller can reach.
+    if state
+        .workspaces
+        .get_for_user(user.id, session.workspace_id)
+        .await?
+        .is_none()
+    {
         return Err(err(StatusCode::NOT_FOUND, "session not found"));
     }
     let last_seq = query.last_seq.unwrap_or(-1);

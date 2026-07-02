@@ -2,10 +2,10 @@ use uuid::Uuid;
 
 use crate::{
     auth::{Role, hash_password},
-    state::{NewUser, UsersState},
+    state::{NewUser, UsersState, WorkspacesState},
 };
 
-pub async fn bootstrap_admin_if_needed(users: &UsersState) {
+pub async fn bootstrap_admin_if_needed(users: &UsersState, workspaces: &WorkspacesState) {
     let count = match users.count_admins().await {
         Ok(c) => c,
         Err(e) => {
@@ -44,6 +44,12 @@ pub async fn bootstrap_admin_if_needed(users: &UsersState) {
                 .await
             {
                 Ok(user) => {
+                    if let Err(e) = workspaces.create_default(&user).await {
+                        tracing::error!(
+                            id = %user.id,
+                            "failed to provision workspace for bootstrap admin: {e}"
+                        );
+                    }
                     tracing::info!(
                         id = %user.id, username = %u,
                         "bootstrap admin user created from env"

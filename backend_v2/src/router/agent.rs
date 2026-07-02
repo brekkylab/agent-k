@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ailoy::agent::AgentSpec;
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
@@ -11,14 +11,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::state::{Agent, AppState, StateError};
+use crate::{
+    auth::AuthUser,
+    state::{Agent, AppState},
+};
 
-use super::error::{ApiError, err};
+use super::{
+    error::ApiError,
+    workspace::{require_owned_agent, require_owned_workspace},
+};
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct AgentResponse {
     pub id: Uuid,
-    pub project_id: Uuid,
+    pub workspace_id: Uuid,
     pub name: String,
     pub description: Option<String>,
     pub active: bool,
@@ -32,7 +38,7 @@ impl From<Agent> for AgentResponse {
     fn from(a: Agent) -> Self {
         Self {
             id: a.id,
-            project_id: a.project_id,
+            workspace_id: a.workspace_id,
             name: a.name,
             description: a.description,
             active: a.active,
@@ -51,15 +57,16 @@ pub struct AgentListResponse {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListAgentsQuery {
-    /// Restrict the listing to a single project. Omit to list every agent.
+    /// Restrict the listing to a single workspace (which the caller must own).
+    /// Omit to list every agent across all of the caller's workspaces.
     #[serde(default)]
-    pub project_id: Option<Uuid>,
+    pub workspace_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateAgentRequest {
-    pub project_id: Uuid,
+    pub workspace_id: Uuid,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -90,11 +97,15 @@ pub struct UpdateAgentRequest {
 
 pub(super) async fn list_agents(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Query(query): Query<ListAgentsQuery>,
 ) -> Result<Json<AgentListResponse>, ApiError> {
-    let agents = match query.project_id {
-        Some(pid) => state.agents.list_by_project(pid).await?,
-        None => state.agents.list().await?,
+    let agents = match query.workspace_id {
+        Some(wid) => {
+            require_owned_workspace(&state, &auth, wid).await?;
+            state.agents.list_by_workspace(wid).await?
+        }
+        None => state.agents.list_by_workspace(auth.id).await?,
     };
     Ok(Json(AgentListResponse {
         items: agents.into_iter().map(AgentResponse::from).collect(),
@@ -103,13 +114,12 @@ pub(super) async fn list_agents(
 
 pub(super) async fn create_agent(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Json(payload): Json<CreateAgentRequest>,
 ) -> Result<(StatusCode, Json<AgentResponse>), ApiError> {
-    if state.projects.get(payload.project_id).await?.is_none() {
-        return Err(err(StatusCode::NOT_FOUND, "project not found"));
-    }
+    require_owned_workspace(&state, &auth, payload.workspace_id).await?;
 
-    let mut agent = Agent::new(payload.project_id, payload.name, payload.spec);
+    let mut agent = Agent::new(payload.workspace_id, payload.name, payload.spec);
     if let Some(d) = payload.description {
         agent = agent.with_description(d);
     }
@@ -125,18 +135,20 @@ pub(super) async fn create_agent(
 
 pub(super) async fn get_agent(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<AgentResponse>, ApiError> {
-    let agent = state.agents.get(id).await?.ok_or(StateError::NotFound)?;
+    let agent = require_owned_agent(&state, &auth, id).await?;
     Ok(Json(AgentResponse::from(agent)))
 }
 
 pub(super) async fn update_agent(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateAgentRequest>,
 ) -> Result<Json<AgentResponse>, ApiError> {
-    let mut agent = state.agents.get(id).await?.ok_or(StateError::NotFound)?;
+    let mut agent = require_owned_agent(&state, &auth, id).await?;
     if let Some(n) = payload.name {
         agent = agent.with_name(n);
     }
@@ -159,8 +171,10 @@ pub(super) async fn update_agent(
 
 pub(super) async fn delete_agent(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    require_owned_agent(&state, &auth, id).await?;
     state.agents.remove(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -8,13 +8,11 @@ use uuid::Uuid;
 use crate::{auth::JwtConfig, event::EventQueue};
 
 mod agent;
-mod project;
 mod session;
 mod user;
 mod workspace;
 
 pub use agent::*;
-pub use project::*;
 pub use session::*;
 pub use user::*;
 pub use workspace::*;
@@ -62,11 +60,10 @@ pub enum StateError {
 pub type StateResult<T> = Result<T, StateError>;
 
 pub struct AppState {
-    pub projects: ProjectsState,
+    pub workspaces: WorkspacesState,
     pub agents: AgentsState,
     pub sessions: SessionsState,
     pub users: UsersState,
-    pub workspace: WorkspaceState,
     pub events: EventQueue,
     pub jwt: JwtConfig,
 }
@@ -92,9 +89,8 @@ impl AppState {
         let events = EventQueue::new();
 
         Ok(Self {
-            projects: ProjectsState::new(db.clone(), data_root.clone()),
+            workspaces: WorkspacesState::new(db.clone(), data_root.clone()),
             agents: AgentsState::new(db.clone()),
-            workspace: WorkspaceState::new(data_root.clone()),
             sessions: SessionsState::new(db.clone(), data_root, events.clone()),
             users: UsersState::new(db),
             events,
