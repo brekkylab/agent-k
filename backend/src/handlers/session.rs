@@ -11,7 +11,7 @@ use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use uuid::Uuid;
 
 use crate::{
@@ -1137,17 +1137,30 @@ pub async fn send_message(
         // answer. Cleared whenever a depth-0 assistant Message commits.
         let mut partial_text = String::new();
         loop {
-            let item = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    // Stop promptly: drop the stream (aborting the in-flight model
-                    // request) instead of draining the rest of the turn. Whatever
-                    // text streamed so far is in `partial_text` and gets persisted
-                    // below, so the partial answer survives without finishing.
-                    stopped = true;
-                    break;
+            let item = if stopped {
+                // Drain mode (entered on cancel). Take only what ailoy has already
+                // produced, never awaiting new output, so a turn that finished at
+                // the exact cancel instant still commits its terminal Message
+                // (→ completed_naturally) instead of being mistagged [Interrupted].
+                // Nothing ready → drop the stream below, aborting the in-flight
+                // request, so stop stays prompt.
+                match run.next().now_or_never() {
+                    Some(item) => item, // Some(x) ready, or None if the stream ended
+                    None => break,      // would block → nothing buffered, stop now
                 }
-                item = run.next() => item,
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        // Switch to drain mode rather than breaking immediately, so
+                        // an already-produced terminal Message isn't discarded.
+                        // Whatever text streamed so far is in `partial_text` and is
+                        // persisted below if the turn truly didn't finish.
+                        stopped = true;
+                        continue;
+                    }
+                    item = run.next() => item,
+                }
             };
             match item {
                 // Live text fragment. Broadcast it incrementally (cheap — small
@@ -1199,9 +1212,9 @@ pub async fn send_message(
                             output,
                         });
                     }
-                    if stopped {
-                        break;
-                    }
+                    // No early break in drain mode: keep taking already-ready items
+                    // until the stream ends (`None`) or nothing is buffered
+                    // (`now_or_never` → break above), so a finish-line turn commits.
                 }
                 Some(Err(e)) => {
                     run_error = Some(e.to_string());
