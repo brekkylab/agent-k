@@ -211,6 +211,11 @@ function SessionPage() {
   // a mid-stream resume it's the whole backlog, which should appear at once
   // rather than slowly retyping. Subsequent chunks animate. Reset per turn.
   const revealSeededRef = useRef<boolean>(false);
+  // True while a hole-recovery resync (refetch of the server-side partial) is in
+  // flight. After a dropped delta every subsequent delta also reads as a hole,
+  // so this gates the refetch to one at a time — otherwise a fast stream would
+  // fire an HTTP snapshot per token until the first one lands.
+  const resyncingRef = useRef<boolean>(false);
 
   const [composerText, setComposerText] = useState('');
   // Composer layout — false = compact pill (textarea + buttons inline),
@@ -269,6 +274,7 @@ function SessionPage() {
     wsOutputsRef.current.clear();
     maxSeqRef.current = -1;
     pendingDeltaRef.current = '';
+    resyncingRef.current = false;
     optimisticUserIdRef.current = null;
     currentRunIdRef.current = null;
     doneRunIdsRef.current.clear();
@@ -895,6 +901,7 @@ function SessionPage() {
           pendingDeltaRef.current = '';
           revealedTextRef.current = '';
           revealSeededRef.current = false;
+          resyncingRef.current = false;
         }
         currentRunIdRef.current = run_id;
 
@@ -964,6 +971,7 @@ function SessionPage() {
         pendingDeltaRef.current = '';
         revealedTextRef.current = '';
         revealSeededRef.current = false;
+        resyncingRef.current = false;
         if (revealRafRef.current !== null) {
           cancelAnimationFrame(revealRafRef.current);
           revealRafRef.current = null;
@@ -1032,8 +1040,35 @@ function SessionPage() {
         if (cum_len <= applied) return; // already have this text (replay overlap)
         const cumStart = cum_len - delta.length; // length before this delta
         if (cumStart > applied) {
-          // Hole: we missed an earlier delta (e.g. broadcast lag). Can't fill it
-          // safely — leave it; the completed agent_message reconciles the turn.
+          // Hole: an earlier delta was dropped (broadcast lag). Leaving it would
+          // freeze the whole reveal — every later delta reads as a hole too —
+          // until the commit reconciles. Instead refetch the exact server-side
+          // partial and replay it as one catch-up delta (cum_len == length →
+          // cumStart 0 → the append below trims the overlap), so the reveal
+          // recovers now. Guard against a refetch storm: only one resync in
+          // flight, since every post-hole delta lands here until it completes.
+          if (resyncingRef.current) return;
+          resyncingRef.current = true;
+          // Paint the recovered backlog at once instead of slowly retyping it.
+          revealSeededRef.current = false;
+          void getActiveRunSnapshot(sessionId)
+            .then((snap) => {
+              if (snap?.partial && currentRunIdRef.current === run_id) {
+                processEvent({
+                  type: 'agent_delta',
+                  session_id: sessionId,
+                  run_id,
+                  delta: snap.partial,
+                  cum_len: snap.partial.length,
+                });
+              }
+            })
+            .catch(() => {
+              /* best-effort recovery; the commit still reconciles the turn */
+            })
+            .finally(() => {
+              resyncingRef.current = false;
+            });
           return;
         }
         // Slice off any overlap already applied, then append the new tail.

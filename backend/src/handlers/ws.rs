@@ -126,7 +126,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, user_id: Uuid) {
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(missed = n, "ws broadcast lagged; spectator may miss events");
+                    // This connection fell behind the shared broadcast ring and
+                    // missed `n` events. Dropped deltas leave a hole the client
+                    // recovers from by refetching the active-run partial, so this
+                    // is a degraded-live-reveal signal, not data loss.
+                    tracing::warn!(
+                        missed = n,
+                        user_id = %broadcast_user_id,
+                        "ws broadcast lagged; client will resync from active-run snapshot"
+                    );
                     continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
