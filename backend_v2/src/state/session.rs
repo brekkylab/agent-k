@@ -19,7 +19,7 @@ use crate::event::{EventQueue, MessageEvent, message_channel};
 pub struct Session {
     pub id: Uuid,
 
-    pub project_id: Uuid,
+    pub workspace_id: Uuid,
 
     /// The agent definition this session was created from, if any. `None` for
     /// sessions built directly from a preset. Deleting the referenced agent
@@ -39,11 +39,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(project_id: Uuid, spec: AgentSpec) -> Self {
+    pub fn new(workspace_id: Uuid, spec: AgentSpec) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
-            project_id,
+            workspace_id,
             agent_id: None,
             title: None,
             spec,
@@ -78,7 +78,10 @@ impl Session {
             .transpose()?;
         Ok(Self {
             id: parse_uuid(row.get::<String, _>("id"), "sessions.id")?,
-            project_id: parse_uuid(row.get::<String, _>("project_id"), "sessions.project_id")?,
+            workspace_id: parse_uuid(
+                row.get::<String, _>("workspace_id"),
+                "sessions.workspace_id",
+            )?,
             agent_id,
             title: row.get("title"),
             spec,
@@ -113,11 +116,13 @@ impl SessionsState {
         }
     }
 
-    pub async fn list(&self) -> StateResult<Vec<Session>> {
+    /// Every session in `workspace_id`, oldest first.
+    pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, project_id, agent_id, title, spec, runenv, created_at, updated_at \
-             FROM sessions ORDER BY created_at ASC",
+            "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
+             FROM sessions WHERE workspace_id = ? ORDER BY created_at ASC",
         )
+        .bind(workspace_id.to_string())
         .fetch_all(&self.db)
         .await?;
         rows.iter().map(Session::from_sqlite_row).collect()
@@ -125,7 +130,7 @@ impl SessionsState {
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, project_id, agent_id, title, spec, runenv, created_at, updated_at \
+            "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -143,11 +148,11 @@ impl SessionsState {
         item.runenv = runenv.is_some();
 
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, agent_id, title, spec, runenv, created_at, updated_at) \
+            "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(item.id.to_string())
-        .bind(item.project_id.to_string())
+        .bind(item.workspace_id.to_string())
         .bind(item.agent_id.map(|id| id.to_string()))
         .bind(&item.title)
         .bind(serde_json::to_string(&item.spec)?)

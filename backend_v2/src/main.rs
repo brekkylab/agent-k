@@ -64,7 +64,7 @@ async fn main() -> std::io::Result<()> {
             .expect("failed to initialise app state"),
     );
 
-    bootstrap_admin_if_needed(&app_state.users).await;
+    bootstrap_admin_if_needed(&app_state.users, &app_state.workspaces).await;
 
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 

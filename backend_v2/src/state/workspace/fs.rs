@@ -1,4 +1,4 @@
-//! Protocol-agnostic filesystem primitives for a project's workspace.
+//! Protocol-agnostic filesystem primitives for a workspace.
 //!
 //! These types ([`WorkspaceFs`], [`File`], [`DirEntry`], …)
 //! mirror the operations a WebDAV backend needs but carry **no** dependency on
@@ -86,19 +86,19 @@ fn is_knowledge(rel_path: &str) -> bool {
 // today they only log. `path` is the absolute on-disk path of the affected file.
 
 /// A *new* file appeared (a write/copy/move landing at a previously-absent path).
-fn knowledge_inserted(pid: Uuid, path: &Path) {
-    tracing::info!("insert_knowledge (project={pid}, path={})", path.display());
+fn knowledge_inserted(wid: Uuid, path: &Path) {
+    tracing::info!("insert_knowledge (workspace={wid}, path={})", path.display());
 }
 
 /// An existing file was overwritten in place.
-fn knowledge_updated(pid: Uuid, path: &Path) {
-    tracing::info!("update_knowledge (project={pid}, path={})", path.display());
+fn knowledge_updated(wid: Uuid, path: &Path) {
+    tracing::info!("update_knowledge (workspace={wid}, path={})", path.display());
 }
 
 /// A file left `knowledge/` (a delete, or a move whose source was under it).
 /// The file is already gone from disk; `path` is where it lived.
-fn knowledge_removed(pid: Uuid, path: &Path) {
-    tracing::info!("remove_knowledge (project={pid}, path={})", path.display());
+fn knowledge_removed(wid: Uuid, path: &Path) {
+    tracing::info!("remove_knowledge (workspace={wid}, path={})", path.display());
 }
 
 /// One entry yielded by [`WorkspaceFs::read_dir`]. Metadata is captured eagerly
@@ -126,7 +126,7 @@ pub type DirStream = Pin<Box<dyn Stream<Item = FsResult<DirEntry>> + Send>>;
 /// Tracks an in-flight write so its completion (`flush` after a `write_*`) can
 /// be reported to the workspace's side-processing.
 struct Observer {
-    pid: Uuid,
+    wid: Uuid,
     /// Absolute on-disk path of the file, for the knowledge handlers.
     path: PathBuf,
     /// Whether the file already existed when opened — distinguishes an insert
@@ -190,31 +190,31 @@ impl File {
             // Clear first so a second flush on the same handle won't re-report.
             o.wrote = false;
             if o.existed {
-                knowledge_updated(o.pid, &o.path);
+                knowledge_updated(o.wid, &o.path);
             } else {
-                knowledge_inserted(o.pid, &o.path);
+                knowledge_inserted(o.wid, &o.path);
             }
         }
         Ok(())
     }
 }
 
-/// A filesystem handle scoped to a single project's workspace. Cheap to clone
-/// (just an owned root path and project id); `Send + Sync + 'static`, so the
+/// A filesystem handle scoped to a single workspace. Cheap to clone
+/// (just an owned root path and workspace id); `Send + Sync + 'static`, so the
 /// WebDAV layer can hold one for the lifetime of a request.
 #[derive(Clone)]
 pub struct WorkspaceFs {
     root: PathBuf,
-    pid: Uuid,
+    wid: Uuid,
 }
 
 impl WorkspaceFs {
-    pub(super) fn new(root: PathBuf, pid: Uuid) -> Self {
-        Self { root, pid }
+    pub(super) fn new(root: PathBuf, wid: Uuid) -> Self {
+        Self { root, wid }
     }
 
     /// Absolute on-disk path of `rel_path` (a workspace-relative path such as
-    /// `/knowledge/foo.txt`) inside this project's workspace.
+    /// `/knowledge/foo.txt`) inside this workspace.
     fn resolve(&self, rel_path: &str) -> PathBuf {
         self.root.join(rel_path.trim_start_matches('/'))
     }
@@ -277,7 +277,7 @@ impl WorkspaceFs {
         // Only knowledge writes need observing; the flush hook then reports an
         // insert or update without re-classifying.
         let observer = (is_write && is_knowledge(rel_path)).then_some(Observer {
-            pid: self.pid,
+            wid: self.wid,
             path,
             existed,
             wrote: false,
@@ -309,7 +309,7 @@ impl WorkspaceFs {
         let path = self.resolve(rel_path);
         tokio::fs::remove_file(&path).await.map_err(FsError::from)?;
         if is_knowledge(rel_path) {
-            knowledge_removed(self.pid, &path);
+            knowledge_removed(self.wid, &path);
         }
         Ok(())
     }
@@ -325,13 +325,13 @@ impl WorkspaceFs {
             .map_err(FsError::from)?;
         // The source path left `knowledge/`; the destination arrived in it.
         if is_knowledge(from) {
-            knowledge_removed(self.pid, &from_path);
+            knowledge_removed(self.wid, &from_path);
         }
         if is_knowledge(to) {
             if to_existed {
-                knowledge_updated(self.pid, &to_path);
+                knowledge_updated(self.wid, &to_path);
             } else {
-                knowledge_inserted(self.pid, &to_path);
+                knowledge_inserted(self.wid, &to_path);
             }
         }
         Ok(())
@@ -346,9 +346,9 @@ impl WorkspaceFs {
             .map_err(FsError::from)?;
         if is_knowledge(to) {
             if to_existed {
-                knowledge_updated(self.pid, &to_path);
+                knowledge_updated(self.wid, &to_path);
             } else {
-                knowledge_inserted(self.pid, &to_path);
+                knowledge_inserted(self.wid, &to_path);
             }
         }
         Ok(())

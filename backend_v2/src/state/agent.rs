@@ -5,19 +5,19 @@ use uuid::Uuid;
 
 use super::{StateError, StateResult, parse_ts, parse_uuid};
 
-/// A reusable, project-scoped agent definition.
+/// A reusable, workspace-scoped agent definition.
 ///
 /// Where a [`Session`](super::Session) is a single running conversation, an
 /// `Agent` is the persistent *template* it is built from: a named, editable
-/// [`AgentSpec`] that lives inside a project and can be reused to start many
-/// sessions. Deleting the owning project cascades to its agents.
+/// [`AgentSpec`] that lives inside a workspace and can be reused to start many
+/// sessions. Deleting the owning workspace cascades to its agents.
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub id: Uuid,
 
-    pub project_id: Uuid,
+    pub workspace_id: Uuid,
 
-    /// Human label, unique within the owning project.
+    /// Human label, unique within the owning workspace.
     pub name: String,
 
     /// Optional free-text description shown in listings.
@@ -40,11 +40,11 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(project_id: Uuid, name: impl Into<String>, spec: AgentSpec) -> Self {
+    pub fn new(workspace_id: Uuid, name: impl Into<String>, spec: AgentSpec) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
-            project_id,
+            workspace_id,
             name: name.into(),
             description: None,
             active: true,
@@ -91,7 +91,10 @@ impl Agent {
             .map_err(|e| StateError::InvalidData(format!("agents.spec: {e}")))?;
         Ok(Self {
             id: parse_uuid(row.get::<String, _>("id"), "agents.id")?,
-            project_id: parse_uuid(row.get::<String, _>("project_id"), "agents.project_id")?,
+            workspace_id: parse_uuid(
+                row.get::<String, _>("workspace_id"),
+                "agents.workspace_id",
+            )?,
             name: row.get("name"),
             description: row.get("description"),
             active: row.get("active"),
@@ -104,7 +107,7 @@ impl Agent {
 }
 
 const SELECT_COLUMNS: &str =
-    "id, project_id, name, description, active, spec, runenv, created_at, updated_at";
+    "id, workspace_id, name, description, active, spec, runenv, created_at, updated_at";
 
 pub struct AgentsState {
     db: SqlitePool,
@@ -115,20 +118,11 @@ impl AgentsState {
         Self { db }
     }
 
-    pub async fn list(&self) -> StateResult<Vec<Agent>> {
+    pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Agent>> {
         let rows = sqlx::query(&format!(
-            "SELECT {SELECT_COLUMNS} FROM agents ORDER BY created_at ASC"
+            "SELECT {SELECT_COLUMNS} FROM agents WHERE workspace_id = ? ORDER BY created_at ASC"
         ))
-        .fetch_all(&self.db)
-        .await?;
-        rows.iter().map(Agent::from_sqlite_row).collect()
-    }
-
-    pub async fn list_by_project(&self, project_id: Uuid) -> StateResult<Vec<Agent>> {
-        let rows = sqlx::query(&format!(
-            "SELECT {SELECT_COLUMNS} FROM agents WHERE project_id = ? ORDER BY created_at ASC"
-        ))
-        .bind(project_id.to_string())
+        .bind(workspace_id.to_string())
         .fetch_all(&self.db)
         .await?;
         rows.iter().map(Agent::from_sqlite_row).collect()
@@ -144,13 +138,13 @@ impl AgentsState {
 
     /// Insert or update by `id`, persisting the spec as JSON. Returns the prior
     /// row if one was overwritten, `None` if freshly inserted. A name that
-    /// collides with another agent in the same project surfaces as
+    /// collides with another agent in the same workspace surfaces as
     /// [`StateError::UniqueViolation`].
     pub async fn upsert(&self, item: Agent) -> StateResult<Option<Agent>> {
         let prior = self.get(item.id).await?;
         sqlx::query(
             "INSERT INTO agents \
-                 (id, project_id, name, description, active, spec, runenv, created_at, updated_at) \
+                 (id, workspace_id, name, description, active, spec, runenv, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
                  name = excluded.name, \
@@ -161,7 +155,7 @@ impl AgentsState {
                  updated_at = excluded.updated_at",
         )
         .bind(item.id.to_string())
-        .bind(item.project_id.to_string())
+        .bind(item.workspace_id.to_string())
         .bind(&item.name)
         .bind(&item.description)
         .bind(item.active)
@@ -185,7 +179,7 @@ impl AgentsState {
     }
 }
 
-/// Map a SQLite UNIQUE violation on `(project_id, name)` to a typed error so
+/// Map a SQLite UNIQUE violation on `(workspace_id, name)` to a typed error so
 /// the router can answer `409 Conflict`. Everything else passes through.
 fn map_sqlx_error(e: sqlx::Error) -> StateError {
     if let sqlx::Error::Database(ref db_err) = e {
@@ -211,28 +205,28 @@ mod tests {
         pool
     }
 
-    async fn seed_project(pool: &SqlitePool) -> Uuid {
-        let id = Uuid::new_v4();
+    async fn seed_workspace(pool: &SqlitePool) -> Uuid {
+        let wid = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
-        sqlx::query("INSERT INTO projects (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)")
-            .bind(id.to_string())
-            .bind("P")
+        sqlx::query("INSERT INTO workspaces (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)")
+            .bind(wid.to_string())
+            .bind("W")
             .bind(&now)
             .bind(&now)
             .execute(pool)
             .await
             .unwrap();
-        id
+        wid
     }
 
     #[tokio::test]
     async fn agent_crud_round_trip() {
         let pool = fresh_db().await;
-        let project_id = seed_project(&pool).await;
+        let workspace_id = seed_workspace(&pool).await;
         let state = AgentsState::new(pool);
 
         let spec = AgentSpec::new("anthropic/claude-sonnet-4-5");
-        let agent = Agent::new(project_id, "researcher", spec).with_description("does research");
+        let agent = Agent::new(workspace_id, "researcher", spec).with_description("does research");
         let id = agent.id;
 
         assert!(state.upsert(agent.clone()).await.unwrap().is_none());
@@ -247,7 +241,7 @@ mod tests {
         assert_eq!(prior.name, "researcher");
         assert_eq!(state.get(id).await.unwrap().unwrap().name, "researcher v2");
 
-        assert_eq!(state.list_by_project(project_id).await.unwrap().len(), 1);
+        assert_eq!(state.list_by_workspace(workspace_id).await.unwrap().len(), 1);
 
         let removed = state.remove(id).await.unwrap();
         assert_eq!(removed.id, id);
@@ -256,18 +250,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_name_in_project_conflicts() {
+    async fn duplicate_name_in_workspace_conflicts() {
         let pool = fresh_db().await;
-        let project_id = seed_project(&pool).await;
+        let workspace_id = seed_workspace(&pool).await;
         let state = AgentsState::new(pool);
 
         let spec = AgentSpec::new("anthropic/claude-sonnet-4-5");
         state
-            .upsert(Agent::new(project_id, "dup", spec.clone()))
+            .upsert(Agent::new(workspace_id, "dup", spec.clone()))
             .await
             .unwrap();
 
-        let clash = Agent::new(project_id, "dup", spec);
+        let clash = Agent::new(workspace_id, "dup", spec);
         assert!(matches!(
             state.upsert(clash).await,
             Err(StateError::UniqueViolation(_))

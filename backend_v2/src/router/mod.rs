@@ -15,9 +15,9 @@ pub(crate) mod error;
 mod agent;
 mod auth;
 mod message;
-mod project;
 mod session;
 mod user;
+mod webdav;
 mod workspace;
 
 pub fn get_router(state: Arc<AppState>) -> ApiRouter {
@@ -25,7 +25,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
     // - `admin_required` is applied first to the `/admin/*` routes, so it
     //   sits closest to those handlers.
     // - `auth_required` is then applied to every route registered above it
-    //   (admin + `/me` + projects + sessions HTTP), wrapping them as the
+    //   (admin + `/me` + workspaces + sessions HTTP), wrapping them as the
     //   outer layer so `AuthUser` is populated before `admin_required`
     //   inspects the role.
     // - Public routes (`/auth/*`, the WS endpoint) are registered after
@@ -46,14 +46,15 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .route_layer(axum::middleware::from_fn(admin_required))
         .api_route("/me", get(user::get_me).patch(user::update_me))
         .api_route(
-            "/projects",
-            get(project::list_projects).post(project::create_project),
+            "/me/workspace",
+            get(workspace::get_my_workspace).patch(workspace::update_my_workspace),
         )
+        .api_route("/workspaces", get(workspace::list_workspaces))
         .api_route(
-            "/projects/{id}",
-            get(project::get_project)
-                .patch(project::update_project)
-                .delete(project::delete_project),
+            "/workspaces/{id}",
+            get(workspace::get_workspace)
+                .patch(workspace::update_workspace)
+                .delete(workspace::delete_workspace),
         )
         .api_route(
             "/agents",
@@ -89,15 +90,12 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             axum::routing::get(message::stream_messages),
         )
         // Two routes: matchit's `{*rest}` wildcard requires one-or-more
-        // segments, so the bare collection path (`/…/workspace`) needs its
+        // segments, so the bare collection path (`/…/files`) needs its
         // own entry — without it, `PROPFIND` on the workspace root 404s.
+        .route_service("/workspaces/{wid}/files", webdav::router(state.clone()))
         .route_service(
-            "/projects/{pid}/workspace",
-            workspace::router(state.clone()),
-        )
-        .route_service(
-            "/projects/{pid}/workspace/{*rest}",
-            workspace::router(state.clone()),
+            "/workspaces/{wid}/files/{*rest}",
+            webdav::router(state.clone()),
         )
         .with_state(state)
 }
