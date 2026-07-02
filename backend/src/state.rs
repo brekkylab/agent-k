@@ -103,7 +103,9 @@ impl AppState {
                     .ok()
             })
             .unwrap_or(50 * 1024 * 1024);
-        let (ws_tx, _) = broadcast::channel(128);
+        // One event per streamed token: a fast model enqueues hundreds per turn,
+        // so a small ring lets a slow subscriber lag and drop deltas.
+        let (ws_tx, _) = broadcast::channel(1024);
         Self {
             agents: DashMap::new(),
             active_agent_runs: DashMap::new(),
