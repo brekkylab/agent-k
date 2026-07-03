@@ -175,27 +175,25 @@ pub(super) async fn delete_workspace(
 }
 
 /// `GET /me/workspace` — the caller's default workspace (id == user id).
+/// Thin alias that delegates to [`get_workspace`] with the caller's id, so the
+/// two share one implementation.
 pub(super) async fn get_my_workspace(
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthUser>,
+    state: State<Arc<AppState>>,
+    auth: Extension<AuthUser>,
 ) -> Result<Json<WorkspaceResponse>, ApiError> {
-    let workspace = require_owned_workspace(&state, &auth, auth.id).await?;
-    Ok(Json(WorkspaceResponse::from(workspace)))
+    let id = auth.id;
+    get_workspace(state, auth, Path(id)).await
 }
 
-/// `PATCH /me/workspace` — update the caller's default workspace.
+/// `PATCH /me/workspace` — update the caller's default workspace. Delegates to
+/// [`update_workspace`] with the caller's id.
 pub(super) async fn update_my_workspace(
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthUser>,
-    Json(payload): Json<UpdateWorkspaceRequest>,
+    state: State<Arc<AppState>>,
+    auth: Extension<AuthUser>,
+    payload: Json<UpdateWorkspaceRequest>,
 ) -> Result<Json<WorkspaceResponse>, ApiError> {
-    let existing = require_owned_workspace(&state, &auth, auth.id).await?;
-    let updated = match payload.title {
-        Some(t) => existing.with_title(t).with_updated_at(),
-        None => existing,
-    };
-    state.workspaces.upsert(updated.clone()).await?;
-    Ok(Json(WorkspaceResponse::from(updated)))
+    let id = auth.id;
+    update_workspace(state, auth, Path(id), payload).await
 }
 
 #[cfg(test)]
