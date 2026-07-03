@@ -109,6 +109,10 @@ pub(super) async fn require_owned_session(
     Ok(session)
 }
 
+/// `GET /workspaces` — list the caller's workspaces. Not routed yet: with a
+/// single workspace per user it only ever returns the default, which
+/// `/me/workspace` already serves. Re-wire (as a real list) with multi-workspace.
+#[allow(dead_code)]
 pub(super) async fn list_workspaces(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
@@ -147,6 +151,11 @@ pub(super) async fn update_workspace(
     Ok(Json(WorkspaceResponse::from(updated)))
 }
 
+/// `DELETE /workspaces/{id}` — remove a non-default workspace the caller owns.
+/// Not routed yet: non-default workspaces can't be created, so this is currently
+/// unreachable. Kept (with the default-protection guard) for when multiple
+/// workspaces per user are supported.
+#[allow(dead_code)]
 pub(super) async fn delete_workspace(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,

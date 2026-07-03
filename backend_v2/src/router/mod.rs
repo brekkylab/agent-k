@@ -49,12 +49,17 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/me/workspace",
             get(workspace::get_my_workspace).patch(workspace::update_my_workspace),
         )
-        .api_route("/workspaces", get(workspace::list_workspaces))
+        // `/workspaces` list unwired: with one workspace per user it only ever
+        // returns the default, which /me/workspace already serves. Re-add (as a
+        // real list) with multiple workspaces per user:
+        // .api_route("/workspaces", get(workspace::list_workspaces))
         .api_route(
             "/workspaces/{id}",
             get(workspace::get_workspace)
-                .patch(workspace::update_workspace)
-                .delete(workspace::delete_workspace),
+                .patch(workspace::update_workspace),
+            // DELETE unwired until multiple workspaces per user exist — today it
+            // would only ever 403 (default) or 404 (see delete_workspace):
+            // .delete(workspace::delete_workspace)
         )
         .api_route(
             "/agents",
