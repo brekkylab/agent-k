@@ -136,8 +136,7 @@ impl WorkspacesState {
         Ok(existing)
     }
 
-    /// Remove a workspace's on-disk artifacts — its directory tree and the
-    /// `users/{id}/workspace` convenience symlink — without touching the
+    /// Remove a workspace's on-disk directory tree without touching the
     /// database. Idempotent. Deleting files before the rows means a filesystem
     /// failure aborts before anything is removed from the database.
     pub async fn remove_files(&self, id: Uuid) -> StateResult<()> {
@@ -145,23 +144,14 @@ impl WorkspacesState {
         if tokio::fs::try_exists(&dir).await? {
             tokio::fs::remove_dir_all(&dir).await?;
         }
-        // A default workspace's id equals its user's id, so its convenience
-        // symlink lives at `users/{id}/workspace`; drop it if present.
-        let link = self.user_default_link(id);
-        if tokio::fs::symlink_metadata(&link).await.is_ok() {
-            tokio::fs::remove_file(&link).await.ok();
-        }
         Ok(())
     }
 
-    /// Provision a user's default workspace. Its id mirrors the user's id, its
-    /// title is derived from `username`, and a convenience symlink
-    /// `users/{uid}/workspace` → the workspace directory is created so the file
-    /// tree is reachable by a user-centric path too.
+    /// Provision a user's default workspace: its id mirrors the user's id and
+    /// its title is derived from `username`.
     pub async fn create_default(&self, user: &User) -> StateResult<Workspace> {
         let ws = Workspace::with_id(user.id, user.id, format!("{}'s workspace", user.username));
         self.upsert(ws.clone()).await?;
-        self.link_user_default(user.id).await?;
         Ok(ws)
     }
 
@@ -189,42 +179,6 @@ impl WorkspacesState {
         self.workspace_dir(wid).join(".title")
     }
 
-    /// Path of the per-user convenience symlink
-    /// (`data_root/users/{uid}/workspace`).
-    fn user_default_link(&self, user_id: Uuid) -> PathBuf {
-        self.data_root
-            .join("users")
-            .join(user_id.to_string())
-            .join("workspace")
-    }
-
-    /// (Re)create the `users/{uid}/workspace` → `workspaces/{uid}` symlink. The
-    /// default workspace's id equals the user's id, so the target is
-    /// `workspaces/{uid}`. The link is *relative* so the whole `data_root` can
-    /// be relocated without breaking it.
-    async fn link_user_default(&self, user_id: Uuid) -> StateResult<()> {
-        let link = self.user_default_link(user_id);
-        if let Some(parent) = link.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        // Idempotent: replace any existing link so re-provisioning is safe.
-        if tokio::fs::symlink_metadata(&link).await.is_ok() {
-            tokio::fs::remove_file(&link).await.ok();
-        }
-        // From `users/{uid}/` the workspace dir is `../../workspaces/{uid}`.
-        let target = PathBuf::from("..")
-            .join("..")
-            .join("workspaces")
-            .join(user_id.to_string());
-        #[cfg(unix)]
-        tokio::fs::symlink(&target, &link).await?;
-        #[cfg(not(unix))]
-        {
-            let _ = target;
-            tracing::warn!("workspace symlink is not supported on this platform");
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -335,7 +289,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_default_mirrors_uid_and_symlinks() {
+    async fn create_default_mirrors_uid() {
         let pool = fresh_db().await;
         let u = user("tester");
         insert_user(&pool, &u).await;
@@ -352,15 +306,8 @@ mod tests {
         // The file root lives under workspaces/{uid}/files.
         assert!(tokio::fs::try_exists(state.get_root(user_id)).await.unwrap());
 
-        // users/{uid}/workspace is a symlink that resolves onto the workspace
-        // directory, so its `files` child is reachable through the link.
-        let link = state.user_default_link(user_id);
-        let meta = tokio::fs::symlink_metadata(&link).await.unwrap();
-        assert!(meta.file_type().is_symlink());
-        assert!(tokio::fs::try_exists(link.join("files")).await.unwrap());
-
-        // Removing the default workspace also drops the dangling symlink.
+        // Removal drops the on-disk directory.
         state.remove(user_id).await.unwrap();
-        assert!(tokio::fs::symlink_metadata(&link).await.is_err());
+        assert!(!tokio::fs::try_exists(state.workspace_dir(user_id)).await.unwrap());
     }
 }
