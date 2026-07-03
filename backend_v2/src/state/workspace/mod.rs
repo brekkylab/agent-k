@@ -117,10 +117,9 @@ impl WorkspacesState {
         .execute(&self.db)
         .await?;
 
-        // Provision the file root and mirror the title to `.title` on disk, so
-        // the workspace is fully described without a DB read.
+        // Provision the file root. The DB row is the sole source of truth for
+        // the workspace's data (title); nothing is mirrored to disk.
         tokio::fs::create_dir_all(self.get_root(id)).await?;
-        tokio::fs::write(self.title_path(id), &item.title).await?;
         Ok(prior)
     }
 
@@ -156,9 +155,9 @@ impl WorkspacesState {
     }
 
     /// Ensure the user's default workspace exists both as a row and on disk.
-    /// Creates it when the row is missing, and re-materializes the file root (and
-    /// `.title`) when only the on-disk tree is gone — e.g. after an account
-    /// deletion whose row-delete failed after the files were already removed.
+    /// Creates it when the row is missing, and re-materializes the file root when
+    /// only the on-disk tree is gone — e.g. after an account deletion whose
+    /// row-delete failed after the files were already removed.
     pub async fn ensure_provisioned(&self, user: &User) -> StateResult<()> {
         match self.get(user.id).await? {
             None => {
@@ -167,7 +166,6 @@ impl WorkspacesState {
             Some(ws) => {
                 if !tokio::fs::try_exists(self.get_root(ws.id)).await? {
                     tokio::fs::create_dir_all(self.get_root(ws.id)).await?;
-                    tokio::fs::write(self.title_path(ws.id), &ws.title).await?;
                 }
             }
         }
@@ -189,13 +187,6 @@ impl WorkspacesState {
     /// file root and room for sibling metadata.
     fn workspace_dir(&self, wid: Uuid) -> PathBuf {
         self.data_root.join("workspaces").join(wid.to_string())
-    }
-
-    /// Path of the on-disk title mirror (`data_root/workspaces/{wid}/.title`).
-    /// It sits beside — not inside — the `files` root, so it is never exposed
-    /// through WebDAV.
-    fn title_path(&self, wid: Uuid) -> PathBuf {
-        self.workspace_dir(wid).join(".title")
     }
 
 }
@@ -256,12 +247,8 @@ mod tests {
         let id = ws.id;
 
         assert!(state.upsert(ws.clone()).await.unwrap().is_none());
-        // The file root is provisioned and the title mirrored to `.title`.
+        // The file root is provisioned on upsert.
         assert!(tokio::fs::try_exists(state.get_root(id)).await.unwrap());
-        assert_eq!(
-            tokio::fs::read_to_string(state.title_path(id)).await.unwrap(),
-            "Alpha"
-        );
 
         let fetched = state.get(id).await.unwrap().unwrap();
         assert_eq!(fetched.id, id);
@@ -271,11 +258,6 @@ mod tests {
         let prior = state.upsert(bumped).await.unwrap().expect("prior row");
         assert_eq!(prior.title, "Alpha");
         assert_eq!(state.get(id).await.unwrap().unwrap().title, "Alpha v2");
-        // The `.title` mirror tracks the rename.
-        assert_eq!(
-            tokio::fs::read_to_string(state.title_path(id)).await.unwrap(),
-            "Alpha v2"
-        );
 
         let removed = state.remove(id).await.unwrap();
         assert_eq!(removed.id, id);
@@ -347,9 +329,5 @@ mod tests {
         // Heal re-materializes the file root even though the row still exists.
         state.ensure_provisioned(&u).await.unwrap();
         assert!(tokio::fs::try_exists(state.get_root(u.id)).await.unwrap());
-        assert_eq!(
-            tokio::fs::read_to_string(state.title_path(u.id)).await.unwrap(),
-            "healme's workspace"
-        );
     }
 }
