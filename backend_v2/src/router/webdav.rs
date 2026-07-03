@@ -82,7 +82,12 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
 fn parse_wid(path: &str) -> Option<Uuid> {
     let rest = path.strip_prefix("/workspaces/")?;
     let (wid_str, _) = rest.split_once('/')?;
-    Uuid::parse_str(wid_str).ok()
+    let wid = Uuid::parse_str(wid_str).ok()?;
+    // Require the canonical (lowercase-hyphenated) form. The DAV strip prefix is
+    // built from `wid`'s Display and dav-server matches it byte-for-byte, so a
+    // non-canonical segment (uppercase, or the 32-char no-hyphen form) would
+    // authenticate but then 502 on PrefixMismatch. Reject it up front as a 400.
+    (wid_str == wid.to_string()).then_some(wid)
 }
 
 fn extract_token(query: &str) -> Option<String> {
@@ -352,5 +357,27 @@ impl DavDirEntry for DavDirEntryAdapter {
             .map(|m| Box::new(DavMetaAdapter(m)) as Box<dyn DavMetaData>)
             .map_err(to_dav_err);
         Box::pin(ready(meta))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_wid;
+
+    #[test]
+    fn parse_wid_requires_canonical_form() {
+        let canon = "15fc016b-0000-4000-8000-000000000000";
+        // Canonical form, with or without a trailing sub-path.
+        assert!(parse_wid(&format!("/workspaces/{canon}/files")).is_some());
+        assert!(parse_wid(&format!("/workspaces/{canon}/files/sub/a.txt")).is_some());
+
+        // Uppercase and 32-char no-hyphen forms parse to the same Uuid but
+        // aren't canonical — they'd 502 on the byte-exact DAV strip prefix.
+        assert!(parse_wid("/workspaces/15FC016B-0000-4000-8000-000000000000/files").is_none());
+        assert!(parse_wid("/workspaces/15fc016b000040008000000000000000/files").is_none());
+
+        // Malformed or missing id segment.
+        assert!(parse_wid("/workspaces/not-a-uuid/files").is_none());
+        assert!(parse_wid(&format!("/workspaces/{canon}")).is_none());
     }
 }
