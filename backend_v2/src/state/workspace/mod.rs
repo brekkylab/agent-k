@@ -155,6 +155,25 @@ impl WorkspacesState {
         Ok(ws)
     }
 
+    /// Ensure the user's default workspace exists both as a row and on disk.
+    /// Creates it when the row is missing, and re-materializes the file root (and
+    /// `.title`) when only the on-disk tree is gone — e.g. after an account
+    /// deletion whose row-delete failed after the files were already removed.
+    pub async fn ensure_provisioned(&self, user: &User) -> StateResult<()> {
+        match self.get(user.id).await? {
+            None => {
+                self.create_default(user).await?;
+            }
+            Some(ws) => {
+                if !tokio::fs::try_exists(self.get_root(ws.id)).await? {
+                    tokio::fs::create_dir_all(self.get_root(ws.id)).await?;
+                    tokio::fs::write(self.title_path(ws.id), &ws.title).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A filesystem handle scoped to workspace `wid`'s file root.
     pub fn get_fs(&self, wid: Uuid) -> WorkspaceFs {
         WorkspaceFs::new(self.get_root(wid), wid)
@@ -309,5 +328,28 @@ mod tests {
         // Removal drops the on-disk directory.
         state.remove(user_id).await.unwrap();
         assert!(!tokio::fs::try_exists(state.workspace_dir(user_id)).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn ensure_provisioned_rematerializes_missing_files() {
+        let pool = fresh_db().await;
+        let u = user("healme");
+        insert_user(&pool, &u).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
+
+        state.create_default(&u).await.unwrap();
+        // Simulate an interrupted deletion: files gone, row still present.
+        state.remove_files(u.id).await.unwrap();
+        assert!(!tokio::fs::try_exists(state.get_root(u.id)).await.unwrap());
+        assert!(state.get(u.id).await.unwrap().is_some());
+
+        // Heal re-materializes the file root even though the row still exists.
+        state.ensure_provisioned(&u).await.unwrap();
+        assert!(tokio::fs::try_exists(state.get_root(u.id)).await.unwrap());
+        assert_eq!(
+            tokio::fs::read_to_string(state.title_path(u.id)).await.unwrap(),
+            "healme's workspace"
+        );
     }
 }

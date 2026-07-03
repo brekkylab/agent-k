@@ -201,6 +201,20 @@ impl SessionsState {
         Ok(existing)
     }
 
+    /// Cancel any in-flight run for `id` and remove its on-disk artifacts and
+    /// event channel, *without* touching the database — for when the row is
+    /// removed elsewhere (e.g. cascaded by a user delete). Best-effort.
+    pub async fn discard_artifacts(&self, id: Uuid) {
+        self.cancel(id).await;
+        let dir = self.data_root.join("sessions").join(id.to_string());
+        if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::error!(session = %id, "failed to remove session dir: {e}");
+            }
+        }
+        self.events.remove_channel(&message_channel(id));
+    }
+
     /// Request that any in-flight run for `id` stop at the next safe point.
     /// Returns `true` if a run was found and signaled, `false` if no run was
     /// active. Non-blocking; the spawned task will clean up its own entry.

@@ -120,11 +120,10 @@ pub(super) async fn login(
         return Err(err(StatusCode::UNAUTHORIZED, "invalid username or password"));
     }
 
-    // Heal a missing default workspace (e.g. a signup that failed after the
-    // user row was created): provision it lazily on login.
-    if state.workspaces.get(user.id).await?.is_none() {
-        state.workspaces.create_default(&user).await?;
-    }
+    // Heal a default workspace missing its row (a signup that failed after the
+    // user row was created) or its files (an interrupted account deletion) by
+    // (re)provisioning on login.
+    state.workspaces.ensure_provisioned(&user).await?;
 
     let access_token = state
         .jwt

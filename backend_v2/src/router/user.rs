@@ -283,15 +283,33 @@ pub(super) async fn delete_user_admin(
         ));
     }
 
-    if state.users.get(id).await?.is_none() {
+    // Collect the user's session ids before the cascade removes their rows.
+    // (Default workspace id == user id; revisit for multi-workspace.)
+    let session_ids: Vec<Uuid> = state
+        .sessions
+        .list_by_workspace(id)
+        .await?
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+
+    // Atomic point: delete the user and workspace rows (cascades agents,
+    // sessions, messages). Nothing on disk is touched yet, so if this fails the
+    // account and all of its files remain fully intact and it can be retried.
+    if !state.users.delete_with_default_workspace(id).await? {
         return Err(StateError::NotFound.into());
     }
 
-    // Remove the default workspace's files first; only if that succeeds do we
-    // delete the user and workspace rows atomically. A filesystem failure aborts
-    // before any row is removed, and the two row deletes never diverge.
-    state.workspaces.remove_files(id).await?;
-    state.users.delete_with_default_workspace(id).await?;
+    // Rows are gone — now best-effort tear down on-disk artifacts (cancel runs,
+    // remove session sandbox dirs and the workspace files, close channels).
+    // Doing this after the row delete means a failure here only leaks disk (the
+    // account is already gone), never leaving an active user with missing data.
+    for sid in session_ids {
+        state.sessions.discard_artifacts(sid).await;
+    }
+    if let Err(e) = state.workspaces.remove_files(id).await {
+        tracing::error!(target_user_id = %id, "failed to remove workspace files: {e}");
+    }
 
     tracing::info!(target_user_id = %id, by = %auth.id, "admin deleted user");
 
