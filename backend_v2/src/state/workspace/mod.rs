@@ -18,18 +18,20 @@ pub use fs::*;
 #[derive(Debug, Clone)]
 pub struct Workspace {
     pub id: Uuid,
+    pub user_id: Uuid,
     pub title: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl Workspace {
-    /// Construct with an explicit id. A user's default workspace uses that
-    /// user's id.
-    pub fn with_id(id: Uuid, title: String) -> Self {
+    /// Construct with an explicit id and owner. A user's default workspace uses
+    /// that user's id for both.
+    pub fn with_id(id: Uuid, user_id: Uuid, title: String) -> Self {
         let now = Utc::now();
         Self {
             id,
+            user_id,
             title,
             created_at: now,
             updated_at: now,
@@ -49,6 +51,7 @@ impl Workspace {
     fn from_sqlite_row(row: &SqliteRow) -> StateResult<Self> {
         Ok(Self {
             id: parse_uuid(row.get::<String, _>("id"), "workspaces.id")?,
+            user_id: parse_uuid(row.get::<String, _>("user_id"), "workspaces.user_id")?,
             title: row.get("title"),
             created_at: parse_ts(&row.get::<String, _>("created_at"), "workspaces.created_at")?,
             updated_at: parse_ts(&row.get::<String, _>("updated_at"), "workspaces.updated_at")?,
@@ -75,24 +78,22 @@ impl WorkspacesState {
     }
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Workspace>> {
-        let row = sqlx::query("SELECT id, title, created_at, updated_at FROM workspaces WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_optional(&self.db)
-            .await?;
+        let row = sqlx::query(
+            "SELECT id, user_id, title, created_at, updated_at FROM workspaces WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.db)
+        .await?;
         row.as_ref().map(Workspace::from_sqlite_row).transpose()
     }
 
-    /// Fetch `wid` only if `user_id` may access it. Access is currently limited
-    /// to a user's default workspace, whose id equals the user's id — this is
-    /// the single definition of the workspace access rule, reused by every
-    /// caller (HTTP routes, WebDAV, message WS). A workspace the user cannot
-    /// access is indistinguishable from a missing one (`None`), so existence
-    /// can't be probed.
+    /// Fetch `wid` only if it is owned by `user_id`. This is the single
+    /// definition of the workspace access rule, reused by every caller (HTTP
+    /// routes, WebDAV, message WS). A workspace the user doesn't own is
+    /// indistinguishable from a missing one (`None`), so existence can't be
+    /// probed.
     pub async fn get_for_user(&self, user_id: Uuid, wid: Uuid) -> StateResult<Option<Workspace>> {
-        if wid != user_id {
-            return Ok(None);
-        }
-        self.get(wid).await
+        Ok(self.get(wid).await?.filter(|w| w.user_id == user_id))
     }
 
     /// Insert or update by `id`. Returns the prior row if one was overwritten,
@@ -102,13 +103,14 @@ impl WorkspacesState {
         let id = item.id;
         let prior = self.get(id).await?;
         sqlx::query(
-            "INSERT INTO workspaces (id, title, created_at, updated_at) \
-             VALUES (?, ?, ?, ?) \
+            "INSERT INTO workspaces (id, user_id, title, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
                  title = excluded.title, \
                  updated_at = excluded.updated_at",
         )
         .bind(item.id.to_string())
+        .bind(item.user_id.to_string())
         .bind(&item.title)
         .bind(item.created_at.to_rfc3339())
         .bind(item.updated_at.to_rfc3339())
@@ -157,7 +159,7 @@ impl WorkspacesState {
     /// `users/{uid}/workspace` → the workspace directory is created so the file
     /// tree is reachable by a user-centric path too.
     pub async fn create_default(&self, user: &User) -> StateResult<Workspace> {
-        let ws = Workspace::with_id(user.id, format!("{}'s workspace", user.username));
+        let ws = Workspace::with_id(user.id, user.id, format!("{}'s workspace", user.username));
         self.upsert(ws.clone()).await?;
         self.link_user_default(user.id).await?;
         Ok(ws)
@@ -251,13 +253,33 @@ mod tests {
         }
     }
 
+    // Insert a user row so workspaces (FK workspaces.user_id -> users) can be
+    // created for it.
+    async fn insert_user(pool: &SqlitePool, u: &User) {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO users \
+                 (id, username, password_hash, role, is_active, preferred_language, created_at, updated_at) \
+             VALUES (?, ?, 'x', 'user', 1, 'en', ?, ?)",
+        )
+        .bind(u.id.to_string())
+        .bind(&u.username)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn workspace_crud_round_trip() {
         let pool = fresh_db().await;
+        let owner = user("owner");
+        insert_user(&pool, &owner).await;
         let tmp = tempfile::tempdir().unwrap();
         let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
 
-        let ws = Workspace::with_id(Uuid::new_v4(), "Alpha".into());
+        let ws = Workspace::with_id(Uuid::new_v4(), owner.id, "Alpha".into());
         let id = ws.id;
 
         assert!(state.upsert(ws.clone()).await.unwrap().is_none());
@@ -290,37 +312,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_for_user_enforces_default_ownership() {
+    async fn get_for_user_enforces_ownership() {
         let pool = fresh_db().await;
+        let owner = user("owner");
+        insert_user(&pool, &owner).await;
         let tmp = tempfile::tempdir().unwrap();
         let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
 
-        let uid = Uuid::new_v4();
-        state
-            .upsert(Workspace::with_id(uid, "W".into()))
-            .await
-            .unwrap();
+        let uid = owner.id;
+        // A default workspace (id == uid) and a non-default one, both owned by uid.
+        state.upsert(Workspace::with_id(uid, uid, "W".into())).await.unwrap();
+        let other = Uuid::new_v4();
+        state.upsert(Workspace::with_id(other, uid, "W2".into())).await.unwrap();
 
-        // Owner (wid == uid) can reach it.
+        // The owner reaches both — including the non-default (id != uid).
         assert!(state.get_for_user(uid, uid).await.unwrap().is_some());
-        // A different user gets None even though the workspace exists — no
-        // existence leak.
-        assert!(state.get_for_user(Uuid::new_v4(), uid).await.unwrap().is_none());
-        // Owner id but a workspace that doesn't exist → None.
+        assert!(state.get_for_user(uid, other).await.unwrap().is_some());
+        // A different user gets None even though the workspace exists — no leak.
+        assert!(state.get_for_user(Uuid::new_v4(), other).await.unwrap().is_none());
+        // A workspace that doesn't exist → None.
         assert!(state.get_for_user(uid, Uuid::new_v4()).await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn create_default_mirrors_uid_and_symlinks() {
         let pool = fresh_db().await;
+        let u = user("tester");
+        insert_user(&pool, &u).await;
         let tmp = tempfile::tempdir().unwrap();
         let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
 
-        let u = user("tester");
         let user_id = u.id;
         let ws = state.create_default(&u).await.unwrap();
-        // The default workspace's id equals the user's id, title from username.
+        // The default workspace's id and owner are the user's id; title from name.
         assert_eq!(ws.id, user_id);
+        assert_eq!(ws.user_id, user_id);
         assert_eq!(ws.title, "tester's workspace");
 
         // The file root lives under workspaces/{uid}/files.

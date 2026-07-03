@@ -13,10 +13,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
 CREATE TABLE workspaces (
     id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE INDEX idx_workspaces_user ON workspaces(user_id);
 
 CREATE TABLE agents (
     id TEXT PRIMARY KEY,

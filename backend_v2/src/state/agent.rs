@@ -206,16 +206,33 @@ mod tests {
     }
 
     async fn seed_workspace(pool: &SqlitePool) -> Uuid {
+        let uid = Uuid::new_v4();
         let wid = Uuid::new_v4();
         let now = Utc::now().to_rfc3339();
-        sqlx::query("INSERT INTO workspaces (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)")
-            .bind(wid.to_string())
-            .bind("W")
-            .bind(&now)
-            .bind(&now)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO users \
+                 (id, username, password_hash, role, is_active, preferred_language, created_at, updated_at) \
+             VALUES (?, ?, 'x', 'user', 1, 'en', ?, ?)",
+        )
+        .bind(uid.to_string())
+        .bind(format!("u-{uid}"))
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces (id, user_id, title, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(wid.to_string())
+        .bind(uid.to_string())
+        .bind("W")
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
         wid
     }
 
