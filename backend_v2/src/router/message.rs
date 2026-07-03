@@ -109,28 +109,11 @@ pub(super) async fn stream_messages(
     Query(query): Query<MessagesWsQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    // Mirrors `auth_required` on HTTP routes via the shared `authenticate`
-    // gate (token must decode to an active user). Token is passed via query
-    // because browser WebSockets can't set headers. The session must live in
-    // the caller's default workspace (whose id equals the user's id);
-    // otherwise it's reported as 404 so it can't be probed.
+    // Token via query (browser WebSockets can't set headers). authenticate +
+    // require_owned_session apply the same gate as the HTTP routes.
     let user = authenticate(&state, &query.token).await?;
+    require_owned_session(&state, &user, sid).await?;
 
-    let session = state
-        .sessions
-        .get(sid)
-        .await?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "session not found"))?;
-    // Same access gate as the HTTP routes: the session's workspace must be one
-    // the caller can reach.
-    if state
-        .workspaces
-        .get_for_user(user.id, session.workspace_id)
-        .await?
-        .is_none()
-    {
-        return Err(err(StatusCode::NOT_FOUND, "session not found"));
-    }
     let last_seq = query.last_seq.unwrap_or(-1);
 
     Ok(ws.on_upgrade(move |mut socket| async move {

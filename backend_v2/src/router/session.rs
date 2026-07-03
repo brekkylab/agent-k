@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     error::{ApiError, err},
-    workspace::{require_owned_session, require_owned_workspace},
+    workspace::{require_owned_agent, require_owned_session, require_owned_workspace},
 };
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -132,17 +132,9 @@ pub(super) async fn create_session(
             ));
         }
         (Some(agent_id), None) => {
-            let agent = state
-                .agents
-                .get(agent_id)
-                .await?
-                .ok_or_else(|| err(StatusCode::NOT_FOUND, "agent not found"))?;
-            if agent.workspace_id != payload.workspace_id {
-                return Err(err(
-                    StatusCode::BAD_REQUEST,
-                    "agent does not belong to the given workspace",
-                ));
-            }
+            // require_owned_agent 404s for missing/foreign agents alike; owning
+            // the agent's workspace also implies it is this one (both == caller id).
+            let agent = require_owned_agent(&state, &auth, agent_id).await?;
             if !agent.active {
                 return Err(err(StatusCode::CONFLICT, "agent is not active"));
             }
