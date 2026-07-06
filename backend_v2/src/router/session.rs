@@ -175,6 +175,6 @@ pub(super) async fn delete_session(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     require_owned_session(&state, &auth, id).await?;
-    state.sessions.remove(id).await?;
+    state.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

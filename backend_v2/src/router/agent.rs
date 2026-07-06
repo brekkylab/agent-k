@@ -175,6 +175,6 @@ pub(super) async fn delete_agent(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     require_owned_agent(&state, &auth, id).await?;
-    state.agents.remove(id).await?;
+    state.delete_agent(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

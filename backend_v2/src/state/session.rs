@@ -128,6 +128,33 @@ impl SessionsState {
         rows.iter().map(Session::from_sqlite_row).collect()
     }
 
+    /// Ids of every session owned by `agent_id`. Cheaper than
+    /// [`Self::list_by_workspace`] when only the ids are needed — the delete
+    /// choreography collects them *before* the agent-row cascade removes the
+    /// session rows, so it can still sweep their artifacts afterwards.
+    pub async fn ids_by_agent(&self, agent_id: Uuid) -> StateResult<Vec<Uuid>> {
+        self.session_ids("agent_id", agent_id).await
+    }
+
+    /// Ids of every session in `workspace_id`. See [`Self::ids_by_agent`] for
+    /// why the ids are collected ahead of a cascading row delete.
+    pub async fn ids_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Uuid>> {
+        self.session_ids("workspace_id", workspace_id).await
+    }
+
+    /// Session ids where `column` equals `value`. `column` is always an internal
+    /// string literal (never user input), so interpolating it is safe.
+    async fn session_ids(&self, column: &str, value: Uuid) -> StateResult<Vec<Uuid>> {
+        let sql = format!("SELECT id FROM sessions WHERE {column} = ?");
+        let rows = sqlx::query(&sql)
+            .bind(value.to_string())
+            .fetch_all(&self.db)
+            .await?;
+        rows.iter()
+            .map(|r| parse_uuid(r.get::<String, _>("id"), "sessions.id"))
+            .collect()
+    }
+
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Session>> {
         let row = sqlx::query(
             "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \

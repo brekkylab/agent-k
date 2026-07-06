@@ -97,4 +97,60 @@ impl AppState {
             jwt,
         })
     }
+
+    // --- Deletion choreography -------------------------------------------
+    //
+    // The database cascades `user → workspace → agent → session → messages`
+    // on delete, but a raw row cascade only drops rows: it never cancels an
+    // in-flight run, removes a session's on-disk dir, closes its event
+    // channel, or deletes a workspace's files. Each `delete_*` below is the
+    // single definition of "what tearing down this entity means" — collect the
+    // descendant session ids *before* the cascade wipes their rows, delete the
+    // row(s), then best-effort sweep the artifacts the FK can't reach. Every
+    // caller (HTTP routes, etc.) goes through these instead of touching the
+    // per-entity `remove` directly, so no delete path can forget the teardown.
+
+    /// Delete a session and its artifacts (leaf of the cascade).
+    pub async fn delete_session(&self, id: Uuid) -> StateResult<Session> {
+        self.sessions.remove(id).await
+    }
+
+    /// Delete an agent and sweep its (cascade-dropped) sessions' artifacts.
+    pub async fn delete_agent(&self, id: Uuid) -> StateResult<Agent> {
+        let session_ids = self.sessions.ids_by_agent(id).await?;
+        let agent = self.agents.remove(id).await?;
+        self.discard_session_artifacts(session_ids).await;
+        Ok(agent)
+    }
+
+    /// Delete a workspace, its files, and its sessions' artifacts.
+    pub async fn delete_workspace(&self, id: Uuid) -> StateResult<Workspace> {
+        let session_ids = self.sessions.ids_by_workspace(id).await?;
+        let workspace = self.workspaces.remove(id).await?;
+        self.discard_session_artifacts(session_ids).await;
+        Ok(workspace)
+    }
+
+    /// Delete a user and every descendant artifact; `false` if no row existed.
+    /// Rows drop atomically first (retryable on failure), disk cleanup after
+    /// (a failure only leaks disk). Default workspace id == user id.
+    pub async fn delete_user(&self, id: Uuid) -> StateResult<bool> {
+        let session_ids = self.sessions.ids_by_workspace(id).await?;
+        if !self.users.delete_with_default_workspace(id).await? {
+            return Ok(false);
+        }
+        self.discard_session_artifacts(session_ids).await;
+        if let Err(e) = self.workspaces.remove_files(id).await {
+            tracing::error!(user_id = %id, "failed to remove workspace files: {e}");
+        }
+        Ok(true)
+    }
+
+    /// Best-effort teardown of run/dir/channel artifacts for sessions whose
+    /// rows are already gone. Never fails; logs and skips on error.
+    async fn discard_session_artifacts(&self, ids: Vec<Uuid>) {
+        for id in ids {
+            self.sessions.discard_artifacts(id).await;
+        }
+    }
 }

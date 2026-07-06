@@ -170,7 +170,7 @@ pub(super) async fn delete_workspace(
             "cannot delete your default workspace",
         ));
     }
-    state.workspaces.remove(id).await?;
+    state.delete_workspace(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
