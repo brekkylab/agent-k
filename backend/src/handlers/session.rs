@@ -1564,16 +1564,20 @@ pub async fn get_active_run(
         .map_err(|e| AppError::internal(e.to_string()))?
         .ok_or_else(|| AppError::not_found("session not found or access denied"))?;
 
-    let snapshot = state.snapshot(&session_id).await.map(
-        |(run_id, user_message, outputs, partial)| ActiveRunSnapshot {
-            run_id: run_id.to_string(),
-            user_message,
-            outputs: outputs
-                .into_iter()
-                .map(|(seq, output)| ActiveRunOutput { seq, output })
-                .collect(),
-            partial,
-        },
-    );
+    let snapshot =
+        state
+            .snapshot(&session_id)
+            .await
+            .map(
+                |(run_id, user_message, outputs, partial)| ActiveRunSnapshot {
+                    run_id: run_id.to_string(),
+                    user_message,
+                    outputs: outputs
+                        .into_iter()
+                        .map(|(seq, output)| ActiveRunOutput { seq, output })
+                        .collect(),
+                    partial,
+                },
+            );
     Ok(Json(snapshot))
 }

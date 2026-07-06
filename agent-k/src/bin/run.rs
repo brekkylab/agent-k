@@ -205,12 +205,14 @@ async fn stream_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<()> 
     while let Some(event) = stream.next().await {
         let delta = event?;
 
-        // Live token fragments: print assistant text as it arrives. A tool result
-        // arrives as its own role=Tool delta and must not print as assistant text;
-        // everything else here is assistant text, so exclude Tool rather than
-        // require Assistant (a provider may stream text before the role marker).
+        // Live token fragments: print top-level assistant text as it arrives.
+        // A tool result (role=Tool) and a sub-agent's re-emitted answer
+        // (role=Assistant, depth >= 1) must not print as the assistant's text;
+        // exclude those rather than require Assistant (a provider may stream
+        // text before the role marker).
         let effective_role = delta.delta.role.as_ref().or(acc.delta.role.as_ref());
-        let is_assistant = !matches!(effective_role, Some(Role::Tool));
+        let is_top_level = matches!(delta.depth.or(acc.depth), None | Some(0));
+        let is_assistant = is_top_level && !matches!(effective_role, Some(Role::Tool));
         if is_assistant {
             for part in &delta.delta.contents {
                 if let PartDelta::Text { text } = part

@@ -18,8 +18,9 @@ use ailoy::message::{
 /// One actionable item derived from the raw delta stream.
 #[derive(Debug)]
 pub enum AgentStreamItem {
-    /// Newly streamed assistant text for live rendering. Empty fragments are
-    /// never emitted, and tool results never appear here — they surface only as
+    /// Newly streamed top-level assistant text for live rendering. Empty
+    /// fragments are never emitted, and tool results and sub-agent (depth ≥ 1)
+    /// output never appear here — they surface only as
     /// [`AgentStreamItem::Completed`], matching the pre-streaming-API semantics.
     Delta(String),
     /// A message finalized at a boundary (equivalent to the old
@@ -51,11 +52,16 @@ impl MessageAssembler {
     pub fn push(&mut self, delta: MessageDeltaOutput) -> Result<Vec<AgentStreamItem>, String> {
         let mut items = Vec::new();
 
-        // 1. Live assistant text. A continuation delta carries no role, so fall
-        //    back to the in-progress message's; exclude Tool rather than require
-        //    Assistant so text streamed before the role marker isn't dropped.
+        // 1. Live assistant text — top-level only. A sub-agent's answer is
+        //    re-emitted on this same stream as a role=Assistant one-shot at
+        //    depth ≥ 1; streaming it here would splice the sub-agent's internal
+        //    text into the top-level answer (and a stop would persist that mix).
+        //    A continuation delta carries no role/depth, so fall back to the
+        //    in-progress message's; exclude Tool rather than require Assistant
+        //    so text streamed before the role marker isn't dropped.
         let effective_role = delta.delta.role.as_ref().or(self.acc.delta.role.as_ref());
-        if !matches!(effective_role, Some(Role::Tool)) {
+        let is_top_level = matches!(delta.depth.or(self.acc.depth), None | Some(0));
+        if is_top_level && !matches!(effective_role, Some(Role::Tool)) {
             let mut fragment = String::new();
             for part in &delta.delta.contents {
                 if let PartDelta::Text { text } = part {
@@ -222,6 +228,30 @@ mod tests {
         assert!(
             err.contains("role"),
             "error should mention the role mismatch: {err}"
+        );
+    }
+
+    #[test]
+    fn subagent_output_never_streams_as_live_delta() {
+        // A sub-agent's answer is re-emitted on the stream as a one-shot
+        // role=Assistant delta at depth >= 1. It must not surface as live
+        // top-level text (that would splice the sub-agent's internal answer
+        // into the main bubble, and a stop would persist the mix) — only as a
+        // Completed message, which the client routes to the sub-agent UI.
+        let mut a = MessageAssembler::new();
+        let mut d = delta(Some(Role::Assistant), "subagent internal answer", true);
+        d.depth = Some(1);
+        let items = a.push(d).unwrap();
+        assert!(
+            text_of(&items).is_empty(),
+            "sub-agent text must not stream as the top-level answer"
+        );
+        let done = completed(items);
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].depth, Some(1));
+        assert_eq!(
+            done[0].message.contents[0].as_text().unwrap(),
+            "subagent internal answer"
         );
     }
 
