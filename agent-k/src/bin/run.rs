@@ -10,8 +10,10 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 
 use agent_k::agents::get_coworker_agent;
 use ailoy::{
-    agent::{Agent, AgentEvent},
-    message::{Message, Part, PartDelta, Role},
+    agent::Agent,
+    message::{
+        Delta, FinishReason, Message, MessageDeltaOutput, MessageOutput, Part, PartDelta, Role,
+    },
 };
 use futures::StreamExt;
 
@@ -198,54 +200,48 @@ async fn stream_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<()> 
     // Track whether the current assistant line has streamed text so we can
     // terminate it with a newline before tool calls / the next turn.
     let mut line_open = false;
+    // `run_stream` yields only `MessageDeltaOutput`s now; accumulate deltas and
+    // act on each completed `MessageOutput` at its boundary (a delta carrying
+    // `finish_reason`, or a role change), mirroring ailoy's `into_messages`.
+    let mut acc = MessageDeltaOutput::new();
     while let Some(event) = stream.next().await {
-        match event? {
-            // Live token fragments: print assistant text as it arrives.
-            AgentEvent::Delta(d) => {
-                for part in &d.delta.contents {
-                    if let PartDelta::Text { text } = part {
-                        if !text.is_empty() {
-                            print!("{text}");
-                            io::stdout().flush().ok();
-                            line_open = true;
-                        }
-                    }
+        let delta = event?;
+
+        // Live token fragments: print assistant text as it arrives. A tool result
+        // arrives as its own role=Tool delta and must not print as assistant text;
+        // everything else here is assistant text, so exclude Tool rather than
+        // require Assistant (a provider may stream text before the role marker).
+        let effective_role = delta.delta.role.as_ref().or(acc.delta.role.as_ref());
+        let is_assistant = !matches!(effective_role, Some(Role::Tool));
+        if is_assistant {
+            for part in &delta.delta.contents {
+                if let PartDelta::Text { text } = part
+                    && !text.is_empty()
+                {
+                    print!("{text}");
+                    io::stdout().flush().ok();
+                    line_open = true;
                 }
             }
-            // Completed turn: assistant text already streamed above, so here we
-            // only close the line and surface tool calls / tool results.
-            AgentEvent::Message(event) => {
-                let msg = &event.message;
-                match msg.role {
-                    Role::Assistant => {
-                        if line_open {
-                            println!();
-                            line_open = false;
-                        }
-                        if let Some(tcs) = &msg.tool_calls {
-                            for tc in tcs {
-                                if let Some((_id, name, args)) = tc.as_function() {
-                                    let args_json = serde_json::to_string(args)
-                                        .unwrap_or_else(|_| "<unprintable>".into());
-                                    println!("[coworker] tool: {name} {args_json}");
-                                }
-                            }
-                        }
-                    }
-                    Role::Tool => {
-                        for part in &msg.contents {
-                            if let Some(t) = part.as_text() {
-                                println!("[coworker] tool result: {t}");
-                            } else if let Some(v) = part.as_value() {
-                                let s = serde_json::to_string(v)
-                                    .unwrap_or_else(|_| "<unprintable>".into());
-                                println!("[coworker] tool result: {s}");
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+        }
+
+        // A role change with no intervening finish_reason is also a boundary;
+        // flush the in-progress message (finalizing as Stop) before accumulating.
+        if let (Some(cur), Some(incoming)) = (&acc.delta.role, &delta.delta.role)
+            && cur != incoming
+        {
+            let mut done = std::mem::replace(&mut acc, MessageDeltaOutput::new());
+            if done.finish_reason.is_none() {
+                done.finish_reason = Some(FinishReason::Stop {});
             }
+            report_completed(&done.finish()?, &mut line_open);
+        }
+        acc = acc.accumulate(delta)?;
+        // Completed turn: assistant text already streamed above, so here we only
+        // close the line and surface tool calls / tool results.
+        if acc.finish_reason.is_some() {
+            let done = std::mem::replace(&mut acc, MessageDeltaOutput::new());
+            report_completed(&done.finish()?, &mut line_open);
         }
     }
     if line_open {
@@ -253,4 +249,38 @@ async fn stream_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<()> 
     }
     println!();
     Ok(())
+}
+
+/// Print the non-text side of a completed turn: an assistant turn's tool calls,
+/// or a tool result's contents. Assistant text has already streamed live.
+fn report_completed(output: &MessageOutput, line_open: &mut bool) {
+    let msg = &output.message;
+    match msg.role {
+        Role::Assistant => {
+            if *line_open {
+                println!();
+                *line_open = false;
+            }
+            if let Some(tcs) = &msg.tool_calls {
+                for tc in tcs {
+                    if let Some((_id, name, args)) = tc.as_function() {
+                        let args_json =
+                            serde_json::to_string(args).unwrap_or_else(|_| "<unprintable>".into());
+                        println!("[coworker] tool: {name} {args_json}");
+                    }
+                }
+            }
+        }
+        Role::Tool => {
+            for part in &msg.contents {
+                if let Some(t) = part.as_text() {
+                    println!("[coworker] tool result: {t}");
+                } else if let Some(v) = part.as_value() {
+                    let s = serde_json::to_string(v).unwrap_or_else(|_| "<unprintable>".into());
+                    println!("[coworker] tool result: {s}");
+                }
+            }
+        }
+        _ => {}
+    }
 }

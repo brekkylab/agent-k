@@ -2,8 +2,10 @@ use std::{collections::HashSet, sync::Arc};
 
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use ailoy::{
-    agent::{Agent, AgentEvent},
-    message::{FinishReason, Message, MessageOutput, Part, PartDelta, Role},
+    agent::Agent,
+    message::{
+        Delta, FinishReason, Message, MessageDeltaOutput, MessageOutput, Part, PartDelta, Role,
+    },
     runenv::{Sandbox, SandboxConfig},
 };
 use axum::{
@@ -337,6 +339,40 @@ fn classify_senders_from_outputs(
     }
 
     senders
+}
+
+/// Commit one completed [`MessageOutput`] reconstructed from the delta stream:
+/// record depth-0 outputs (clearing the partial buffer once a depth-0 assistant
+/// message commits), then broadcast it as an `AgentMessage` so spectators see
+/// the finalized turn. This is the streaming-era equivalent of the old
+/// `AgentEvent::Message` arm, now that `run_stream` yields only deltas.
+async fn commit_stream_output(
+    state: &AppState,
+    session_id: &Uuid,
+    run_id: Uuid,
+    depth0_outputs: &mut Vec<MessageOutput>,
+    partial_text: &mut String,
+    output: MessageOutput,
+) {
+    if matches!(output.depth, None | Some(0)) {
+        if output.message.role == Role::Assistant {
+            // This turn committed as a real Message; the partial buffer is now
+            // redundant — clear it so the next turn accumulates from empty (and a
+            // later stop doesn't re-persist already-committed text). Also clear
+            // the replayable snapshot so a resume doesn't double it.
+            partial_text.clear();
+            state.set_partial(session_id, String::new()).await;
+        }
+        depth0_outputs.push(output.clone());
+    }
+    if let Some(seq) = state.push_output(session_id, output.clone()).await {
+        let _ = state.ws_tx.send(WsEvent::AgentMessage {
+            session_id: session_id.to_string(),
+            run_id: run_id.to_string(),
+            seq,
+            output,
+        });
+    }
 }
 
 async fn resolve_agent_for(
@@ -1136,6 +1172,12 @@ pub async fn send_message(
         // short before it commits a Message, this is the only copy of the partial
         // answer. Cleared whenever a depth-0 assistant Message commits.
         let mut partial_text = String::new();
+        // `run_stream` now yields only `MessageDeltaOutput`s; we rebuild each
+        // completed `MessageOutput` ourselves by accumulating deltas until a
+        // boundary (a delta carrying `finish_reason`, or a role change), mirroring
+        // ailoy's `into_messages`. This is the running accumulator for the
+        // message currently being streamed.
+        let mut acc = MessageDeltaOutput::new();
         loop {
             let item = if stopped {
                 // Drain mode (entered on cancel). Take only what ailoy has already
@@ -1163,58 +1205,111 @@ pub async fn send_message(
                 }
             };
             match item {
-                // Live text fragment. Broadcast it incrementally (cheap — small
-                // payload even with many subscribers) with the running total so
-                // the client can dedup at the replay↔live boundary. Keep the full
-                // text in `partial_text` for stop-persist and mid-turn resume.
-                // Ephemeral — not persisted, no seq.
-                Some(Ok(AgentEvent::Delta(delta))) => {
-                    let mut fragment = String::new();
-                    for part in &delta.delta.contents {
-                        if let PartDelta::Text { text } = part {
-                            fragment.push_str(text);
+                Some(Ok(delta)) => {
+                    // 1. Live text fragment. Only the assistant's own tokens stream
+                    // as the answer; tool results arrive on this same stream as
+                    // their own role=Tool one-shot delta and must not be shown as
+                    // the assistant's text. Everything else on this stream is
+                    // assistant text, so exclude Tool rather than require Assistant
+                    // — a provider may stream leading text before the role marker,
+                    // leaving both the delta and the accumulator role-less.
+                    let effective_role = delta.delta.role.as_ref().or(acc.delta.role.as_ref());
+                    let is_assistant_text = !matches!(effective_role, Some(Role::Tool));
+                    if is_assistant_text {
+                        let mut fragment = String::new();
+                        for part in &delta.delta.contents {
+                            if let PartDelta::Text { text } = part {
+                                fragment.push_str(text);
+                            }
+                        }
+                        if !fragment.is_empty() {
+                            // Broadcast incrementally (cheap — small payload even with
+                            // many subscribers) with the running total so the client can
+                            // dedup at the replay↔live boundary. Keep the full text in
+                            // `partial_text` for stop-persist and mid-turn resume.
+                            // Ephemeral — not persisted, no seq.
+                            partial_text.push_str(&fragment);
+                            // UTF-16 units so cum_len matches the client's String.length.
+                            let cum_len = partial_text.encode_utf16().count() as u64;
+                            // Keep the resume snapshot exact so a (re)subscribe never
+                            // lands in a hole (cheap: in-process, not per-subscriber).
+                            state2.set_partial(&session_id, partial_text.clone()).await;
+                            let _ = state2.ws_tx.send(WsEvent::AgentDelta {
+                                session_id: session_id.to_string(),
+                                run_id: run_id.to_string(),
+                                delta: fragment,
+                                cum_len,
+                            });
                         }
                     }
-                    if !fragment.is_empty() {
-                        partial_text.push_str(&fragment);
-                        // UTF-16 units so cum_len matches the client's String.length.
-                        let cum_len = partial_text.encode_utf16().count() as u64;
-                        // Keep the resume snapshot exact so a (re)subscribe never
-                        // lands in a hole (cheap: in-process, not per-subscriber).
-                        state2.set_partial(&session_id, partial_text.clone()).await;
-                        let _ = state2.ws_tx.send(WsEvent::AgentDelta {
-                            session_id: session_id.to_string(),
-                            run_id: run_id.to_string(),
-                            delta: fragment,
-                            cum_len,
-                        });
-                    }
-                }
-                // Completed turn: identical to what `run()` used to yield.
-                Some(Ok(AgentEvent::Message(output))) => {
-                    if matches!(output.depth, None | Some(0)) {
-                        if output.message.role == Role::Assistant {
-                            // This turn committed as a real Message; the partial
-                            // buffer is now redundant — clear it so the next turn
-                            // accumulates from empty (and a later stop doesn't
-                            // re-persist already-committed text). Also clear the
-                            // replayable snapshot so a resume doesn't double it.
-                            partial_text.clear();
-                            state2.set_partial(&session_id, String::new()).await;
+
+                    // 2. A role change with no intervening finish_reason is also a
+                    // message boundary (e.g. an assistant turn flowing into a tool
+                    // result). accumulate() rejects a role mismatch, so flush the
+                    // in-progress message first (finalizing it as Stop).
+                    if let (Some(cur), Some(incoming)) = (&acc.delta.role, &delta.delta.role)
+                        && cur != incoming
+                    {
+                        let mut done = std::mem::replace(&mut acc, MessageDeltaOutput::new());
+                        if done.finish_reason.is_none() {
+                            done.finish_reason = Some(FinishReason::Stop {});
                         }
-                        depth0_outputs.push(output.clone());
+                        match done.finish() {
+                            Ok(output) => {
+                                commit_stream_output(
+                                    &state2,
+                                    &session_id,
+                                    run_id,
+                                    &mut depth0_outputs,
+                                    &mut partial_text,
+                                    output,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                run_error = Some(e.to_string());
+                                break;
+                            }
+                        }
                     }
-                    if let Some(seq) = state2.push_output(&session_id, output.clone()).await {
-                        let _ = state2.ws_tx.send(WsEvent::AgentMessage {
-                            session_id: session_id.to_string(),
-                            run_id: run_id.to_string(),
-                            seq,
-                            output,
-                        });
+
+                    // 3. Fold this delta into the running message.
+                    match acc.accumulate(delta) {
+                        Ok(a) => acc = a,
+                        Err(e) => {
+                            run_error = Some(e.to_string());
+                            // Restore a valid `acc` for the post-loop trailing
+                            // flush; it's skipped anyway once `run_error` is set.
+                            acc = MessageDeltaOutput::new();
+                            break;
+                        }
                     }
+
+                    // 4. A delta carrying finish_reason finalizes the message. Commit
+                    // it as a completed MessageOutput (the old `AgentEvent::Message`).
                     // No early break in drain mode: keep taking already-ready items
                     // until the stream ends (`None`) or nothing is buffered
                     // (`now_or_never` → break above), so a finish-line turn commits.
+                    if acc.finish_reason.is_some() {
+                        let done = std::mem::replace(&mut acc, MessageDeltaOutput::new());
+                        match done.finish() {
+                            Ok(output) => {
+                                commit_stream_output(
+                                    &state2,
+                                    &session_id,
+                                    run_id,
+                                    &mut depth0_outputs,
+                                    &mut partial_text,
+                                    output,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                run_error = Some(e.to_string());
+                                break;
+                            }
+                        }
+                    }
                 }
                 Some(Err(e)) => {
                     run_error = Some(e.to_string());
@@ -1224,6 +1319,35 @@ pub async fn send_message(
             }
         }
         drop(run);
+
+        // Provider quirk: some models (e.g. Gemini) end the stream cleanly with no
+        // terminal finish_reason delta, so the final assistant message never hit
+        // the finish_reason boundary in the loop and is still sitting in `acc`. On
+        // a natural completion (not an error, not a user stop) finalize it as Stop
+        // and commit it — mirroring ailoy's own internal fallback and
+        // `into_messages`' trailing flush — so it lands in `depth0_outputs`.
+        // Without this, `attribute_messages` below zips a sender list one short of
+        // `agent`'s history and silently drops the final answer from persistence.
+        // A stopped/errored turn is left to the partial-text path below on purpose.
+        if run_error.is_none() && !stopped && acc.delta.role.is_some() {
+            acc.finish_reason.get_or_insert(FinishReason::Stop {});
+            match acc.finish() {
+                Ok(output) => {
+                    commit_stream_output(
+                        &state2,
+                        &session_id,
+                        run_id,
+                        &mut depth0_outputs,
+                        &mut partial_text,
+                        output,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    tracing::warn!(%session_id, "failed to finalize trailing stream delta: {e}");
+                }
+            }
+        }
 
         if let Some(err) = run_error {
             if stopped {
