@@ -11,9 +11,7 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 use agent_k::agents::get_coworker_agent;
 use ailoy::{
     agent::Agent,
-    message::{
-        Delta, FinishReason, Message, MessageDeltaOutput, MessageOutput, Part, PartDelta, Role,
-    },
+    message::{Delta, Message, MessageDeltaOutput, MessageOutput, Part, PartDelta, Role},
 };
 use futures::StreamExt;
 
@@ -200,9 +198,9 @@ async fn stream_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<()> 
     // Track whether the current assistant line has streamed text so we can
     // terminate it with a newline before tool calls / the next turn.
     let mut line_open = false;
-    // `run_stream` yields only `MessageDeltaOutput`s now; accumulate deltas and
-    // act on each completed `MessageOutput` at its boundary (a delta carrying
-    // `finish_reason`, or a role change), mirroring ailoy's `into_messages`.
+    // `run_stream` yields only `MessageDeltaOutput`s; per ailoy's stream
+    // contract every message ends with a finish_reason delta, so accumulate and
+    // act on each completed `MessageOutput` at that boundary.
     let mut acc = MessageDeltaOutput::new();
     while let Some(event) = stream.next().await {
         let delta = event?;
@@ -225,17 +223,6 @@ async fn stream_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<()> 
             }
         }
 
-        // A role change with no intervening finish_reason is also a boundary;
-        // flush the in-progress message (finalizing as Stop) before accumulating.
-        if let (Some(cur), Some(incoming)) = (&acc.delta.role, &delta.delta.role)
-            && cur != incoming
-        {
-            let mut done = std::mem::replace(&mut acc, MessageDeltaOutput::new());
-            if done.finish_reason.is_none() {
-                done.finish_reason = Some(FinishReason::Stop {});
-            }
-            report_completed(&done.finish()?, &mut line_open);
-        }
         acc = acc.accumulate(delta)?;
         // Completed turn: assistant text already streamed above, so here we only
         // close the line and surface tool calls / tool results.

@@ -1,3 +1,4 @@
+pub mod agent_stream;
 pub mod auth;
 pub mod cron;
 pub mod error;

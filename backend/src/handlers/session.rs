@@ -3,9 +3,7 @@ use std::{collections::HashSet, sync::Arc};
 use agent_k::agents::{GUEST_ATTACHED_DIR, GUEST_SHARED_DIR};
 use ailoy::{
     agent::Agent,
-    message::{
-        Delta, FinishReason, Message, MessageDeltaOutput, MessageOutput, Part, PartDelta, Role,
-    },
+    message::{FinishReason, Message, MessageOutput, Part, Role},
     runenv::{Sandbox, SandboxConfig},
 };
 use axum::{
@@ -17,6 +15,7 @@ use futures_util::{FutureExt, StreamExt};
 use uuid::Uuid;
 
 use crate::{
+    agent_stream::{AgentStreamItem, MessageAssembler},
     auth::AuthUser,
     error::{ApiResult, AppError},
     events::{RunUserMessage, WsEvent},
@@ -1172,12 +1171,10 @@ pub async fn send_message(
         // short before it commits a Message, this is the only copy of the partial
         // answer. Cleared whenever a depth-0 assistant Message commits.
         let mut partial_text = String::new();
-        // `run_stream` now yields only `MessageDeltaOutput`s; we rebuild each
-        // completed `MessageOutput` ourselves by accumulating deltas until a
-        // boundary (a delta carrying `finish_reason`, or a role change), mirroring
-        // ailoy's `into_messages`. This is the running accumulator for the
-        // message currently being streamed.
-        let mut acc = MessageDeltaOutput::new();
+        // `run_stream` yields only `MessageDeltaOutput`s; the assembler reassembles
+        // them into live assistant deltas + completed messages (boundary detection
+        // and the trailing-flush quirk live in `agent_stream`, unit-tested there).
+        let mut assembler = MessageAssembler::new();
         loop {
             let item = if stopped {
                 // Drain mode (entered on cancel). Take only what ailoy has already
@@ -1206,107 +1203,50 @@ pub async fn send_message(
             };
             match item {
                 Some(Ok(delta)) => {
-                    // 1. Live text fragment. Only the assistant's own tokens stream
-                    // as the answer; tool results arrive on this same stream as
-                    // their own role=Tool one-shot delta and must not be shown as
-                    // the assistant's text. Everything else on this stream is
-                    // assistant text, so exclude Tool rather than require Assistant
-                    // — a provider may stream leading text before the role marker,
-                    // leaving both the delta and the accumulator role-less.
-                    let effective_role = delta.delta.role.as_ref().or(acc.delta.role.as_ref());
-                    let is_assistant_text = !matches!(effective_role, Some(Role::Tool));
-                    if is_assistant_text {
-                        let mut fragment = String::new();
-                        for part in &delta.delta.contents {
-                            if let PartDelta::Text { text } = part {
-                                fragment.push_str(text);
-                            }
-                        }
-                        if !fragment.is_empty() {
-                            // Broadcast incrementally (cheap — small payload even with
-                            // many subscribers) with the running total so the client can
-                            // dedup at the replay↔live boundary. Keep the full text in
-                            // `partial_text` for stop-persist and mid-turn resume.
-                            // Ephemeral — not persisted, no seq.
-                            partial_text.push_str(&fragment);
-                            // UTF-16 units so cum_len matches the client's String.length.
-                            let cum_len = partial_text.encode_utf16().count() as u64;
-                            // Keep the resume snapshot exact so a (re)subscribe never
-                            // lands in a hole (cheap: in-process, not per-subscriber).
-                            state2.set_partial(&session_id, partial_text.clone()).await;
-                            let _ = state2.ws_tx.send(WsEvent::AgentDelta {
-                                session_id: session_id.to_string(),
-                                run_id: run_id.to_string(),
-                                delta: fragment,
-                                cum_len,
-                            });
-                        }
-                    }
-
-                    // 2. A role change with no intervening finish_reason is also a
-                    // message boundary (e.g. an assistant turn flowing into a tool
-                    // result). accumulate() rejects a role mismatch, so flush the
-                    // in-progress message first (finalizing it as Stop).
-                    if let (Some(cur), Some(incoming)) = (&acc.delta.role, &delta.delta.role)
-                        && cur != incoming
-                    {
-                        let mut done = std::mem::replace(&mut acc, MessageDeltaOutput::new());
-                        if done.finish_reason.is_none() {
-                            done.finish_reason = Some(FinishReason::Stop {});
-                        }
-                        match done.finish() {
-                            Ok(output) => {
-                                commit_stream_output(
-                                    &state2,
-                                    &session_id,
-                                    run_id,
-                                    &mut depth0_outputs,
-                                    &mut partial_text,
-                                    output,
-                                )
-                                .await;
-                            }
-                            Err(e) => {
-                                run_error = Some(e.to_string());
-                                break;
-                            }
-                        }
-                    }
-
-                    // 3. Fold this delta into the running message.
-                    match acc.accumulate(delta) {
-                        Ok(a) => acc = a,
+                    // Reassemble the raw delta into live assistant deltas and/or a
+                    // completed message. No early break in drain mode: keep taking
+                    // already-ready items until the stream ends (`None`) or nothing
+                    // is buffered (`now_or_never` → break above), so a finish-line
+                    // turn commits.
+                    let produced = match assembler.push(delta) {
+                        Ok(items) => items,
                         Err(e) => {
-                            run_error = Some(e.to_string());
-                            // Restore a valid `acc` for the post-loop trailing
-                            // flush; it's skipped anyway once `run_error` is set.
-                            acc = MessageDeltaOutput::new();
+                            run_error = Some(e);
                             break;
                         }
-                    }
-
-                    // 4. A delta carrying finish_reason finalizes the message. Commit
-                    // it as a completed MessageOutput (the old `AgentEvent::Message`).
-                    // No early break in drain mode: keep taking already-ready items
-                    // until the stream ends (`None`) or nothing is buffered
-                    // (`now_or_never` → break above), so a finish-line turn commits.
-                    if acc.finish_reason.is_some() {
-                        let done = std::mem::replace(&mut acc, MessageDeltaOutput::new());
-                        match done.finish() {
-                            Ok(output) => {
+                    };
+                    for out in produced {
+                        match out {
+                            // Live assistant text. Broadcast incrementally (cheap —
+                            // small payload even with many subscribers) with the
+                            // running total so the client can dedup at the replay↔live
+                            // boundary. Keep the full text in `partial_text` for
+                            // stop-persist and mid-turn resume. Ephemeral — no seq.
+                            AgentStreamItem::Delta(fragment) => {
+                                partial_text.push_str(&fragment);
+                                // UTF-16 units so cum_len matches the client's String.length.
+                                let cum_len = partial_text.encode_utf16().count() as u64;
+                                // Keep the resume snapshot exact so a (re)subscribe never
+                                // lands in a hole (cheap: in-process, not per-subscriber).
+                                state2.set_partial(&session_id, partial_text.clone()).await;
+                                let _ = state2.ws_tx.send(WsEvent::AgentDelta {
+                                    session_id: session_id.to_string(),
+                                    run_id: run_id.to_string(),
+                                    delta: fragment,
+                                    cum_len,
+                                });
+                            }
+                            // Completed turn (the old `AgentEvent::Message`).
+                            AgentStreamItem::Completed(output) => {
                                 commit_stream_output(
                                     &state2,
                                     &session_id,
                                     run_id,
                                     &mut depth0_outputs,
                                     &mut partial_text,
-                                    output,
+                                    *output,
                                 )
                                 .await;
-                            }
-                            Err(e) => {
-                                run_error = Some(e.to_string());
-                                break;
                             }
                         }
                     }
@@ -1320,19 +1260,19 @@ pub async fn send_message(
         }
         drop(run);
 
-        // Provider quirk: some models (e.g. Gemini) end the stream cleanly with no
-        // terminal finish_reason delta, so the final assistant message never hit
-        // the finish_reason boundary in the loop and is still sitting in `acc`. On
-        // a natural completion (not an error, not a user stop) finalize it as Stop
-        // and commit it — mirroring ailoy's own internal fallback and
-        // `into_messages`' trailing flush — so it lands in `depth0_outputs`.
-        // Without this, `attribute_messages` below zips a sender list one short of
-        // `agent`'s history and silently drops the final answer from persistence.
-        // A stopped/errored turn is left to the partial-text path below on purpose.
-        if run_error.is_none() && !stopped && acc.delta.role.is_some() {
-            acc.finish_reason.get_or_insert(FinishReason::Stop {});
-            match acc.finish() {
-                Ok(output) => {
+        // Defensive trailing flush on natural completion. ailoy's stream contract
+        // (every message ends with a finish_reason delta) makes this a no-op for
+        // conforming streams — Some here means an upstream producer broke the
+        // contract. Still commit the message (losing a completed answer is worse)
+        // but warn so the violation is visible. A stopped/errored turn is left to
+        // the partial-text path below on purpose.
+        if run_error.is_none() && !stopped {
+            match assembler.finish() {
+                Ok(Some(output)) => {
+                    tracing::warn!(
+                        %session_id,
+                        "stream ended mid-message (contract violation upstream); committing trailing message"
+                    );
                     commit_stream_output(
                         &state2,
                         &session_id,
@@ -1343,6 +1283,7 @@ pub async fn send_message(
                     )
                     .await;
                 }
+                Ok(None) => {}
                 Err(e) => {
                     tracing::warn!(%session_id, "failed to finalize trailing stream delta: {e}");
                 }
