@@ -1182,9 +1182,10 @@ function SessionPage() {
     // round-trip later). Feeds the same event shapes through processEvent; it's
     // idempotent with the replay (run claimed by id, messages keyed by seq,
     // delta is a length-guarded snapshot).
+    let ignoreSnapshot = false;
     void getActiveRunSnapshot(sessionId)
       .then((snap) => {
-        if (!snap) return;
+        if (ignoreSnapshot || !snap) return;
         processEvent({
           type: 'agent_run_started',
           session_id: sessionId,
@@ -1209,6 +1210,7 @@ function SessionPage() {
       });
 
     return () => {
+      ignoreSnapshot = true;
       unsubscribe();
       if (wsInactivityTimerRef.current) {
         clearTimeout(wsInactivityTimerRef.current);
