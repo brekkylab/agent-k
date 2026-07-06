@@ -7,7 +7,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useTranslation } from 'react-i18next';
 import { localizedNoun } from '@/i18n';
 import { getSession, markSessionRead, updateSessionShareMode } from '@/api/sessions';
-import { listMessageItems, sendMessage, stopRun, getRunActive, getActiveRunSnapshot, deriveStreamState } from '@/api/messages';
+import { listMessageItems, sendMessage, stopRun, getRunActive, getActiveRunSnapshot, deriveLiveSegments } from '@/api/messages';
 import { appWs } from '@/api/ws';
 import type { AppWsEvent } from '@/api/ws';
 import type { MessageOutput } from '@/api/backend-types';
@@ -984,41 +984,64 @@ function SessionPage() {
         const outOfOrder = seq <= maxSeqRef.current;
         if (seq > maxSeqRef.current) maxSeqRef.current = seq;
 
-        const outputs = outOfOrder
-          ? [...wsOutputsRef.current.entries()].sort(([a], [b]) => a - b).map(([, v]) => v)
-          : [...wsOutputsRef.current.values()];
-        const update = deriveStreamState(outputs, 'streaming');
+        const orderedEntries = outOfOrder
+          ? [...wsOutputsRef.current.entries()].sort(([a], [b]) => a - b)
+          : [...wsOutputsRef.current.entries()];
+        const segments = deriveLiveSegments(orderedEntries);
 
+        // Rebuild the live transcript chronologically — one bubble per committed
+        // turn, sub-agent bubbles at their seq position, streaming tail last —
+        // mirroring the persisted layout. This keeps an earlier turn's text
+        // visible while the next turn streams (it used to vanish: the single
+        // live bubble's body was replaced per turn) and streams a
+        // post-sub-agent turn *below* the sub-agent bubble instead of above it.
         const aiId = `live-ai-${sessionId}`;
         setLiveMessages((prev) => {
-          let next = prev.map((m) => {
-            if (m.id !== aiId) return m;
-            const updatedToolCalls = update.toolCalls.length > 0
-              ? update.toolCalls.map((tc) => ({ ...tc }))
-              : m.toolCalls;
-            return { ...m, body: update.text, status: 'streaming' as const, toolCalls: updatedToolCalls };
-          });
-          // Upsert subagent bubbles
-          for (const sub of update.subagentUpdates) {
-            const subId = `live-sub-${sub.sourceAgent}`;
-            const exists = next.some((m) => m.id === subId);
-            const nowIso = new Date().toISOString();
-            if (exists) {
-              next = next.map((m) =>
-                m.id === subId ? { ...m, body: sub.text, status: 'streaming' as const } : m,
-              );
-            } else {
-              next = [...next, {
-                id: subId,
+          const isLiveTranscript = (id: string) =>
+            id === aiId || id.startsWith('live-sub-') || id.startsWith('live-turn-');
+          // User bubbles (optimistic or from run_started) stay in front.
+          const head = prev.filter((m) => !isLiveTranscript(String(m.id)));
+          const prevById = new Map(prev.map((m) => [String(m.id), m]));
+          const nowIso = new Date().toISOString();
+          const committed = segments.map((seg): Message => {
+            if (seg.kind === 'turn') {
+              const id = `live-turn-${seg.seq}`;
+              return {
+                id,
                 sessionId: sessionPrefix,
-                sender: { kind: 'agent' as const, name: sub.sourceAgent },
-                createdAt: nowIso,
-                body: sub.text,
-                status: 'streaming' as const,
-              }];
+                sender: { kind: 'agent' as const, name: 'agent-k' },
+                createdAt: prevById.get(id)?.createdAt ?? nowIso,
+                body: seg.text,
+                status: 'done' as const,
+                toolCalls: seg.toolCalls.length > 0 ? seg.toolCalls.map((tc) => ({ ...tc })) : undefined,
+              };
             }
-          }
-          return next;
+            const id = `live-sub-${seg.sourceAgent}`;
+            return {
+              id,
+              sessionId: sessionPrefix,
+              sender: { kind: 'agent' as const, name: seg.sourceAgent },
+              createdAt: prevById.get(id)?.createdAt ?? nowIso,
+              body: seg.text,
+              status: 'streaming' as const,
+            };
+          });
+          // The streaming tail is where the next turn's deltas paint (the
+          // reveal loop targets aiId); this commit consumed the partial, so its
+          // body resets to empty.
+          const tail = prevById.get(aiId);
+          return [
+            ...head,
+            ...committed,
+            {
+              id: aiId,
+              sessionId: sessionPrefix,
+              sender: { kind: 'agent' as const, name: 'agent-k' },
+              createdAt: tail?.createdAt ?? nowIso,
+              body: '',
+              status: 'streaming' as const,
+            },
+          ];
         });
       }
 

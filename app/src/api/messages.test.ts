@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveStreamState } from './messages';
+import { deriveStreamState, deriveLiveSegments } from './messages';
 import type { MessageOutput } from './backend-types';
 
 // Helper: build a minimal MessageOutput with a depth-0 assistant text message
@@ -169,5 +169,62 @@ describe('deriveStreamState', () => {
     const state = deriveStreamState([{ depth: 0 }]);
     expect(state.text).toBe('');
     expect(state.toolCalls).toEqual([]);
+  });
+});
+
+describe('deriveLiveSegments', () => {
+  const sub = (text: string, agent = 'speedwagon'): MessageOutput => ({
+    message: { role: 'assistant', contents: [{ type: 'text', text }] },
+    depth: 1,
+    source_agent: agent,
+  });
+
+  it('keeps each committed turn as its own segment (earlier turns never vanish)', () => {
+    const segments = deriveLiveSegments([
+      [0, assistantOutput('turn one')],
+      [1, assistantOutput('turn two')],
+    ]);
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toMatchObject({ kind: 'turn', seq: 0, text: 'turn one' });
+    expect(segments[1]).toMatchObject({ kind: 'turn', seq: 1, text: 'turn two' });
+  });
+
+  it('pins the sub-agent segment between the turns it interleaves with', () => {
+    // turn 1 (calls sub-agent) → sub-agent answer → turn 2: the final
+    // persisted layout — live rendering must match it, not hoist turn 2 above.
+    const segments = deriveLiveSegments([
+      [0, assistantOutput('looking it up')],
+      [1, sub('sub answer')],
+      [2, assistantOutput('summary')],
+    ]);
+    expect(segments.map((s) => s.kind)).toEqual(['turn', 'sub', 'turn']);
+    expect(segments[1]).toMatchObject({ kind: 'sub', sourceAgent: 'speedwagon', text: 'sub answer' });
+    expect(segments[2]).toMatchObject({ kind: 'turn', text: 'summary' });
+  });
+
+  it('joins repeat sub-agent output into the pinned segment', () => {
+    const segments = deriveLiveSegments([
+      [0, sub('first ')],
+      [1, assistantOutput('between')],
+      [2, sub('second')],
+    ]);
+    expect(segments).toHaveLength(2);
+    expect(segments[0]).toMatchObject({ kind: 'sub', seq: 0, text: 'first second' });
+    expect(segments[1]).toMatchObject({ kind: 'turn', text: 'between' });
+  });
+
+  it('attaches tool results to the owning turn segment', () => {
+    const segments = deriveLiveSegments([
+      [0, toolCallOutput('call-1', 'shell')],
+      [1, toolResultOutput('call-1', 'ok')],
+      [2, assistantOutput('done')],
+    ]);
+    expect(segments).toHaveLength(2);
+    const first = segments[0];
+    expect(first.kind).toBe('turn');
+    if (first.kind === 'turn') {
+      expect(first.toolCalls).toHaveLength(1);
+      expect(first.toolCalls[0]).toMatchObject({ id: 'call-1', name: 'shell', result: 'ok' });
+    }
   });
 });

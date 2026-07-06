@@ -156,3 +156,97 @@ export function deriveStreamState(
     subagentUpdates,
   };
 }
+
+export interface LiveTurnSegment {
+  kind: 'turn';
+  /** seq of the committed depth-0 assistant message (stable bubble key). */
+  seq: number;
+  text: string;
+  toolCalls: StreamToolCall[];
+}
+
+export interface LiveSubSegment {
+  kind: 'sub';
+  /** seq at which this sub-agent first appeared (chronological position). */
+  seq: number;
+  sourceAgent: string;
+  text: string;
+}
+
+export type LiveSegment = LiveTurnSegment | LiveSubSegment;
+
+/**
+ * Derives the chronological live transcript from seq-ordered `[seq, output]`
+ * entries: one 'turn' segment per committed depth-0 assistant message (carrying
+ * its tool calls; tool results attach to the owning turn), and one 'sub'
+ * segment per sub-agent at its first appearance. This mirrors the persisted
+ * transcript's final layout, so live rendering doesn't reflow when the run
+ * completes — unlike `deriveStreamState`, which collapses all turns into a
+ * single text (an earlier turn's text vanished while the next streamed, and a
+ * post-sub-agent turn rendered *above* the sub-agent bubble then jumped down
+ * on completion). Pure — no side effects.
+ */
+export function deriveLiveSegments(entries: Array<[number, MessageOutput]>): LiveSegment[] {
+  const segments: LiveSegment[] = [];
+  const subByAgent = new Map<string, LiveSubSegment>();
+  const toolCallIndex = new Map<string, StreamToolCall>();
+
+  for (const [seq, output] of entries) {
+    if (!output?.message) continue;
+
+    const depth = output.depth ?? 0;
+    const sourceAgent = output.source_agent ?? null;
+    const msg = output.message as AiloyMessage;
+
+    if (depth >= 1) {
+      // Sub-agent output: one bubble per agent, pinned where it first appeared.
+      if (msg.role === 'assistant' && sourceAgent) {
+        const text = aiMessageText(msg.contents as AiloyPart[] | undefined);
+        const existing = subByAgent.get(sourceAgent);
+        if (existing) {
+          existing.text += text;
+        } else {
+          const seg: LiveSubSegment = { kind: 'sub', seq, sourceAgent, text };
+          subByAgent.set(sourceAgent, seg);
+          segments.push(seg);
+        }
+      }
+      continue;
+    }
+
+    if (msg.role === 'assistant') {
+      const toolCalls: StreamToolCall[] = [];
+      for (const call of (msg.tool_calls ?? []) as AiloyToolCall[]) {
+        if (!call.id || !call.function?.name) continue;
+        const tc: StreamToolCall = { id: call.id, name: call.function.name, arguments: call.function.arguments };
+        toolCalls.push(tc);
+        toolCallIndex.set(call.id, tc);
+      }
+      segments.push({
+        kind: 'turn',
+        seq,
+        text: aiMessageText(msg.contents as AiloyPart[] | undefined),
+        toolCalls,
+      });
+    } else if (msg.role === 'tool') {
+      if (!msg.id) continue;
+      const resultText = aiMessageText(msg.contents as AiloyPart[] | undefined) || '[done]';
+      let tc = toolCallIndex.get(msg.id);
+      if (!tc) {
+        console.warn(`[deriveLiveSegments] tool result id=${msg.id} arrived without matching tool_call; rendering as stub`);
+        tc = { id: msg.id, name: '(pending)' };
+        toolCallIndex.set(msg.id, tc);
+        // Attach the stub to the most recent turn (or synthesize one).
+        const lastTurn = [...segments].reverse().find((s): s is LiveTurnSegment => s.kind === 'turn');
+        if (lastTurn) {
+          lastTurn.toolCalls.push(tc);
+        } else {
+          segments.push({ kind: 'turn', seq, text: '', toolCalls: [tc] });
+        }
+      }
+      tc.result = resultText;
+    }
+  }
+
+  return segments;
+}
