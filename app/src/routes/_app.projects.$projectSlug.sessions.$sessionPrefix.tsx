@@ -1053,7 +1053,7 @@ function SessionPage() {
           revealSeededRef.current = false;
           void getActiveRunSnapshot(sessionId)
             .then((snap) => {
-              if (snap?.partial && currentRunIdRef.current === run_id) {
+              if (snap?.partial && snap.run_id === run_id && currentRunIdRef.current === run_id) {
                 processEvent({
                   type: 'agent_delta',
                   session_id: sessionId,
