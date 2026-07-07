@@ -283,8 +283,7 @@ pub(super) async fn delete_user_admin(
         ));
     }
 
-    let deleted = state.users.delete(id).await?;
-    if !deleted {
+    if !state.delete_user(id).await? {
         return Err(StateError::NotFound.into());
     }
 

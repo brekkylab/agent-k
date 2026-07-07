@@ -1,351 +1,291 @@
-use std::future::ready;
-use std::io::SeekFrom;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    Router,
-    body::Body,
-    extract::{Request, State},
-    http::{Response, StatusCode},
-    response::IntoResponse,
+    Extension, Json,
+    extract::{Path, State},
+    http::StatusCode,
 };
-use dav_server::{
-    DavHandler,
-    davpath::DavPath,
-    fakels::FakeLs,
-    fs::{
-        DavDirEntry, DavFile, DavFileSystem, DavMetaData, FsError, FsFuture, FsResult, FsStream,
-        OpenOptions, ReadDirMeta,
-    },
-};
-use futures_util::StreamExt;
+use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::state::{
-    AppState, DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError,
-    OpenOptions as WsOpenOptions, ReadDirMeta as WsReadDirMeta, WorkspaceFs,
+use crate::{
+    auth::AuthUser,
+    state::{Agent, AppState, Session, Workspace},
 };
 
-/// WebDAV workspace router. Mounted by [`super::get_router`] at
-/// `/projects/{pid}/workspace[/…]`; exposes `data_root/{pid}/workspace` as a
-/// per-project filesystem.
-///
-/// Routes via `fallback` so axum forwards every HTTP method — including
-/// WebDAV-specific ones (`PROPFIND`, `MKCOL`, `COPY`, `MOVE`, `LOCK`, …) —
-/// straight to [`dav_server`]. Auth mirrors the WS route: JWT is read from
-/// `?token=…` because the eventual target audience (browser fetch + native
-/// WebDAV clients) cannot reliably set custom auth headers.
-pub fn router(state: Arc<AppState>) -> Router {
-    Router::new().fallback(handle).with_state(state)
+use super::error::{ApiError, err};
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkspaceResponse {
+    pub id: Uuid,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
-async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Body> {
-    let pid = match parse_pid(req.uri().path()) {
-        Some(p) => p,
-        None => return (StatusCode::BAD_REQUEST, "invalid project id").into_response(),
-    };
+impl From<Workspace> for WorkspaceResponse {
+    fn from(w: Workspace) -> Self {
+        Self {
+            id: w.id,
+            title: w.title,
+            created_at: w.created_at,
+            updated_at: w.updated_at,
+        }
+    }
+}
 
-    let token = req.uri().query().and_then(extract_token);
-    let Some(token) = token else {
-        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WorkspaceListResponse {
+    pub items: Vec<WorkspaceResponse>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateWorkspaceRequest {
+    pub title: Option<String>,
+}
+
+/// Fetch a workspace the caller may access (see
+/// [`WorkspacesState::get_for_user`](crate::state::WorkspacesState::get_for_user));
+/// a workspace the caller can't reach is reported as `404` so its existence
+/// can't be probed. Reused by the other resource routers.
+pub(super) async fn require_owned_workspace(
+    state: &AppState,
+    auth: &AuthUser,
+    wid: Uuid,
+) -> Result<Workspace, ApiError> {
+    state
+        .workspaces
+        .get_for_user(auth.id, wid)
+        .await?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "workspace not found"))
+}
+
+/// Fetch an agent the caller owns. Missing and foreign agents return the same
+/// `404` (status and message).
+pub(super) async fn require_owned_agent(
+    state: &AppState,
+    auth: &AuthUser,
+    aid: Uuid,
+) -> Result<Agent, ApiError> {
+    let agent = state
+        .agents
+        .get(aid)
+        .await?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "agent not found"))?;
+    if state
+        .workspaces
+        .get_for_user(auth.id, agent.workspace_id)
+        .await?
+        .is_none()
+    {
+        return Err(err(StatusCode::NOT_FOUND, "agent not found"));
+    }
+    Ok(agent)
+}
+
+/// Fetch a session the caller owns. Missing and foreign sessions return the same
+/// `404` (status and message).
+pub(super) async fn require_owned_session(
+    state: &AppState,
+    auth: &AuthUser,
+    sid: Uuid,
+) -> Result<Session, ApiError> {
+    let session = state
+        .sessions
+        .get(sid)
+        .await?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "session not found"))?;
+    if state
+        .workspaces
+        .get_for_user(auth.id, session.workspace_id)
+        .await?
+        .is_none()
+    {
+        return Err(err(StatusCode::NOT_FOUND, "session not found"));
+    }
+    Ok(session)
+}
+
+/// `GET /workspaces` — list the caller's workspaces. Not routed yet: with a
+/// single workspace per user it only ever returns the default, which
+/// `/me/workspace` already serves. Re-wire (as a real list) with multi-workspace.
+#[allow(dead_code)]
+pub(super) async fn list_workspaces(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<WorkspaceListResponse>, ApiError> {
+    let items = state
+        .workspaces
+        .get(auth.id)
+        .await?
+        .into_iter()
+        .map(WorkspaceResponse::from)
+        .collect();
+    Ok(Json(WorkspaceListResponse { items }))
+}
+
+pub(super) async fn get_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<WorkspaceResponse>, ApiError> {
+    let workspace = require_owned_workspace(&state, &auth, id).await?;
+    Ok(Json(WorkspaceResponse::from(workspace)))
+}
+
+pub(super) async fn update_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateWorkspaceRequest>,
+) -> Result<Json<WorkspaceResponse>, ApiError> {
+    let existing = require_owned_workspace(&state, &auth, id).await?;
+    let updated = match payload.title {
+        Some(t) => existing.with_title(t).with_updated_at(),
+        None => existing,
     };
-    if state.jwt.decode(&token).is_err() {
-        return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
+    state.workspaces.upsert(updated.clone()).await?;
+    Ok(Json(WorkspaceResponse::from(updated)))
+}
+
+/// `DELETE /workspaces/{id}` — remove a non-default workspace the caller owns.
+/// Not routed yet: non-default workspaces can't be created, so this is currently
+/// unreachable. Kept (with the default-protection guard) for when multiple
+/// workspaces per user are supported.
+#[allow(dead_code)]
+pub(super) async fn delete_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    require_owned_workspace(&state, &auth, id).await?;
+    // The default workspace (id == user id) is not user-deletable; it is only
+    // removed when the account itself is deleted.
+    if id == auth.id {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "cannot delete your default workspace",
+        ));
+    }
+    state.delete_workspace(id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /me/workspace` — the caller's default workspace (id == user id).
+/// Thin alias that delegates to [`get_workspace`] with the caller's id, so the
+/// two share one implementation.
+pub(super) async fn get_my_workspace(
+    state: State<Arc<AppState>>,
+    auth: Extension<AuthUser>,
+) -> Result<Json<WorkspaceResponse>, ApiError> {
+    let id = auth.id;
+    get_workspace(state, auth, Path(id)).await
+}
+
+/// `PATCH /me/workspace` — update the caller's default workspace. Delegates to
+/// [`update_workspace`] with the caller's id.
+pub(super) async fn update_my_workspace(
+    state: State<Arc<AppState>>,
+    auth: Extension<AuthUser>,
+    payload: Json<UpdateWorkspaceRequest>,
+) -> Result<Json<WorkspaceResponse>, ApiError> {
+    let id = auth.id;
+    update_workspace(state, auth, Path(id), payload).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use ailoy::agent::AgentSpec;
+    use axum::Json;
+
+    use crate::auth::{JwtConfig, Role};
+    use crate::state::NewUser;
+
+    async fn test_state() -> (AppState, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_url = format!("sqlite://{}/test.db", tmp.path().display());
+        let jwt = JwtConfig::new("test-secret", 3600);
+        let state = AppState::new(&db_url, tmp.path().to_path_buf(), jwt)
+            .await
+            .unwrap();
+        (state, tmp)
     }
 
-    match state.projects.get(pid).await {
-        Ok(Some(_)) => {}
-        Ok(None) => return (StatusCode::NOT_FOUND, "project not found").into_response(),
-        Err(e) => {
-            tracing::error!("workspace project lookup failed: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+    async fn seed_user(state: &AppState, username: &str) -> AuthUser {
+        let user = state
+            .users
+            .create(NewUser {
+                id: Uuid::new_v4(),
+                username: username.to_string(),
+                password_hash: "x".into(),
+                role: Role::User,
+                display_name: None,
+                is_active: true,
+                preferred_language: "en".into(),
+            })
+            .await
+            .unwrap();
+        state.workspaces.create_default(&user).await.unwrap();
+        AuthUser {
+            id: user.id,
+            username: user.username,
+            role: user.role,
         }
     }
 
-    // The filesystem (and its side-processing) lives in `state.workspace`; here
-    // we only wrap it in the WebDAV protocol (see [`DavFs`]).
-    let dav = DavHandler::builder()
-        .filesystem(Box::new(DavFs(state.workspace.get_fs(pid))))
-        .locksystem(FakeLs::new())
-        .strip_prefix(format!("/projects/{pid}/workspace"))
-        .build_handler();
+    // Missing and foreign ids must yield the identical 404 (status and body).
+    #[tokio::test]
+    async fn require_owned_agent_hides_cross_tenant_existence() {
+        let (state, _tmp) = test_state().await;
+        let alice = seed_user(&state, "alice").await;
+        let bob = seed_user(&state, "bob").await;
 
-    dav.handle(req).await.map(Body::new)
-}
+        let agent = Agent::new(
+            alice.id,
+            "researcher",
+            AgentSpec::new("anthropic/claude-sonnet-4-5"),
+        );
+        let agent_id = agent.id;
+        state.agents.upsert(agent).await.unwrap();
 
-fn parse_pid(path: &str) -> Option<Uuid> {
-    let rest = path.strip_prefix("/projects/")?;
-    let (pid_str, _) = rest.split_once('/')?;
-    Uuid::parse_str(pid_str).ok()
-}
+        let (fstatus, Json(fbody)) =
+            require_owned_agent(&state, &bob, agent_id).await.unwrap_err();
+        let (mstatus, Json(mbody)) = require_owned_agent(&state, &bob, Uuid::new_v4())
+            .await
+            .unwrap_err();
+        assert_eq!(fstatus, StatusCode::NOT_FOUND);
+        assert_eq!(fstatus, mstatus);
+        assert_eq!(fbody.error, mbody.error);
 
-fn extract_token(query: &str) -> Option<String> {
-    url::form_urlencoded::parse(query.as_bytes())
-        .find(|(k, _)| k == "token")
-        .map(|(_, v)| v.into_owned())
-}
-
-/// Workspace-relative path (leading `/`) in the shape [`WorkspaceFs`] expects.
-/// `as_rel_ospath` already drops the leading slash, so we re-add one.
-fn rel_path_string(path: &DavPath) -> String {
-    format!("/{}", path.as_rel_ospath().to_string_lossy())
-}
-
-/// Map a workspace [`WsFsError`] onto the WebDAV [`FsError`].
-fn to_dav_err(e: WsFsError) -> FsError {
-    match e {
-        WsFsError::NotImplemented => FsError::NotImplemented,
-        WsFsError::GeneralFailure => FsError::GeneralFailure,
-        WsFsError::Exists => FsError::Exists,
-        WsFsError::NotFound => FsError::NotFound,
-        WsFsError::Forbidden => FsError::Forbidden,
-    }
-}
-
-/// Map an `io::Error` from a `std::fs::Metadata` accessor onto a [`FsError`],
-/// routing through the workspace's own classification.
-fn io_to_dav_err(e: std::io::Error) -> FsError {
-    to_dav_err(WsFsError::from(e))
-}
-
-/// Adapts a [`WorkspaceFs`] onto `dav_server`'s [`DavFileSystem`]. Pure
-/// translation: [`DavPath`] ↔ workspace-relative string, and the workspace's
-/// own file/metadata/dir-entry types onto the corresponding `dav_server`
-/// trait objects. All disk access and side-processing happen inside
-/// [`WorkspaceFs`].
-#[derive(Clone)]
-struct DavFs(WorkspaceFs);
-
-impl DavFileSystem for DavFs {
-    fn open<'a>(
-        &'a self,
-        path: &'a DavPath,
-        options: OpenOptions,
-    ) -> FsFuture<'a, Box<dyn DavFile>> {
-        Box::pin(async move {
-            let opts = WsOpenOptions {
-                read: options.read,
-                write: options.write,
-                append: options.append,
-                truncate: options.truncate,
-                create: options.create,
-                create_new: options.create_new,
-            };
-            let file = self
-                .0
-                .open(&rel_path_string(path), opts)
-                .await
-                .map_err(to_dav_err)?;
-            Ok(Box::new(DavFileAdapter(file)) as Box<dyn DavFile>)
-        })
+        // The owner still reaches her own agent.
+        assert!(require_owned_agent(&state, &alice, agent_id).await.is_ok());
     }
 
-    fn read_dir<'a>(
-        &'a self,
-        path: &'a DavPath,
-        meta: ReadDirMeta,
-    ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>> {
-        Box::pin(async move {
-            let meta = match meta {
-                ReadDirMeta::Data => WsReadDirMeta::Data,
-                ReadDirMeta::DataSymlink => WsReadDirMeta::DataSymlink,
-                ReadDirMeta::None => WsReadDirMeta::None,
-            };
-            let stream = self
-                .0
-                .read_dir(&rel_path_string(path), meta)
-                .await
-                .map_err(to_dav_err)?;
-            let mapped = stream.map(|res| {
-                res.map(|e| Box::new(DavDirEntryAdapter(e)) as Box<dyn DavDirEntry>)
-                    .map_err(to_dav_err)
-            });
-            Ok(Box::pin(mapped) as FsStream<Box<dyn DavDirEntry>>)
-        })
-    }
+    #[tokio::test]
+    async fn require_owned_session_hides_cross_tenant_existence() {
+        let (state, _tmp) = test_state().await;
+        let alice = seed_user(&state, "alice").await;
+        let bob = seed_user(&state, "bob").await;
 
-    fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
-        Box::pin(async move {
-            let meta = self
-                .0
-                .metadata(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)?;
-            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
-        })
-    }
+        let session = Session::new(alice.id, AgentSpec::new("anthropic/claude-sonnet-4-5"));
+        let sid = session.id;
+        state.sessions.insert(session, None).await.unwrap();
 
-    fn symlink_metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
-        Box::pin(async move {
-            let meta = self
-                .0
-                .symlink_metadata(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)?;
-            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
-        })
-    }
+        let (fstatus, Json(fbody)) =
+            require_owned_session(&state, &bob, sid).await.unwrap_err();
+        let (mstatus, Json(mbody)) = require_owned_session(&state, &bob, Uuid::new_v4())
+            .await
+            .unwrap_err();
+        assert_eq!(fstatus, StatusCode::NOT_FOUND);
+        assert_eq!(fstatus, mstatus);
+        assert_eq!(fbody.error, mbody.error);
 
-    fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .create_dir(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-
-    fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .remove_dir(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-
-    fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .remove_file(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-
-    fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .rename(&rel_path_string(from), &rel_path_string(to))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-
-    fn copy<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .copy(&rel_path_string(from), &rel_path_string(to))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-}
-
-/// Adapts a workspace [`WsFile`] onto [`DavFile`].
-struct DavFileAdapter(WsFile);
-
-impl std::fmt::Debug for DavFileAdapter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DavFileAdapter").finish_non_exhaustive()
-    }
-}
-
-impl DavFile for DavFileAdapter {
-    fn metadata(&mut self) -> FsFuture<'_, Box<dyn DavMetaData>> {
-        Box::pin(async move {
-            let meta = self.0.metadata().await.map_err(to_dav_err)?;
-            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
-        })
-    }
-
-    fn write_buf(&mut self, buf: Box<dyn bytes::Buf + Send>) -> FsFuture<'_, ()> {
-        Box::pin(async move { self.0.write_buf(buf).await.map_err(to_dav_err) })
-    }
-
-    fn write_bytes(&mut self, buf: bytes::Bytes) -> FsFuture<'_, ()> {
-        Box::pin(async move { self.0.write_bytes(buf).await.map_err(to_dav_err) })
-    }
-
-    fn read_bytes(&mut self, count: usize) -> FsFuture<'_, bytes::Bytes> {
-        Box::pin(async move { self.0.read_bytes(count).await.map_err(to_dav_err) })
-    }
-
-    fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64> {
-        Box::pin(async move { self.0.seek(pos).await.map_err(to_dav_err) })
-    }
-
-    fn flush(&mut self) -> FsFuture<'_, ()> {
-        Box::pin(async move { self.0.flush().await.map_err(to_dav_err) })
-    }
-}
-
-/// Adapts a [`std::fs::Metadata`] onto [`DavMetaData`]. The WebDAV-specific
-/// projections (`status_changed`, `executable`) live here rather than in the
-/// protocol-agnostic filesystem layer.
-#[derive(Debug, Clone)]
-struct DavMetaAdapter(std::fs::Metadata);
-
-impl DavMetaData for DavMetaAdapter {
-    fn len(&self) -> u64 {
-        self.0.len()
-    }
-
-    fn modified(&self) -> FsResult<SystemTime> {
-        self.0.modified().map_err(io_to_dav_err)
-    }
-
-    fn is_dir(&self) -> bool {
-        self.0.is_dir()
-    }
-
-    fn is_file(&self) -> bool {
-        self.0.is_file()
-    }
-
-    fn is_symlink(&self) -> bool {
-        self.0.is_symlink()
-    }
-
-    fn accessed(&self) -> FsResult<SystemTime> {
-        self.0.accessed().map_err(io_to_dav_err)
-    }
-
-    fn created(&self) -> FsResult<SystemTime> {
-        self.0.created().map_err(io_to_dav_err)
-    }
-
-    #[cfg(unix)]
-    fn status_changed(&self) -> FsResult<SystemTime> {
-        use std::os::unix::fs::MetadataExt;
-        Ok(UNIX_EPOCH + Duration::new(self.0.ctime() as u64, 0))
-    }
-
-    #[cfg(not(unix))]
-    fn status_changed(&self) -> FsResult<SystemTime> {
-        Err(FsError::NotImplemented)
-    }
-
-    #[cfg(unix)]
-    fn executable(&self) -> FsResult<bool> {
-        use std::os::unix::fs::PermissionsExt;
-        if self.0.is_file() {
-            return Ok((self.0.permissions().mode() & 0o100) > 0);
-        }
-        Err(FsError::NotImplemented)
-    }
-
-    #[cfg(not(unix))]
-    fn executable(&self) -> FsResult<bool> {
-        Err(FsError::NotImplemented)
-    }
-}
-
-/// Adapts a workspace [`WsDirEntry`] onto [`DavDirEntry`].
-struct DavDirEntryAdapter(WsDirEntry);
-
-impl DavDirEntry for DavDirEntryAdapter {
-    fn name(&self) -> Vec<u8> {
-        self.0.name()
-    }
-
-    fn metadata(&self) -> FsFuture<'_, Box<dyn DavMetaData>> {
-        let meta = self
-            .0
-            .metadata()
-            .map(|m| Box::new(DavMetaAdapter(m)) as Box<dyn DavMetaData>)
-            .map_err(to_dav_err);
-        Box::pin(ready(meta))
+        // The owner still reaches her own session.
+        assert!(require_owned_session(&state, &alice, sid).await.is_ok());
     }
 }

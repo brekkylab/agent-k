@@ -19,7 +19,7 @@ use crate::event::{EventQueue, MessageEvent, message_channel};
 pub struct Session {
     pub id: Uuid,
 
-    pub project_id: Uuid,
+    pub workspace_id: Uuid,
 
     /// The agent definition this session was created from, if any. `None` for
     /// sessions built directly from a preset. Deleting the referenced agent
@@ -39,11 +39,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(project_id: Uuid, spec: AgentSpec) -> Self {
+    pub fn new(workspace_id: Uuid, spec: AgentSpec) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
-            project_id,
+            workspace_id,
             agent_id: None,
             title: None,
             spec,
@@ -78,7 +78,10 @@ impl Session {
             .transpose()?;
         Ok(Self {
             id: parse_uuid(row.get::<String, _>("id"), "sessions.id")?,
-            project_id: parse_uuid(row.get::<String, _>("project_id"), "sessions.project_id")?,
+            workspace_id: parse_uuid(
+                row.get::<String, _>("workspace_id"),
+                "sessions.workspace_id",
+            )?,
             agent_id,
             title: row.get("title"),
             spec,
@@ -113,19 +116,48 @@ impl SessionsState {
         }
     }
 
-    pub async fn list(&self) -> StateResult<Vec<Session>> {
+    /// Every session in `workspace_id`, oldest first.
+    pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, project_id, agent_id, title, spec, runenv, created_at, updated_at \
-             FROM sessions ORDER BY created_at ASC",
+            "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
+             FROM sessions WHERE workspace_id = ? ORDER BY created_at ASC",
         )
+        .bind(workspace_id.to_string())
         .fetch_all(&self.db)
         .await?;
         rows.iter().map(Session::from_sqlite_row).collect()
     }
 
+    /// Ids of every session owned by `agent_id`. Cheaper than
+    /// [`Self::list_by_workspace`] when only the ids are needed — the delete
+    /// choreography collects them *before* the agent-row cascade removes the
+    /// session rows, so it can still sweep their artifacts afterwards.
+    pub async fn ids_by_agent(&self, agent_id: Uuid) -> StateResult<Vec<Uuid>> {
+        self.session_ids("agent_id", agent_id).await
+    }
+
+    /// Ids of every session in `workspace_id`. See [`Self::ids_by_agent`] for
+    /// why the ids are collected ahead of a cascading row delete.
+    pub async fn ids_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Uuid>> {
+        self.session_ids("workspace_id", workspace_id).await
+    }
+
+    /// Session ids where `column` equals `value`. `column` is always an internal
+    /// string literal (never user input), so interpolating it is safe.
+    async fn session_ids(&self, column: &str, value: Uuid) -> StateResult<Vec<Uuid>> {
+        let sql = format!("SELECT id FROM sessions WHERE {column} = ?");
+        let rows = sqlx::query(&sql)
+            .bind(value.to_string())
+            .fetch_all(&self.db)
+            .await?;
+        rows.iter()
+            .map(|r| parse_uuid(r.get::<String, _>("id"), "sessions.id"))
+            .collect()
+    }
+
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, project_id, agent_id, title, spec, runenv, created_at, updated_at \
+            "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -143,11 +175,11 @@ impl SessionsState {
         item.runenv = runenv.is_some();
 
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, agent_id, title, spec, runenv, created_at, updated_at) \
+            "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(item.id.to_string())
-        .bind(item.project_id.to_string())
+        .bind(item.workspace_id.to_string())
         .bind(item.agent_id.map(|id| id.to_string()))
         .bind(&item.title)
         .bind(serde_json::to_string(&item.spec)?)
@@ -194,6 +226,20 @@ impl SessionsState {
         // exists.
         self.events.remove_channel(&message_channel(id));
         Ok(existing)
+    }
+
+    /// Cancel any in-flight run for `id` and remove its on-disk artifacts and
+    /// event channel, *without* touching the database — for when the row is
+    /// removed elsewhere (e.g. cascaded by a user delete). Best-effort.
+    pub async fn discard_artifacts(&self, id: Uuid) {
+        self.cancel(id).await;
+        let dir = self.data_root.join("sessions").join(id.to_string());
+        if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::error!(session = %id, "failed to remove session dir: {e}");
+            }
+        }
+        self.events.remove_channel(&message_channel(id));
     }
 
     /// Request that any in-flight run for `id` stop at the next safe point.

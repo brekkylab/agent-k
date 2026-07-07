@@ -182,11 +182,22 @@ impl UsersState {
         self.get(id).await
     }
 
-    pub async fn delete(&self, id: Uuid) -> StateResult<bool> {
+    /// Atomically delete the user and their default workspace (which shares the
+    /// user's id), cascading to that workspace's agents and sessions via foreign
+    /// keys. The caller must remove the workspace's on-disk files first (see
+    /// [`WorkspacesState::remove_files`](super::WorkspacesState::remove_files)).
+    /// Returns whether a user row existed.
+    pub async fn delete_with_default_workspace(&self, id: Uuid) -> StateResult<bool> {
+        let mut tx = self.db.begin().await?;
         let result = sqlx::query("DELETE FROM users WHERE id = ?")
             .bind(id.to_string())
-            .execute(&self.db)
+            .execute(&mut *tx)
             .await?;
+        sqlx::query("DELETE FROM workspaces WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(result.rows_affected() > 0)
     }
 

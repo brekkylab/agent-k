@@ -91,6 +91,12 @@ pub(super) async fn signup(
             other => other.into(),
         })?;
 
+    // Every user starts with one default workspace (its id mirrors the user's
+    // id). The one-per-user policy lives here (not in a schema constraint), so
+    // opening up multiple workspaces later is just a matter of exposing a
+    // create endpoint.
+    state.workspaces.create_default(&user).await?;
+
     tracing::info!(%id, username = %user.username, "user signed up");
 
     Ok((StatusCode::CREATED, Json(UserResponse::from(user))))
@@ -113,6 +119,11 @@ pub(super) async fn login(
     if !verify_password(&payload.password, &user.password_hash)? {
         return Err(err(StatusCode::UNAUTHORIZED, "invalid username or password"));
     }
+
+    // Heal a default workspace missing its row (a signup that failed after the
+    // user row was created) or its files (an interrupted account deletion) by
+    // (re)provisioning on login.
+    state.workspaces.ensure_provisioned(&user).await?;
 
     let access_token = state
         .jwt
