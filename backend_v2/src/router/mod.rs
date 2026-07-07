@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aide::axum::{
     ApiRouter,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 
 use crate::{
@@ -15,6 +15,7 @@ pub(crate) mod error;
 mod agent;
 mod auth;
 mod message;
+mod mount;
 mod session;
 mod user;
 mod webdav;
@@ -60,6 +61,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             // DELETE unwired until multiple workspaces per user exist — today it
             // would only ever 403 (default) or 404 (see delete_workspace):
             // .delete(workspace::delete_workspace)
+        )
+        .api_route(
+            "/workspaces/{wid}/mounts",
+            get(mount::list_mounts).post(mount::create_mount),
+        )
+        .api_route(
+            "/workspaces/{wid}/mounts/{mount_id}",
+            delete(mount::delete_mount),
         )
         .api_route(
             "/agents",

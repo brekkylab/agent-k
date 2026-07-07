@@ -25,8 +25,11 @@ croner = "2"
 dashmap = "6"
 dav-server = "0.11"
 dotenvy = "0.15"
+futures = "0.3"
 futures-util = "0.3"
 jsonwebtoken = "9"
+object_store = { version = "0.14", features = ["aws"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 mime_guess = "2"
 nanoid = "0.4"
 schemars = { version = "0.8", features = ["uuid1", "chrono"] }

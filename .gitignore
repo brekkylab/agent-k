@@ -53,3 +53,7 @@ docs/agents/
 
 # Others
 test
+
+# Runtime data (SQLite DB, per-session/workspace files created at run time)
+/data/
+/backend_v2/data/

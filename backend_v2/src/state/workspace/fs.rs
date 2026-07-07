@@ -15,11 +15,15 @@
 use std::io::{self, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use bytes::{Buf, Bytes, BytesMut};
 use futures_util::{Stream, stream};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
+
+use crate::vfs::{FileKind, FileStat, Resource, VPath, Vfs, VfsError};
 
 /// Errors a workspace filesystem operation can produce. A protocol-agnostic
 /// subset that the WebDAV layer maps onto `dav_server::fs::FsError`.
@@ -75,6 +79,133 @@ pub enum ReadDirMeta {
     None,
 }
 
+/// The kind of a filesystem node. External providers only ever report
+/// [`File`](NodeKind::File) / [`Dir`](NodeKind::Dir); [`Symlink`](NodeKind::Symlink)
+/// arises only from a local `symlink_metadata`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeKind {
+    File,
+    Dir,
+    Symlink,
+}
+
+/// Protocol-agnostic file metadata: the fields the WebDAV layer reads, decoupled
+/// from [`std::fs::Metadata`] so a node can equally be a local file or an
+/// external provider object. Timestamps and `executable` are `Option` because
+/// non-local sources (S3, Notion, …) don't report them; the WebDAV adapter maps
+/// a `None` onto the corresponding `NotImplemented`.
+#[derive(Debug, Clone)]
+pub struct Stat {
+    pub kind: NodeKind,
+    pub len: u64,
+    pub modified: Option<SystemTime>,
+    pub accessed: Option<SystemTime>,
+    pub created: Option<SystemTime>,
+    pub status_changed: Option<SystemTime>,
+    pub executable: Option<bool>,
+}
+
+impl Stat {
+    pub fn is_dir(&self) -> bool {
+        matches!(self.kind, NodeKind::Dir)
+    }
+
+    pub fn is_file(&self) -> bool {
+        matches!(self.kind, NodeKind::File)
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        matches!(self.kind, NodeKind::Symlink)
+    }
+}
+
+impl From<std::fs::Metadata> for Stat {
+    fn from(m: std::fs::Metadata) -> Self {
+        let kind = if m.is_dir() {
+            NodeKind::Dir
+        } else if m.is_symlink() {
+            NodeKind::Symlink
+        } else {
+            NodeKind::File
+        };
+        Stat {
+            kind,
+            len: m.len(),
+            modified: m.modified().ok(),
+            accessed: m.accessed().ok(),
+            created: m.created().ok(),
+            status_changed: status_changed_of(&m),
+            executable: executable_of(&m),
+        }
+    }
+}
+
+/// Change time (`ctime`) of a local file, on platforms that expose it.
+#[cfg(unix)]
+fn status_changed_of(m: &std::fs::Metadata) -> Option<SystemTime> {
+    use std::os::unix::fs::MetadataExt;
+    use std::time::{Duration, UNIX_EPOCH};
+    Some(UNIX_EPOCH + Duration::new(m.ctime() as u64, 0))
+}
+
+#[cfg(not(unix))]
+fn status_changed_of(_m: &std::fs::Metadata) -> Option<SystemTime> {
+    None
+}
+
+/// Whether a local *file* has the owner-execute bit set. `None` for non-files
+/// and on platforms without a unix mode.
+#[cfg(unix)]
+fn executable_of(m: &std::fs::Metadata) -> Option<bool> {
+    use std::os::unix::fs::PermissionsExt;
+    if m.is_file() {
+        Some((m.permissions().mode() & 0o100) > 0)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+fn executable_of(_m: &std::fs::Metadata) -> Option<bool> {
+    None
+}
+
+/// Map a VFS [`FileKind`] onto the local [`NodeKind`].
+fn node_kind_of(kind: FileKind) -> NodeKind {
+    match kind {
+        FileKind::Dir => NodeKind::Dir,
+        FileKind::File => NodeKind::File,
+    }
+}
+
+/// Build a [`Stat`] from an external provider's [`FileStat`]. External sources
+/// report only kind / size / mtime; the local-only projections stay `None`.
+fn stat_from_vfs(fs: FileStat) -> Stat {
+    Stat {
+        kind: node_kind_of(fs.kind),
+        len: fs.size,
+        modified: fs.mtime,
+        accessed: None,
+        created: None,
+        status_changed: None,
+        executable: None,
+    }
+}
+
+/// Map a provider [`VfsError`] onto the workspace [`FsError`]. The provider
+/// classifies the failure itself (typed, not by message), so this is a direct
+/// translation — `NotFound` → 404, an unsupported op → `NotImplemented`, and
+/// any backend failure → a generic error.
+impl From<VfsError> for FsError {
+    fn from(e: VfsError) -> Self {
+        match e {
+            VfsError::NotFound => FsError::NotFound,
+            VfsError::Unsupported => FsError::NotImplemented,
+            VfsError::Backend(_) => FsError::GeneralFailure,
+        }
+    }
+}
+
 /// True when `rel_path` lives under the `knowledge/` directory. Component-wise
 /// match on the leading dir: `knowledge/x` hits, `knowledgebase/x` does not.
 fn is_knowledge(rel_path: &str) -> bool {
@@ -105,7 +236,7 @@ fn knowledge_removed(wid: Uuid, path: &Path) {
 /// at listing time.
 pub struct DirEntry {
     name: Vec<u8>,
-    metadata: FsResult<std::fs::Metadata>,
+    metadata: FsResult<Stat>,
 }
 
 impl DirEntry {
@@ -115,7 +246,7 @@ impl DirEntry {
     }
 
     /// Metadata captured when the directory was listed.
-    pub fn metadata(&self) -> FsResult<std::fs::Metadata> {
+    pub fn metadata(&self) -> FsResult<Stat> {
         self.metadata.clone()
     }
 }
@@ -135,67 +266,146 @@ struct Observer {
     wrote: bool,
 }
 
-/// An open workspace file. Readable / writable / seekable, like
-/// [`std::fs::File`], and — for write opens — reports a completed write to the
-/// workspace once `flush` follows at least one `write_*`.
-pub struct File {
+/// An open workspace file: either a local on-disk file or a read-only view onto
+/// a mounted external-provider object. The WebDAV layer holds one behind the
+/// same interface regardless of which it is.
+pub enum File {
+    /// A local on-disk file. Readable / writable / seekable, like
+    /// [`std::fs::File`], and — for write opens — reports a completed write to
+    /// the workspace once `flush` follows at least one `write_*`.
+    Local(LocalFile),
+    /// A read-only cursor over a mounted provider object.
+    Mount(MountFile),
+}
+
+/// A local on-disk file (the original workspace-file behaviour).
+pub struct LocalFile {
     file: tokio::fs::File,
     buf: BytesMut,
     observer: Option<Observer>,
 }
 
+/// A read-only cursor over a mounted external-provider object. Reads pull byte
+/// ranges from the [`Resource`] on demand and advance the cursor; writes are
+/// rejected because mounts are read-only.
+pub struct MountFile {
+    resource: Arc<dyn Resource>,
+    path: VPath,
+    offset: u64,
+}
+
 impl File {
-    pub async fn metadata(&mut self) -> FsResult<std::fs::Metadata> {
-        self.file.metadata().await.map_err(FsError::from)
+    pub async fn metadata(&mut self) -> FsResult<Stat> {
+        match self {
+            File::Local(f) => f
+                .file
+                .metadata()
+                .await
+                .map(Stat::from)
+                .map_err(FsError::from),
+            File::Mount(m) => m
+                .resource
+                .stat(&m.path)
+                .await
+                .map(stat_from_vfs)
+                .map_err(FsError::from),
+        }
     }
 
     pub async fn write_bytes(&mut self, buf: Bytes) -> FsResult<()> {
-        if let Some(o) = self.observer.as_mut() {
-            o.wrote = true;
+        match self {
+            File::Local(f) => {
+                if let Some(o) = f.observer.as_mut() {
+                    o.wrote = true;
+                }
+                f.file.write_all(&buf).await.map_err(FsError::from)
+            }
+            File::Mount(_) => Err(FsError::Forbidden),
         }
-        self.file.write_all(&buf).await.map_err(FsError::from)
     }
 
     pub async fn write_buf(&mut self, mut buf: Box<dyn Buf + Send>) -> FsResult<()> {
-        if let Some(o) = self.observer.as_mut() {
-            o.wrote = true;
+        match self {
+            File::Local(f) => {
+                if let Some(o) = f.observer.as_mut() {
+                    o.wrote = true;
+                }
+                while buf.has_remaining() {
+                    let n = f.file.write(buf.chunk()).await.map_err(FsError::from)?;
+                    buf.advance(n);
+                }
+                Ok(())
+            }
+            File::Mount(_) => Err(FsError::Forbidden),
         }
-        while buf.has_remaining() {
-            let n = self.file.write(buf.chunk()).await.map_err(FsError::from)?;
-            buf.advance(n);
-        }
-        Ok(())
     }
 
     pub async fn read_bytes(&mut self, count: usize) -> FsResult<Bytes> {
-        // Reuse `self.buf`'s allocation across reads; cap the read at `count`
-        // and hand back exactly the bytes filled (an empty `Bytes` at EOF).
-        let mut buf = std::mem::take(&mut self.buf);
-        buf.reserve(count);
-        let res = (&mut self.file).take(count as u64).read_buf(&mut buf).await;
-        self.buf = buf;
-        res.map_err(FsError::from)?;
-        Ok(self.buf.split().freeze())
+        match self {
+            File::Local(f) => {
+                // Reuse `f.buf`'s allocation across reads; cap the read at
+                // `count` and hand back exactly the bytes filled (empty at EOF).
+                let mut buf = std::mem::take(&mut f.buf);
+                buf.reserve(count);
+                let res = (&mut f.file).take(count as u64).read_buf(&mut buf).await;
+                f.buf = buf;
+                res.map_err(FsError::from)?;
+                Ok(f.buf.split().freeze())
+            }
+            File::Mount(m) => {
+                // Pull the next `count` bytes from the provider and advance the
+                // cursor. A short read (or empty at EOF) is honoured verbatim.
+                let end = m.offset.saturating_add(count as u64);
+                let data = m
+                    .resource
+                    .read_bytes(&m.path, Some(m.offset..end))
+                    .await
+                    .map_err(FsError::from)?;
+                m.offset = m.offset.saturating_add(data.len() as u64);
+                Ok(Bytes::from(data))
+            }
+        }
     }
 
     pub async fn seek(&mut self, pos: SeekFrom) -> FsResult<u64> {
-        self.file.seek(pos).await.map_err(FsError::from)
+        match self {
+            File::Local(f) => f.file.seek(pos).await.map_err(FsError::from),
+            File::Mount(m) => {
+                let new = match pos {
+                    SeekFrom::Start(n) => n,
+                    SeekFrom::Current(d) => (m.offset as i64 + d).max(0) as u64,
+                    // Seeking from the end needs the object size; one stat serves it.
+                    SeekFrom::End(d) => {
+                        let size = m.resource.stat(&m.path).await.map_err(FsError::from)?.size;
+                        (size as i64 + d).max(0) as u64
+                    }
+                };
+                m.offset = new;
+                Ok(new)
+            }
+        }
     }
 
     pub async fn flush(&mut self) -> FsResult<()> {
-        self.file.flush().await?;
-        if let Some(o) = self.observer.as_mut()
-            && o.wrote
-        {
-            // Clear first so a second flush on the same handle won't re-report.
-            o.wrote = false;
-            if o.existed {
-                knowledge_updated(o.wid, &o.path);
-            } else {
-                knowledge_inserted(o.wid, &o.path);
+        match self {
+            File::Local(f) => {
+                f.file.flush().await?;
+                if let Some(o) = f.observer.as_mut()
+                    && o.wrote
+                {
+                    // Clear first so a second flush on the same handle won't re-report.
+                    o.wrote = false;
+                    if o.existed {
+                        knowledge_updated(o.wid, &o.path);
+                    } else {
+                        knowledge_inserted(o.wid, &o.path);
+                    }
+                }
+                Ok(())
             }
+            // Nothing buffered on a read-only mount cursor.
+            File::Mount(_) => Ok(()),
         }
-        Ok(())
     }
 }
 
@@ -206,11 +416,44 @@ impl File {
 pub struct WorkspaceFs {
     root: PathBuf,
     wid: Uuid,
+    /// External-provider mounts, if any. Paths under a mount prefix are served
+    /// by the provider (read-only); every other path stays on local disk.
+    vfs: Option<Arc<Vfs>>,
 }
 
 impl WorkspaceFs {
     pub(super) fn new(root: PathBuf, wid: Uuid) -> Self {
-        Self { root, wid }
+        Self {
+            root,
+            wid,
+            vfs: None,
+        }
+    }
+
+    /// Attach a set of external-provider mounts. Paths under a mount prefix are
+    /// routed to the provider; all others stay local. `None` clears mounts.
+    pub(super) fn with_vfs(mut self, vfs: Option<Arc<Vfs>>) -> Self {
+        self.vfs = vfs;
+        self
+    }
+
+    /// Route a workspace-relative path to the mount that owns it, if any.
+    /// `Some((resource, vpath))` means the path lives under an external
+    /// provider; `None` means it stays on local disk.
+    fn route(&self, rel_path: &str) -> Option<(Arc<dyn Resource>, VPath)> {
+        let vfs = self.vfs.as_ref()?;
+        let abs = if rel_path.starts_with('/') {
+            rel_path.to_string()
+        } else {
+            format!("/{rel_path}")
+        };
+        vfs.route(&abs).map(|(r, p)| (Arc::clone(r), p))
+    }
+
+    /// Top-level mount names (no leading `/`), surfaced as virtual subdirectories
+    /// at the workspace root.
+    fn mount_names(&self) -> Vec<String> {
+        self.vfs.as_ref().map(|v| v.mount_names()).unwrap_or_default()
     }
 
     /// Absolute on-disk path of `rel_path` (a workspace-relative path such as
@@ -219,19 +462,45 @@ impl WorkspaceFs {
         self.root.join(rel_path.trim_start_matches('/'))
     }
 
-    pub async fn metadata(&self, rel_path: &str) -> FsResult<std::fs::Metadata> {
+    pub async fn metadata(&self, rel_path: &str) -> FsResult<Stat> {
+        if let Some((resource, vpath)) = self.route(rel_path) {
+            return resource
+                .stat(&vpath)
+                .await
+                .map(stat_from_vfs)
+                .map_err(FsError::from);
+        }
         tokio::fs::metadata(self.resolve(rel_path))
             .await
+            .map(Stat::from)
             .map_err(FsError::from)
     }
 
-    pub async fn symlink_metadata(&self, rel_path: &str) -> FsResult<std::fs::Metadata> {
+    pub async fn symlink_metadata(&self, rel_path: &str) -> FsResult<Stat> {
+        // External providers have no symlinks, so a mount path stats the same
+        // as `metadata`.
+        if let Some((resource, vpath)) = self.route(rel_path) {
+            return resource
+                .stat(&vpath)
+                .await
+                .map(stat_from_vfs)
+                .map_err(FsError::from);
+        }
         tokio::fs::symlink_metadata(self.resolve(rel_path))
             .await
+            .map(Stat::from)
             .map_err(FsError::from)
     }
 
     pub async fn read_dir(&self, rel_path: &str, meta: ReadDirMeta) -> FsResult<DirStream> {
+        // A path under a mount lists through the provider.
+        if let Some((resource, vpath)) = self.route(rel_path) {
+            let entries = resource.readdir(&vpath).await.map_err(FsError::from)?;
+            let out: Vec<FsResult<DirEntry>> =
+                entries.into_iter().map(|e| Ok(dir_entry_from_vfs(e))).collect();
+            return Ok(Box::pin(stream::iter(out)));
+        }
+
         let path = self.resolve(rel_path);
         let mut rd = tokio::fs::read_dir(&path).await?;
         // Collect eagerly (metadata captured at listing time) and replay as a
@@ -246,7 +515,7 @@ impl WorkspaceFs {
                     };
                     out.push(Ok(DirEntry {
                         name: dir_entry_name(&entry),
-                        metadata: md.map_err(FsError::from),
+                        metadata: md.map(Stat::from).map_err(FsError::from),
                     }));
                 }
                 Ok(None) => break,
@@ -256,10 +525,40 @@ impl WorkspaceFs {
                 }
             }
         }
+        // At the workspace root, surface each mount as a virtual subdirectory
+        // alongside the local entries.
+        if is_root_path(rel_path) {
+            for name in self.mount_names() {
+                out.push(Ok(mount_dir_entry(&name)));
+            }
+        }
         Ok(Box::pin(stream::iter(out)))
     }
 
     pub async fn open(&self, rel_path: &str, options: OpenOptions) -> FsResult<File> {
+        // A mount path opens read-only; any write intent is rejected up front.
+        if let Some((resource, vpath)) = self.route(rel_path) {
+            let wants_write = options.write
+                || options.append
+                || options.create
+                || options.create_new
+                || options.truncate;
+            if wants_write {
+                return Err(FsError::Forbidden);
+            }
+            // Confirm the target is a readable object before handing back a
+            // cursor, so a GET on a missing path / directory fails cleanly.
+            let stat = resource.stat(&vpath).await.map_err(FsError::from)?;
+            if matches!(stat.kind, FileKind::Dir) {
+                return Err(FsError::Forbidden);
+            }
+            return Ok(File::Mount(MountFile {
+                resource,
+                path: vpath,
+                offset: 0,
+            }));
+        }
+
         let is_write = options.write || options.append || options.create || options.create_new;
         let path = self.resolve(rel_path);
         // Probe before opening: a create/truncating open would make the file
@@ -282,14 +581,17 @@ impl WorkspaceFs {
             existed,
             wrote: false,
         });
-        Ok(File {
+        Ok(File::Local(LocalFile {
             file,
             buf: BytesMut::new(),
             observer,
-        })
+        }))
     }
 
     pub async fn create_dir(&self, rel_path: &str) -> FsResult<()> {
+        if self.route(rel_path).is_some() {
+            return Err(FsError::Forbidden);
+        }
         let path = self.resolve(rel_path);
         let mut builder = tokio::fs::DirBuilder::new();
         #[cfg(unix)]
@@ -300,12 +602,18 @@ impl WorkspaceFs {
     }
 
     pub async fn remove_dir(&self, rel_path: &str) -> FsResult<()> {
+        if self.route(rel_path).is_some() {
+            return Err(FsError::Forbidden);
+        }
         tokio::fs::remove_dir(self.resolve(rel_path))
             .await
             .map_err(FsError::from)
     }
 
     pub async fn remove_file(&self, rel_path: &str) -> FsResult<()> {
+        if self.route(rel_path).is_some() {
+            return Err(FsError::Forbidden);
+        }
         let path = self.resolve(rel_path);
         tokio::fs::remove_file(&path).await.map_err(FsError::from)?;
         if is_knowledge(rel_path) {
@@ -315,6 +623,11 @@ impl WorkspaceFs {
     }
 
     pub async fn rename(&self, from: &str, to: &str) -> FsResult<()> {
+        // Mounts are read-only, and cross-boundary moves aren't supported yet;
+        // reject a rename touching either side of a mount.
+        if self.route(from).is_some() || self.route(to).is_some() {
+            return Err(FsError::Forbidden);
+        }
         // Probe the destination before the move so we can tell whether it
         // landed on a fresh path (insert) or replaced one (update).
         let to_existed = self.metadata(to).await.is_ok();
@@ -338,6 +651,10 @@ impl WorkspaceFs {
     }
 
     pub async fn copy(&self, from: &str, to: &str) -> FsResult<()> {
+        // Copying to/from a mount isn't supported in the read-only phase.
+        if self.route(from).is_some() || self.route(to).is_some() {
+            return Err(FsError::Forbidden);
+        }
         let to_existed = self.metadata(to).await.is_ok();
         let from_path = self.resolve(from);
         let to_path = self.resolve(to);
@@ -364,6 +681,45 @@ fn dir_entry_name(entry: &tokio::fs::DirEntry) -> Vec<u8> {
 #[cfg(not(unix))]
 fn dir_entry_name(entry: &tokio::fs::DirEntry) -> Vec<u8> {
     entry.file_name().to_string_lossy().as_bytes().to_vec()
+}
+
+/// True for the workspace root (`/` or empty), where mount names are surfaced.
+fn is_root_path(rel_path: &str) -> bool {
+    rel_path.trim_matches('/').is_empty()
+}
+
+/// Convert a provider directory entry into a workspace [`DirEntry`], carrying
+/// the kind/size/mtime the provider reported.
+fn dir_entry_from_vfs(e: crate::vfs::DirEntry) -> DirEntry {
+    let stat = Stat {
+        kind: node_kind_of(e.kind),
+        len: e.size,
+        modified: e.mtime,
+        accessed: None,
+        created: None,
+        status_changed: None,
+        executable: None,
+    };
+    DirEntry {
+        name: e.name.into_bytes(),
+        metadata: Ok(stat),
+    }
+}
+
+/// A synthetic directory entry for a mount, listed at the workspace root.
+fn mount_dir_entry(name: &str) -> DirEntry {
+    DirEntry {
+        name: name.as_bytes().to_vec(),
+        metadata: Ok(Stat {
+            kind: NodeKind::Dir,
+            len: 0,
+            modified: None,
+            accessed: None,
+            created: None,
+            status_changed: None,
+            executable: None,
+        }),
+    }
 }
 
 /// Build the `std::fs::OpenOptions` for opening a workspace file. On unix,
@@ -408,5 +764,201 @@ async fn rename_compat(from: &Path, to: &Path) -> io::Result<()> {
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::SeekFrom;
+    use std::ops::Range;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use futures_util::StreamExt;
+    use uuid::Uuid;
+
+    use super::{File, OpenOptions, ReadDirMeta, WorkspaceFs};
+    use crate::state::FsError;
+    use crate::vfs::{
+        DirEntry as VfsDirEntry, FileKind, FileStat, Mount, Resource, VPath, Vfs, VfsError,
+        VfsResult,
+    };
+
+    /// A tiny read-only provider holding one file, `/file.txt`.
+    struct MockResource {
+        content: Vec<u8>,
+    }
+
+    #[async_trait]
+    impl Resource for MockResource {
+        async fn read_bytes(
+            &self,
+            path: &VPath,
+            range: Option<Range<u64>>,
+        ) -> VfsResult<Vec<u8>> {
+            if path.as_str() != "/file.txt" {
+                return Err(VfsError::NotFound);
+            }
+            Ok(match range {
+                Some(r) => {
+                    let s = (r.start as usize).min(self.content.len());
+                    let e = (r.end as usize).min(self.content.len());
+                    self.content[s..e].to_vec()
+                }
+                None => self.content.clone(),
+            })
+        }
+
+        async fn write_bytes(&self, _path: &VPath, _data: Vec<u8>) -> VfsResult<()> {
+            Err(VfsError::Unsupported)
+        }
+
+        async fn readdir(&self, path: &VPath) -> VfsResult<Vec<VfsDirEntry>> {
+            if path.is_root() {
+                Ok(vec![VfsDirEntry {
+                    name: "file.txt".to_string(),
+                    kind: FileKind::File,
+                    size: self.content.len() as u64,
+                    mtime: None,
+                }])
+            } else {
+                Err(VfsError::NotFound)
+            }
+        }
+
+        async fn stat(&self, path: &VPath) -> VfsResult<FileStat> {
+            if path.is_root() {
+                Ok(FileStat {
+                    kind: FileKind::Dir,
+                    ..Default::default()
+                })
+            } else if path.as_str() == "/file.txt" {
+                Ok(FileStat {
+                    kind: FileKind::File,
+                    size: self.content.len() as u64,
+                    ..Default::default()
+                })
+            } else {
+                Err(VfsError::NotFound)
+            }
+        }
+    }
+
+    fn mounted_fs(root: std::path::PathBuf) -> WorkspaceFs {
+        let resource: Arc<dyn Resource> = Arc::new(MockResource {
+            content: b"hello world".to_vec(),
+        });
+        let vfs = Vfs::new(vec![Mount {
+            prefix: "/mock".to_string(),
+            resource,
+        }])
+        .unwrap();
+        WorkspaceFs::new(root, Uuid::new_v4()).with_vfs(Some(Arc::new(vfs)))
+    }
+
+    async fn dir_names(fs: &WorkspaceFs, path: &str) -> Vec<String> {
+        let mut stream = fs.read_dir(path, ReadDirMeta::None).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(e) = stream.next().await {
+            names.push(String::from_utf8(e.unwrap().name()).unwrap());
+        }
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn mount_metadata_read_and_seek() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fs = mounted_fs(tmp.path().to_path_buf());
+
+        let st = fs.metadata("/mock/file.txt").await.unwrap();
+        assert!(st.is_file());
+        assert_eq!(st.len, 11);
+
+        let mut f = fs
+            .open(
+                "/mock/file.txt",
+                OpenOptions {
+                    read: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(f, File::Mount(_)));
+        let head = f.read_bytes(11).await.unwrap();
+        assert_eq!(&head[..], b"hello world");
+
+        // Seek from the start, then a bounded read.
+        f.seek(SeekFrom::Start(6)).await.unwrap();
+        let tail = f.read_bytes(5).await.unwrap();
+        assert_eq!(&tail[..], b"world");
+    }
+
+    #[tokio::test]
+    async fn mount_readdir_and_root_merge() {
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(tmp.path().join("local.txt"), b"x")
+            .await
+            .unwrap();
+        let fs = mounted_fs(tmp.path().to_path_buf());
+
+        // The mount lists provider entries.
+        assert_eq!(dir_names(&fs, "/mock").await, vec!["file.txt"]);
+
+        // The root lists local entries plus the mount name.
+        let root = dir_names(&fs, "/").await;
+        assert!(root.contains(&"local.txt".to_string()), "{root:?}");
+        assert!(root.contains(&"mock".to_string()), "{root:?}");
+    }
+
+    #[tokio::test]
+    async fn mount_is_read_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(tmp.path().join("local.txt"), b"x")
+            .await
+            .unwrap();
+        let fs = mounted_fs(tmp.path().to_path_buf());
+
+        let write_open = fs
+            .open(
+                "/mock/file.txt",
+                OpenOptions {
+                    write: true,
+                    create: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(write_open.err(), Some(FsError::Forbidden));
+        assert_eq!(
+            fs.create_dir("/mock/x").await.err(),
+            Some(FsError::Forbidden)
+        );
+        assert_eq!(
+            fs.remove_file("/mock/file.txt").await.err(),
+            Some(FsError::Forbidden)
+        );
+        assert_eq!(
+            fs.rename("/mock/a", "/mock/b").await.err(),
+            Some(FsError::Forbidden)
+        );
+        assert_eq!(
+            fs.copy("/local.txt", "/mock/b").await.err(),
+            Some(FsError::Forbidden)
+        );
+    }
+
+    #[tokio::test]
+    async fn local_paths_unaffected_by_mounts() {
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(tmp.path().join("local.txt"), b"data")
+            .await
+            .unwrap();
+        let fs = mounted_fs(tmp.path().to_path_buf());
+
+        let st = fs.metadata("/local.txt").await.unwrap();
+        assert!(st.is_file());
+        assert_eq!(st.len, 4);
     }
 }
