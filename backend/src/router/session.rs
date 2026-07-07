@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
 use ailoy::agent::AgentSpec;
-use ailoy::runenv::SandboxBuilder;
+use ailoy::runenv::{SandboxBuilder, VolumeMount};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -168,11 +168,25 @@ pub(super) async fn create_session(
     // stops + archives it; each run restores it (with host egress when mounts
     // exist — see `SessionsState::run`).
     let runenv = if payload.runenv.unwrap_or(false) {
+        // Bind-mount the workspace's local files into the guest so the agent
+        // sees them at /workspace/files (alongside the read-only VFS mounts).
+        let files_root = state.workspaces.files_root(payload.workspace_id);
+        tokio::fs::create_dir_all(&files_root).await.map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("provision workspace files dir: {e}"),
+            )
+        })?;
         let sandbox = SandboxBuilder::new()
             .image("brekkylab/agent-k-libreoffice:latest")
             .cpus(8)
             .memory_mib(1024)
             .allow_host_egress(true)
+            .mount(VolumeMount::Bind {
+                host: files_root,
+                guest: "/workspace/files".to_string(),
+                readonly: false,
+            })
             .build()
             .await
             .map_err(|e| {

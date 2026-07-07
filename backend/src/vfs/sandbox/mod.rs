@@ -25,7 +25,7 @@ mod e2e {
     use std::path::Path;
     use std::sync::Arc;
 
-    use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder};
+    use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder, VolumeMount};
 
     use crate::vfs::{MountSpec, NotionConfig, ProviderConfig, Vfs, VfsConfig, VfsForward};
 
@@ -149,6 +149,62 @@ done
         assert!(
             r.stdout.contains("REACHABLE"),
             "host-egress did NOT survive archive/restore — apply the policy at run-time start"
+        );
+    }
+
+    /// Workspace local `files/` reach the guest via a plain `VolumeMount::Bind`
+    /// (the mechanism `create_session` uses at `/workspace/files`). Verifies read
+    /// and host-visible write-back. Run:
+    ///   cargo test -p agent-k-backend workspace_files_bind_mount -- --ignored --nocapture
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "boots a VM; verifies a host dir bind-mounts into the guest"]
+    async fn workspace_files_bind_mount() {
+        if std::env::var_os("MSB_HOME").is_none() {
+            if let Some(home) = std::env::var_os("HOME") {
+                let d = std::path::PathBuf::from(home).join(".microsandbox-agentk");
+                unsafe { std::env::set_var("MSB_HOME", &d) };
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("hello.txt"), b"workspace-file-content").unwrap();
+
+        let mut sandbox = SandboxBuilder::new()
+            .image("brekkylab/agent-k-libreoffice:latest")
+            .cpus(2)
+            .memory_mib(1024)
+            .mount(VolumeMount::Bind {
+                host: tmp.path().to_path_buf(),
+                guest: "/workspace/files".to_string(),
+                readonly: false,
+            })
+            .build()
+            .await
+            .expect("build sandbox");
+        let console = sandbox.start().await.expect("start VM");
+
+        // Read a host file from inside the guest.
+        let r = console
+            .exec_shell("cat /workspace/files/hello.txt".to_string(), Some(30))
+            .await
+            .expect("cat");
+        println!("guest cat /workspace/files/hello.txt -> {}", r.stdout.trim());
+        assert_eq!(r.exit_code, 0, "guest cat failed: {}", r.stderr);
+        assert!(r.stdout.contains("workspace-file-content"));
+
+        // Write from the guest; it must appear back on the host.
+        let w = console
+            .exec_shell(
+                "echo from-guest > /workspace/files/guest.txt".to_string(),
+                Some(30),
+            )
+            .await
+            .expect("write");
+        assert_eq!(w.exit_code, 0, "guest write failed: {}", w.stderr);
+
+        let _ = sandbox.stop().await;
+        assert!(
+            tmp.path().join("guest.txt").exists(),
+            "guest write should appear on the host bind source"
         );
     }
 
