@@ -12,3 +12,9 @@ exclude = [
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
 ailoy = { git = "ssh://git@github.com/brekkylab/ailoy.git", rev = "3034538ee8bfc35f7019080f76aa3ecfe96846ee", features = ["sandbox"] }
+
+# Local override while validating the host-egress change (branch agent-k/host-egress
+# = 3034538 + SandboxBuilder::allow_host_egress). Once verified, push the ailoy
+# commit and bump the `rev` above instead of patching. Same crate version (0.3.0).
+[patch."ssh://git@github.com/brekkylab/ailoy.git"]
+ailoy = { path = "../ailoy" }

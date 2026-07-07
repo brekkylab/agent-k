@@ -7,8 +7,10 @@ use uuid::Uuid;
 use super::{StateError, StateResult, User, parse_ts, parse_uuid};
 
 mod fs;
+mod mount;
 
 pub use fs::*;
+pub use mount::*;
 
 /// A workspace: both a database row and a directory tree on disk.
 ///
@@ -172,9 +174,12 @@ impl WorkspacesState {
         Ok(())
     }
 
-    /// A filesystem handle scoped to workspace `wid`'s file root.
-    pub fn get_fs(&self, wid: Uuid) -> WorkspaceFs {
-        WorkspaceFs::new(self.get_root(wid), wid)
+    /// A filesystem handle scoped to workspace `wid`'s file root, with the
+    /// workspace's external-provider mounts attached (paths under a mount prefix
+    /// route to the provider; everything else stays local).
+    pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
+        let vfs = self.build_vfs(wid).await?;
+        Ok(WorkspaceFs::new(self.get_root(wid), wid).with_vfs(vfs))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root

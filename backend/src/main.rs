@@ -2,6 +2,7 @@ mod auth;
 mod event;
 mod router;
 mod state;
+mod vfs;
 
 use std::{path::PathBuf, sync::Arc};
 
