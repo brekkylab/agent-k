@@ -319,13 +319,20 @@ impl SessionsState {
 
             let result: anyhow::Result<()> = async {
                 // Setup — spec, history, sandbox.
-                let row = sqlx::query("SELECT spec, runenv FROM sessions WHERE id = ?")
-                    .bind(&session_key)
-                    .fetch_optional(&db)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("session {id} not found"))?;
+                let row =
+                    sqlx::query("SELECT workspace_id, spec, runenv FROM sessions WHERE id = ?")
+                        .bind(&session_key)
+                        .fetch_optional(&db)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("session {id} not found"))?;
+                let workspace_id =
+                    parse_uuid(row.get::<String, _>("workspace_id"), "sessions.workspace_id")?;
                 let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
                 let has_runenv: bool = row.get("runenv");
+
+                // The workspace's external-provider mounts, if any. Mounted into
+                // the guest below so the agent reads them as files.
+                let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
 
                 let runenv = if has_runenv {
                     if !tokio::fs::try_exists(&archive_path).await? {
@@ -334,11 +341,35 @@ impl SessionsState {
                             archive_path.display()
                         );
                     }
-                    Some(Arc::new(Mutex::new(
-                        Sandbox::try_from_archive(&archive_path).await?,
-                    )))
+                    // When the workspace has mounts, restore with host egress so
+                    // the in-guest forwarder can reach the host forward server
+                    // (the archive does not carry the network policy).
+                    let sandbox = if vfs.is_some() {
+                        Sandbox::try_from_archive_with_host_egress(&archive_path).await?
+                    } else {
+                        Sandbox::try_from_archive(&archive_path).await?
+                    };
+                    Some(Arc::new(Mutex::new(sandbox)))
                 } else {
                     None
+                };
+
+                // Mount the VFS into the guest before the agent runs. The
+                // returned forward server is held for the whole run; dropping it
+                // (at the end of this scope) tears it down.
+                let _vfs_forward = match (&runenv, &vfs) {
+                    (Some(r), Some(vfs)) => {
+                        let mut sandbox = r.lock().await;
+                        let console = sandbox.start().await?;
+                        let fwd = crate::vfs::sandbox::mount_vfs_in_guest(
+                            console,
+                            vfs.clone(),
+                            "/mnt/vfs",
+                        )
+                        .await?;
+                        Some(fwd)
+                    }
+                    _ => None,
                 };
 
                 let rows = sqlx::query(
