@@ -31,5 +31,5 @@ pub use accessor::{NotionConfig, S3Config};
 pub use error::{VfsError, VfsResult};
 pub use path::VPath;
 pub use resource::{DirEntry, FileKind, FileStat, Resource, S3Resource};
-pub use sandbox::VfsForward;
+pub use sandbox::{ForwardFs, FwdEntry, FwdStat, VfsForward};
 pub use vfs::{Mount, MountSpec, ProviderConfig, Vfs, VfsConfig};

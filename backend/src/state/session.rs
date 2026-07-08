@@ -341,36 +341,46 @@ impl SessionsState {
                             archive_path.display()
                         );
                     }
-                    // When the workspace has mounts, restore with host egress so
-                    // the in-guest forwarder can reach the host forward server
-                    // (the archive does not carry the network policy).
-                    let sandbox = if vfs.is_some() {
-                        Sandbox::try_from_archive_with_host_egress(&archive_path).await?
-                    } else {
-                        Sandbox::try_from_archive(&archive_path).await?
-                    };
+                    // A runenv always runs an in-guest FUSE forwarder (the
+                    // unified workspace mount, below), which reaches the host
+                    // forward server via host.microsandbox.internal and so needs
+                    // guest->host egress. The archive doesn't carry the network
+                    // policy, so re-apply it on restore.
+                    let sandbox =
+                        Sandbox::try_from_archive_with_host_egress(&archive_path).await?;
                     Some(Arc::new(Mutex::new(sandbox)))
                 } else {
                     None
                 };
 
-                // Mount the VFS into the guest before the agent runs. The
-                // returned forward server is held for the whole run; dropping it
-                // (at the end of this scope) tears it down.
-                let _vfs_forward = match (&runenv, &vfs) {
-                    (Some(r), Some(vfs)) => {
-                        let mut sandbox = r.lock().await;
-                        let console = sandbox.start().await?;
-                        let fwd = crate::vfs::sandbox::mount_vfs_in_guest(
+                // Mount the workspace into the guest before the agent runs. The
+                // forward servers are held for the whole run; dropping them (at
+                // the end of this scope) tears the guest mounts down.
+                //   - /mnt/workspace: the unified tree (local files + provider
+                //     mounts) — the browser-WebDAV view served over FUSE.
+                //   - /mnt/vfs: the provider-only view, kept alongside for
+                //     comparison while the unified mount is validated.
+                let mut _vfs_forwards: Vec<crate::vfs::VfsForward> = Vec::new();
+                if let Some(r) = &runenv {
+                    let mut sandbox = r.lock().await;
+                    let console = sandbox.start().await?;
+                    let unified: Arc<dyn crate::vfs::ForwardFs> =
+                        Arc::new(crate::state::workspace_fs(&data_root, workspace_id, vfs.clone()));
+                    _vfs_forwards.push(
+                        crate::vfs::sandbox::mount_vfs_in_guest(
                             console,
-                            vfs.clone(),
-                            "/mnt/vfs",
+                            unified,
+                            "/mnt/workspace",
                         )
-                        .await?;
-                        Some(fwd)
+                        .await?,
+                    );
+                    if let Some(vfs) = &vfs {
+                        _vfs_forwards.push(
+                            crate::vfs::sandbox::mount_vfs_in_guest(console, vfs.clone(), "/mnt/vfs")
+                                .await?,
+                        );
                     }
-                    _ => None,
-                };
+                }
 
                 let rows = sqlx::query(
                     "SELECT content FROM messages WHERE session_id = ? ORDER BY seq ASC",

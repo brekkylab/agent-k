@@ -7,19 +7,26 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::vfs::{Vfs, path::VPath, resource::FileKind};
+use crate::vfs::sandbox::ForwardFs;
 
-/// Host-side forward server exposing a [`Vfs`] over a tiny HTTP/1.1 API for the
-/// in-guest FUSE forwarder. Bound to an OS-assigned ephemeral port; requests
-/// must carry the session token in the `x-vfs-token` header. Aborts on drop.
+/// Host-side forward server exposing a [`ForwardFs`] over a tiny HTTP/1.1 API
+/// for the in-guest FUSE forwarder. Bound to an OS-assigned ephemeral port;
+/// requests must carry the session token in the `x-vfs-token` header. Aborts on
+/// drop.
+///
+/// The served filesystem is any [`ForwardFs`]: a provider-only
+/// [`Vfs`](crate::vfs::Vfs) or the unified `WorkspaceFs` (local files + provider
+/// mounts). The server itself is filesystem-agnostic — it just adapts the HTTP
+/// routes onto the trait.
 ///
 /// Routes: `GET /readdir|/stat|/read?path=…[&offset=&size=]`, `PUT /write?path=…`,
 /// `DELETE /unlink?path=…`, `POST /mkdir?path=…`, `DELETE /rmdir?path=…`,
 /// `POST /rename?path=<from>&to=<to>`.
 ///
-/// Vendored from ailoy's `src/vfs/sandbox/forward.rs` (61c4c43). Only change:
-/// the per-run token is a `uuid` v4 (agent-k already depends on `uuid`) instead
-/// of `getrandom` + `hex`, avoiding two new deps.
+/// Vendored from ailoy's `src/vfs/sandbox/forward.rs` (61c4c43). Changes: the
+/// per-run token is a `uuid` v4 (agent-k already depends on `uuid`) instead of
+/// `getrandom` + `hex`; and the server is generic over [`ForwardFs`] rather than
+/// bound to `Vfs`, so it can also serve the unified workspace tree.
 pub struct VfsForward {
     addr: SocketAddr,
     token: String,
@@ -33,7 +40,7 @@ impl Drop for VfsForward {
 }
 
 impl VfsForward {
-    pub fn spawn(vfs: Arc<Vfs>, rt: &Handle) -> anyhow::Result<Self> {
+    pub fn spawn(fs: Arc<dyn ForwardFs>, rt: &Handle) -> anyhow::Result<Self> {
         let listener = std::net::TcpListener::bind(("0.0.0.0", 0))?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -54,10 +61,10 @@ impl VfsForward {
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
-                        let vfs = vfs.clone();
+                        let fs = fs.clone();
                         let token = task_token.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_conn(stream, vfs, token).await {
+                            if let Err(e) = handle_conn(stream, fs, token).await {
                                 tracing::debug!("vfs forward: connection error: {e}");
                             }
                         });
@@ -143,7 +150,11 @@ async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Req> {
     })
 }
 
-async fn handle_conn(mut stream: TcpStream, vfs: Arc<Vfs>, token: String) -> anyhow::Result<()> {
+async fn handle_conn(
+    mut stream: TcpStream,
+    fs: Arc<dyn ForwardFs>,
+    token: String,
+) -> anyhow::Result<()> {
     let req = read_request(&mut stream).await?;
 
     if req.token.as_deref() != Some(token.as_str()) {
@@ -157,12 +168,12 @@ async fn handle_conn(mut stream: TcpStream, vfs: Arc<Vfs>, token: String) -> any
         .unwrap_or_else(|| "/".to_string());
 
     let result = match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/readdir") => readdir_json(&vfs, &path).await,
-        ("GET", "/stat") => stat_json(&vfs, &path).await,
+        ("GET", "/readdir") => readdir_json(&*fs, &path).await,
+        ("GET", "/stat") => stat_json(&*fs, &path).await,
         ("GET", "/read") => {
             let offset = params.get("offset").and_then(|s| s.parse::<u64>().ok());
             let size = params.get("size").and_then(|s| s.parse::<u64>().ok());
-            return match read_bytes(&vfs, &path, offset, size).await {
+            return match fs.read(&path, offset, size).await {
                 Ok(data) => respond(&mut stream, 200, "application/octet-stream", data).await,
                 Err(e) => respond(&mut stream, 500, "text/plain", e.to_string().into_bytes()).await,
             };
@@ -170,21 +181,16 @@ async fn handle_conn(mut stream: TcpStream, vfs: Arc<Vfs>, token: String) -> any
         ("PUT", "/write") => {
             let body = read_body(&mut stream, &req).await?;
             // For a `.cmd/<op>` path this returns the command's JSON result (C4);
-            // for a normal write it returns `{"ok":true}`.
-            write_bytes(&vfs, &path, body).await
+            // for a normal write it returns `{"ok":true}`; a read-only frontend
+            // rejects it.
+            fs.write(&path, body).await
         }
-        ("DELETE", "/unlink") => unlink_path(&vfs, &path)
-            .await
-            .map(|_| b"{\"ok\":true}".to_vec()),
-        ("POST", "/mkdir") => mkdir_path(&vfs, &path)
-            .await
-            .map(|_| b"{\"ok\":true}".to_vec()),
-        ("DELETE", "/rmdir") => rmdir_path(&vfs, &path)
-            .await
-            .map(|_| b"{\"ok\":true}".to_vec()),
+        ("DELETE", "/unlink") => fs.unlink(&path).await.map(|_| b"{\"ok\":true}".to_vec()),
+        ("POST", "/mkdir") => fs.mkdir(&path).await.map(|_| b"{\"ok\":true}".to_vec()),
+        ("DELETE", "/rmdir") => fs.rmdir(&path).await.map(|_| b"{\"ok\":true}".to_vec()),
         ("POST", "/rename") => {
             let to = params.get("to").cloned().unwrap_or_default();
-            rename_path(&vfs, &path, &to)
+            fs.rename(&path, &to)
                 .await
                 .map(|_| b"{\"ok\":true}".to_vec())
         }
@@ -211,126 +217,29 @@ async fn read_body(stream: &mut TcpStream, req: &Req) -> anyhow::Result<Vec<u8>>
     Ok(body)
 }
 
-async fn readdir_json(vfs: &Vfs, path: &str) -> anyhow::Result<Vec<u8>> {
-    let entries: Vec<(String, FileKind, u64)> = if path == "/" {
-        vfs.mount_names()
-            .into_iter()
-            .map(|n| (n, FileKind::Dir, 0))
-            .collect()
-    } else {
-        let (res, vp) = vfs
-            .route(path)
-            .ok_or_else(|| anyhow::anyhow!("no mount for {path}"))?;
-        res.readdir(&vp)
-            .await?
-            .into_iter()
-            .map(|e| (e.name, e.kind, e.size))
-            .collect()
-    };
-    let items: Vec<serde_json::Value> = entries
+async fn readdir_json(fs: &dyn ForwardFs, path: &str) -> anyhow::Result<Vec<u8>> {
+    let items: Vec<serde_json::Value> = fs
+        .readdir(path)
+        .await?
         .into_iter()
-        .map(|(name, kind, size)| {
-            serde_json::json!({"name": name, "is_dir": matches!(kind, FileKind::Dir), "size": size})
-        })
+        .map(|e| serde_json::json!({"name": e.name, "is_dir": e.is_dir, "size": e.size}))
         .collect();
     Ok(serde_json::to_vec(
         &serde_json::json!({ "entries": items }),
     )?)
 }
 
-async fn stat_json(vfs: &Vfs, path: &str) -> anyhow::Result<Vec<u8>> {
-    if path == "/" {
-        return Ok(serde_json::to_vec(
-            &serde_json::json!({"exists": true, "is_dir": true, "size": 0}),
-        )?);
-    }
-    let Some((res, vp)) = vfs.route(path) else {
+async fn stat_json(fs: &dyn ForwardFs, path: &str) -> anyhow::Result<Vec<u8>> {
+    let s = fs.stat(path).await?;
+    if !s.exists {
         return Ok(serde_json::to_vec(&serde_json::json!({"exists": false}))?);
-    };
-    match res.stat(&vp).await {
-        Ok(s) => {
-            let mtime = s
-                .mtime
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs());
-            Ok(serde_json::to_vec(&serde_json::json!({
-                "exists": true,
-                "is_dir": matches!(s.kind, FileKind::Dir),
-                "size": s.size,
-                "mtime": mtime,
-            }))?)
-        }
-        Err(_) => Ok(serde_json::to_vec(&serde_json::json!({"exists": false}))?),
     }
-}
-
-async fn read_bytes(
-    vfs: &Vfs,
-    path: &str,
-    offset: Option<u64>,
-    size: Option<u64>,
-) -> anyhow::Result<Vec<u8>> {
-    let (res, vp) = vfs
-        .route(path)
-        .ok_or_else(|| anyhow::anyhow!("no mount for {path}"))?;
-    let range = match (offset, size) {
-        (Some(o), Some(s)) => Some(o..o + s),
-        _ => None,
-    };
-    // The forward server speaks to the vendored core, whose `Resource` returns a
-    // typed `VfsError`; collapse it into `anyhow` for the HTTP layer.
-    res.read_bytes(&vp, range).await.map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-async fn unlink_path(vfs: &Vfs, path: &str) -> anyhow::Result<()> {
-    let (res, vp) = vfs
-        .route(path)
-        .ok_or_else(|| anyhow::anyhow!("no mount for {path}"))?;
-    res.unlink(&vp).await.map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-async fn mkdir_path(vfs: &Vfs, path: &str) -> anyhow::Result<()> {
-    let (res, vp) = vfs
-        .route(path)
-        .ok_or_else(|| anyhow::anyhow!("no mount for {path}"))?;
-    res.mkdir(&vp).await.map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-async fn rmdir_path(vfs: &Vfs, path: &str) -> anyhow::Result<()> {
-    let (res, vp) = vfs
-        .route(path)
-        .ok_or_else(|| anyhow::anyhow!("no mount for {path}"))?;
-    res.rmdir(&vp).await.map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-async fn rename_path(vfs: &Vfs, from: &str, to: &str) -> anyhow::Result<()> {
-    let (res, from_vp) = vfs
-        .route(from)
-        .ok_or_else(|| anyhow::anyhow!("no mount for {from}"))?;
-    let (_, to_vp) = vfs
-        .route(to)
-        .ok_or_else(|| anyhow::anyhow!("no mount for {to}"))?;
-    res.rename(&from_vp, &to_vp)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-/// Returns the command result JSON for a `/<mount>/.cmd/<op>` path (C4 read-back),
-/// or `{"ok":true}` for a normal byte write.
-async fn write_bytes(vfs: &Vfs, path: &str, data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-    let (res, vp): (_, VPath) = vfs
-        .route(path)
-        .ok_or_else(|| anyhow::anyhow!("no mount for {path}"))?;
-    if let Some(op) = vp.as_str().strip_prefix("/.cmd/") {
-        res.command(op, &data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    } else {
-        res.write_bytes(&vp, data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(b"{\"ok\":true}".to_vec())
-    }
+    Ok(serde_json::to_vec(&serde_json::json!({
+        "exists": true,
+        "is_dir": s.is_dir,
+        "size": s.size,
+        "mtime": s.mtime,
+    }))?)
 }
 
 async fn respond(
