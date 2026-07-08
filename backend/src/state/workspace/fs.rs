@@ -695,10 +695,14 @@ fn guest_local_rel(path: &str) -> Option<String> {
 /// Serve the **unified** workspace tree to the in-guest FUSE forwarder: the
 /// workspace's local files under a reserved `files/` subdirectory plus the
 /// provider mounts as sibling virtual subdirectories (so the guest sees
-/// `/mnt/workspace/files/…`, `/mnt/workspace/notion/…`, …). Read-only: the
-/// mutating ops keep [`ForwardFs`]'s default rejection, matching the workspace's
-/// read-only mount policy and avoiding a second write path into local disk
-/// (guest writes go through the `/workspace/files` bind mount).
+/// `/mnt/workspace/files/…`, `/mnt/workspace/notion/…`, …).
+///
+/// Writable: local `files/` paths write to disk (through the inherent write
+/// path, so `knowledge/` ingestion still fires), and provider paths delegate to
+/// the [`Resource`], which decides by capability — S3 writes objects, a provider
+/// whose `write_bytes` is `Unsupported` (e.g. Notion) stays read-only and
+/// surfaces the error to the guest. The guest forwarder buffers FUSE writes and
+/// sends the whole file on flush, so [`Self::write`] is a whole-file replace.
 #[async_trait]
 impl ForwardFs for WorkspaceFs {
     async fn readdir(&self, path: &str) -> anyhow::Result<Vec<FwdEntry>> {
@@ -849,6 +853,106 @@ impl ForwardFs for WorkspaceFs {
             out.extend_from_slice(&chunk);
         }
         Ok(out)
+    }
+
+    async fn write(&self, path: &str, data: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        // Local file: whole-file replace (create+truncate), matching the guest
+        // forwarder's flush semantics. Inherent path → `knowledge/` hooks fire.
+        if let Some(rel) = guest_local_rel(path) {
+            let mut f = self
+                .open(
+                    &rel,
+                    OpenOptions {
+                        write: true,
+                        create: true,
+                        truncate: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("open {path}: {e:?}"))?;
+            f.write_bytes(Bytes::from(data))
+                .await
+                .map_err(|e| anyhow::anyhow!("write {path}: {e:?}"))?;
+            f.flush()
+                .await
+                .map_err(|e| anyhow::anyhow!("flush {path}: {e:?}"))?;
+            return Ok(b"{\"ok\":true}".to_vec());
+        }
+        // Provider mount: delegate to the Resource; its capability decides
+        // (S3 writes the object; an `Unsupported` provider surfaces the error).
+        if let Some((res, vp)) = self.route(path) {
+            res.write_bytes(&vp, data)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            return Ok(b"{\"ok\":true}".to_vec());
+        }
+        anyhow::bail!("no such file: {path}")
+    }
+
+    async fn unlink(&self, path: &str) -> anyhow::Result<()> {
+        if let Some(rel) = guest_local_rel(path) {
+            return self
+                .remove_file(&rel)
+                .await
+                .map_err(|e| anyhow::anyhow!("unlink {path}: {e:?}"));
+        }
+        if let Some((res, vp)) = self.route(path) {
+            return res.unlink(&vp).await.map_err(|e| anyhow::anyhow!("{e}"));
+        }
+        anyhow::bail!("no such file: {path}")
+    }
+
+    async fn mkdir(&self, path: &str) -> anyhow::Result<()> {
+        if let Some(rel) = guest_local_rel(path) {
+            return self
+                .create_dir(&rel)
+                .await
+                .map_err(|e| anyhow::anyhow!("mkdir {path}: {e:?}"));
+        }
+        if let Some((res, vp)) = self.route(path) {
+            return res.mkdir(&vp).await.map_err(|e| anyhow::anyhow!("{e}"));
+        }
+        anyhow::bail!("no such path: {path}")
+    }
+
+    async fn rmdir(&self, path: &str) -> anyhow::Result<()> {
+        if let Some(rel) = guest_local_rel(path) {
+            return self
+                .remove_dir(&rel)
+                .await
+                .map_err(|e| anyhow::anyhow!("rmdir {path}: {e:?}"));
+        }
+        if let Some((res, vp)) = self.route(path) {
+            return res.rmdir(&vp).await.map_err(|e| anyhow::anyhow!("{e}"));
+        }
+        anyhow::bail!("no such path: {path}")
+    }
+
+    async fn rename(&self, from: &str, to: &str) -> anyhow::Result<()> {
+        match (guest_local_rel(from), guest_local_rel(to)) {
+            // Both local — inherent `rename` wins over this trait method
+            // (inherent methods take resolution precedence), so no recursion.
+            (Some(a), Some(b)) => {
+                return self
+                    .rename(&a, &b)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("rename {from} -> {to}: {e:?}"));
+            }
+            // Crossing the local/provider boundary isn't supported.
+            (Some(_), None) | (None, Some(_)) => {
+                anyhow::bail!("cross-boundary rename: {from} -> {to}");
+            }
+            (None, None) => {}
+        }
+        // Both provider: delegate to the Resource (same mount).
+        match (self.route(from), self.route(to)) {
+            (Some((res, from_vp)), Some((_, to_vp))) => res
+                .rename(&from_vp, &to_vp)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}")),
+            _ => anyhow::bail!("no such path: {from} -> {to}"),
+        }
     }
 }
 
@@ -1218,11 +1322,75 @@ mod tests {
             b"world"
         );
 
-        // Writes are rejected — the unified mount is read-only.
+        // Local writes succeed; a provider whose Resource lacks write support
+        // (MockResource) stays read-only.
         assert!(
             ForwardFs::write(&fs, "/files/local.txt", b"x".to_vec())
                 .await
+                .is_ok()
+        );
+        assert!(
+            ForwardFs::write(&fs, "/mock/file.txt", b"x".to_vec())
+                .await
                 .is_err()
         );
+    }
+
+    /// Local `files/` is read-write through the unified `ForwardFs` view —
+    /// write / mkdir / rename / unlink land on disk; provider paths whose
+    /// Resource lacks write support stay read-only.
+    #[tokio::test]
+    async fn forward_fs_local_write() {
+        use crate::vfs::sandbox::ForwardFs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let fs = mounted_fs(tmp.path().to_path_buf());
+
+        // Create then read back.
+        ForwardFs::write(&fs, "/files/note.txt", b"hello".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            ForwardFs::read(&fs, "/files/note.txt", None, None).await.unwrap(),
+            b"hello"
+        );
+        assert!(tmp.path().join("note.txt").exists());
+
+        // Whole-file overwrite.
+        ForwardFs::write(&fs, "/files/note.txt", b"world!".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            ForwardFs::read(&fs, "/files/note.txt", None, None).await.unwrap(),
+            b"world!"
+        );
+
+        // mkdir + write inside it, then it lists.
+        ForwardFs::mkdir(&fs, "/files/sub").await.unwrap();
+        ForwardFs::write(&fs, "/files/sub/a.txt", b"x".to_vec())
+            .await
+            .unwrap();
+        let sub: Vec<String> = ForwardFs::readdir(&fs, "/files/sub")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(sub, vec!["a.txt".to_string()]);
+
+        // rename + unlink within local.
+        ForwardFs::rename(&fs, "/files/note.txt", "/files/renamed.txt")
+            .await
+            .unwrap();
+        assert!(ForwardFs::stat(&fs, "/files/renamed.txt").await.unwrap().exists);
+        assert!(!ForwardFs::stat(&fs, "/files/note.txt").await.unwrap().exists);
+        ForwardFs::unlink(&fs, "/files/renamed.txt").await.unwrap();
+        assert!(!ForwardFs::stat(&fs, "/files/renamed.txt").await.unwrap().exists);
+
+        // Provider stays read-only (MockResource → Unsupported), and crossing
+        // the local/provider boundary is rejected.
+        assert!(ForwardFs::write(&fs, "/mock/file.txt", b"x".to_vec()).await.is_err());
+        assert!(ForwardFs::mkdir(&fs, "/mock/newdir").await.is_err());
+        assert!(ForwardFs::rename(&fs, "/files/a", "/mock/b").await.is_err());
     }
 }
