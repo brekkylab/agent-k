@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use ailoy::{
     agent::AgentSpec,
-    runenv::{FileEntry, Sandbox, SandboxBuilder, VolumeMount},
+    runenv::{FileEntry, Sandbox, SandboxConfig, VolumeMount},
 };
 
 const XLSX_SKILL_DIR: &str = "/root/skills/xlsx";
@@ -134,25 +134,28 @@ pub async fn get_coworker_agent_runenv(
     shared_data_dir: impl AsRef<Path>,
     artifacts_dir: impl AsRef<Path>,
 ) -> anyhow::Result<Sandbox> {
-    SandboxBuilder::new()
-        .image("brekkylab/agent-k-libreoffice:latest")
-        .cpus(8)
-        .memory_mib(1024)
-        .mount(VolumeMount::Bind {
-            host: input_dir.as_ref().to_path_buf(),
-            guest: GUEST_ATTACHED_DIR.to_string(),
-            readonly: false,
-        })
-        .mount(VolumeMount::Bind {
-            host: shared_data_dir.as_ref().to_path_buf(),
-            guest: GUEST_SHARED_DIR.to_string(),
-            readonly: true,
-        })
-        .mount(VolumeMount::Bind {
-            host: artifacts_dir.as_ref().to_path_buf(),
-            guest: GUEST_ARTIFACTS_DIR.to_string(),
-            readonly: false,
-        })
-        .build()
-        .await
+    Sandbox::new(SandboxConfig {
+        image: "brekkylab/agent-k-libreoffice:latest".to_string(),
+        cpus: 8,
+        memory_mib: 1024,
+        volumes: vec![
+            VolumeMount::Bind {
+                host: input_dir.as_ref().to_path_buf(),
+                guest: GUEST_ATTACHED_DIR.to_string(),
+                readonly: false,
+            },
+            VolumeMount::Bind {
+                host: shared_data_dir.as_ref().to_path_buf(),
+                guest: GUEST_SHARED_DIR.to_string(),
+                readonly: true,
+            },
+            VolumeMount::Bind {
+                host: artifacts_dir.as_ref().to_path_buf(),
+                guest: GUEST_ARTIFACTS_DIR.to_string(),
+                readonly: false,
+            },
+        ],
+        ..Default::default()
+    })
+    .await
 }

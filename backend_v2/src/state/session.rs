@@ -1,9 +1,9 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use ailoy::{
-    agent::{Agent, AgentSpec, AgentState},
+    agent::{Agent, AgentSpec},
     message::{Message, Part, Role},
-    runenv::{Machine as _, Sandbox},
+    runenv::{RunEnv, Sandbox, SandboxConfig},
 };
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt as _;
@@ -14,6 +14,13 @@ use uuid::Uuid;
 
 use super::{StateError, StateResult, parse_ts, parse_uuid};
 use crate::event::{EventQueue, MessageEvent, message_channel};
+
+/// Name of the session's persistent sandbox VM in the microsandbox registry.
+/// [`SessionsState::insert`] registers it, runs reattach to it, and
+/// [`SessionsState::remove`] / [`SessionsState::discard_artifacts`] delete it.
+fn sandbox_name(session_id: Uuid) -> String {
+    format!("agent-k-{session_id}")
+}
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -167,11 +174,13 @@ impl SessionsState {
     }
 
     /// `INSERT` the session row with its spec persisted as JSON. If a sandbox
-    /// is provided, it is stopped and archived into
-    /// `data_root/{session_id}/sandbox.tar.zst`; sessions without a sandbox
-    /// touch no disk state outside the database. The `runenv` column tracks
-    /// whether the archive exists so readers don't need to probe disk.
-    pub async fn insert(&self, mut item: Session, runenv: Option<Sandbox>) -> StateResult<()> {
+    /// config is provided, a persistent VM named after the session is
+    /// registered from it (the name/persist fields are overwritten); runs
+    /// reattach to it by name and it survives until the session is removed.
+    /// Sessions without a sandbox touch no state outside the database. The
+    /// `runenv` column tracks whether the VM exists so readers don't need to
+    /// probe the sandbox registry.
+    pub async fn insert(&self, mut item: Session, runenv: Option<SandboxConfig>) -> StateResult<()> {
         item.runenv = runenv.is_some();
 
         sqlx::query(
@@ -189,15 +198,12 @@ impl SessionsState {
         .execute(&self.db)
         .await?;
 
-        if let Some(mut runenv) = runenv {
-            let dir = self.data_root.join("sessions").join(item.id.to_string());
-            tokio::fs::create_dir_all(&dir).await?;
-            runenv
-                .stop()
-                .await
-                .map_err(|e| StateError::Sandbox(format!("{e:#}")))?;
-            runenv
-                .archive(dir.join("sandbox.tar.zst"))
+        if let Some(mut config) = runenv {
+            config.name = Some(sandbox_name(item.id));
+            config.persist = true;
+            // Registers the VM (stopped) under the session's name; the
+            // returned handle is dropped here and runs reattach by name.
+            Sandbox::new(config)
                 .await
                 .map_err(|e| StateError::Sandbox(format!("{e:#}")))?;
         }
@@ -221,6 +227,11 @@ impl SessionsState {
         if tokio::fs::try_exists(&dir).await? {
             tokio::fs::remove_dir_all(&dir).await?;
         }
+        if existing.runenv
+            && let Err(e) = Sandbox::remove_persisted(&sandbox_name(id)).await
+        {
+            tracing::error!(session = %id, "failed to remove persisted sandbox: {e:#}");
+        }
         // Drop the channel so any attached WS subscribers wake up with
         // RecvError::Closed instead of waiting on a session that no longer
         // exists.
@@ -228,9 +239,10 @@ impl SessionsState {
         Ok(existing)
     }
 
-    /// Cancel any in-flight run for `id` and remove its on-disk artifacts and
-    /// event channel, *without* touching the database — for when the row is
-    /// removed elsewhere (e.g. cascaded by a user delete). Best-effort.
+    /// Cancel any in-flight run for `id` and remove its on-disk artifacts,
+    /// persisted sandbox, and event channel, *without* touching the database —
+    /// for when the row is removed elsewhere (e.g. cascaded by a user
+    /// delete). Best-effort.
     pub async fn discard_artifacts(&self, id: Uuid) {
         self.cancel(id).await;
         let dir = self.data_root.join("sessions").join(id.to_string());
@@ -238,6 +250,14 @@ impl SessionsState {
             if e.kind() != std::io::ErrorKind::NotFound {
                 tracing::error!(session = %id, "failed to remove session dir: {e}");
             }
+        }
+        // The row is already gone, so the `runenv` flag can't be consulted —
+        // try the removal unconditionally and ignore "not registered".
+        let name = sandbox_name(id);
+        if Sandbox::exists(&name).await
+            && let Err(e) = Sandbox::remove_persisted(&name).await
+        {
+            tracing::error!(session = %id, "failed to remove persisted sandbox: {e:#}");
         }
         self.events.remove_channel(&message_channel(id));
     }
@@ -307,14 +327,11 @@ impl SessionsState {
         }
 
         let db = self.db.clone();
-        let data_root = self.data_root.clone();
         let events = self.events.clone();
         let runs = self.runs.clone();
 
         tokio::spawn(async move {
             let session_key = id.to_string();
-            let dir = data_root.join("sessions").join(&session_key);
-            let archive_path = dir.join("sandbox.tar.zst");
             let channel = message_channel(id);
 
             let result: anyhow::Result<()> = async {
@@ -328,15 +345,23 @@ impl SessionsState {
                 let has_runenv: bool = row.get("runenv");
 
                 let runenv = if has_runenv {
-                    if !tokio::fs::try_exists(&archive_path).await? {
+                    let name = sandbox_name(id);
+                    if !Sandbox::exists(&name).await {
                         anyhow::bail!(
-                            "session {id} marked as having a runenv but archive is missing at {}",
-                            archive_path.display()
+                            "session {id} marked as having a runenv but sandbox '{name}' \
+                             is not registered"
                         );
                     }
-                    Some(Arc::new(Mutex::new(
-                        Sandbox::try_from_archive(&archive_path).await?,
-                    )))
+                    // Reattaches to the persisted VM by name; the rest of the
+                    // config is ignored for an existing sandbox.
+                    Some(RunEnv::new(
+                        Sandbox::new(SandboxConfig {
+                            name: Some(name),
+                            persist: true,
+                            ..Default::default()
+                        })
+                        .await?,
+                    ))
                 } else {
                     None
                 };
@@ -352,16 +377,18 @@ impl SessionsState {
                     .map(|r| serde_json::from_str::<Message>(&r.get::<String, _>("content")))
                     .collect::<Result<_, _>>()?;
 
-                // Drive — persist + publish each message. The sandbox archive
-                // below must run regardless of how this exits, so capture the
-                // drive's Result and propagate it after archiving.
-                let drive: anyhow::Result<()> = async {
+                // Drive — persist + publish each message. The persistent VM
+                // needs no teardown: it auto-stops when the run's last handle
+                // drops and survives for the next run.
+                {
                     let mut next_seq = history.len() as i64;
-                    let mut state = AgentState::new().with_history(history);
-                    if let Some(ref r) = runenv {
-                        state = state.with_runenv(r.clone());
-                    }
-                    let mut agent = Agent::try_with_state(spec, state)?;
+                    let mut agent = match runenv {
+                        Some(rv) => Agent::try_with_runenv(spec, rv)?,
+                        None => Agent::try_new(spec)?,
+                    };
+                    // The constructor seeded the spec's system message; the
+                    // persisted turns follow it.
+                    agent.state.history.extend(history);
 
                     let user_msg = Message::new(Role::User).with_contents(query);
                     sqlx::query(
@@ -412,27 +439,9 @@ impl SessionsState {
                             }
                         }
                     }
-                    Ok(())
-                }
-                .await;
-
-                if let Some(runenv) = runenv {
-                    let mut sandbox = runenv.lock().await;
-                    let archive: anyhow::Result<()> = async {
-                        sandbox.stop().await?;
-                        if tokio::fs::try_exists(&archive_path).await? {
-                            tokio::fs::remove_file(&archive_path).await?;
-                        }
-                        sandbox.archive(&archive_path).await?;
-                        Ok(())
-                    }
-                    .await;
-                    if let Err(e) = archive {
-                        tracing::error!(session = %id, "sandbox archive failed: {e:#}");
-                    }
                 }
 
-                drive
+                Ok(())
             }
             .await;
 

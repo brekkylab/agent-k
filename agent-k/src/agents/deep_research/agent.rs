@@ -1,9 +1,8 @@
 use std::path::Path;
 
 use ailoy::{
-    agent::AgentSpec,
-    runenv::{Sandbox, SandboxBuilder, VolumeMount},
-    tool::get_tool_providers_mut,
+    agent::{AgentSpec, default_provider_mut},
+    runenv::{Sandbox, SandboxConfig, VolumeMount},
 };
 
 use super::tool::{get_api_search_tool_desc, get_api_search_tool_factory};
@@ -48,10 +47,9 @@ Sequential is correct only when a later call genuinely depends on an earlier res
 - Current time: {{TIME}}"#;
 
 fn ensure_api_search_registered() {
-    let mut providers = get_tool_providers_mut();
-    if let Some(provider) = providers.get_mut("default") {
-        provider.insert_func_factory("api_search", get_api_search_tool_factory());
-    }
+    default_provider_mut()
+        .tools
+        .insert_func_factory("api_search", get_api_search_tool_factory());
 }
 
 // Howard Hinnant's civil_from_days: days since 1970-01-01 → (year, month, day).
@@ -106,17 +104,20 @@ pub fn get_deep_research_agent_spec(
 pub async fn get_deep_research_agent_runenv(
     artifacts_dir: impl AsRef<Path>,
 ) -> anyhow::Result<Sandbox> {
-    SandboxBuilder::new()
-        .image("brekkylab/agent-k:latest")
-        .cpus(8)
-        .memory_mib(1024)
-        .workdir("/workspace")
-        .env([("HOME".to_string(), "/workspace".to_string())])
-        .mount(VolumeMount::Bind {
+    Sandbox::new(SandboxConfig {
+        image: "brekkylab/agent-k:latest".to_string(),
+        cpus: 8,
+        memory_mib: 1024,
+        workdir: "/workspace".to_string(),
+        env: [("HOME".to_string(), "/workspace".to_string())]
+            .into_iter()
+            .collect(),
+        volumes: vec![VolumeMount::Bind {
             host: artifacts_dir.as_ref().to_path_buf(),
             guest: "/workspace/artifacts".to_string(),
             readonly: false,
-        })
-        .build()
-        .await
+        }],
+        ..Default::default()
+    })
+    .await
 }
