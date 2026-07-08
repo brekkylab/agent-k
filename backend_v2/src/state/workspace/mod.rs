@@ -202,6 +202,28 @@ impl WorkspacesState {
 
 }
 
+/// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`
+/// attached. The filesystem-layer counterpart of
+/// [`build_workspace_vfs`](mount::build_workspace_vfs): where that assembles the
+/// provider mounts, this wraps them together with the local file root into the
+/// unified tree. Standalone (takes `data_root` + a prebuilt `vfs`) so the
+/// session run loop — which holds only the pool + data root — can mount the
+/// unified workspace into a sandbox guest without a [`WorkspacesState`].
+///
+/// The `workspaces/{wid}/files` layout mirrors
+/// [`WorkspacesState::get_root`]; keep the two in step.
+pub(crate) fn workspace_fs(
+    data_root: &std::path::Path,
+    wid: Uuid,
+    vfs: Option<std::sync::Arc<crate::vfs::Vfs>>,
+) -> WorkspaceFs {
+    let root = data_root
+        .join("workspaces")
+        .join(wid.to_string())
+        .join("files");
+    WorkspaceFs::new(root, wid).with_vfs(vfs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

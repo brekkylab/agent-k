@@ -7,9 +7,12 @@
 //! binary injection + session run-loop wiring (ailoy's `guest.rs` / `AgentVfs`)
 //! land in later steps and must be adapted to agent-k's ailoy `Console` API.
 mod forward;
+mod fwdfs;
 mod guest;
 
 pub use forward::VfsForward;
+pub use fwdfs::{ForwardFs, FwdEntry, FwdStat};
+pub(crate) use fwdfs::secs_since_epoch;
 pub use guest::{forwarder_available, mount_vfs_in_guest};
 
 #[cfg(test)]
@@ -205,6 +208,125 @@ done
         assert!(
             tmp.path().join("guest.txt").exists(),
             "guest write should appear on the host bind source"
+        );
+    }
+
+    /// Option C end-to-end: the **unified** workspace mount. Boots a VM and,
+    /// via the production [`mount_vfs_in_guest`] helper over a `WorkspaceFs`,
+    /// mounts the unified tree at `/mnt/workspace`, then proves the guest reads
+    /// BOTH a local workspace file AND a real Notion `page.json` under one mount
+    /// — the same tree the browser sees over WebDAV. Ignored by default; needs a
+    /// Notion token, the forwarder ELF built (build.rs), and working microsandbox:
+    ///
+    ///   NOTION_API_KEY=ntn_… cargo test -p agent-k-backend unified_workspace_readable_in_guest -- --ignored --nocapture
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "boots a VM + mounts unified FUSE + reads local file & real Notion (needs NOTION_API_KEY, built forwarder, working microsandbox)"]
+    async fn unified_workspace_readable_in_guest() {
+        use uuid::Uuid;
+
+        let api_key =
+            std::env::var("NOTION_API_KEY").expect("set NOTION_API_KEY to run this e2e check");
+
+        if std::env::var_os("MSB_HOME").is_none() {
+            if let Some(home) = std::env::var_os("HOME") {
+                let d = std::path::PathBuf::from(home).join(".microsandbox-agentk");
+                unsafe { std::env::set_var("MSB_HOME", &d) };
+            }
+        }
+        assert!(
+            super::forwarder_available(),
+            "forwarder ELF not built into this binary; see backend_v2/build.rs"
+        );
+
+        // A workspace file tree on disk (data_root/workspaces/{wid}/files) with a
+        // local file, plus a Notion mount — assembled into the unified WorkspaceFs.
+        let data_root = tempfile::tempdir().unwrap();
+        let wid = Uuid::new_v4();
+        let files = data_root
+            .path()
+            .join("workspaces")
+            .join(wid.to_string())
+            .join("files");
+        std::fs::create_dir_all(&files).unwrap();
+        std::fs::write(files.join("notes.txt"), b"unified-local-marker").unwrap();
+
+        let vfs = Arc::new(
+            Vfs::from_config(VfsConfig {
+                mounts: vec![MountSpec {
+                    prefix: "/notion".into(),
+                    provider: ProviderConfig::Notion(NotionConfig { api_key }),
+                }],
+            })
+            .expect("build vfs"),
+        );
+        // Pick a real page dir to target (host-side lookup on the raw Vfs).
+        let (res, vp) = vfs.route("/notion/pages").expect("route /notion/pages");
+        let entries = res.readdir(&vp).await.expect("readdir pages");
+        let page = entries
+            .first()
+            .expect("no Notion pages shared with this integration")
+            .name
+            .clone();
+        println!("target page dir: {page}");
+
+        let ws_fs =
+            crate::state::workspace_fs(data_root.path(), wid, Some(vfs.clone()));
+        let unified: Arc<dyn crate::vfs::ForwardFs> = Arc::new(ws_fs);
+
+        let mut sandbox = SandboxBuilder::new()
+            .image("brekkylab/agent-k-libreoffice:latest")
+            .cpus(2)
+            .memory_mib(1024)
+            .allow_host_egress(true)
+            .build()
+            .await
+            .expect("build sandbox");
+        let console = sandbox.start().await.expect("start VM");
+
+        let _fwd = super::mount_vfs_in_guest(console, unified, "/mnt/workspace")
+            .await
+            .expect("mount unified workspace in guest");
+        println!("mounted unified tree at /mnt/workspace");
+
+        // The unified tree lists the reserved `files/` dir alongside the mount.
+        let ls = console
+            .exec_shell("ls -la /mnt/workspace 2>&1".to_string(), Some(30))
+            .await
+            .expect("ls");
+        println!("--- guest: ls /mnt/workspace (exit {}) ---\n{}", ls.exit_code, ls.stdout);
+
+        // Local workspace file (under files/), read from inside the guest via FUSE.
+        let local = console
+            .exec_shell("cat /mnt/workspace/files/notes.txt 2>&1".to_string(), Some(30))
+            .await
+            .expect("cat local");
+        println!("--- guest: cat files/notes.txt (exit {}) ---\n{}", local.exit_code, local.stdout);
+
+        // Notion page, under the same mount.
+        let notion = console
+            .exec_shell(
+                format!("cat '/mnt/workspace/notion/pages/{page}/page.json' 2>&1"),
+                Some(30),
+            )
+            .await
+            .expect("cat notion");
+        println!(
+            "--- guest: cat notion page.json (exit {}) ---\n{}",
+            notion.exit_code,
+            &notion.stdout[..notion.stdout.len().min(1200)]
+        );
+
+        let _ = sandbox.stop().await;
+
+        assert_eq!(local.exit_code, 0, "guest failed to read local file: {}", local.stderr);
+        assert!(
+            local.stdout.contains("unified-local-marker"),
+            "guest did not read the local workspace file through the unified mount"
+        );
+        assert_eq!(notion.exit_code, 0, "guest failed to read notion page: {}", notion.stderr);
+        assert!(
+            notion.stdout.contains("\"page_id\""),
+            "guest did not read a Notion page.json through the unified mount"
         );
     }
 

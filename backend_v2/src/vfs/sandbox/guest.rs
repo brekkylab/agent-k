@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ailoy::runenv::Console;
 
-use crate::vfs::{Vfs, VfsForward};
+use crate::vfs::{ForwardFs, VfsForward};
 
 /// Guest path the forwarder binary is written to.
 const GUEST_FWD_BIN: &str = "/opt/ailoy/vfs-fwd";
@@ -26,18 +26,19 @@ pub fn forwarder_available() -> bool {
     !FORWARDER_ELF.is_empty()
 }
 
-/// Spawn a host forward server for `vfs`, inject + start the in-guest FUSE
-/// forwarder in `console`'s sandbox, and mount the VFS at `mount_root` inside
-/// the guest. Returns the live [`VfsForward`] — keep it alive as long as the
-/// mount is needed; dropping it tears the host server down. Blocks until the
+/// Spawn a host forward server for `fs`, inject + start the in-guest FUSE
+/// forwarder in `console`'s sandbox, and mount the filesystem at `mount_root`
+/// inside the guest. Returns the live [`VfsForward`] — keep it alive as long as
+/// the mount is needed; dropping it tears the host server down. Blocks until the
 /// mount appears in the guest's `/proc/mounts`.
 ///
-/// The guest reaches the host forward server via
+/// `fs` is any [`ForwardFs`]: a provider-only [`Vfs`](crate::vfs::Vfs) or the
+/// unified `WorkspaceFs`. The guest reaches the host forward server via
 /// `host.microsandbox.internal:<port>`, so the sandbox must have been built with
 /// host egress allowed (`SandboxBuilder::allow_host_egress(true)`).
 pub async fn mount_vfs_in_guest(
     console: &impl Console,
-    vfs: Arc<Vfs>,
+    fs: Arc<dyn ForwardFs>,
     mount_root: &str,
 ) -> anyhow::Result<VfsForward> {
     if !forwarder_available() {
@@ -47,7 +48,7 @@ pub async fn mount_vfs_in_guest(
         );
     }
 
-    let fwd = VfsForward::spawn(vfs, &tokio::runtime::Handle::current())?;
+    let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current())?;
     console
         .write(Path::new(GUEST_FWD_BIN), FORWARDER_ELF)
         .await?;

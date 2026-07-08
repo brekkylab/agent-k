@@ -18,11 +18,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
-use futures_util::{Stream, stream};
+use futures_util::{Stream, StreamExt as _, stream};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
 
+use crate::vfs::sandbox::{ForwardFs, FwdEntry, FwdStat, secs_since_epoch};
 use crate::vfs::{FileKind, FileStat, Resource, VPath, Vfs, VfsError};
 
 /// Errors a workspace filesystem operation can produce. A protocol-agnostic
@@ -672,6 +674,184 @@ impl WorkspaceFs {
     }
 }
 
+/// Guest paths served to the in-guest FUSE forwarder reserve this top-level
+/// directory for the workspace's local files; every other top-level segment is
+/// a provider mount. A mount whose prefix is literally `files` would be shadowed
+/// by the local tree — local wins.
+const GUEST_LOCAL_DIR: &str = "files";
+
+/// Map a guest path onto its local-subtree remainder, or `None` if it isn't
+/// under `files/`. `/files` → `/`, `/files/a/b` → `/a/b`.
+fn guest_local_rel(path: &str) -> Option<String> {
+    let rest = path.trim_start_matches('/');
+    if rest == GUEST_LOCAL_DIR {
+        Some("/".to_string())
+    } else {
+        rest.strip_prefix(&format!("{GUEST_LOCAL_DIR}/"))
+            .map(|sub| format!("/{sub}"))
+    }
+}
+
+/// Serve the **unified** workspace tree to the in-guest FUSE forwarder: the
+/// workspace's local files under a reserved `files/` subdirectory plus the
+/// provider mounts as sibling virtual subdirectories (so the guest sees
+/// `/mnt/workspace/files/…`, `/mnt/workspace/notion/…`, …). Read-only: the
+/// mutating ops keep [`ForwardFs`]'s default rejection, matching the workspace's
+/// read-only mount policy and avoiding a second write path into local disk
+/// (guest writes go through the `/workspace/files` bind mount).
+#[async_trait]
+impl ForwardFs for WorkspaceFs {
+    async fn readdir(&self, path: &str) -> anyhow::Result<Vec<FwdEntry>> {
+        // Root: the reserved local dir plus each provider mount, all as dirs.
+        if is_root_path(path) {
+            let mut out = vec![FwdEntry {
+                name: GUEST_LOCAL_DIR.to_string(),
+                is_dir: true,
+                size: 0,
+                mtime: None,
+            }];
+            out.extend(self.mount_names().into_iter().map(|name| FwdEntry {
+                name,
+                is_dir: true,
+                size: 0,
+                mtime: None,
+            }));
+            return Ok(out);
+        }
+
+        // Local subtree: list disk directly. (Reusing `read_dir` would re-merge
+        // the mount names, which belong only at the guest root.)
+        if let Some(rel) = guest_local_rel(path) {
+            let mut rd = tokio::fs::read_dir(self.resolve(&rel)).await?;
+            let mut out = Vec::new();
+            while let Some(entry) = rd.next_entry().await? {
+                let (is_dir, size, mtime) = match entry.metadata().await {
+                    Ok(m) => {
+                        let s = Stat::from(m);
+                        (s.is_dir(), s.len, s.modified.and_then(secs_since_epoch))
+                    }
+                    Err(_) => (false, 0, None),
+                };
+                out.push(FwdEntry {
+                    name: String::from_utf8_lossy(&dir_entry_name(&entry)).into_owned(),
+                    is_dir,
+                    size,
+                    mtime,
+                });
+            }
+            return Ok(out);
+        }
+
+        // Provider mount: only a path that actually routes to a mount. A
+        // top-level segment that is neither `files/` nor a mount prefix has no
+        // node in the unified tree. The routed `read_dir` never merges.
+        if self.route(path).is_none() {
+            anyhow::bail!("no such directory: {path}");
+        }
+        let mut stream = self
+            .read_dir(path, ReadDirMeta::None)
+            .await
+            .map_err(|e| anyhow::anyhow!("readdir {path}: {e:?}"))?;
+        let mut out = Vec::new();
+        while let Some(entry) = stream.next().await {
+            let entry = entry.map_err(|e| anyhow::anyhow!("readdir {path}: {e:?}"))?;
+            let (is_dir, size, mtime) = match entry.metadata() {
+                Ok(st) => (st.is_dir(), st.len, st.modified.and_then(secs_since_epoch)),
+                Err(_) => (false, 0, None),
+            };
+            out.push(FwdEntry {
+                name: String::from_utf8_lossy(&entry.name()).into_owned(),
+                is_dir,
+                size,
+                mtime,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn stat(&self, path: &str) -> anyhow::Result<FwdStat> {
+        if is_root_path(path) {
+            return Ok(FwdStat {
+                exists: true,
+                is_dir: true,
+                size: 0,
+                mtime: None,
+            });
+        }
+        // Only two namespaces exist in the unified tree: local files under
+        // `files/`, and provider mounts. A path in neither is ENOENT — it must
+        // NOT fall through to `metadata`, which would resolve any bare name
+        // against local disk (e.g. `/local.txt` → the file at the root).
+        let target = match guest_local_rel(path) {
+            Some(rel) => rel,
+            None if self.route(path).is_some() => path.to_string(),
+            None => return Ok(FwdStat::missing()),
+        };
+        Ok(match self.metadata(&target).await {
+            Ok(st) => FwdStat {
+                exists: true,
+                is_dir: st.is_dir(),
+                size: st.len,
+                mtime: st.modified.and_then(secs_since_epoch),
+            },
+            // Any stat failure (missing path, provider error) reads as ENOENT,
+            // matching the provider-only `Vfs` frontend.
+            Err(_) => FwdStat::missing(),
+        })
+    }
+
+    async fn read(
+        &self,
+        path: &str,
+        offset: Option<u64>,
+        size: Option<u64>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let target = match guest_local_rel(path) {
+            Some(rel) => rel,
+            None if self.route(path).is_some() => path.to_string(),
+            None => anyhow::bail!("no such file: {path}"),
+        };
+        let mut file = self
+            .open(
+                &target,
+                OpenOptions {
+                    read: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("open {path}: {e:?}"))?;
+        if let Some(off) = offset {
+            file.seek(SeekFrom::Start(off))
+                .await
+                .map_err(|e| anyhow::anyhow!("seek {path}: {e:?}"))?;
+        }
+        // `read_bytes` may short-read (local `take` fills at most one buffer; a
+        // mount pulls one range), so loop until the requested size is met or EOF.
+        // A `None` size reads to EOF in bounded chunks.
+        const CHUNK: usize = 256 * 1024;
+        let mut out = Vec::new();
+        loop {
+            let want = match size {
+                Some(s) => (s as usize).saturating_sub(out.len()),
+                None => CHUNK,
+            };
+            if want == 0 {
+                break;
+            }
+            let chunk = file
+                .read_bytes(want.min(CHUNK))
+                .await
+                .map_err(|e| anyhow::anyhow!("read {path}: {e:?}"))?;
+            if chunk.is_empty() {
+                break;
+            }
+            out.extend_from_slice(&chunk);
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(unix)]
 fn dir_entry_name(entry: &tokio::fs::DirEntry) -> Vec<u8> {
     use std::os::unix::ffi::OsStrExt;
@@ -960,5 +1140,89 @@ mod tests {
         let st = fs.metadata("/local.txt").await.unwrap();
         assert!(st.is_file());
         assert_eq!(st.len, 4);
+    }
+
+    /// The `ForwardFs` view the in-guest FUSE forwarder consumes serves the
+    /// unified tree: the workspace's local files under a reserved `files/`
+    /// subdir plus the provider mounts as sibling virtual subdirectories, all
+    /// through readdir/stat/read.
+    #[tokio::test]
+    async fn forward_fs_serves_unified_tree() {
+        use crate::vfs::sandbox::ForwardFs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        tokio::fs::write(tmp.path().join("local.txt"), b"local-bytes")
+            .await
+            .unwrap();
+        let fs = mounted_fs(tmp.path().to_path_buf());
+
+        // Root lists the reserved local dir alongside the mount name — NOT the
+        // local files directly.
+        let mut root: Vec<(String, bool)> = ForwardFs::readdir(&fs, "/")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.name, e.is_dir))
+            .collect();
+        root.sort();
+        assert_eq!(
+            root,
+            vec![("files".to_string(), true), ("mock".to_string(), true)]
+        );
+
+        // Local files live under `/files`.
+        let local: Vec<String> = ForwardFs::readdir(&fs, "/files")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(local, vec!["local.txt".to_string()]);
+
+        // The mount lists provider entries at its top-level prefix.
+        let mount: Vec<(String, bool)> = ForwardFs::readdir(&fs, "/mock")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.name, e.is_dir))
+            .collect();
+        assert_eq!(mount, vec![("file.txt".to_string(), false)]);
+
+        // Stat crosses both worlds; the reserved dir stats as a directory.
+        assert!(ForwardFs::stat(&fs, "/files").await.unwrap().is_dir);
+        let ls = ForwardFs::stat(&fs, "/files/local.txt").await.unwrap();
+        assert!(ls.exists && !ls.is_dir && ls.size == 11);
+        let ms = ForwardFs::stat(&fs, "/mock/file.txt").await.unwrap();
+        assert!(ms.exists && !ms.is_dir && ms.size == 11);
+        assert!(!ForwardFs::stat(&fs, "/nope").await.unwrap().exists);
+        // A local file is no longer visible at the root.
+        assert!(!ForwardFs::stat(&fs, "/local.txt").await.unwrap().exists);
+
+        // Full and ranged reads of both a local file and a mounted object.
+        assert_eq!(
+            ForwardFs::read(&fs, "/files/local.txt", None, None)
+                .await
+                .unwrap(),
+            b"local-bytes"
+        );
+        assert_eq!(
+            ForwardFs::read(&fs, "/mock/file.txt", None, None)
+                .await
+                .unwrap(),
+            b"hello world"
+        );
+        assert_eq!(
+            ForwardFs::read(&fs, "/mock/file.txt", Some(6), Some(5))
+                .await
+                .unwrap(),
+            b"world"
+        );
+
+        // Writes are rejected — the unified mount is read-only.
+        assert!(
+            ForwardFs::write(&fs, "/files/local.txt", b"x".to_vec())
+                .await
+                .is_err()
+        );
     }
 }
