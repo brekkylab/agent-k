@@ -28,7 +28,7 @@ mod e2e {
     use std::path::Path;
     use std::sync::Arc;
 
-    use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder};
+    use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder, SandboxNetwork};
 
     use crate::vfs::{MountSpec, NotionConfig, ProviderConfig, Vfs, VfsConfig, VfsForward};
 
@@ -63,7 +63,7 @@ mod e2e {
             .memory_mib(1024)
             // Open guest->host egress so the forwarder can reach the host
             // forward server at host.microsandbox.internal.
-            .allow_host_egress(true)
+            .network(SandboxNetwork::Public)
             .build()
             .await
             .expect("build sandbox");
@@ -100,7 +100,7 @@ for A in "$HMI" "$GW" 172.16.0.1 10.0.2.2 192.168.127.254 192.168.127.1; do
 done
 "#;
 
-    /// Does `allow_host_egress` survive archive → try_from_archive → start?
+    /// Does the network policy survive archive → try_from_archive → start?
     /// `create_session` builds + archives the sandbox and `run()` restores it, so
     /// the host-egress policy must persist across that round-trip for the
     /// forwarder to reach the host at run time. If this fails, the policy must be
@@ -132,7 +132,7 @@ done
                 .image("brekkylab/agent-k-libreoffice:latest")
                 .cpus(2)
                 .memory_mib(1024)
-                .allow_host_egress(true)
+                .network(SandboxNetwork::Public)
                 .build()
                 .await
                 .expect("build");
@@ -143,7 +143,7 @@ done
 
         // Restore WITH host egress re-applied (the archive doesn't carry the
         // policy), start, and probe host reachability from the guest.
-        let mut restored = ailoy::runenv::Sandbox::try_from_archive_with_host_egress(&archive)
+        let mut restored = ailoy::runenv::Sandbox::try_from_archive_with_network(&archive, SandboxNetwork::Public)
             .await
             .expect("restore from archive");
         let console = restored.start().await.expect("start (restored)");
@@ -226,7 +226,7 @@ done
             .image("brekkylab/agent-k-libreoffice:latest")
             .cpus(2)
             .memory_mib(1024)
-            .allow_host_egress(true)
+            .network(SandboxNetwork::Public)
             .build()
             .await
             .expect("build sandbox");

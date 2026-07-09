@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
 use ailoy::agent::AgentSpec;
-use ailoy::runenv::SandboxBuilder;
+use ailoy::runenv::{SandboxBuilder, SandboxNetwork};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -172,7 +172,7 @@ pub(super) async fn create_session(
             .image("brekkylab/agent-k-libreoffice:latest")
             .cpus(8)
             .memory_mib(1024)
-            .allow_host_egress(true)
+            .network(SandboxNetwork::Public)
             .build()
             .await
             .map_err(|e| {

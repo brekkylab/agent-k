@@ -157,7 +157,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=faf7da1c419e85535034456aee47b43b8f30c1d9#faf7da1c419e85535034456aee47b43b8f30c1d9"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=4acf653963559c1e351e0433d0412b8930c83b39#4acf653963559c1e351e0433d0412b8930c83b39"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -179,6 +179,7 @@ dependencies = [
  "jsonschema",
  "log",
  "microsandbox",
+ "microsandbox-network",
  "ordered-float 5.3.0",
  "parking_lot",
  "png",
@@ -1281,7 +1282,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.12.1",
  "proc-macro2",
  "quote",
  "regex",
@@ -4255,15 +4256,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -5470,7 +5462,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "log",
- "lru 0.12.5",
+ "lru 0.16.4",
  "msb-imago",
  "msb_krun_arch",
  "msb_krun_hvf",
@@ -8004,7 +7996,7 @@ version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
 dependencies = [
- "dirs 6.0.0",
+ "dirs 5.0.1",
 ]
 
 [[package]]

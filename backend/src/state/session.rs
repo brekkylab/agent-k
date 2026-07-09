@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
     message::{Message, Part, Role},
-    runenv::{Machine as _, Sandbox},
+    runenv::{Machine as _, Sandbox, SandboxNetwork},
 };
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt as _;
@@ -347,7 +347,7 @@ impl SessionsState {
                     // guest->host egress. The archive doesn't carry the network
                     // policy, so re-apply it on restore.
                     let sandbox =
-                        Sandbox::try_from_archive_with_host_egress(&archive_path).await?;
+                        Sandbox::try_from_archive_with_network(&archive_path, SandboxNetwork::Public).await?;
                     Some(Arc::new(Mutex::new(sandbox)))
                 } else {
                     None
