@@ -41,15 +41,19 @@ function wrapper(children: ReactNode) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-function installProvider(id: SourceProvider['id'], detail: SourceDetail): SourceProvider {
+function installProvider(
+  id: SourceProvider['id'],
+  detail: SourceDetail,
+  overrides: Partial<Pick<SourceProvider, 'category' | 'kind' | 'count'>> = {},
+): SourceProvider {
   const provider: SourceProvider = {
     id,
     nameKey: `workspace.src.${id}`,
-    category: 'files',
-    kind: 'files',
+    category: overrides.category ?? 'files',
+    kind: overrides.kind ?? 'files',
     connected: true,
     attachable: id === 'local',
-    count: null,
+    count: overrides.count ?? null,
     list: vi.fn().mockResolvedValue([]),
     recent: vi.fn().mockResolvedValue([]),
     detail: vi.fn().mockResolvedValue(detail),
@@ -198,5 +202,177 @@ describe('DetailPanel', () => {
     const anchor = link.closest('a');
     expect(anchor?.getAttribute('href')).toBe('https://drive.example.com/spec');
     expect(anchor?.getAttribute('target')).toBe('_blank');
+  });
+
+  it('renders Notion page bodyPreview as a document-like page body', async () => {
+    const entry: SourceEntry = {
+      id: 'notion-page-workspace-source-grounding',
+      sourceId: 'notion',
+      title: 'Workspace Source Grounding',
+      subtitle: 'Product',
+      kind: 'page',
+      modifiedAt: '2026-07-06T11:45:00.000Z',
+      parentId: 'notion-page-q3-product-strategy',
+      emoji: '📚',
+    };
+    installProvider(
+      'notion',
+      {
+        entry,
+        bodyPreview:
+          'Workspace Source Grounding은 Notion page tree를 유지합니다.\n\n## Principle\n- 답변은 source별 provenance chip을 가져야 합니다.\n- [x] Notion page tree는 source view 내부에서 펼친다',
+        externalUrl: 'https://notion.example.com/workspace-source-grounding',
+      },
+      { category: 'docs', kind: 'pages', count: 1 },
+    );
+
+    render(wrapper(<DetailPanel entry={entry} onClose={vi.fn()} />));
+
+    await waitFor(() => expect(screen.getByTestId('source-document-preview')).toBeTruthy());
+    expect(screen.getByText('Principle')).toBeTruthy();
+    expect(screen.getByText('답변은 source별 provenance chip을 가져야 합니다.')).toBeTruthy();
+    expect(screen.getByText('Notion page tree는 source view 내부에서 펼친다')).toBeTruthy();
+    const link = screen.getByText('workspace.detail.openOriginal').closest('a');
+    expect(link?.getAttribute('href')).toBe('https://notion.example.com/workspace-source-grounding');
+  });
+
+  it('renders knowledge record status, confidence, and provenance', async () => {
+    const entry: SourceEntry = {
+      id: 'knowledge-decision-q3-mobile-performance',
+      sourceId: 'knowledge',
+      title: 'Q3 priority is mobile performance and reliability',
+      subtitle: 'Decision · approved',
+      kind: 'record',
+      collection: 'Decisions',
+      status: 'approved',
+      confidence: 0.92,
+      evidenceRefs: [
+        {
+          id: 'ev-test-notion',
+          sourceId: 'notion',
+          entryId: 'notion-page-q3-product-strategy',
+          label: 'Notion / Q3 Product Strategy',
+          excerpt: 'Q3 mobile performance priority.',
+          usedFor: 'decision.summary',
+        },
+        {
+          id: 'ev-test-slack',
+          sourceId: 'slack',
+          entryId: 'slack-thread-q3-planning',
+          label: 'Slack #product',
+          excerpt: '이번 분기 핵심은 성능 개선과 모바일 대응입니다.',
+          usedFor: 'supporting evidence',
+        },
+      ],
+      modifiedAt: '2026-07-03T12:20:00.000Z',
+    };
+    installProvider(
+      'knowledge',
+      {
+        entry,
+        bodyPreview:
+          'Approved workspace decision for Q3 planning.\nMobile performance and reliability should be treated as the primary engineering priority.',
+        externalUrl: '#',
+      },
+      { category: 'knowledge', kind: 'records', count: 1 },
+    );
+
+    render(wrapper(<DetailPanel entry={entry} onClose={vi.fn()} />));
+
+    await waitFor(() => expect(screen.getByTestId('knowledge-detail-preview')).toBeTruthy());
+    expect(screen.getByText('Decisions')).toBeTruthy();
+    expect(screen.getByText('workspace.knowledge.status.approved')).toBeTruthy();
+    expect(screen.getByText('workspace.knowledge.confidence: 92%')).toBeTruthy();
+    expect(screen.getByText('Notion / Q3 Product Strategy')).toBeTruthy();
+    expect(screen.getByText('Slack #product')).toBeTruthy();
+    expect(screen.getByText('Q3 mobile performance priority.')).toBeTruthy();
+  });
+
+  it('shows knowledge records created from the selected source document', async () => {
+    const entry: SourceEntry = {
+      id: 'notion-page-q3-product-strategy',
+      sourceId: 'notion',
+      title: 'Q3 Product Strategy',
+      subtitle: 'Product',
+      kind: 'page',
+      modifiedAt: '2026-07-05T10:00:00.000Z',
+      parentId: 'notion-page-company-os',
+    };
+    installProvider(
+      'notion',
+      {
+        entry,
+        bodyPreview: 'Q3 product strategy page body.',
+        externalUrl: '#',
+      },
+      { category: 'docs', kind: 'pages', count: 1 },
+    );
+    const onSelectEntry = vi.fn();
+
+    render(wrapper(<DetailPanel entry={entry} onClose={vi.fn()} onSelectEntry={onSelectEntry} />));
+
+    await waitFor(() => expect(screen.getByTestId('source-knowledge-links')).toBeTruthy());
+    expect(screen.getByText('workspace.knowledge.fromThisSource')).toBeTruthy();
+    fireEvent.click(screen.getByText('Q3 priority is mobile performance and reliability'));
+    expect(onSelectEntry).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'knowledge-decision-q3-mobile-performance',
+      sourceId: 'knowledge',
+    }));
+  });
+
+  it('renders Confluence items as document-like bodies', async () => {
+    const entry: SourceEntry = {
+      id: 'confluence-page-api-spec',
+      sourceId: 'confluence',
+      title: 'REST API 명세서 v3.1',
+      subtitle: 'DEV 스페이스',
+      kind: 'item',
+      modifiedAt: '2026-06-30T09:00:00.000Z',
+    };
+    installProvider(
+      'confluence',
+      {
+        entry,
+        bodyPreview:
+          'REST API 명세서 v3.1입니다.\n\n## Changes\n- POST /workspaces/{id}/members 추가\n- [x] Cursor pagination 적용',
+        externalUrl: 'https://confluence.example.com/api-spec',
+      },
+      { category: 'docs', kind: 'items', count: 1 },
+    );
+
+    render(wrapper(<DetailPanel entry={entry} onClose={vi.fn()} />));
+
+    await waitFor(() => expect(screen.getByTestId('source-document-preview')).toBeTruthy());
+    expect(screen.getByText('Changes')).toBeTruthy();
+    expect(screen.getByText('POST /workspaces/{id}/members 추가')).toBeTruthy();
+    expect(screen.getByText('Cursor pagination 적용')).toBeTruthy();
+  });
+
+  it('renders Jira items as document-like bodies', async () => {
+    const entry: SourceEntry = {
+      id: 'jira-issue-DEV-201',
+      sourceId: 'jira',
+      title: '결제 모듈 성능 개선 (응답 시간 50% 단축)',
+      subtitle: '[DEV-201] 진행 중',
+      kind: 'item',
+      modifiedAt: '2026-07-02T11:00:00.000Z',
+    };
+    installProvider(
+      'jira',
+      {
+        entry,
+        bodyPreview:
+          '결제 API 평균 응답 시간이 SLA를 초과합니다.\n\n## Scope\n- N+1 쿼리 패턴을 배치 조회로 교체합니다.\n- [ ] Batch loader 적용',
+        externalUrl: 'https://jira.example.com/DEV-201',
+      },
+      { category: 'docs', kind: 'items', count: 1 },
+    );
+
+    render(wrapper(<DetailPanel entry={entry} onClose={vi.fn()} />));
+
+    await waitFor(() => expect(screen.getByTestId('source-document-preview')).toBeTruthy());
+    expect(screen.getByText('Scope')).toBeTruthy();
+    expect(screen.getByText('N+1 쿼리 패턴을 배치 조회로 교체합니다.')).toBeTruthy();
+    expect(screen.getByText('Batch loader 적용')).toBeTruthy();
   });
 });

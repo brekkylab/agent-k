@@ -122,6 +122,7 @@ export function WorkspaceShell() {
               entry={selected}
               onClose={() => setSelected(null)}
               onAttach={selected.sourceId === 'local' ? handleAttach : undefined}
+              onSelectEntry={handleSelect}
             />
           )}
         </aside>

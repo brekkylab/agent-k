@@ -103,24 +103,122 @@
     "error": "Some files could not be indexed. Try re-uploading them."
   },
   "workspace": {
-    "all": "All sources",
+    "all": "All workspace",
+    "groups": {
+      "sources": "Sources",
+      "knowledge": "Knowledge"
+    },
     "cat": {
       "files": "Files",
       "docs": "Docs & Tickets",
       "messages": "Messages"
     },
     "src": {
-      "local": "Local",
+      "local": "Shared Files",
       "gdrive": "Google Drive",
       "s3": "Amazon S3",
+      "dropbox": "Dropbox",
+      "figma": "Figma",
       "confluence": "Confluence",
+      "notion": "Notion",
       "jira": "Jira",
+      "github": "GitHub",
+      "linear": "Linear",
       "gmail": "Gmail",
-      "slack": "Slack"
+      "slack": "Slack",
+      "knowledge": "Knowledge"
     },
     "addSource": "Add source",
-    "addSourceBody": "Connectors are coming soon",
-    "searchAll": "Search all sources…",
+    "addSourceBody": "Pick a source, check what it needs, then connect the mock source from here.",
+    "hideUnconnected": "Hide unconnected",
+    "connect": {
+      "cta": "Add",
+      "connected": "Connected",
+      "notConnected": "Not connected",
+      "connectedHint": "This source is already connected. Open it to browse its workspace data.",
+      "action": "Connect mock source",
+      "open": "Open source",
+      "tabs": {
+        "label": "Connection detail mode",
+        "connect": "Connect",
+        "guide": "Setup guide"
+      },
+      "instructions": {
+        "dropbox": "Connect with a Dropbox account email and a scoped access token.",
+        "figma": "Connect a Figma team URL and token so design files can appear beside project docs.",
+        "github": "Connect a repository URL and access token to browse issues, PRs, and decisions.",
+        "linear": "Connect a Linear workspace URL and API key to bring issues into the workspace."
+      },
+      "fields": {
+        "accountEmail": "Account email",
+        "accessToken": "Access token",
+        "teamUrl": "Team URL",
+        "repositoryUrl": "Repository URL",
+        "workspaceUrl": "Workspace URL",
+        "apiKey": "API key"
+      },
+      "placeholders": {
+        "accountEmail": "ops@example.com",
+        "accessToken": "mock-token",
+        "teamUrl": "https://figma.com/files/team/...",
+        "repositoryUrl": "https://github.com/acme/app",
+        "workspaceUrl": "https://linear.app/acme",
+        "apiKey": "lin_api_mock"
+      },
+      "guides": {
+        "permissions": "Required access",
+        "back": "Back to connect",
+        "github": {
+          "title": "How to get a GitHub token",
+          "intro": "Use a fine-grained personal access token so this source only sees the repository you choose.",
+          "step1": "Open GitHub Settings, then Developer settings.",
+          "step2": "Choose Personal access tokens, then create a fine-grained token.",
+          "step3": "Select the repository you want Cowork to read.",
+          "step4": "Set an expiration date, generate the token, and paste it into Access token.",
+          "scopeContents": "Contents: Read-only",
+          "scopeIssues": "Issues: Read-only",
+          "scopePullRequests": "Pull requests: Read-only",
+          "note": "For a mock connection, any token-shaped value works. In a real connector, Cowork would validate the token before saving it."
+        },
+        "linear": {
+          "title": "How to get a Linear API key",
+          "intro": "Create a personal API key from the Linear workspace you want to browse.",
+          "step1": "Open Linear and switch to the target workspace.",
+          "step2": "Go to Settings, then API.",
+          "step3": "Create a personal API key and copy it once it appears.",
+          "step4": "Paste the workspace URL and API key into the connect form.",
+          "scopeRead": "Workspace read access",
+          "scopeIssues": "Issues and projects read access",
+          "note": "Keep the API key private. This mock stores only the connected source id locally, not the field values."
+        }
+      }
+    },
+    "searchAll": "Search workspace…",
+    "knowledge": {
+      "eyebrow": "Workspace memory",
+      "title": "Curated knowledge",
+      "search": "Search knowledge records…",
+      "statusSummary": "Knowledge status summary",
+      "sourceCount": "{{count}} sources",
+      "recordCount": "{{count}} records",
+      "confidence": "Confidence",
+      "provenance": "Provenance",
+      "basedOn": "Based on",
+      "usedFor": "Used for",
+      "fromThisSource": "Knowledge from this source",
+      "views": {
+        "label": "Knowledge view",
+        "records": "Records",
+        "sources": "Source documents",
+        "conflicts": "Conflicts"
+      },
+      "status": {
+        "approved": "Approved",
+        "draft": "Draft",
+        "conflict": "Conflict",
+        "stale": "Stale"
+      }
+    },
     "loading": "Loading…",
     "emptySource": "No items",
     "emptySourceHint": "This source has no items yet.",

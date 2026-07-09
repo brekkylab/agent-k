@@ -7,6 +7,7 @@ import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { Icon } from '@/components/Icon';
 import { useDialogEscape } from '@/lib/useDialogEscape';
 import { SourceIcon } from '@/workspace/icons';
+import { evidenceForRecord, getKnowledgeRecordsForSource, sourceEntryFromEvidence } from '@/workspace/knowledge';
 import { getProvider } from '@/workspace/providers';
 import type { SourceEntry } from '@/workspace/types';
 
@@ -19,6 +20,7 @@ interface DetailPanelProps {
    * source until the real local flow lands.
    */
   onAttach?: (entry: SourceEntry) => void;
+  onSelectEntry?: (entry: SourceEntry) => void;
 }
 
 const NOTICE_MS = 2500;
@@ -53,12 +55,42 @@ function parseBubbleLine(line: string): BubbleLine {
   return { speaker, text: m[2]!, isSelf: speaker === '나' };
 }
 
+function renderDocumentBody(body: string) {
+  return body
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .map((line, index) => {
+      if (line.startsWith('## ')) {
+        return <h3 key={index}>{line.slice(3)}</h3>;
+      }
+      if (line.startsWith('- [ ] ') || line.startsWith('- [x] ')) {
+        const checked = line.startsWith('- [x] ');
+        return (
+          <div key={index} className="cw-ws-page-check">
+            <span className={checked ? 'is-checked' : ''}>{checked ? '✓' : ''}</span>
+            <p>{line.slice(6)}</p>
+          </div>
+        );
+      }
+      if (line.startsWith('- ')) {
+        return (
+          <div key={index} className="cw-ws-page-bullet">
+            <span>•</span>
+            <p>{line.slice(2)}</p>
+          </div>
+        );
+      }
+      return <p key={index}>{line}</p>;
+    });
+}
+
 /**
  * DetailPanel — right-hand aside showing meta + preview + actions for the
  * selected entry. Only mounted for file/item/thread entries (views never
  * select folders). ESC and the ✕ button both clear the selection.
  */
-export function DetailPanel({ entry, onClose, onAttach }: DetailPanelProps) {
+export function DetailPanel({ entry, onClose, onAttach, onSelectEntry }: DetailPanelProps) {
   const { t } = useTranslation('files');
   const qc = useQueryClient();
 
@@ -101,7 +133,11 @@ export function DetailPanel({ entry, onClose, onAttach }: DetailPanelProps) {
   const provider = getProvider(entry.sourceId);
   const isLocal = entry.sourceId === 'local';
   const isFile = entry.kind === 'file';
+  const isKnowledgeEntry = entry.kind === 'record';
   const detail = detailQuery.data;
+  const isDocumentEntry =
+    entry.kind === 'page' || (entry.kind === 'item' && provider?.category === 'docs');
+  const relatedKnowledge = isKnowledgeEntry ? [] : getKnowledgeRecordsForSource(entry);
 
   function handleAttach() {
     if (onAttach) {
@@ -180,6 +216,57 @@ export function DetailPanel({ entry, onClose, onAttach }: DetailPanelProps) {
           <div className="cw-ws-detail-loading">{t('workspace.loading')}</div>
         )}
 
+        {isKnowledgeEntry && (
+          <div className="cw-ws-knowledge-detail" data-testid="knowledge-detail-preview">
+            <div className="cw-ws-knowledge-detail-meta">
+              {entry.collection && <span>{entry.collection}</span>}
+              <span>{t(`workspace.knowledge.status.${entry.status ?? 'draft'}`)}</span>
+              {entry.confidence != null && (
+                <span>{t('workspace.knowledge.confidence')}: {Math.round(entry.confidence * 100)}%</span>
+              )}
+            </div>
+            {detail?.bodyPreview && (
+              <div className="cw-ws-knowledge-detail-body">
+                {detail.bodyPreview.split('\n').filter((line) => line.trim() !== '').map((line, index) => (
+                  <p key={index}>{line}</p>
+                ))}
+              </div>
+            )}
+            {evidenceForRecord(entry).length > 0 && (
+              <div className="cw-ws-knowledge-detail-evidence">
+                <strong>{t('workspace.knowledge.basedOn')}</strong>
+                {evidenceForRecord(entry).map((evidence) => {
+                  const sourceEntry = sourceEntryFromEvidence(evidence);
+                  const canOpen = evidence.sourceId !== 'local' && Boolean(onSelectEntry);
+                  const content = (
+                    <>
+                      <span className="cw-ws-knowledge-evidence-title">{evidence.label}</span>
+                      <span className="cw-ws-knowledge-evidence-excerpt">{evidence.excerpt}</span>
+                      <span className="cw-ws-knowledge-evidence-used">
+                        {t('workspace.knowledge.usedFor')}: {evidence.usedFor}
+                      </span>
+                    </>
+                  );
+                  return canOpen ? (
+                    <button
+                      type="button"
+                      key={evidence.id}
+                      className="cw-ws-knowledge-evidence-card"
+                      onClick={() => onSelectEntry?.(sourceEntry)}
+                    >
+                      {content}
+                    </button>
+                  ) : (
+                    <span key={evidence.id} className="cw-ws-knowledge-evidence-card is-static">
+                      {content}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Files: mini preview. Local opens the full lightbox; mock sources
             show a static placeholder (no blob exists to preview). */}
         {isFile && isLocal && entry.path && (
@@ -219,9 +306,35 @@ export function DetailPanel({ entry, onClose, onAttach }: DetailPanelProps) {
           </div>
         )}
 
-        {/* Items: plain body text. */}
-        {entry.kind === 'item' && detail?.bodyPreview && (
+        {/* Items outside docs keep the compact excerpt rendering. */}
+        {entry.kind === 'item' && !isDocumentEntry && detail?.bodyPreview && (
           <p className="cw-ws-detail-excerpt">{detail.bodyPreview}</p>
+        )}
+
+        {/* Docs/tickets/pages: document-like preview that mirrors the source body. */}
+        {isDocumentEntry && detail?.bodyPreview && (
+          <div className="cw-ws-page-preview" data-testid="source-document-preview">
+            <div className="cw-ws-page-icon" aria-hidden="true">
+              {entry.emoji ?? (provider ? <SourceIcon sourceId={provider.id} size={22} /> : '📄')}
+            </div>
+            {renderDocumentBody(detail.bodyPreview)}
+          </div>
+        )}
+
+        {!isKnowledgeEntry && relatedKnowledge.length > 0 && (
+          <div className="cw-ws-source-knowledge-links" data-testid="source-knowledge-links">
+            <strong>{t('workspace.knowledge.fromThisSource')}</strong>
+            {relatedKnowledge.map((record) => (
+              <button
+                type="button"
+                key={record.id}
+                onClick={() => onSelectEntry?.(record)}
+              >
+                <span>{record.title}</span>
+                <em>{t(`workspace.knowledge.status.${record.status ?? 'draft'}`)}</em>
+              </button>
+            ))}
+          </div>
         )}
       </div>
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -17,7 +17,11 @@ vi.mock('@tanstack/react-router', () => ({
 
 import { FileBrowserView } from '../components/FileBrowserView';
 import { ItemListView } from '../components/ItemListView';
+import { KnowledgeRecordView } from '../components/KnowledgeRecordView';
+import { NotionPageView } from '../components/NotionPageView';
 import { ThreadListView } from '../components/ThreadListView';
+import * as knowledgeFixture from '../fixtures/knowledge';
+import * as notionFixture from '../fixtures/notion';
 import type { SourceEntry, SourceProvider } from '../types';
 
 // Helper: wrap with per-test QueryClient (retry:false to avoid hanging)
@@ -122,6 +126,114 @@ describe('ItemListView', () => {
   });
 });
 
+describe('NotionPageView', () => {
+  const notionProvider: SourceProvider = {
+    id: 'notion',
+    nameKey: 'workspace.src.notion',
+    category: 'docs',
+    kind: 'pages',
+    connected: true,
+    attachable: false,
+    count: notionFixture.entries.length,
+    list: vi.fn().mockResolvedValue(notionFixture.entries),
+    recent: vi.fn().mockResolvedValue(notionFixture.entries),
+    detail: vi.fn((id: string) => Promise.resolve(notionFixture.details[id])),
+  };
+
+  it('renders a Notion-style expandable page tree as the only page chooser', async () => {
+    const onSelect = vi.fn();
+    render(wrapper(<NotionPageView provider={notionProvider} onSelect={onSelect} />));
+
+    await waitFor(() => expect(screen.getByText('Company OS')).toBeTruthy());
+    const tree = screen.getByTestId('notion-page-tree');
+
+    expect(within(tree).getByText('Company OS')).toBeTruthy();
+    expect(within(tree).getByText('Workspace')).toBeTruthy();
+    expect(within(tree).getAllByText(/2026/).length).toBeGreaterThan(0);
+    expect(within(tree).queryByText('Q3 Product Strategy')).toBeNull();
+    expect(screen.queryByTestId('notion-page-document')).toBeNull();
+
+    fireEvent.click(within(tree).getByRole('button', { name: 'Expand Company OS' }));
+    expect(within(tree).getByText('Q3 Product Strategy')).toBeTruthy();
+
+    fireEvent.click(within(tree).getByRole('button', { name: 'Expand Q3 Product Strategy' }));
+    fireEvent.click(within(tree).getByText('Workspace Source Grounding'));
+
+    await waitFor(() => {
+      expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'notion-page-workspace-source-grounding' }));
+    });
+  });
+});
+
+describe('KnowledgeRecordView', () => {
+  const knowledgeProvider: SourceProvider = {
+    id: 'knowledge',
+    nameKey: 'workspace.src.knowledge',
+    category: 'knowledge',
+    kind: 'records',
+    connected: true,
+    attachable: false,
+    count: knowledgeFixture.entries.length,
+    list: vi.fn().mockResolvedValue(knowledgeFixture.entries),
+    recent: vi.fn().mockResolvedValue(knowledgeFixture.entries),
+    detail: vi.fn((id: string) => Promise.resolve(knowledgeFixture.details[id])),
+  };
+
+  it('renders curated records with status and provenance', async () => {
+    render(wrapper(<KnowledgeRecordView provider={knowledgeProvider} onSelect={() => {}} />));
+
+    await waitFor(() => expect(screen.getByText('workspace.knowledge.title')).toBeTruthy());
+    expect(screen.getAllByText('workspace.knowledge.status.approved').length).toBeGreaterThan(0);
+    expect(screen.getByText('Notion / Q3 Product Strategy')).toBeTruthy();
+    expect(screen.getByText('Jira DEV-201')).toBeTruthy();
+  });
+
+  it('filters records and calls onSelect', async () => {
+    const onSelect = vi.fn();
+    render(wrapper(<KnowledgeRecordView provider={knowledgeProvider} onSelect={onSelect} />));
+
+    await waitFor(() => expect(screen.getByText('Q3 priority is mobile performance and reliability')).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText('workspace.knowledge.search'), {
+      target: { value: 'NDA' },
+    });
+    expect(screen.getByText('A사 NDA confidentiality period changed from 5 years to 3 years')).toBeTruthy();
+    expect(screen.queryByText('Q3 priority is mobile performance and reliability')).toBeNull();
+
+    fireEvent.click(screen.getByText('A사 NDA confidentiality period changed from 5 years to 3 years'));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'knowledge-contract-nda-retention' }));
+  });
+
+  it('shows source documents used by knowledge records', async () => {
+    const onSelect = vi.fn();
+    render(wrapper(<KnowledgeRecordView provider={knowledgeProvider} onSelect={onSelect} />));
+
+    await waitFor(() => expect(screen.getByText('workspace.knowledge.title')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.knowledge.views.sources' }));
+
+    expect(screen.getByText('Q3의 제품 전략은 모바일 응답성과 workspace reload 안정성을 우선순위로 둡니다.')).toBeTruthy();
+    const q3SourceRow = screen.getByRole('button', { name: /Q3 Product Strategy/ });
+    expect(within(q3SourceRow).getByText('workspace.src.notion')).toBeTruthy();
+    expect(within(q3SourceRow).getByText('Q3 Product Strategy')).toBeTruthy();
+    fireEvent.click(q3SourceRow);
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'notion-page-q3-product-strategy',
+      sourceId: 'notion',
+      kind: 'page',
+    }));
+  });
+
+  it('shows conflict records with both conflicting evidence excerpts', async () => {
+    render(wrapper(<KnowledgeRecordView provider={knowledgeProvider} onSelect={() => {}} />));
+
+    await waitFor(() => expect(screen.getByText('workspace.knowledge.title')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'workspace.knowledge.views.conflicts' }));
+
+    expect(screen.getByText('A사 NDA confidentiality period changed from 5 years to 3 years')).toBeTruthy();
+    expect(screen.getByText('기밀 유지 기간 5년에서 3년으로 수정 협의 완료.')).toBeTruthy();
+    expect(screen.getByText('최신 draft에는 기밀 유지 기간이 5년으로 남아 있습니다.')).toBeTruthy();
+  });
+});
+
 describe('ThreadListView', () => {
   const threadProvider: SourceProvider = {
     id: 'gmail',
@@ -148,6 +260,16 @@ describe('ThreadListView', () => {
   it('renders thread title', async () => {
     render(wrapper(<ThreadListView provider={threadProvider} onSelect={() => {}} />));
     await waitFor(() => expect(screen.getByText('[긴급] 2분기 검토')).toBeTruthy());
+  });
+
+  it('uses the message thread list treatment', async () => {
+    const { container } = render(wrapper(<ThreadListView provider={threadProvider} onSelect={() => {}} />));
+    await waitFor(() => expect(screen.getByText('[긴급] 2분기 검토')).toBeTruthy());
+
+    expect(container.querySelector('.cw-ws-thread-list')).toBeTruthy();
+    expect(container.querySelectorAll('.cw-ws-thread-row')).toHaveLength(2);
+    expect(screen.getAllByText('Email')).toHaveLength(2);
+    expect(screen.getByText('Needs review')).toBeTruthy();
   });
 
   it('calls onSelect with entry on row click', async () => {

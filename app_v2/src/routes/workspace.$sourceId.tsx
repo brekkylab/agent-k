@@ -2,6 +2,8 @@ import { createFileRoute, redirect, useParams } from '@tanstack/react-router';
 import { getProvider } from '@/workspace/providers';
 import { FileBrowserView } from '@/workspace/components/FileBrowserView';
 import { ItemListView } from '@/workspace/components/ItemListView';
+import { KnowledgeRecordView } from '@/workspace/components/KnowledgeRecordView';
+import { NotionPageView } from '@/workspace/components/NotionPageView';
 import { ThreadListView } from '@/workspace/components/ThreadListView';
 import { useWorkspaceSelection } from '@/workspace/components/WorkspaceShell';
 
@@ -23,6 +25,10 @@ export function SourcePage() {
       <FileBrowserView provider={provider} onSelect={onSelect} />
     ) : provider.kind === 'items' ? (
       <ItemListView provider={provider} onSelect={onSelect} />
+    ) : provider.kind === 'pages' ? (
+      <NotionPageView provider={provider} onSelect={onSelect} />
+    ) : provider.kind === 'records' ? (
+      <KnowledgeRecordView provider={provider} onSelect={onSelect} />
     ) : (
       <ThreadListView provider={provider} onSelect={onSelect} />
     )

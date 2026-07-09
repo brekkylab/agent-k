@@ -104,23 +104,121 @@
   },
   "workspace": {
     "all": "전체",
+    "groups": {
+      "sources": "소스",
+      "knowledge": "지식"
+    },
     "cat": {
       "files": "파일",
       "docs": "문서·티켓",
       "messages": "메시지"
     },
     "src": {
-      "local": "로컬",
+      "local": "Shared Files",
       "gdrive": "Google Drive",
       "s3": "Amazon S3",
+      "dropbox": "Dropbox",
+      "figma": "Figma",
       "confluence": "Confluence",
+      "notion": "Notion",
       "jira": "Jira",
+      "github": "GitHub",
+      "linear": "Linear",
       "gmail": "Gmail",
-      "slack": "Slack"
+      "slack": "Slack",
+      "knowledge": "Knowledge"
     },
     "addSource": "소스 추가",
-    "addSourceBody": "커넥터는 준비 중이에요",
-    "searchAll": "모든 소스에서 검색…",
+    "addSourceBody": "소스를 고르고 필요한 값을 확인한 뒤, 이 화면에서 바로 mock 소스로 연결해요.",
+    "hideUnconnected": "연결 안 된 소스 숨기기",
+    "connect": {
+      "cta": "추가",
+      "connected": "연결됨",
+      "notConnected": "미연결",
+      "connectedHint": "이미 연결된 소스예요. 열어서 workspace 데이터를 둘러볼 수 있어요.",
+      "action": "Mock 소스 연결",
+      "open": "소스 열기",
+      "tabs": {
+        "label": "연결 상세 모드",
+        "connect": "연결",
+        "guide": "설정 가이드"
+      },
+      "instructions": {
+        "dropbox": "Dropbox 계정 이메일과 범위가 제한된 access token으로 연결합니다.",
+        "figma": "Figma team URL과 token을 연결해 디자인 파일을 프로젝트 문서 옆에서 볼 수 있게 합니다.",
+        "github": "Repository URL과 access token을 연결해 issue, PR, decision을 workspace에서 둘러봅니다.",
+        "linear": "Linear workspace URL과 API key를 연결해 issue를 workspace로 가져옵니다."
+      },
+      "fields": {
+        "accountEmail": "계정 이메일",
+        "accessToken": "Access token",
+        "teamUrl": "Team URL",
+        "repositoryUrl": "Repository URL",
+        "workspaceUrl": "Workspace URL",
+        "apiKey": "API key"
+      },
+      "placeholders": {
+        "accountEmail": "ops@example.com",
+        "accessToken": "mock-token",
+        "teamUrl": "https://figma.com/files/team/...",
+        "repositoryUrl": "https://github.com/acme/app",
+        "workspaceUrl": "https://linear.app/acme",
+        "apiKey": "lin_api_mock"
+      },
+      "guides": {
+        "permissions": "필요한 접근 권한",
+        "back": "연결 화면으로 돌아가기",
+        "github": {
+          "title": "GitHub token을 얻는 방법",
+          "intro": "선택한 repository만 읽을 수 있도록 fine-grained personal access token을 사용합니다.",
+          "step1": "GitHub Settings에서 Developer settings로 이동합니다.",
+          "step2": "Personal access tokens에서 fine-grained token을 새로 만듭니다.",
+          "step3": "Cowork가 읽을 repository를 선택합니다.",
+          "step4": "만료일을 정하고 token을 생성한 뒤 Access token에 붙여넣습니다.",
+          "scopeContents": "Contents: Read-only",
+          "scopeIssues": "Issues: Read-only",
+          "scopePullRequests": "Pull requests: Read-only",
+          "note": "Mock 연결에서는 token처럼 생긴 값이면 충분합니다. 실제 connector에서는 저장 전 token 검증이 필요합니다."
+        },
+        "linear": {
+          "title": "Linear API key를 얻는 방법",
+          "intro": "둘러볼 Linear workspace에서 personal API key를 만듭니다.",
+          "step1": "Linear를 열고 대상 workspace로 전환합니다.",
+          "step2": "Settings에서 API 화면으로 이동합니다.",
+          "step3": "Personal API key를 만들고 표시된 값을 복사합니다.",
+          "step4": "Workspace URL과 API key를 연결 form에 붙여넣습니다.",
+          "scopeRead": "Workspace read access",
+          "scopeIssues": "Issues and projects read access",
+          "note": "API key는 비공개로 다뤄야 합니다. 이 mock은 입력값이 아니라 연결된 source id만 로컬에 저장합니다."
+        }
+      }
+    },
+    "searchAll": "Workspace 검색…",
+    "knowledge": {
+      "eyebrow": "Workspace memory",
+      "title": "정리된 지식",
+      "search": "지식 기록 검색…",
+      "statusSummary": "지식 상태 요약",
+      "sourceCount": "소스 {{count}}개",
+      "recordCount": "기록 {{count}}개",
+      "confidence": "신뢰도",
+      "provenance": "출처",
+      "basedOn": "근거 문서",
+      "usedFor": "사용 위치",
+      "fromThisSource": "이 소스에서 만든 Knowledge",
+      "views": {
+        "label": "Knowledge 보기",
+        "records": "기록",
+        "sources": "근거 문서",
+        "conflicts": "충돌"
+      },
+      "status": {
+        "approved": "승인됨",
+        "draft": "초안",
+        "conflict": "충돌",
+        "stale": "오래됨"
+      }
+    },
     "loading": "불러오는 중…",
     "emptySource": "항목 없음",
     "emptySourceHint": "이 소스에 항목이 없습니다.",

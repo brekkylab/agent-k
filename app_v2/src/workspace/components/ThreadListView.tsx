@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { EmptyState } from '@/components/uiPrimitives';
+import { SourceIcon } from '@/workspace/icons';
 import type { SourceEntry, SourceProvider } from '@/workspace/types';
 
 interface ThreadListViewProps {
@@ -8,7 +9,6 @@ interface ThreadListViewProps {
   onSelect: (entry: SourceEntry) => void;
 }
 
-/** Format an ISO date string as a short locale date. */
 function formatDate(iso: string): string {
   try {
     return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -17,12 +17,22 @@ function formatDate(iso: string): string {
   }
 }
 
-/**
- * ThreadListView — renders a flat list for 'threads' kind providers (Gmail, Slack, etc.).
- * Each row shows a bold sender line (subtitle), thread title, and date.
- * The sender element carries data-testid="thread-sender-{id}" for test targeting.
- * Row click calls onSelect with the entry.
- */
+function threadLabel(provider: SourceProvider): string {
+  if (provider.id === 'gmail') return 'Email';
+  if (provider.id === 'slack') return 'Channel';
+  return 'Thread';
+}
+
+function avatarText(entry: SourceEntry, provider: SourceProvider): string {
+  if (provider.id === 'slack') return '#';
+  const seed = entry.subtitle ?? entry.title;
+  return seed.trim().slice(0, 1).toUpperCase();
+}
+
+function isHighSignal(entry: SourceEntry): boolean {
+  return /긴급|보안|인시던트|alert|incident|security/i.test(entry.title);
+}
+
 export function ThreadListView({ provider, onSelect }: ThreadListViewProps) {
   const { t } = useTranslation('files');
 
@@ -44,23 +54,37 @@ export function ThreadListView({ provider, onSelect }: ThreadListViewProps) {
   }
 
   return (
-    <ul className="cw-ws-list" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+    <ul className="cw-ws-list cw-ws-thread-list">
       {entries.map((entry) => (
         <li key={entry.id}>
-          <button className="cw-ws-row" onClick={() => onSelect(entry)}>
-            <span className="cw-ws-row-body" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-              {/* Bold sender — subtitle carries the full "Name <email>" string */}
-              {entry.subtitle && (
-                <span
-                  className="cw-ws-row-sender"
-                  data-testid={`thread-sender-${entry.id}`}
-                >
-                  {entry.subtitle}
-                </span>
-              )}
-              <span className="cw-ws-row-subtitle">{entry.title}</span>
+          <button
+            className={`cw-ws-thread-row${isHighSignal(entry) ? ' is-high-signal' : ''}`}
+            onClick={() => onSelect(entry)}
+          >
+            <span className="cw-ws-thread-avatar" aria-hidden="true">
+              <span className="cw-ws-thread-avatar-mark">{avatarText(entry, provider)}</span>
+              <span className="cw-ws-thread-source-icon">
+                <SourceIcon sourceId={provider.id} size={14} />
+              </span>
             </span>
-            <span className="cw-ws-row-meta">{formatDate(entry.modifiedAt)}</span>
+            <span className="cw-ws-thread-content">
+              <span className="cw-ws-thread-topline">
+                {entry.subtitle && (
+                  <span
+                    className="cw-ws-thread-sender"
+                    data-testid={`thread-sender-${entry.id}`}
+                  >
+                    {entry.subtitle}
+                  </span>
+                )}
+                <span className="cw-ws-thread-date">{formatDate(entry.modifiedAt)}</span>
+              </span>
+              <span className="cw-ws-thread-title">{entry.title}</span>
+              <span className="cw-ws-thread-foot">
+                <span className="cw-ws-thread-pill">{threadLabel(provider)}</span>
+                {isHighSignal(entry) && <span className="cw-ws-thread-priority">Needs review</span>}
+              </span>
+            </span>
           </button>
         </li>
       ))}
