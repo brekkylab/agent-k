@@ -8,6 +8,23 @@ use crate::vfs::{
     resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
+/// Extract `(mtime, ctime)` from a rendered `page.json`: Notion's
+/// `last_edited_time` → mtime, `created_time` → ctime (the nearest ctime analog
+/// the API exposes). Notion has no access time, so atime stays `None`.
+fn page_times(page_json: &[u8]) -> (Option<std::time::SystemTime>, Option<std::time::SystemTime>) {
+    let Ok(v) = serde_json::from_slice::<Value>(page_json) else {
+        return (None, None);
+    };
+    let t = |key: &str| v.get(key).and_then(|x| x.as_str()).and_then(rfc3339_to_systemtime);
+    (t("last_edited_time"), t("created_time"))
+}
+
+/// Parse an RFC 3339 timestamp into a `SystemTime` (pre-epoch → `None`).
+fn rfc3339_to_systemtime(s: &str) -> Option<std::time::SystemTime> {
+    let secs = chrono::DateTime::parse_from_rfc3339(s).ok()?.timestamp();
+    (secs >= 0).then(|| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64))
+}
+
 const NOTION_PROMPT: &str = "\
 Notion (read + write). Mirrors the workspace page tree:
   pages/<title>__<page-id>/page.json     — page metadata, markdown body, raw blocks
@@ -134,22 +151,29 @@ impl Resource for NotionResource {
             [p, rest @ ..] if p == "pages" && !rest.is_empty() => {
                 if rest.last().map(String::as_str) == Some("page.json") {
                     let id = page_id(&rest[rest.len() - 2]);
-                    let size = self.render_page_json(&id).await?.len() as u64;
+                    let bytes = self.render_page_json(&id).await?;
+                    let (mtime, ctime) = page_times(&bytes);
                     Ok(FileStat {
                         kind: FileKind::File,
-                        size,
+                        size: bytes.len() as u64,
+                        mtime,
+                        ctime,
                         ..Default::default()
                     })
                 } else {
                     // N1: don't blindly report a page dir as existing — verify the
                     // page is real (render fails → NotFound instead of a Dir whose
-                    // readdir later errors).
+                    // readdir later errors). Reuse the render for the page's times.
                     let id = page_id(rest.last().unwrap());
-                    self.render_page_json(&id)
+                    let bytes = self
+                        .render_page_json(&id)
                         .await
                         .map_err(|_| VfsError::NotFound)?;
+                    let (mtime, ctime) = page_times(&bytes);
                     Ok(FileStat {
                         kind: FileKind::Dir,
+                        mtime,
+                        ctime,
                         ..Default::default()
                     })
                 }

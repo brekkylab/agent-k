@@ -239,6 +239,8 @@ async fn stat_json(fs: &dyn ForwardFs, path: &str) -> anyhow::Result<Vec<u8>> {
         "is_dir": s.is_dir,
         "size": s.size,
         "mtime": s.mtime,
+        "atime": s.atime,
+        "ctime": s.ctime,
     }))?)
 }
 

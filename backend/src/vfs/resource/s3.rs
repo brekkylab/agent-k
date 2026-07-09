@@ -136,6 +136,9 @@ impl Resource for S3Resource {
                 kind: FileKind::File,
                 size: meta.size,
                 mtime: Some(meta.last_modified.into()),
+                // S3 reports only LastModified; no access/change time.
+                atime: None,
+                ctime: None,
                 etag: meta.e_tag.clone(),
                 version: meta.version.clone(),
             }),

@@ -27,8 +27,15 @@ pub struct DirEntry {
 pub struct FileStat {
     pub kind: FileKind,
     pub size: u64,
-    /// Last-modified time, if the backend reports one (S3 `LastModified`).
+    /// Last-modified time, if the backend reports one (S3 `LastModified`,
+    /// Notion `last_edited_time`).
     pub mtime: Option<std::time::SystemTime>,
+    /// Last-access time, if the backend reports one. Most object/document
+    /// backends don't track access time, so this is usually `None`.
+    pub atime: Option<std::time::SystemTime>,
+    /// Change/creation time, if the backend reports one (Notion `created_time`).
+    /// Not POSIX `ctime` exactly — the nearest timestamp the backend exposes.
+    pub ctime: Option<std::time::SystemTime>,
     /// Entity tag / content fingerprint, if available (S3 `ETag`).
     pub etag: Option<String>,
     /// Version id, if the backend is versioned (S3 `VersionId`).
