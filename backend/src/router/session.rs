@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
 use ailoy::agent::AgentSpec;
-use ailoy::runenv::{SandboxBuilder, VolumeMount};
+use ailoy::runenv::SandboxBuilder;
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -163,30 +163,16 @@ pub(super) async fn create_session(
         session = session.with_title(t);
     }
     // Build a sandbox (runenv) when requested. The agent then runs in a VM and
-    // can read the workspace's mounts as files. Coworker image + host egress so
-    // the in-guest VFS forwarder can reach the host forward server. `insert`
-    // stops + archives it; each run restores it (with host egress when mounts
-    // exist — see `SessionsState::run`).
+    // reads the workspace — local files plus the external mounts — as one FUSE
+    // tree at /mnt/workspace (see `SessionsState::run`). Coworker image + host
+    // egress so the in-guest forwarder can reach the host forward server.
+    // `insert` stops + archives it; each run restores it (with host egress).
     let runenv = if payload.runenv.unwrap_or(false) {
-        // Bind-mount the workspace's local files into the guest so the agent
-        // sees them at /workspace/files (alongside the read-only VFS mounts).
-        let files_root = state.workspaces.files_root(payload.workspace_id);
-        tokio::fs::create_dir_all(&files_root).await.map_err(|e| {
-            err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("provision workspace files dir: {e}"),
-            )
-        })?;
         let sandbox = SandboxBuilder::new()
             .image("brekkylab/agent-k-libreoffice:latest")
             .cpus(8)
             .memory_mib(1024)
             .allow_host_egress(true)
-            .mount(VolumeMount::Bind {
-                host: files_root,
-                guest: "/workspace/files".to_string(),
-                readonly: false,
-            })
             .build()
             .await
             .map_err(|e| {
