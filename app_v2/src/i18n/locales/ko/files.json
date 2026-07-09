@@ -1,0 +1,138 @@
+{
+  "toast": {
+    "upload_success_one": "파일이 업로드되었습니다",
+    "upload_success_other": "{{count}}개 파일이 업로드되었습니다",
+    "upload_renamed_one": "파일이 업로드되었습니다 (이름이 변경됨)",
+    "upload_renamed_other": "{{count}}개 파일이 업로드되었습니다 ({{renamed}}개 이름 변경됨)",
+    "upload_partial": "{{ok}}개 업로드, {{ko}}개 실패",
+    "upload_failed": "업로드 실패: {{message}}",
+    "folder_created": "폴더가 생성되었습니다",
+    "folder_failed": "폴더 생성 실패: {{message}}",
+    "download_failed": "다운로드 실패: {{message}}",
+    "no_files_selected": "다운로드할 파일이 선택되지 않았습니다",
+    "delete_success_one": "삭제되었습니다",
+    "delete_success_other": "{{count}}개 항목이 삭제되었습니다",
+    "delete_partial": "{{ok}}개 삭제, {{ko}}개 실패",
+    "delete_failed": "삭제 실패: {{message}}",
+    "rename_success": "이름이 변경되었습니다",
+    "rename_failed": "이름 변경 실패",
+    "move_success_one": "이동되었습니다",
+    "move_success_other": "{{count}}개 이동되었습니다",
+    "move_partial": "{{ok}}개 이동, {{ko}}개 실패",
+    "rename_or_move_failed": "{{action}} 실패: {{message}}",
+    "rename_action": "이름 변경",
+    "move_action": "이동",
+    "copy_success_one": "복사되었습니다",
+    "copy_success_other": "{{count}}개 복사되었습니다",
+    "copy_partial": "{{ok}}개 복사, {{ko}}개 실패",
+    "copy_failed": "복사 실패: {{message}}",
+    "invalid_move": "자기 자신 또는 하위 폴더로는 이동할 수 없습니다",
+    "failed_entry": "{{path}} — {{error}}",
+    "unnamed": "(이름 없음)"
+  },
+  "ui": {
+    "selected_count": "{{count}}개 선택됨",
+    "move": "이동",
+    "copy": "복사",
+    "clear_selection": "선택 해제",
+    "search_placeholder": "이 프로젝트에서 검색",
+    "view_toggle_label": "보기 방식",
+    "list_view": "리스트 보기",
+    "grid_view": "그리드 보기",
+    "more": "더보기",
+    "move_dropdown": "이동…",
+    "copy_dropdown": "복사…",
+    "expand": "펼치기",
+    "collapse": "접기",
+    "drag_items": "{{count}}개 항목",
+    "empty_folder": "빈 폴더",
+    "item_count": "{{count}}개 항목",
+    "download": "다운로드",
+    "rename": "이름 변경",
+    "delete": "삭제",
+    "new_folder": "새 폴더",
+    "upload": "업로드",
+    "uploading": "업로드 중…",
+    "preview": "미리보기",
+    "colName": "이름",
+    "colSize": "크기",
+    "colModified": "수정됨"
+  },
+  "page": {
+    "title": "파일",
+    "description": "프로젝트 전체와 공유돼요. 파일을 선택해 세션에 고정하고, 그 인용에서 산출물을 생성할 수 있어요."
+  },
+  "empty_action": {
+    "upload": "파일 업로드"
+  },
+  "empty": {
+    "search_no_results": "검색 결과 없음",
+    "search_hint": "다른 키워드로 시도하거나 검색을 지우세요.",
+    "folder_empty_title": "이 폴더는 비어 있습니다",
+    "folder_empty_hint": "파일을 드래그하거나 Upload를 눌러 첫 파일을 올려보세요."
+  },
+  "delete": {
+    "folder_title": "폴더를 삭제하시겠어요?",
+    "folder_body_with_children": "{{name}} 폴더와 그 안의 파일 {{count}}개가 함께 삭제됩니다. 되돌릴 수 없습니다.",
+    "folder_body_empty": "{{name}} 폴더를 삭제합니다. 되돌릴 수 없습니다.",
+    "file_title": "파일을 삭제하시겠어요?",
+    "file_body": "{{name}} 삭제하면 되돌릴 수 없습니다.",
+    "bulk_title": "{{count}}개 항목을 삭제하시겠어요?",
+    "bulk_body_summary": "{{summary}}를 삭제합니다.",
+    "bulk_body_includes": " 폴더 내부 파일 {{count}}개도 함께 삭제됩니다.",
+    "bulk_body_undo": " 되돌릴 수 없습니다.",
+    "summary_folders_one": "폴더 {{count}}개",
+    "summary_folders_other": "폴더 {{count}}개",
+    "summary_files_one": "파일 {{count}}개",
+    "summary_files_other": "파일 {{count}}개",
+    "confirm": "삭제"
+  },
+  "ops": {
+    "move_title": "이동",
+    "move_confirm": "이동",
+    "copy_title": "복사",
+    "copy_confirm": "복사"
+  },
+  "knowledge": {
+    "banner": "여기에 올린 파일은 AI가 이 프로젝트 질문에 답할 때 참고합니다. 새 파일은 올린 직후 잠시 뒤부터 쓰입니다.",
+    "indexing": "새 파일을 AI가 읽을 수 있게 정리하는 중이에요... 잠시만 기다려 주세요.",
+    "file_ready": "준비됨",
+    "file_pending": "준비 중",
+    "file_failed": "인덱싱 실패",
+    "file_failed_hint": "이 파일을 인덱싱하지 못했어요. 파일을 확인하거나 다시 올려보세요.",
+    "error": "일부 파일을 정리하지 못했어요. 다시 올려보세요."
+  },
+  "workspace": {
+    "all": "전체",
+    "cat": {
+      "files": "파일",
+      "docs": "문서·티켓",
+      "messages": "메시지"
+    },
+    "src": {
+      "local": "로컬",
+      "gdrive": "Google Drive",
+      "s3": "Amazon S3",
+      "confluence": "Confluence",
+      "jira": "Jira",
+      "gmail": "Gmail",
+      "slack": "Slack"
+    },
+    "addSource": "소스 추가",
+    "addSourceBody": "커넥터는 준비 중이에요",
+    "searchAll": "모든 소스에서 검색…",
+    "loading": "불러오는 중…",
+    "emptySource": "항목 없음",
+    "emptySourceHint": "이 소스에 항목이 없습니다.",
+    "folderEmpty": "이 폴더는 비어 있습니다",
+    "folderEmptyHint": "이 폴더에 추가한 파일이 여기에 표시돼요",
+    "detail": {
+      "close": "닫기",
+      "openChat": "새 대화에서 쓰기",
+      "download": "다운로드",
+      "delete": "삭제",
+      "openOriginal": "원본 열기",
+      "mockAttachToast": "곧 지원돼요 — 아직 이 소스는 첨부할 수 없어요"
+    }
+  }
+}

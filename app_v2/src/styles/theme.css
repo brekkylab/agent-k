@@ -1,0 +1,128 @@
+/* ============================================================================
+ * app_v2 theme — design tokens
+ * ----------------------------------------------------------------------------
+ * Sibling palette to the team app (cowork-design-system.css), NOT a rebrand.
+ * Same token architecture and structural design system; a deliberately
+ * different color identity so a single-user app_v2 instance is recognizable
+ * at a glance next to the warm-cream, slate-teal team app.
+ *
+ * Divergence (scene: one knowledge worker at a desk under cool daytime/screen
+ * light, calmly driving their own agent sessions):
+ *   - Neutrals: warm cream (team, hue ~75) -> cool slate (hue ~265, low chroma)
+ *   - Accent:   slate-teal (team, hue ~215) -> committed indigo-violet (hue ~278)
+ * Typography, spacing, radii, layout, motion: unchanged.
+ *
+ * ISOLATION RULE: every color decision lives here. globals.css only references
+ * these tokens via var(--token, <literal fallback>). Do not add colors there.
+ *
+ * OKLCH throughout. Contrast verified (see app_v2/DESIGN.md):
+ *   ink/paper 17.0:1, ink-2/paper 9.7:1, ink-3/paper 4.7:1,
+ *   white/accent 6.3:1, accent-ink/accent-soft 11.3:1 — all >= 4.5:1 body.
+ * ========================================================================== */
+
+:root {
+  /* ── Surfaces — cool slate paper ramp (hue 265, very low chroma) ────────── */
+  --cw-paper:        oklch(0.982 0.004 265);  /* main page bg */
+  --cw-paper-2:      oklch(0.968 0.006 265);  /* card / pane / form panel bg */
+  --cw-paper-3:      oklch(0.945 0.008 265);  /* hover, inset, chip, code */
+  --cw-paper-4:      oklch(0.918 0.010 265);  /* deeper inset, divider hover */
+  --cw-neutral-0:    oklch(1     0     0);    /* pure white surface (dialogs) */
+
+  /* ── Borders ─────────────────────────────────────────────────────────── */
+  --cw-line:         oklch(0.898 0.010 265);  /* default border */
+  --cw-line-strong:  oklch(0.855 0.012 265);  /* input / control border */
+  --cw-line-soft:    oklch(0.940 0.008 265);  /* soft divider (list rows) */
+
+  /* ── Ink — cool slate text ramp (hue ~270, slight accent lean) ─────────── */
+  --cw-ink:          oklch(0.205 0.012 275);  /* primary text */
+  --cw-ink-2:        oklch(0.375 0.014 272);  /* secondary text, nav link */
+  --cw-ink-3:        oklch(0.545 0.013 270);  /* tertiary / muted (dates, hints) */
+  --cw-ink-4:        oklch(0.700 0.010 268);  /* disabled / decorative only */
+
+  /* ── Accent — committed indigo-violet (hue 278) ────────────────────────── */
+  --cw-accent:       oklch(0.500 0.170 278);  /* primary action, focus, active */
+  --cw-accent-2:     oklch(0.430 0.175 278);  /* hover / pressed accent */
+  --cw-accent-soft:  oklch(0.955 0.020 278);  /* accent pill / badge bg */
+  --cw-accent-ink:   oklch(0.320 0.070 278);  /* text on accent-soft (badge) */
+  --cw-on-accent:    oklch(1     0     0);     /* text on solid accent (white) */
+
+  /* Accent border/line — pairs with accent-soft on pills & focus rings. */
+  --cw-accent-line:  oklch(0.850 0.055 278);  /* accent pill border, focus outline */
+
+  /* ── Semantic ──────────────────────────────────────────────────────────── */
+  --cw-destructive:      oklch(0.560 0.190 27);   /* error text, delete action */
+  --cw-destructive-2:    oklch(0.480 0.185 27);   /* destructive hover */
+  --cw-destructive-soft: oklch(0.968 0.020 27);   /* error box bg */
+
+  --cw-ok:           oklch(0.560 0.130 150);  /* connected status dot */
+
+  --cw-warn:         oklch(0.720 0.150 70);   /* disconnected status dot */
+  --cw-warn-bg:      oklch(0.972 0.028 85);   /* warning box bg */
+  --cw-warn-border:  oklch(0.910 0.060 85);   /* warning box border */
+  --cw-warn-fg:      oklch(0.470 0.080 65);   /* warning box text */
+
+  /* @mention accent — kept in the indigo-violet family (NOT the original's
+     true-blue 260) so mention tokens read as a brighter sibling of the accent,
+     preserving the divergent identity. */
+  --cw-mention:      oklch(0.520 0.200 285);
+  --cw-mention-soft: oklch(0.965 0.030 285);
+
+  /* ── Overlays ────────────────────────────────────────────────────────── */
+  --cw-scrim:        oklch(0 0 0 / 0.42);     /* dialog backdrop */
+
+  /* ── Design-system semantic aliases (ported from cowork-design-system.css).
+     The ported CSS derives these from the base tokens above, so they normally
+     inherit the divergent palette for free. They are re-declared here so this
+     file remains the single source of truth for color and theme.css can load
+     LAST and win regardless of cascade order. Non-color tokens (radii, spacing,
+     type, shadows, layout) intentionally stay in the design system. */
+  --cw-bg:            var(--cw-paper);
+  --cw-bg-subtle:     var(--cw-paper-2);
+  --cw-bg-muted:      var(--cw-paper-3);
+  --cw-bg-elevated:   var(--cw-paper);
+
+  --cw-fg-1:          var(--cw-ink);
+  --cw-fg-2:          var(--cw-ink-2);
+  --cw-fg-3:          var(--cw-ink-3);
+  --cw-fg-4:          var(--cw-ink-4);
+  --cw-fg-on-primary: var(--cw-on-accent);
+  --cw-fg-on-dark:    var(--cw-paper);
+
+  --cw-border:        var(--cw-line);
+  --cw-border-hover:  var(--cw-line-strong);
+  --cw-border-strong: var(--cw-line-strong);
+  --cw-ring:          var(--cw-ink-3);
+
+  /* Primary button = solid accent (the app's committed indigo-violet), unlike
+     the original app whose primary was warm ink. This keeps the strongest CTA
+     wearing the divergent accent. */
+  --cw-primary:       var(--cw-accent);
+  --cw-primary-hover: var(--cw-accent-2);
+  --cw-secondary:     var(--cw-paper-3);
+  --cw-secondary-fg:  var(--cw-ink);
+
+  --cw-active-bg:     var(--cw-paper-3);
+  --cw-active-fg:     var(--cw-ink);
+  --cw-active-mark:   var(--cw-accent);
+
+  --cw-live-ping:     var(--cw-ok);
+  --cw-live-dot:      var(--cw-ok);
+
+  /* Selection wash (multi-select rows) — accent family. */
+  --cw-selected-bg:     color-mix(in oklch, var(--cw-accent) 14%, transparent);
+  --cw-selected-bg-2:   color-mix(in oklch, var(--cw-accent) 22%, transparent);
+  --cw-selected-border: var(--cw-accent);
+  --cw-selected-ring:   color-mix(in oklch, var(--cw-accent), transparent 86%);
+
+  /* Home composer — unify agent-type accents to indigo (overrides per-agent
+     amber/green tints from globals.css .cw-agent-composer-wrap).
+     All agents now share the app's committed indigo identity. */
+  .cw-agent-composer-wrap {
+    --cw-agent-accent: var(--cw-accent);
+    --cw-agent-send-bg: var(--cw-accent-2);
+  }
+  .cw-agent-composer-wrap[data-agent="deep_research"] {
+    --cw-agent-accent: var(--cw-accent);
+    --cw-agent-send-bg: var(--cw-accent-2);
+  }
+}

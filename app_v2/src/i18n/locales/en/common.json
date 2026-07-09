@@ -1,0 +1,113 @@
+{
+  "attach_limit": "You can attach up to {{max}} files at once.",
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "close": "Close",
+    "edit": "Edit",
+    "create": "Create",
+    "rename": "Rename",
+    "copy": "Copy",
+    "move": "Move",
+    "retry": "Retry",
+    "logout": "Log out",
+    "user_menu": "Account menu",
+    "user_settings": "User Settings"
+  },
+  "state": {
+    "loading": "Loading…",
+    "saving": "Saving…",
+    "creating": "Creating…",
+    "deleting": "Deleting…",
+    "processing": "Processing…",
+    "empty": "Nothing to show"
+  },
+  "language": {
+    "label": "Language",
+    "english": "English",
+    "korean": "한국어"
+  },
+  "nav": {
+    "new_chat": "New Chat",
+    "recents": "Recents",
+    "recents_empty": "No recent chats yet",
+    "workspace": "Workspace"
+  },
+  "intent": {
+    "general": { "label": "General", "note": "Start freely" },
+    "analysis": { "label": "Analysis", "note": "Evidence-based judgement" },
+    "brainstorm": { "label": "Brainstorm", "note": "Explore options" },
+    "writing": { "label": "Writing", "note": "Draft content" },
+    "recap": { "label": "Recap", "note": "Decisions & summary" }
+  },
+  "share": {
+    "private": {
+      "label": "Private",
+      "short_label": "Private",
+      "desc": "Only visible to you"
+    },
+    "shared_readonly": {
+      "label": "Read-only share",
+      "short_label": "Read",
+      "desc": "Teammates can read"
+    },
+    "shared_chat": {
+      "label": "Chat together",
+      "short_label": "Chat",
+      "desc": "Teammates and AI reply together"
+    }
+  },
+  "sidebar": {
+    "resizer_label": "Sidebar width",
+    "open": "Open sidebar",
+    "close": "Close sidebar",
+    "pin": "Pin sidebar",
+    "collapse": "Collapse sidebar",
+    "add_label": "Add {{label}}",
+    "new_project": "New Project",
+    "new_session": "New Session",
+    "creating_session": "Creating session…",
+    "brand_label": "Cowork projects",
+    "section_projects": "PROJECTS",
+    "section_sessions": "Sessions",
+    "nav": {
+      "home": "Home",
+      "files": "Files",
+      "skills": "Skills",
+      "schedule": "Schedule",
+      "automation": "Automation",
+      "members": "Members",
+      "settings": "Settings"
+    }
+  },
+  "mention": {
+    "you_were_mentioned": "You were mentioned",
+    "unread_in_project": "Unread mentions in this project"
+  },
+  "placeholders": {
+    "untitled_session": "Untitled session",
+    "no_description": "No description"
+  },
+  "errors": {
+    "unknown": "Something went wrong. Please try again."
+  },
+  "preview": {
+    "loading": "Loading…",
+    "download": "Download",
+    "unsupported_title": "Preview not available for this format",
+    "unsupported_body": "Download the file to view it.",
+    "too_large_title": "File too large",
+    "too_large_body": "This file is too large to preview. Download to view.",
+    "error_title": "Couldn't load preview",
+    "error_body": "Try again or download to view.",
+    "close": "Close",
+    "zoom": "Zoom",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "zoom_reset": "Reset zoom",
+    "table_truncated": "Large table — showing the first {{n}} of {{total}} rows",
+    "table_empty": "No rows to display"
+  }
+}

@@ -1,0 +1,81 @@
+import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
+import { Icon } from './Icon';
+import { useDialogEscape } from '@/lib/useDialogEscape';
+
+interface ConfirmDialogProps {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+  pending?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+  confirmOnEnter?: boolean;
+}
+
+export function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  cancelLabel,
+  destructive,
+  pending,
+  onConfirm,
+  onClose,
+  confirmOnEnter = false,
+}: ConfirmDialogProps) {
+  const { t } = useTranslation('common');
+  useDialogEscape(onClose, { disabled: pending });
+  useEffect(() => {
+    if (!confirmOnEnter) return;
+    function onKey(e: KeyboardEvent) {
+      if (pending) return;
+      if (e.key === 'Enter') onConfirm();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onConfirm, pending, confirmOnEnter]);
+
+  const downOnBackdropRef = useRef(false);
+
+  return createPortal(
+    <div
+      className="cw-dialog-backdrop"
+      role="dialog"
+      aria-modal="true"
+      onMouseDown={(e) => { downOnBackdropRef.current = e.target === e.currentTarget; }}
+      onClick={(e) => {
+        const wasDownOnBackdrop = downOnBackdropRef.current;
+        downOnBackdropRef.current = false;
+        if (!wasDownOnBackdrop) return;
+        if (e.target === e.currentTarget && !pending) onClose();
+      }}
+    >
+      <div className="cw-dialog">
+        <button className="cw-close" onClick={onClose} aria-label={t('actions.close')} disabled={pending}>
+          <Icon name="x" />
+        </button>
+        <h2 style={{ margin: '0 0 8px', fontSize: 18, letterSpacing: '-0.015em' }}>{title}</h2>
+        <p style={{ color: 'var(--cw-ink-3)', margin: '0 0 18px', fontSize: 13, lineHeight: 1.6 }}>{body}</p>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button type="button" className="cw-btn-secondary" onClick={onClose} disabled={pending}>
+            {cancelLabel ?? t('actions.cancel')}
+          </button>
+          <button
+            type="button"
+            className="cw-btn-primary"
+            onClick={onConfirm}
+            disabled={pending}
+            style={destructive ? { background: 'var(--cw-destructive)', borderColor: 'var(--cw-destructive)' } : undefined}
+          >
+            {pending ? t('state.processing') : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}

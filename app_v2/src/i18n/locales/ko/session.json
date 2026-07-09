@@ -1,0 +1,124 @@
+{
+  "home": {
+    "greeting": "오늘은 무엇을 도와드릴까요?",
+    "placeholder": "Cowork에 메시지 보내기…",
+    "hint": "Enter로 전송 · Shift+Enter로 줄바꿈",
+    "send": "전송",
+    "agent_label": "에이전트",
+    "agent": {
+      "coworker": "코워커",
+      "deep_research": "딥 리서치"
+    },
+    "model_label": "모델",
+    "model_placeholder": "모델 (선택)",
+    "error": "대화를 시작하지 못했어요: {{message}}",
+    "error_generic": "알 수 없는 오류",
+    "attachmentHint": "이 파일을 참조해 대화를 시작해요",
+    "removeAttachment": "첨부 파일 제거"
+  },
+  "toast": {
+    "stream_failed": "스트리밍 실패: {{error}}",
+    "send_failed": "전송 실패: {{message}}",
+    "stop_failed": "중지 실패: {{message}}",
+    "agent_error": "에이전트 오류: {{message}}",
+    "run_stopped": "응답 생성이 중지되었습니다",
+    "share_mode_changed": "공유 모드가 변경되었습니다",
+    "share_change_failed": "공유 변경 실패: {{message}}",
+    "artifact_deleted": "삭제되었습니다",
+    "artifact_delete_failed": "삭제 실패",
+    "copied": "클립보드에 복사되었습니다",
+    "team_send_failed": "팀 메시지 전송 실패: {{message}}",
+    "unknown_error": "unknown"
+  },
+  "ui": {
+    "ai_responding": "AI 답변 중…",
+    "response_delayed": "응답이 평소보다 지연되고 있습니다… Esc로 언제든 중지할 수 있어요.",
+    "loading_history": "이전 메시지를 불러오는 중…",
+    "attach_file": "파일 첨부",
+    "self_label": "나",
+    "tool_running": "실행 중…",
+    "send_aria": "전송",
+    "stop_generation": "응답 생성 중지",
+    "stopping": "중지 중… 마지막 메시지가 도착할 수 있어요.",
+    "composer_placeholder": "Cowork와 팀에 메시지 보내기…",
+    "composer_hint": "Enter로 전송 · #로 파일 첨부 · @로 멤버 멘션",
+    "command_no_results": "결과 없음",
+    "command_loading": "불러오는 중…",
+    "command_suggestions": "제안",
+    "mention_all_label": "모두",
+    "team_mode_hint": "팀에게만 전송 · AI가 보지 않음",
+    "team_message_tooltip": "AI가 보지 않는 메시지",
+    "new_message": "새 메시지",
+    "scroll_to_bottom": "맨 아래로",
+    "copy": "복사",
+    "title_fallback": "…"
+  },
+  "chat": {
+    "started_by": "시작한 사람:",
+    "files_count": "파일 {{count}}개",
+    "default_label": "Cowork 기본",
+    "model_in_use": "이 세션에서 사용 중인 모델",
+    "model_unavailable": "이 모델은 현재 사용할 수 없어 추천 모델로 대체 실행됩니다",
+    "model_unavailable_suffix": " (사용 불가)",
+    "agent_chip": "이 세션의 에이전트"
+  },
+  "side": {
+    "members": "멤버",
+    "referenced_files": "참조된 파일",
+    "no_pinned_files": "고정된 파일이 아직 없어요.",
+    "access": "접근",
+    "session": "세션",
+    "project_label": "프로젝트 · {{name}}",
+    "info_tab": "정보",
+    "files_tab": "파일"
+  },
+  "artifacts_header": "산출물",
+  "shared_files_header": "공유 파일",
+  "shared_files": {
+    "import": "메시지에 추가",
+    "remove": "제거",
+    "up": "뒤로가기",
+    "drag_hint": "채팅으로 끌어다 놓으면 첨부돼요",
+    "attach_limit": "한 번에 최대 {{max}}개까지 첨부할 수 있어요.",
+    "drag_items": "파일 {{count}}개",
+    "empty_title": "공유 파일이 없어요",
+    "empty_body": "프로젝트 공유 파일이 여기에 표시돼요. 채팅으로 끌어다 놓으면 첨부돼요."
+  },
+  "menu": {
+    "options": "세션 옵션",
+    "mark_read": "읽음으로 표시",
+    "duplicate": "세션 복제",
+    "delete": "세션 삭제"
+  },
+  "artifact": {
+    "download": "다운로드",
+    "copy_to_shared": "공유 디렉토리로 복사",
+    "delete": "삭제",
+    "preview": "미리보기"
+  },
+  "delete_artifact": {
+    "title": "삭제 확인",
+    "body": "{{name}} 삭제하시겠습니까?",
+    "confirm": "삭제"
+  },
+  "artifacts": {
+    "select_count": "{{count}}개 선택됨",
+    "deselect_all": "전체 해제",
+    "select_all": "전체 선택",
+    "bulk_label": "선택 항목 작업",
+    "more": "더보기",
+    "empty_title": "산출물 없음",
+    "empty_body": "에이전트가 파일을 생성하면 여기에 표시됩니다."
+  },
+  "delete_artifacts_bulk": {
+    "title": "삭제 확인",
+    "body": "{{count}}개 파일을 삭제하시겠습니까?",
+    "confirm": "삭제"
+  },
+  "citation": {
+    "verified": "이 프로젝트 문서에서 확인됨",
+    "unverified": "프로젝트 문서에서 확인되지 않음",
+    "missing": "답변에서 인용했지만 출처가 표시되지 않음",
+    "missing_label": "출처 없음"
+  }
+}
