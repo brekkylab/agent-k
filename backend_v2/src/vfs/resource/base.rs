@@ -18,9 +18,14 @@ pub struct DirEntry {
     pub kind: FileKind,
     pub size: u64,
     /// Last-modified time, if the backend reports one per entry (S3
-    /// `LastModified`). Carried from `readdir` so the cache can serve it on the
-    /// stat fast-path (`ls -l`) instead of falling back to the UNIX epoch (R2).
+    /// `LastModified`, Notion `last_edited_time`). Carried from `readdir` so the
+    /// cache can serve it on the stat fast-path (`ls -l`) instead of falling
+    /// back to the UNIX epoch (R2).
     pub mtime: Option<std::time::SystemTime>,
+    /// Last-access time per entry, if the backend reports one (usually `None`).
+    pub atime: Option<std::time::SystemTime>,
+    /// Change/creation time per entry (Notion `created_time`), if reported.
+    pub ctime: Option<std::time::SystemTime>,
 }
 
 #[derive(Clone, Debug, Default)]

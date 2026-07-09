@@ -46,8 +46,9 @@ impl NotionResource {
         })
     }
 
-    /// Top-level (workspace) pages as `<title>__<id>` directory names.
-    async fn top_level_page_dirs(&self) -> anyhow::Result<Vec<String>> {
+    /// Top-level (workspace) pages as `<title>__<id>` directory entries,
+    /// carrying each page's `last_edited_time`/`created_time`.
+    async fn top_level_page_dirs(&self) -> anyhow::Result<Vec<DirEntry>> {
         let pages = self.accessor.search_pages().await?;
         Ok(pages
             .iter()
@@ -57,7 +58,13 @@ impl NotionResource {
                     .and_then(|t| t.as_str())
                     == Some("workspace")
             })
-            .map(page_dirname)
+            .map(|p| {
+                dir_t(
+                    &page_dirname(p),
+                    page_time(p, "last_edited_time"),
+                    page_time(p, "created_time"),
+                )
+            })
             .collect())
     }
 
@@ -76,11 +83,11 @@ impl NotionResource {
                 .and_then(|t| t.as_str())
                 .unwrap_or("untitled");
             let child_id = b.get("id").and_then(|i| i.as_str()).unwrap_or("");
-            out.push(dir(&format!(
-                "{}__{}",
-                sanitize_name(child_title),
-                child_id
-            )));
+            out.push(dir_t(
+                &format!("{}__{}", sanitize_name(child_title), child_id),
+                page_time(b, "last_edited_time"),
+                page_time(b, "created_time"),
+            ));
         }
         Ok(out)
     }
@@ -122,12 +129,7 @@ impl Resource for NotionResource {
         let segs = segments(path);
         match segs.as_slice() {
             [] => Ok(vec![dir("pages")]),
-            [p] if p == "pages" => Ok(self
-                .top_level_page_dirs()
-                .await?
-                .into_iter()
-                .map(|n| dir(&n))
-                .collect()),
+            [p] if p == "pages" => self.top_level_page_dirs().await.map_err(VfsError::from),
             [p, rest @ ..] if p == "pages" && !rest.is_empty() => {
                 let last = rest.last().unwrap();
                 if last == "page.json" {
@@ -507,7 +509,32 @@ fn dir(name: &str) -> DirEntry {
         kind: FileKind::Dir,
         size: 0,
         mtime: None,
+        atime: None,
+        ctime: None,
     }
+}
+
+/// A page directory carrying the page's times (`last_edited_time` → mtime,
+/// `created_time` → ctime) so `ls -l` shows real times through the cache.
+fn dir_t(
+    name: &str,
+    mtime: Option<std::time::SystemTime>,
+    ctime: Option<std::time::SystemTime>,
+) -> DirEntry {
+    DirEntry {
+        name: name.to_string(),
+        kind: FileKind::Dir,
+        size: 0,
+        mtime,
+        atime: None,
+        ctime,
+    }
+}
+
+/// Read an RFC 3339 timestamp field (e.g. `last_edited_time`) off a Notion
+/// page/block object into a `SystemTime`.
+fn page_time(v: &Value, key: &str) -> Option<std::time::SystemTime> {
+    v.get(key).and_then(|x| x.as_str()).and_then(rfc3339_to_systemtime)
 }
 
 fn file(name: &str, size: u64) -> DirEntry {
@@ -516,6 +543,8 @@ fn file(name: &str, size: u64) -> DirEntry {
         kind: FileKind::File,
         size,
         mtime: None,
+        atime: None,
+        ctime: None,
     }
 }
 
