@@ -8,17 +8,6 @@ use crate::vfs::{
     resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
-/// Extract `(mtime, ctime)` from a rendered `page.json`: Notion's
-/// `last_edited_time` → mtime, `created_time` → ctime (the nearest ctime analog
-/// the API exposes). Notion has no access time, so atime stays `None`.
-fn page_times(page_json: &[u8]) -> (Option<std::time::SystemTime>, Option<std::time::SystemTime>) {
-    let Ok(v) = serde_json::from_slice::<Value>(page_json) else {
-        return (None, None);
-    };
-    let t = |key: &str| v.get(key).and_then(|x| x.as_str()).and_then(rfc3339_to_systemtime);
-    (t("last_edited_time"), t("created_time"))
-}
-
 /// Parse an RFC 3339 timestamp into a `SystemTime` (pre-epoch → `None`).
 fn rfc3339_to_systemtime(s: &str) -> Option<std::time::SystemTime> {
     let secs = chrono::DateTime::parse_from_rfc3339(s).ok()?.timestamp();
@@ -151,34 +140,27 @@ impl Resource for NotionResource {
                 ..Default::default()
             }),
             [p, rest @ ..] if p == "pages" && !rest.is_empty() => {
-                if rest.last().map(String::as_str) == Some("page.json") {
-                    let id = page_id(&rest[rest.len() - 2]);
-                    let bytes = self.render_page_json(&id).await?;
-                    let (mtime, ctime) = page_times(&bytes);
-                    Ok(FileStat {
-                        kind: FileKind::File,
-                        size: bytes.len() as u64,
-                        mtime,
-                        ctime,
-                        ..Default::default()
-                    })
+                // Cheap: fetch only the page object (times + existence), not the
+                // full block tree. Size is 0 here (computed on read); keeping
+                // `stat` cheap is what makes `last_edited_time` revalidation pay.
+                let id = if rest.last().map(String::as_str) == Some("page.json") {
+                    page_id(&rest[rest.len() - 2])
                 } else {
-                    // N1: don't blindly report a page dir as existing — verify the
-                    // page is real (render fails → NotFound instead of a Dir whose
-                    // readdir later errors). Reuse the render for the page's times.
-                    let id = page_id(rest.last().unwrap());
-                    let bytes = self
-                        .render_page_json(&id)
-                        .await
-                        .map_err(|_| VfsError::NotFound)?;
-                    let (mtime, ctime) = page_times(&bytes);
-                    Ok(FileStat {
-                        kind: FileKind::Dir,
-                        mtime,
-                        ctime,
-                        ..Default::default()
-                    })
-                }
+                    page_id(rest.last().unwrap())
+                };
+                let page = self
+                    .accessor
+                    .get_page(&id)
+                    .await
+                    .map_err(|_| VfsError::NotFound)?;
+                let is_json = rest.last().map(String::as_str) == Some("page.json");
+                Ok(FileStat {
+                    kind: if is_json { FileKind::File } else { FileKind::Dir },
+                    size: 0,
+                    mtime: page_time(&page, "last_edited_time"),
+                    ctime: page_time(&page, "created_time"),
+                    ..Default::default()
+                })
             }
             _ => Err(VfsError::NotFound),
         }

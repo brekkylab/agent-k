@@ -19,8 +19,9 @@ use crate::vfs::{
     resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
-/// Default listing TTL (600s).
-const DEFAULT_TTL: Duration = Duration::from_secs(600);
+/// Directory-listing TTL. Listings have no cheap version to revalidate against
+/// (unlike file content), so they fall back to a short expiry.
+const DEFAULT_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy)]
 struct Entry {
@@ -155,12 +156,50 @@ impl IndexCache {
     }
 }
 
-/// Wraps a provider [`Resource`] with an [`IndexCache`]: `readdir` fills the
-/// cache, `stat` serves from it (and negative-caches misses), mutations
-/// invalidate. Read/write payloads are delegated unchanged.
+/// Full object bytes cached above this size are dropped — a ranged read of a
+/// known-large object is served ranged and uncached instead (8 MiB).
+const MAX_CONTENT_BYTES: u64 = 8 << 20;
+
+/// A cheap validator for a file's content: the backend's strong tag
+/// (S3 `ETag`/`VersionId`) if any, else its mtime (Notion `last_edited_time`).
+/// `Unknown` = nothing to validate against, so content is never cache-served.
+#[derive(Clone, PartialEq)]
+enum Version {
+    Tag(String),
+    Time(std::time::SystemTime),
+    Unknown,
+}
+
+impl Version {
+    fn of(s: &FileStat) -> Self {
+        if let Some(e) = &s.etag {
+            Version::Tag(e.clone())
+        } else if let Some(v) = &s.version {
+            Version::Tag(v.clone())
+        } else if let Some(t) = s.mtime {
+            Version::Time(t)
+        } else {
+            Version::Unknown
+        }
+    }
+    fn known(&self) -> bool {
+        !matches!(self, Version::Unknown)
+    }
+}
+
+/// A cached object: (validator, full bytes).
+type ContentEntry = (Version, Arc<Vec<u8>>);
+
+/// Wraps a provider [`Resource`] with an [`IndexCache`] for listings (short TTL)
+/// plus a **validated** content cache: a read probes the object's cheap version
+/// via `stat` and serves cached bytes only while it matches, so external edits
+/// are refetched without a TTL wait. Mutations invalidate both.
 pub struct CachedResource {
     inner: Arc<dyn Resource>,
     cache: IndexCache,
+    /// path -> (validator, full bytes). Held until the validator changes or the
+    /// path is written; freshness comes from revalidation, not a TTL.
+    content: Mutex<HashMap<String, ContentEntry>>,
 }
 
 impl CachedResource {
@@ -168,20 +207,81 @@ impl CachedResource {
         Self {
             inner,
             cache: IndexCache::new(DEFAULT_TTL),
+            content: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Cached bytes for `key` iff the stored validator equals `version` (and is
+    /// known) — the metadata dirty check; a changed backend version misses.
+    fn content_get(&self, key: &str, version: &Version) -> Option<Arc<Vec<u8>>> {
+        if !version.known() {
+            return None;
+        }
+        match self.content.lock().unwrap().get(key) {
+            Some((v, b)) if v == version => Some(b.clone()),
+            _ => None,
+        }
+    }
+
+    fn content_put(&self, key: &str, version: Version, bytes: Vec<u8>) {
+        if version.known() && bytes.len() as u64 <= MAX_CONTENT_BYTES {
+            self.content
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), (version, Arc::new(bytes)));
+        }
+    }
+
+    fn content_drop(&self, key: &str) {
+        self.content.lock().unwrap().remove(key);
+    }
+
+    fn content_clear(&self) {
+        self.content.lock().unwrap().clear();
+    }
+}
+
+/// Slice `data` by an optional byte range (clamped to bounds); `None` = all.
+fn slice(data: &[u8], range: &Option<Range<u64>>) -> Vec<u8> {
+    match range {
+        Some(r) => {
+            let start = (r.start as usize).min(data.len());
+            let end = (r.end as usize).min(data.len()).max(start);
+            data[start..end].to_vec()
+        }
+        None => data.to_vec(),
     }
 }
 
 #[async_trait]
 impl Resource for CachedResource {
     async fn read_bytes(&self, path: &VPath, range: Option<Range<u64>>) -> VfsResult<Vec<u8>> {
-        self.inner.read_bytes(path, range).await
+        let key = path.as_str();
+        // Probe the cheap version; serve cached bytes only while it matches.
+        let st = self.inner.stat(path).await?;
+        let version = Version::of(&st);
+        if let Some(full) = self.content_get(key, &version) {
+            return Ok(slice(&full, &range));
+        }
+        // Miss: fetch + cache the whole object, unless it's a known-large object
+        // read with a range (served ranged, uncached). Providers that render the
+        // whole file regardless of range report size 0, so they still cache whole.
+        let fetch_full = range.is_none() || st.size == 0 || st.size <= MAX_CONTENT_BYTES;
+        if fetch_full {
+            let full = self.inner.read_bytes(path, None).await?;
+            let out = slice(&full, &range);
+            self.content_put(key, version, full);
+            Ok(out)
+        } else {
+            self.inner.read_bytes(path, range).await
+        }
     }
 
     async fn write_bytes(&self, path: &VPath, data: Vec<u8>) -> VfsResult<()> {
         let r = self.inner.write_bytes(path, data).await;
         if r.is_ok() {
             self.cache.invalidate_parent(path.as_str());
+            self.content_drop(path.as_str());
         }
         r
     }
@@ -241,6 +341,7 @@ impl Resource for CachedResource {
             // The path itself may have been a directory; drop its listing too.
             self.cache.invalidate_dir(path.as_str());
             self.cache.invalidate_parent(path.as_str());
+            self.content_drop(path.as_str());
         }
         r
     }
@@ -268,16 +369,19 @@ impl Resource for CachedResource {
             self.cache.invalidate_dir(from.as_str());
             self.cache.invalidate_parent(from.as_str());
             self.cache.invalidate_parent(to.as_str());
+            self.content_drop(from.as_str());
+            self.content_drop(to.as_str());
         }
         r
     }
 
     async fn command(&self, name: &str, body: &[u8]) -> VfsResult<Vec<u8>> {
         let r = self.inner.command(name, body).await;
-        // A domain write (e.g. Notion page-create) may change listings anywhere
-        // in the mount; conservatively drop the whole index.
+        // A domain write (e.g. Notion page-create) may change listings and
+        // content anywhere in the mount; conservatively drop both caches.
         if r.is_ok() {
             self.cache.clear();
+            self.content_clear();
         }
         r
     }
@@ -387,5 +491,86 @@ mod tests {
         // TTL 0 -> already expired
         assert!(!c.is_listed("/"));
         assert!(c.list_dir_entries("/").is_none());
+    }
+
+    // Validated content cache: repeat reads (incl. ranged) hit the once-fetched
+    // object; a changed backend version forces a refetch; a write invalidates.
+    // The counting provider proves `read_bytes` fires only on a genuine miss.
+    #[tokio::test]
+    async fn content_cache_validates_and_invalidates() {
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        use std::time::{Duration as D, UNIX_EPOCH};
+
+        struct Counter {
+            reads: AtomicUsize,
+            /// Backend version → `stat` mtime; bumping it simulates an edit made
+            /// outside the cache.
+            ver: AtomicU64,
+            data: Mutex<Vec<u8>>,
+        }
+        #[async_trait]
+        impl Resource for Counter {
+            async fn read_bytes(
+                &self,
+                _p: &VPath,
+                range: Option<Range<u64>>,
+            ) -> VfsResult<Vec<u8>> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                Ok(slice(self.data.lock().unwrap().as_slice(), &range))
+            }
+            async fn write_bytes(&self, _p: &VPath, data: Vec<u8>) -> VfsResult<()> {
+                *self.data.lock().unwrap() = data;
+                Ok(())
+            }
+            async fn readdir(&self, _p: &VPath) -> VfsResult<Vec<DirEntry>> {
+                Ok(vec![])
+            }
+            async fn stat(&self, _p: &VPath) -> VfsResult<FileStat> {
+                // Size unknown (0), like Notion — validated by mtime instead.
+                Ok(FileStat {
+                    kind: FileKind::File,
+                    size: 0,
+                    mtime: Some(UNIX_EPOCH + D::from_secs(self.ver.load(Ordering::SeqCst))),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let counter = Arc::new(Counter {
+            reads: AtomicUsize::new(0),
+            ver: AtomicU64::new(1),
+            data: Mutex::new(b"hello world".to_vec()),
+        });
+        let cached = CachedResource::new(counter.clone());
+        let p = VPath::new("/f.txt");
+
+        // First read fetches + caches (validated by version 1).
+        assert_eq!(cached.read_bytes(&p, None).await.unwrap(), b"hello world");
+        // Ranged repeat at the same version → served from cache, inner not hit.
+        assert_eq!(cached.read_bytes(&p, Some(0..5)).await.unwrap(), b"hello");
+        assert_eq!(
+            counter.reads.load(Ordering::SeqCst),
+            1,
+            "same version → cache hit"
+        );
+
+        // External edit: change bytes + bump the version WITHOUT going through
+        // the cache. The dirty check must notice and refetch.
+        *counter.data.lock().unwrap() = b"edited elsewhere".to_vec();
+        counter.ver.store(2, Ordering::SeqCst);
+        assert_eq!(
+            cached.read_bytes(&p, None).await.unwrap(),
+            b"edited elsewhere"
+        );
+        assert_eq!(
+            counter.reads.load(Ordering::SeqCst),
+            2,
+            "changed version → refetch"
+        );
+
+        // A write through the cache invalidates the entry too.
+        cached.write_bytes(&p, b"written".to_vec()).await.unwrap();
+        assert_eq!(cached.read_bytes(&p, None).await.unwrap(), b"written");
+        assert_eq!(counter.reads.load(Ordering::SeqCst), 3, "write invalidates");
     }
 }
