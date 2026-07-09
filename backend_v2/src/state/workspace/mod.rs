@@ -188,12 +188,6 @@ impl WorkspacesState {
         self.workspace_dir(wid).join("files")
     }
 
-    /// Public host path of workspace `wid`'s file root, for bind-mounting the
-    /// workspace's local files into a sandbox guest.
-    pub fn files_root(&self, wid: Uuid) -> PathBuf {
-        self.get_root(wid)
-    }
-
     /// The per-workspace directory (`data_root/workspaces/{wid}`), holding the
     /// file root and room for sibling metadata.
     fn workspace_dir(&self, wid: Uuid) -> PathBuf {
