@@ -233,20 +233,21 @@ struct Stat {
     is_dir: bool,
     size: u64,
     mtime: u64,
+    atime: u64,
+    ctime: u64,
 }
 fn stat(path: &str) -> Stat {
     match http("GET", "/stat", &format!("path={}", pct(path)), None) {
         Ok((200, body)) => {
             let j = String::from_utf8_lossy(&body);
+            let num = |k: &str| json_str(&j, k).and_then(|s| s.parse().ok()).unwrap_or(0);
             Stat {
                 exists: json_str(&j, "exists") == Some("true"),
                 is_dir: json_str(&j, "is_dir") == Some("true"),
-                size: json_str(&j, "size")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
-                mtime: json_str(&j, "mtime")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
+                size: num("size"),
+                mtime: num("mtime"),
+                atime: num("atime"),
+                ctime: num("ctime"),
             }
         }
         _ => Stat {
@@ -254,33 +255,51 @@ fn stat(path: &str) -> Stat {
             is_dir: false,
             size: 0,
             mtime: 0,
+            atime: 0,
+            ctime: 0,
         },
     }
 }
 
 fn dir_attr(ino: u64) -> FileAttr {
-    mk(ino, FileType::Directory, 0, UNIX_EPOCH)
+    mk(ino, FileType::Directory, 0, UNIX_EPOCH, UNIX_EPOCH, UNIX_EPOCH)
 }
 fn file_attr(ino: u64, size: u64) -> FileAttr {
-    mk(ino, FileType::RegularFile, size, UNIX_EPOCH)
+    mk(ino, FileType::RegularFile, size, UNIX_EPOCH, UNIX_EPOCH, UNIX_EPOCH)
 }
-/// File attr with a backend mtime (epoch seconds; 0 = unknown → epoch). S3-1.
-fn file_attr_mt(ino: u64, size: u64, mtime_secs: u64) -> FileAttr {
-    let t = if mtime_secs > 0 {
-        UNIX_EPOCH + Duration::from_secs(mtime_secs)
-    } else {
-        UNIX_EPOCH
-    };
-    mk(ino, FileType::RegularFile, size, t)
+/// Convert backend epoch-seconds (0 = unknown) to a `SystemTime`, falling back
+/// to `mtime` for an absent atime/ctime (e.g. S3 reports only LastModified).
+fn secs_or(mtime_secs: u64, secs: u64) -> SystemTime {
+    let s = if secs > 0 { secs } else { mtime_secs };
+    if s > 0 { UNIX_EPOCH + Duration::from_secs(s) } else { UNIX_EPOCH }
 }
-fn mk(ino: u64, kind: FileType, size: u64, mtime: SystemTime) -> FileAttr {
+/// Regular-file attr carrying the backend's atime/mtime/ctime (epoch seconds;
+/// absent atime/ctime fall back to mtime). S3-1.
+fn file_attr_times(ino: u64, size: u64, atime: u64, mtime: u64, ctime: u64) -> FileAttr {
+    mk(
+        ino,
+        FileType::RegularFile,
+        size,
+        secs_or(mtime, atime),
+        secs_or(mtime, mtime),
+        secs_or(mtime, ctime),
+    )
+}
+fn mk(
+    ino: u64,
+    kind: FileType,
+    size: u64,
+    atime: SystemTime,
+    mtime: SystemTime,
+    ctime: SystemTime,
+) -> FileAttr {
     FileAttr {
         ino: INodeNo(ino),
         size,
         blocks: 1,
-        atime: mtime,
+        atime,
         mtime,
-        ctime: mtime,
+        ctime,
         crtime: UNIX_EPOCH,
         kind,
         perm: if kind == FileType::Directory {
@@ -533,7 +552,7 @@ impl Filesystem for Fs {
                 &if s.is_dir {
                     dir_attr(ino)
                 } else {
-                    file_attr_mt(ino, s.size, s.mtime)
+                    file_attr_times(ino, s.size, s.atime, s.mtime, s.ctime)
                 },
                 Generation(0),
             );
@@ -569,7 +588,7 @@ impl Filesystem for Fs {
                 &if s.is_dir {
                     dir_attr(ino)
                 } else {
-                    file_attr_mt(ino, s.size, s.mtime)
+                    file_attr_times(ino, s.size, s.atime, s.mtime, s.ctime)
                 },
             );
         });
@@ -671,7 +690,7 @@ impl Filesystem for Fs {
                             &if s.is_dir {
                                 dir_attr(ino)
                             } else {
-                                file_attr_mt(ino, s.size, s.mtime)
+                                file_attr_times(ino, s.size, s.atime, s.mtime, s.ctime)
                             },
                         );
                     }

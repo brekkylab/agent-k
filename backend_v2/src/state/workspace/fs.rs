@@ -187,9 +187,9 @@ fn stat_from_vfs(fs: FileStat) -> Stat {
         kind: node_kind_of(fs.kind),
         len: fs.size,
         modified: fs.mtime,
-        accessed: None,
+        accessed: fs.atime,
         created: None,
-        status_changed: None,
+        status_changed: fs.ctime,
         executable: None,
     }
 }
@@ -780,6 +780,8 @@ impl ForwardFs for WorkspaceFs {
                 is_dir: true,
                 size: 0,
                 mtime: None,
+                atime: None,
+                ctime: None,
             });
         }
         // Only two namespaces exist in the unified tree: local files under
@@ -797,6 +799,8 @@ impl ForwardFs for WorkspaceFs {
                 is_dir: st.is_dir(),
                 size: st.len,
                 mtime: st.modified.and_then(secs_since_epoch),
+                atime: st.accessed.and_then(secs_since_epoch),
+                ctime: st.status_changed.and_then(secs_since_epoch),
             },
             // Any stat failure (missing path, provider error) reads as ENOENT,
             // matching the provider-only `Vfs` frontend.
@@ -1296,6 +1300,8 @@ mod tests {
         assert!(ForwardFs::stat(&fs, "/files").await.unwrap().is_dir);
         let ls = ForwardFs::stat(&fs, "/files/local.txt").await.unwrap();
         assert!(ls.exists && !ls.is_dir && ls.size == 11);
+        // Local files expose real mtime/atime/ctime from disk metadata.
+        assert!(ls.mtime.is_some() && ls.atime.is_some() && ls.ctime.is_some());
         let ms = ForwardFs::stat(&fs, "/mock/file.txt").await.unwrap();
         assert!(ms.exists && !ms.is_dir && ms.size == 11);
         assert!(!ForwardFs::stat(&fs, "/nope").await.unwrap().exists);

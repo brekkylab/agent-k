@@ -35,7 +35,12 @@ pub struct FwdStat {
     pub exists: bool,
     pub is_dir: bool,
     pub size: u64,
+    /// Times as seconds since the Unix epoch, if the source reports them.
+    /// `atime`/`ctime` are `None` for backends that only track modification
+    /// time (e.g. S3); the forwarder falls back to `mtime` when they are absent.
     pub mtime: Option<u64>,
+    pub atime: Option<u64>,
+    pub ctime: Option<u64>,
 }
 
 impl FwdStat {
@@ -46,6 +51,8 @@ impl FwdStat {
             is_dir: false,
             size: 0,
             mtime: None,
+            atime: None,
+            ctime: None,
         }
     }
 }
@@ -136,6 +143,8 @@ impl ForwardFs for Vfs {
                 is_dir: true,
                 size: 0,
                 mtime: None,
+                atime: None,
+                ctime: None,
             });
         }
         let Some((res, vp)) = self.route(path) else {
@@ -147,6 +156,8 @@ impl ForwardFs for Vfs {
                 is_dir: matches!(s.kind, FileKind::Dir),
                 size: s.size,
                 mtime: s.mtime.and_then(secs_since_epoch),
+                atime: s.atime.and_then(secs_since_epoch),
+                ctime: s.ctime.and_then(secs_since_epoch),
             },
             Err(_) => FwdStat::missing(),
         })
