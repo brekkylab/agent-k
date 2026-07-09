@@ -60,7 +60,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const onSessions = pathname === '/' || pathname.startsWith('/sessions');
-  const onWorkspace = pathname.startsWith('/workspace');
+  // Exact-prefix match: '/workspace-b' etc. are sibling candidate tabs, not sub-routes.
+  const onWorkspace = pathname === '/workspace' || pathname.startsWith('/workspace/');
+  const onWorkspaceB = pathname.startsWith('/workspace-b');
+  const onWorkspaceC = pathname.startsWith('/workspace-c');
+  const onWorkspaceD = pathname.startsWith('/workspace-d');
+  const onWorkspaceE = pathname.startsWith('/workspace-e');
+  const onWorkspaceF = pathname.startsWith('/workspace-f');
 
   return (
     <div className="cw-app-shell">
@@ -88,6 +94,47 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             <span className="cw-pocket"><Icon name="folder-open" size={13} /></span>
             <span>{t('nav.workspace', 'Workspace')}</span>
+          </Link>
+
+          {/* Workspace design candidates — mockup tabs for comparing workspace directions. */}
+          <Link
+            to="/workspace-b"
+            className={`cw-nav-row${onWorkspaceB ? ' is-active' : ''}`}
+          >
+            <span className="cw-pocket"><Icon name="file-text" size={13} /></span>
+            <span>WS · NotebookLM형</span>
+          </Link>
+
+          <Link
+            to="/workspace-c"
+            className={`cw-nav-row${onWorkspaceC ? ' is-active' : ''}`}
+          >
+            <span className="cw-pocket"><Icon name="image" size={13} /></span>
+            <span>WS · 가꾸기 캔버스</span>
+          </Link>
+
+          <Link
+            to="/workspace-d"
+            className={`cw-nav-row${onWorkspaceD ? ' is-active' : ''}`}
+          >
+            <span className="cw-pocket"><Icon name="sheet" size={13} /></span>
+            <span>WS · 경작형</span>
+          </Link>
+
+          <Link
+            to="/workspace-e"
+            className={`cw-nav-row${onWorkspaceE ? ' is-active' : ''}`}
+          >
+            <span className="cw-pocket"><Icon name="grid" size={13} /></span>
+            <span>WS · Astryx</span>
+          </Link>
+
+          <Link
+            to="/workspace-f"
+            className={`cw-nav-row${onWorkspaceF ? ' is-active' : ''}`}
+          >
+            <span className="cw-pocket"><Icon name="shield" size={13} /></span>
+            <span>WS · Glean형</span>
           </Link>
 
           {/* Subtle divider between Workspace and Recents */}

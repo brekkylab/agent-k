@@ -9,12 +9,42 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WorkspaceFRouteImport } from './routes/workspace-f'
+import { Route as WorkspaceERouteImport } from './routes/workspace-e'
+import { Route as WorkspaceDRouteImport } from './routes/workspace-d'
+import { Route as WorkspaceCRouteImport } from './routes/workspace-c'
+import { Route as WorkspaceBRouteImport } from './routes/workspace-b'
 import { Route as WorkspaceRouteImport } from './routes/workspace'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as WorkspaceIndexRouteImport } from './routes/workspace.index'
 import { Route as WorkspaceSourceIdRouteImport } from './routes/workspace.$sourceId'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
 
+const WorkspaceFRoute = WorkspaceFRouteImport.update({
+  id: '/workspace-f',
+  path: '/workspace-f',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkspaceERoute = WorkspaceERouteImport.update({
+  id: '/workspace-e',
+  path: '/workspace-e',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkspaceDRoute = WorkspaceDRouteImport.update({
+  id: '/workspace-d',
+  path: '/workspace-d',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkspaceCRoute = WorkspaceCRouteImport.update({
+  id: '/workspace-c',
+  path: '/workspace-c',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkspaceBRoute = WorkspaceBRouteImport.update({
+  id: '/workspace-b',
+  path: '/workspace-b',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WorkspaceRoute = WorkspaceRouteImport.update({
   id: '/workspace',
   path: '/workspace',
@@ -44,12 +74,22 @@ const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/workspace': typeof WorkspaceRouteWithChildren
+  '/workspace-b': typeof WorkspaceBRoute
+  '/workspace-c': typeof WorkspaceCRoute
+  '/workspace-d': typeof WorkspaceDRoute
+  '/workspace-e': typeof WorkspaceERoute
+  '/workspace-f': typeof WorkspaceFRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/workspace/$sourceId': typeof WorkspaceSourceIdRoute
   '/workspace/': typeof WorkspaceIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/workspace-b': typeof WorkspaceBRoute
+  '/workspace-c': typeof WorkspaceCRoute
+  '/workspace-d': typeof WorkspaceDRoute
+  '/workspace-e': typeof WorkspaceERoute
+  '/workspace-f': typeof WorkspaceFRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/workspace/$sourceId': typeof WorkspaceSourceIdRoute
   '/workspace': typeof WorkspaceIndexRoute
@@ -58,6 +98,11 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/workspace': typeof WorkspaceRouteWithChildren
+  '/workspace-b': typeof WorkspaceBRoute
+  '/workspace-c': typeof WorkspaceCRoute
+  '/workspace-d': typeof WorkspaceDRoute
+  '/workspace-e': typeof WorkspaceERoute
+  '/workspace-f': typeof WorkspaceFRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/workspace/$sourceId': typeof WorkspaceSourceIdRoute
   '/workspace/': typeof WorkspaceIndexRoute
@@ -67,15 +112,34 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/workspace'
+    | '/workspace-b'
+    | '/workspace-c'
+    | '/workspace-d'
+    | '/workspace-e'
+    | '/workspace-f'
     | '/sessions/$sessionId'
     | '/workspace/$sourceId'
     | '/workspace/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/sessions/$sessionId' | '/workspace/$sourceId' | '/workspace'
+  to:
+    | '/'
+    | '/workspace-b'
+    | '/workspace-c'
+    | '/workspace-d'
+    | '/workspace-e'
+    | '/workspace-f'
+    | '/sessions/$sessionId'
+    | '/workspace/$sourceId'
+    | '/workspace'
   id:
     | '__root__'
     | '/'
     | '/workspace'
+    | '/workspace-b'
+    | '/workspace-c'
+    | '/workspace-d'
+    | '/workspace-e'
+    | '/workspace-f'
     | '/sessions/$sessionId'
     | '/workspace/$sourceId'
     | '/workspace/'
@@ -84,11 +148,51 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   WorkspaceRoute: typeof WorkspaceRouteWithChildren
+  WorkspaceBRoute: typeof WorkspaceBRoute
+  WorkspaceCRoute: typeof WorkspaceCRoute
+  WorkspaceDRoute: typeof WorkspaceDRoute
+  WorkspaceERoute: typeof WorkspaceERoute
+  WorkspaceFRoute: typeof WorkspaceFRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/workspace-f': {
+      id: '/workspace-f'
+      path: '/workspace-f'
+      fullPath: '/workspace-f'
+      preLoaderRoute: typeof WorkspaceFRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workspace-e': {
+      id: '/workspace-e'
+      path: '/workspace-e'
+      fullPath: '/workspace-e'
+      preLoaderRoute: typeof WorkspaceERouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workspace-d': {
+      id: '/workspace-d'
+      path: '/workspace-d'
+      fullPath: '/workspace-d'
+      preLoaderRoute: typeof WorkspaceDRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workspace-c': {
+      id: '/workspace-c'
+      path: '/workspace-c'
+      fullPath: '/workspace-c'
+      preLoaderRoute: typeof WorkspaceCRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workspace-b': {
+      id: '/workspace-b'
+      path: '/workspace-b'
+      fullPath: '/workspace-b'
+      preLoaderRoute: typeof WorkspaceBRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/workspace': {
       id: '/workspace'
       path: '/workspace'
@@ -144,6 +248,11 @@ const WorkspaceRouteWithChildren = WorkspaceRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   WorkspaceRoute: WorkspaceRouteWithChildren,
+  WorkspaceBRoute: WorkspaceBRoute,
+  WorkspaceCRoute: WorkspaceCRoute,
+  WorkspaceDRoute: WorkspaceDRoute,
+  WorkspaceERoute: WorkspaceERoute,
+  WorkspaceFRoute: WorkspaceFRoute,
   SessionsSessionIdRoute: SessionsSessionIdRoute,
 }
 export const routeTree = rootRouteImport

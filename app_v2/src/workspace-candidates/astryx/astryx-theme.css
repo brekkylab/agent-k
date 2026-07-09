@@ -1,0 +1,263 @@
+/* Workspace candidate E — Astryx token override layer.
+   Renders the Cultivate (D) component inside .axw-scope, which redefines all
+   --cw-* custom properties consumed by cultivate.css with real Astryx values.
+
+   Core mechanism: every color token uses light-dark(light, dark) so flipping
+   color-scheme on the scope element auto-inverts the whole palette — no
+   separate .dark selector needed.
+
+   Themes:
+     .axw-scope              — Default (blue accent #0064E0)
+     .axw-scope[data-theme='neutral'] — Neutral (Figtree + OKLCH grayscale)
+   Schemes:
+     .axw-scope              — light (color-scheme: light)
+     .axw-scope[data-scheme='dark'] — dark (color-scheme: dark)
+*/
+
+/* ── Scope root ─────────────────────────────────────────────────── */
+
+.axw-scope {
+  color-scheme: light;
+  height: 100%;
+
+  /* ── Typography ──────────────────────────────────────────────── */
+  font-size: 14px; /* Astryx base: 0.875rem */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.4286;
+
+  /* ── Background / surface ────────────────────────────────────── */
+  --ax-bg-body:     light-dark(#F1F4F7, #111112);
+  --ax-bg-surface:  light-dark(#FFFFFF, #1F1F22);
+  --ax-bg-card:     light-dark(#FFFFFF, #1F1F22);
+  --ax-bg-popover:  light-dark(#FFFFFF, #28292C);
+  --ax-bg-muted:    light-dark(#0536590C, #1111127F);
+
+  /* ── Text ────────────────────────────────────────────────────── */
+  --ax-text-primary:   light-dark(#0A1317, #DFE2E5);
+  --ax-text-secondary: light-dark(#4E606F, #AAAFB5);
+  --ax-text-disabled:  light-dark(#A4B0BC, #6F747C);
+
+  /* ── Accent (default = blue) ─────────────────────────────────── */
+  --ax-accent:         light-dark(#0064E0, #2694FE);
+  --ax-accent-hover:   light-dark(#0055BF, #3EA5FF);
+  --ax-accent-on:      #FFFFFF;
+  --ax-accent-muted:   light-dark(#0082FB33, #0082FB3F);
+
+  /* ── Border ──────────────────────────────────────────────────── */
+  --ax-border:         light-dark(#05365919, #F2F4F619);
+  --ax-border-strong:  light-dark(#CCD3DB, #494D53);
+
+  /* ── Status ──────────────────────────────────────────────────── */
+  --ax-success:        light-dark(#0D8626, #0D8626);
+  --ax-success-muted:  light-dark(#0B991F33, #0B991F3F);
+  --ax-warning:        light-dark(#E9AF08, #F2C00B);
+  --ax-warning-muted:  light-dark(#E2A40033, #E2A4003F);
+  --ax-warning-text:   light-dark(#753F07, #FBCE03);
+
+  /* ── Shadow ──────────────────────────────────────────────────── */
+  --ax-shadow-low:
+    0px 1px 1px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2)),
+    0px 2px 8px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2));
+  --ax-shadow-med:
+    0px 1px 2px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2)),
+    0px 2px 12px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2));
+  --ax-shadow-high:
+    0px 2px 2px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2)),
+    0px 8px 24px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.3));
+
+  /* ── Radius ──────────────────────────────────────────────────── */
+  --ax-radius-inner:     4px;
+  --ax-radius-element:   8px;
+  --ax-radius-container: 12px;
+  --ax-radius-page:      28px;
+
+  /* ── Motion ──────────────────────────────────────────────────── */
+  --ax-ease:    cubic-bezier(0.24, 1, 0.4, 1);
+  --ax-dur-fast: 175ms;
+
+  /* ── Map --cw-* → astryx tokens ─────────────────────────────── */
+  /* All 17 variables consumed by cultivate.css: */
+
+  --cw-bg:           var(--ax-bg-surface);
+  --cw-bg-subtle:    var(--ax-bg-body);
+  --cw-bg-muted:     var(--ax-bg-muted);
+
+  --cw-border:       var(--ax-border);
+  --cw-border-strong:var(--ax-border-strong);
+
+  --cw-ink:          var(--ax-text-primary);
+  --cw-ink-soft:     var(--ax-text-secondary);
+  --cw-ink-faint:    var(--ax-text-disabled);
+
+  --cw-accent:       var(--ax-accent);
+  --cw-accent-2:     var(--ax-accent-hover);
+  --cw-accent-soft:  var(--ax-accent-muted);
+  --cw-accent-line:  light-dark(rgba(0,100,224,0.25), rgba(38,148,254,0.3));
+  --cw-accent-ink:   light-dark(#0064E0, #2694FE);
+
+  --cw-warn-fg:      var(--ax-warning-text);
+  --cw-warn-bg:      var(--ax-warning-muted);
+
+  --cw-ok:           var(--ax-success);
+  --cw-ok-bg:        var(--ax-success-muted);
+}
+
+/* ── Dark scheme ────────────────────────────────────────────────── */
+
+.axw-scope[data-scheme='dark'] {
+  color-scheme: dark;
+}
+
+/* ── Neutral theme overrides ────────────────────────────────────── */
+/* Figtree font stack + OKLCH grayscale accent + slightly larger radii */
+
+.axw-scope[data-theme='neutral'] {
+  font-family: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Radius bump (neutral theme: inner 6px / element 10px / container 12px) */
+  --ax-radius-inner:     6px;
+  --ax-radius-element:   10px;
+  --ax-radius-container: 12px;
+
+  /* Grayscale accent (OKLCH-derived, replaces blue) */
+  --ax-accent:       light-dark(oklch(0.35 0 0), oklch(0.78 0 0));
+  --ax-accent-hover: light-dark(oklch(0.25 0 0), oklch(0.88 0 0));
+  --ax-accent-muted: light-dark(oklch(0.35 0 0 / 0.08), oklch(0.78 0 0 / 0.12));
+  --cw-accent-line:  light-dark(oklch(0.35 0 0 / 0.2), oklch(0.78 0 0 / 0.25));
+  --cw-accent-ink:   light-dark(oklch(0.3 0 0), oklch(0.82 0 0));
+}
+
+/* ── Astryx-feel overrides scoped to cultivate elements ─────────── */
+/* Apply shadow-low/-med, transition timing, and border-radius upgrades
+   without touching cultivate.css. */
+
+/* Inbox item cards: shadow-low */
+.axw-scope .cvw-inbox-item {
+  box-shadow: var(--ax-shadow-low);
+  border-radius: var(--ax-radius-container);
+  transition: box-shadow var(--ax-dur-fast) var(--ax-ease),
+              border-color var(--ax-dur-fast) var(--ax-ease);
+}
+.axw-scope .cvw-inbox-item:hover {
+  box-shadow: var(--ax-shadow-med);
+}
+
+/* Evidence table wrapper: shadow-low + astryx container radius */
+.axw-scope .cvw-tablewrap {
+  box-shadow: var(--ax-shadow-low);
+  border-radius: var(--ax-radius-container);
+}
+
+/* Dialog: shadow-high + astryx container radius */
+.axw-scope .cvw-dialog {
+  box-shadow: var(--ax-shadow-high);
+  border-radius: var(--ax-radius-container);
+}
+
+/* Button hover transitions: background/border only, no layout transitions */
+.axw-scope .cvw-btn {
+  transition: background var(--ax-dur-fast) var(--ax-ease),
+              border-color var(--ax-dur-fast) var(--ax-ease),
+              color var(--ax-dur-fast) var(--ax-ease);
+}
+
+/* Rail items: element radius, snap transitions */
+.axw-scope .cvw-rail-item {
+  border-radius: var(--ax-radius-element);
+  transition: background var(--ax-dur-fast) var(--ax-ease);
+}
+
+/* Rail add button: element radius */
+.axw-scope .cvw-rail-add {
+  border-radius: var(--ax-radius-element);
+}
+
+/* Doc rows: element radius + shadow on hover */
+.axw-scope .cvw-doc-row {
+  border-radius: var(--ax-radius-element);
+  transition: box-shadow var(--ax-dur-fast) var(--ax-ease),
+              background var(--ax-dur-fast) var(--ax-ease);
+}
+.axw-scope .cvw-doc-row:hover {
+  box-shadow: var(--ax-shadow-low);
+}
+
+/* Proposal / prov-quote cards: container radius */
+.axw-scope .cvw-proposal,
+.axw-scope .cvw-prov-quote {
+  border-radius: var(--ax-radius-container);
+}
+
+/* Search input focus ring: astryx inset ring */
+.axw-scope .cvw-search input:focus,
+.axw-scope .cvw-ask-box input:focus {
+  box-shadow: inset 0 0 0 2px rgba(0, 100, 224, 0.35);
+}
+.axw-scope[data-theme='neutral'] .cvw-search input:focus,
+.axw-scope[data-theme='neutral'] .cvw-ask-box input:focus {
+  box-shadow: inset 0 0 0 2px oklch(0.35 0 0 / 0.3);
+}
+
+/* ── Theme control strip ─────────────────────────────────────────── */
+
+.axw-controls {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--ax-bg-surface);
+  border: 1px solid var(--ax-border-strong);
+  border-radius: var(--ax-radius-element);
+  box-shadow: var(--ax-shadow-med);
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--ax-text-secondary);
+  font-family: inherit;
+}
+
+.axw-controls-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ax-text-disabled);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.axw-seg {
+  display: flex;
+  border: 1px solid var(--ax-border-strong);
+  border-radius: var(--ax-radius-inner);
+  overflow: hidden;
+}
+
+.axw-seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--ax-text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: background var(--ax-dur-fast) var(--ax-ease),
+              color var(--ax-dur-fast) var(--ax-ease);
+  white-space: nowrap;
+}
+.axw-seg-btn:hover {
+  background: var(--ax-bg-muted);
+  color: var(--ax-text-primary);
+}
+.axw-seg-btn.is-active {
+  background: var(--ax-accent);
+  color: #fff;
+}
+.axw-seg-btn + .axw-seg-btn {
+  border-left: 1px solid var(--ax-border-strong);
+}
+.axw-seg-btn.is-active + .axw-seg-btn {
+  border-left-color: var(--ax-accent);
+}

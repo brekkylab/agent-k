@@ -1,0 +1,1053 @@
+/* Workspace candidate E — Astryx component philosophy implementation.
+   Self-contained token definitions (no --cw-* mapping layer needed).
+   All color tokens use light-dark(light, dark); dark mode = color-scheme flip only.
+
+   Themes:
+     .axw-root                       — Default (blue accent #0064E0)
+     .axw-root[data-theme='neutral'] — Neutral (Figtree + OKLCH grayscale, radius bump)
+   Schemes:
+     .axw-root                       — light  (color-scheme: light)
+     .axw-root[data-scheme='dark']   — dark   (color-scheme: dark)
+*/
+
+/* ── Token definitions ──────────────────────────────────────────── */
+
+.axw-root {
+  color-scheme: light;
+
+  /* Background / surface */
+  --ax-bg-body:      light-dark(#F1F4F7, #111112);
+  --ax-bg-surface:   light-dark(#FFFFFF, #1F1F22);
+  --ax-bg-card:      light-dark(#FFFFFF, #1F1F22);
+  --ax-bg-popover:   light-dark(#FFFFFF, #28292C);
+  --ax-bg-muted:     light-dark(#0536590C, #FFFFFF0C);
+
+  /* Text */
+  --ax-text-primary:    light-dark(#0A1317, #DFE2E5);
+  --ax-text-secondary:  light-dark(#4E606F, #AAAFB5);
+  --ax-text-disabled:   light-dark(#A4B0BC, #6F747C);
+
+  /* Accent — default blue */
+  --ax-accent:          light-dark(#0064E0, #2694FE);
+  --ax-accent-hover:    light-dark(#0055BF, #3EA5FF);
+  --ax-accent-on:       #FFFFFF;
+  --ax-accent-muted:    light-dark(rgba(0,100,224,.08), rgba(38,148,254,.12));
+  --ax-accent-ring:     light-dark(rgba(0,100,224,.5),  rgba(38,148,254,.55));
+
+  /* Border */
+  --ax-border:          light-dark(rgba(5,54,89,.1),   rgba(242,244,246,.1));
+  --ax-border-strong:   light-dark(#CCD3DB, #494D53);
+
+  /* Status — saturated bg + contrast text (semantic badge rule) */
+  --ax-ok:              light-dark(#0D8626, #0D8626);
+  --ax-ok-bg:           light-dark(rgba(11,153,31,.15), rgba(11,153,31,.2));
+  --ax-ok-text:         light-dark(#09441F, #A5F690);
+  --ax-warn:            light-dark(#E9AF08, #F2C00B);
+  --ax-warn-bg:         light-dark(rgba(226,164,0,.15), rgba(226,164,0,.2));
+  --ax-warn-text:       light-dark(#753F07, #FBCE03);
+  --ax-error:           light-dark(#E3193B, #F5394F);
+  --ax-error-bg:        light-dark(rgba(227,25,59,.12), rgba(245,57,79,.15));
+  --ax-error-text:      light-dark(#7B0210, #FFB2B8);
+
+  /* Category tints (index badge rule: light tint bg + color text) */
+  --ax-cat-in-bg:       light-dark(rgba(38,167,86,.12), rgba(38,167,86,.18));
+  --ax-cat-in-text:     light-dark(#09441F, #A5F690);
+  --ax-cat-pending-bg:  light-dark(rgba(0,100,224,.08), rgba(38,148,254,.12));
+  --ax-cat-pending-text:light-dark(#042F97, #AFD7FF);
+  --ax-cat-none-bg:     light-dark(rgba(10,19,23,.06), rgba(102,106,114,.3));
+  --ax-cat-none-text:   var(--ax-text-secondary);
+
+  /* Shadow — Astryx low/med/high.
+     Dark bezel adds inset 1px white rim for card lift (Astryx dark philosophy). */
+  --ax-shadow-low:
+    0px 1px 1px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2)),
+    0px 2px 8px  light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2));
+  --ax-shadow-med:
+    0px 1px 2px  light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2)),
+    0px 2px 12px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2));
+  --ax-shadow-high:
+    0px 2px 2px  light-dark(rgba(0,0,0,.1), rgba(0,0,0,.2)),
+    0px 8px 24px light-dark(rgba(0,0,0,.1), rgba(0,0,0,.3));
+  /* Bezel: invisible in light, white rim in dark */
+  --ax-bezel: light-dark(none, inset 0 0 0 1px oklch(1 0 0 / 10%));
+
+  /* Interaction overlay wash */
+  --ax-overlay-hover:   light-dark(rgba(5,54,89,.05),  rgba(255,255,255,.05));
+  --ax-overlay-pressed: light-dark(rgba(5,54,89,.1),   rgba(255,255,255,.1));
+
+  /* Radius */
+  --ax-r-inner:     4px;
+  --ax-r-element:   8px;
+  --ax-r-container: 12px;
+  --ax-r-page:      28px;
+
+  /* Spacing (4px grid) */
+  --ax-sp-1: 4px;
+  --ax-sp-2: 8px;
+  --ax-sp-3: 12px;
+  --ax-sp-4: 16px;
+  --ax-sp-5: 20px;
+  --ax-sp-6: 24px;
+
+  /* Element sizing */
+  --ax-ctrl-sm: 28px;
+  --ax-ctrl-md: 32px;
+  --ax-ctrl-lg: 36px;
+
+  /* Motion — single ease, fast 175ms band */
+  --ax-ease:    cubic-bezier(0.24, 1, 0.4, 1);
+  --ax-dur:     175ms;
+
+  /* Typography */
+  --ax-font-body:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --ax-font-code:  "SF Mono", Monaco, Consolas, "Courier New", monospace;
+
+  /* Applied base */
+  font-size: 14px;
+  font-family: var(--ax-font-body);
+  line-height: 1.4286;
+  color: var(--ax-text-primary);
+}
+
+/* ── Dark scheme ────────────────────────────────────────────────── */
+
+.axw-root[data-scheme='dark'] {
+  color-scheme: dark;
+}
+
+/* ── Neutral theme ──────────────────────────────────────────────── */
+
+.axw-root[data-theme='neutral'] {
+  --ax-font-body: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Radius bump: inner 6 / element 10 / container 12 */
+  --ax-r-inner:     6px;
+  --ax-r-element:   10px;
+  --ax-r-container: 12px;
+
+  /* Grayscale OKLCH accent */
+  --ax-accent:       light-dark(oklch(0.35 0 0), oklch(0.78 0 0));
+  --ax-accent-hover: light-dark(oklch(0.25 0 0), oklch(0.88 0 0));
+  --ax-accent-on:    light-dark(#FFFFFF, #111112);
+  --ax-accent-muted: light-dark(oklch(0.35 0 0 / .08), oklch(0.78 0 0 / .12));
+  --ax-accent-ring:  light-dark(oklch(0.35 0 0 / .45), oklch(0.78 0 0 / .5));
+  --ax-cat-pending-bg:   light-dark(oklch(0.35 0 0 / .08), oklch(0.78 0 0 / .12));
+  --ax-cat-pending-text: light-dark(oklch(0.25 0 0), oklch(0.88 0 0));
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   LAYOUT ROOT
+══════════════════════════════════════════════════════════════════ */
+
+.axw-root {
+  display: grid;
+  grid-template-columns: 236px 1fr 316px;
+  height: 100%;
+  min-height: 0;
+  background: var(--ax-bg-body);
+  overflow: hidden;
+}
+
+/* Re-anchor all heading/button/input color to ax tokens so the global
+   body { color: var(--cw-fg-1) } (light-only) can't bleed in via inherit. */
+.axw-root h2,
+.axw-root h3,
+.axw-root h4 {
+  color: var(--ax-text-primary);
+}
+.axw-root button {
+  color: inherit;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SIDENAV (left rail) — Astryx SideNav anatomy:
+   Selected = inset 2px accent ring (NOT filled background).
+   Hover = overlay wash only.
+══════════════════════════════════════════════════════════════════ */
+
+.axw-nav {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--ax-bg-surface);
+  border-right: 1px solid var(--ax-border);
+  padding: var(--ax-sp-2) var(--ax-sp-2);
+  overflow-y: auto;
+  box-shadow: var(--ax-bezel);
+}
+
+.axw-nav-sec {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ax-text-disabled);
+  padding: var(--ax-sp-3) var(--ax-sp-2) var(--ax-sp-1);
+}
+
+.axw-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-sp-2);
+  width: 100%;
+  height: var(--ax-ctrl-md);
+  border: none;
+  /* Astryx SideNav: transparent bg, border for ring (hidden when not active) */
+  background: transparent;
+  border-radius: var(--ax-r-element);
+  box-shadow: none;
+  text-align: left;
+  font-size: 13px;
+  color: var(--ax-text-primary);
+  padding: 0 var(--ax-sp-2);
+  cursor: pointer;
+  transition:
+    background var(--ax-dur) var(--ax-ease),
+    box-shadow var(--ax-dur) var(--ax-ease),
+    color var(--ax-dur) var(--ax-ease);
+}
+.axw-nav-item:hover {
+  background: var(--ax-overlay-hover);
+}
+/* Selected: inset 2px accent ring — the Astryx SideNav signature */
+.axw-nav-item.is-active {
+  background: var(--ax-accent-muted);
+  box-shadow: inset 0 0 0 2px var(--ax-accent-ring);
+  color: var(--ax-accent);
+  font-weight: 600;
+}
+.axw-nav-item .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Count badge — category tint (neither semantic hot/cold) */
+.axw-nav-count {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: var(--ax-bg-muted);
+  color: var(--ax-text-secondary);
+  border-radius: 999px;
+  padding: 0 7px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  transition: background var(--ax-dur) var(--ax-ease);
+}
+/* Hot: semantic badge — saturated accent bg + white text */
+.axw-nav-count.hot {
+  background: var(--ax-accent);
+  color: var(--ax-accent-on);
+}
+
+/* Source status dot — Astryx StatusDot */
+.axw-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ax-ok);
+  flex: none;
+}
+.axw-status-dot.paused {
+  background: var(--ax-text-disabled);
+}
+.axw-sync-label {
+  font-size: 10.5px;
+  color: var(--ax-text-disabled);
+  flex: none;
+  white-space: nowrap;
+}
+
+/* Add-source button */
+.axw-nav-add {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-sp-2);
+  width: 100%;
+  height: var(--ax-ctrl-sm);
+  border: 1px dashed var(--ax-border-strong);
+  background: transparent;
+  color: var(--ax-text-secondary);
+  font-size: 12.5px;
+  border-radius: var(--ax-r-element);
+  padding: 0 var(--ax-sp-2);
+  cursor: pointer;
+  margin-top: var(--ax-sp-1);
+  transition:
+    background var(--ax-dur) var(--ax-ease),
+    border-color var(--ax-dur) var(--ax-ease),
+    color var(--ax-dur) var(--ax-ease);
+}
+.axw-nav-add:hover {
+  border-color: var(--ax-accent);
+  color: var(--ax-accent);
+  background: var(--ax-accent-muted);
+}
+
+/* New collection slide-in */
+.axw-nav-item.is-new {
+  animation: axw-in 0.35s var(--ax-ease);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   MAIN COLUMN
+══════════════════════════════════════════════════════════════════ */
+
+.axw-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.axw-main-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: var(--ax-sp-4) var(--ax-sp-5) 28px;
+}
+
+/* ── Growth digest — Astryx MetadataList / Token pill anatomy ───── */
+/* Compact pill row with tabular-nums, no animation bounce */
+
+.axw-digest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ax-sp-2);
+  align-items: center;
+  margin-bottom: var(--ax-sp-3);
+}
+.axw-digest-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ax-text-secondary);
+  margin-right: var(--ax-sp-1);
+  letter-spacing: 0.02em;
+}
+/* MetadataList-style stat pill */
+.axw-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--ax-ctrl-sm);
+  border: 1px solid var(--ax-border-strong);
+  background: var(--ax-bg-surface);
+  border-radius: 999px;
+  padding: 0 var(--ax-sp-3);
+  font-size: 12px;
+  color: var(--ax-text-secondary);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+  box-shadow: var(--ax-bezel);
+  transition:
+    background var(--ax-dur) var(--ax-ease),
+    border-color var(--ax-dur) var(--ax-ease);
+}
+.axw-stat b {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ax-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.axw-stat.clickable { cursor: pointer; }
+.axw-stat.clickable:hover {
+  background: var(--ax-bg-muted);
+  border-color: var(--ax-border-strong);
+}
+/* Warn stat: semantic badge bg (saturated bg + contrast text) */
+.axw-stat.warn {
+  background: var(--ax-warn-bg);
+  border-color: transparent;
+}
+.axw-stat.warn b { color: var(--ax-warn-text); }
+/* Grew: scale pop on transform only, no bounce */
+.axw-stat.grew b { animation: axw-pop 0.4s var(--ax-ease); color: var(--ax-accent); }
+
+/* ── Structure proposal ──────────────────────────────────────────── */
+
+.axw-proposal {
+  border: 1px solid var(--ax-accent-ring);
+  background: var(--ax-accent-muted);
+  border-radius: var(--ax-r-container);
+  padding: var(--ax-sp-3) var(--ax-sp-4);
+  margin-bottom: var(--ax-sp-4);
+  box-shadow: var(--ax-bezel);
+  animation: axw-in 0.3s var(--ax-ease);
+}
+.axw-proposal h4 {
+  margin: 0 0 var(--ax-sp-1);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ax-accent);
+}
+.axw-proposal p {
+  margin: 0 0 var(--ax-sp-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ax-text-secondary);
+}
+.axw-proposal-files {
+  font-size: 11.5px;
+  color: var(--ax-text-disabled);
+  margin-bottom: var(--ax-sp-3);
+}
+.axw-proposal-actions { display: flex; gap: var(--ax-sp-2); }
+
+/* ── Extracting state ────────────────────────────────────────────── */
+
+.axw-extracting {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-sp-3);
+  font-size: 12.5px;
+  color: var(--ax-text-secondary);
+  padding: var(--ax-sp-3) var(--ax-sp-4);
+}
+.axw-spin {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--ax-bg-muted);
+  border-top-color: var(--ax-accent);
+  border-radius: 50%;
+  animation: axw-rot 0.8s linear infinite;
+  flex: none;
+}
+
+/* ── Section heading ─────────────────────────────────────────────── */
+
+.axw-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-sp-2);
+  margin: var(--ax-sp-1) 0 var(--ax-sp-3);
+}
+.axw-section-head h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+  flex: none;
+  white-space: nowrap;
+  color: var(--ax-text-primary);
+}
+.axw-section-sub {
+  font-size: 11.5px;
+  color: var(--ax-text-disabled);
+}
+.axw-sync-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   BUTTONS — 32px md / 28px sm height, radius-element, 14px base
+══════════════════════════════════════════════════════════════════ */
+
+.axw-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--ax-ctrl-md);
+  padding: 0 var(--ax-sp-3);
+  border: 1px solid var(--ax-border-strong);
+  background: var(--ax-bg-surface);
+  color: var(--ax-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--ax-r-element);
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  box-shadow: var(--ax-bezel);
+  transition:
+    background var(--ax-dur) var(--ax-ease),
+    border-color var(--ax-dur) var(--ax-ease),
+    color var(--ax-dur) var(--ax-ease);
+}
+.axw-btn:hover {
+  background: var(--ax-bg-muted);
+  border-color: var(--ax-border-strong);
+}
+.axw-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.axw-btn.primary {
+  background: var(--ax-accent);
+  border-color: var(--ax-accent);
+  color: var(--ax-accent-on);
+  box-shadow: none;
+}
+.axw-btn.primary:hover { background: var(--ax-accent-hover); border-color: var(--ax-accent-hover); }
+.axw-btn.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ax-text-secondary);
+  box-shadow: none;
+}
+.axw-btn.ghost:hover { background: var(--ax-overlay-hover); color: var(--ax-text-primary); }
+/* Small variant: 28px height */
+.axw-btn.sm {
+  height: var(--ax-ctrl-sm);
+  padding: 0 var(--ax-sp-2);
+  font-size: 12px;
+}
+
+/* Kbd chip */
+.axw-kbd {
+  font-family: var(--ax-font-code);
+  font-size: 10px;
+  border: 1px solid var(--ax-border-strong);
+  border-radius: var(--ax-r-inner);
+  padding: 0 4px;
+  color: var(--ax-text-disabled);
+  margin-left: 4px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   INBOX CARDS — shadow-low, radius-container, bezel in dark
+══════════════════════════════════════════════════════════════════ */
+
+.axw-inbox-item {
+  display: flex;
+  gap: var(--ax-sp-3);
+  align-items: flex-start;
+  background: var(--ax-bg-card);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-r-container);
+  padding: var(--ax-sp-3) var(--ax-sp-3);
+  margin-bottom: var(--ax-sp-2);
+  /* shadow-low for card lift; bezel adds white rim in dark */
+  box-shadow: var(--ax-shadow-low), var(--ax-bezel);
+  transition:
+    box-shadow var(--ax-dur) var(--ax-ease),
+    border-color var(--ax-dur) var(--ax-ease);
+}
+.axw-inbox-item:hover {
+  box-shadow: var(--ax-shadow-med), var(--ax-bezel);
+}
+.axw-inbox-icon { font-size: 16px; margin-top: 1px; }
+.axw-inbox-body { flex: 1; min-width: 0; }
+.axw-inbox-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ax-text-primary);
+  line-height: 1.4;
+}
+.axw-inbox-meta {
+  font-size: 11.5px;
+  color: var(--ax-text-disabled);
+  margin-top: 2px;
+}
+
+/* Suggestion row — accent-tinted inline note */
+.axw-suggest {
+  margin-top: var(--ax-sp-2);
+  background: var(--ax-accent-muted);
+  border-radius: var(--ax-r-inner);
+  padding: 6px var(--ax-sp-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.axw-suggest-to { font-weight: 600; color: var(--ax-accent); }
+.axw-suggest-why { color: var(--ax-text-secondary); }
+
+.axw-inbox-actions { display: flex; gap: var(--ax-sp-2); margin-top: var(--ax-sp-2); }
+
+/* Empty state — Astryx EmptyState: centered secondary text */
+.axw-empty {
+  text-align: center;
+  color: var(--ax-text-disabled);
+  font-size: 12.5px;
+  padding: 28px var(--ax-sp-3);
+  border: 1px dashed var(--ax-border-strong);
+  border-radius: var(--ax-r-container);
+  line-height: 1.6;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   KNOWLEDGE INDEX ROW
+══════════════════════════════════════════════════════════════════ */
+
+.axw-search-bar {
+  display: flex;
+  gap: var(--ax-sp-2);
+  margin-bottom: var(--ax-sp-3);
+}
+.axw-search-input {
+  flex: 1;
+  height: var(--ax-ctrl-md);
+  border: 1px solid var(--ax-border-strong);
+  border-radius: var(--ax-r-element);
+  padding: 0 var(--ax-sp-3);
+  font: inherit;
+  font-size: 13px;
+  background: var(--ax-bg-surface);
+  color: var(--ax-text-primary);
+  box-shadow: var(--ax-bezel);
+  transition: box-shadow var(--ax-dur) var(--ax-ease), border-color var(--ax-dur) var(--ax-ease);
+}
+.axw-search-input::placeholder { color: var(--ax-text-disabled); }
+.axw-search-input:focus {
+  outline: none;
+  border-color: var(--ax-accent);
+  box-shadow: inset 0 0 0 2px var(--ax-accent-ring);
+}
+.axw-note {
+  font-size: 11.5px;
+  color: var(--ax-text-disabled);
+  margin: 2px 0 var(--ax-sp-3);
+  line-height: 1.5;
+}
+
+.axw-doc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-sp-2);
+  background: var(--ax-bg-surface);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-r-element);
+  padding: var(--ax-sp-2) var(--ax-sp-3);
+  margin-bottom: var(--ax-sp-1);
+  font-size: 13px;
+  box-shadow: var(--ax-bezel);
+  transition:
+    box-shadow var(--ax-dur) var(--ax-ease),
+    background var(--ax-dur) var(--ax-ease);
+}
+.axw-doc-row:hover { background: var(--ax-bg-muted); box-shadow: var(--ax-shadow-low), var(--ax-bezel); }
+.axw-doc-row.is-new { animation: axw-in 0.4s var(--ax-ease); border-color: var(--ax-accent-ring); }
+.axw-doc-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.axw-doc-meta { font-size: 11.5px; color: var(--ax-text-disabled); flex: none; }
+
+/* Catalog row — has-acts two-line layout */
+.axw-doc-row.has-acts { flex-wrap: wrap; align-items: flex-start; }
+.axw-doc-row.has-acts .axw-doc-title { flex-basis: 0; }
+.axw-doc-row.has-acts .axw-doc-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-sp-2);
+  margin-left: 26px;
+  width: 100%;
+  flex: 0 0 100%;
+  margin-top: var(--ax-sp-1);
+}
+.axw-doc-row.has-acts .axw-doc-sub .axw-doc-meta { font-size: 11.5px; }
+.axw-doc-row.has-acts .axw-doc-acts { margin-left: auto; display: flex; gap: 5px; }
+
+/* Category badges — tint bg + color text (catalog badge rule) */
+.axw-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex: none;
+}
+.axw-badge.cat-in {
+  background: var(--ax-cat-in-bg);
+  color: var(--ax-cat-in-text);
+}
+.axw-badge.cat-pending {
+  background: var(--ax-cat-pending-bg);
+  color: var(--ax-cat-pending-text);
+}
+.axw-badge.cat-none {
+  background: var(--ax-cat-none-bg);
+  color: var(--ax-cat-none-text);
+}
+/* Semantic badge: used for warn gap and warn conflict */
+.axw-badge.sem-warn {
+  background: var(--ax-warn-bg);
+  color: var(--ax-warn-text);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   EVIDENCE TABLE — Astryx Table anatomy
+   Header: 14px/500 secondary. Border: alpha light. Row hover: overlay wash.
+   Cell padding: 8px vertical / 12px horizontal (4px grid).
+══════════════════════════════════════════════════════════════════ */
+
+.axw-tablewrap {
+  overflow-x: auto;
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-r-container);
+  background: var(--ax-bg-surface);
+  /* shadow-low for table surface; bezel for dark */
+  box-shadow: var(--ax-shadow-low), var(--ax-bezel);
+}
+.axw-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 560px;
+  font-size: 13px;
+}
+.axw-table th {
+  text-align: left;
+  /* Astryx table header: 14px/500 secondary */
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ax-text-secondary);
+  background: var(--ax-bg-body);
+  /* 8px vertical / 12px horizontal */
+  padding: var(--ax-sp-2) var(--ax-sp-3);
+  border-bottom: 1px solid var(--ax-border);
+  white-space: nowrap;
+}
+.axw-table td {
+  padding: var(--ax-sp-2) var(--ax-sp-3);
+  border-bottom: 1px solid var(--ax-border);
+  vertical-align: top;
+  line-height: 1.45;
+}
+.axw-table tr:last-child td { border-bottom: none; }
+/* Row hover = overlay wash only (no background color change) */
+.axw-table tbody tr:hover td { background: var(--ax-overlay-hover); }
+.axw-table tr.is-new td {
+  animation: axw-in 0.45s var(--ax-ease);
+  background: var(--ax-accent-muted);
+}
+
+/* Provenance cell — Astryx Token chip feel */
+.axw-prov-cell {
+  cursor: pointer;
+  text-decoration: underline dotted var(--ax-accent-ring);
+  text-underline-offset: 3px;
+  font-weight: 500;
+  transition: color var(--ax-dur) var(--ax-ease);
+}
+.axw-prov-cell:hover { color: var(--ax-accent); text-decoration-style: solid; }
+
+/* ══════════════════════════════════════════════════════════════════
+   DETAIL PANEL — shadow-med, bezel
+══════════════════════════════════════════════════════════════════ */
+
+.axw-detail {
+  background: var(--ax-bg-surface);
+  border-left: 1px solid var(--ax-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* shadow-med for raised panel feel */
+  box-shadow: -2px 0 12px light-dark(rgba(0,0,0,.06), rgba(0,0,0,.2)), var(--ax-bezel);
+}
+.axw-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ax-sp-3) var(--ax-sp-3) var(--ax-sp-2);
+  border-bottom: 1px solid var(--ax-border);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ax-text-primary);
+  flex: none;
+}
+.axw-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--ax-sp-3) var(--ax-sp-3) var(--ax-sp-5);
+  min-height: 0;
+}
+.axw-detail-sec {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ax-text-disabled);
+  margin: var(--ax-sp-3) 0 var(--ax-sp-1);
+}
+.axw-detail-sec:first-child { margin-top: 0; }
+
+.axw-detail-value {
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--ax-bg-muted);
+  border-radius: var(--ax-r-element);
+  padding: var(--ax-sp-2) var(--ax-sp-3);
+  color: var(--ax-text-primary);
+}
+.axw-prov-quote {
+  font-size: 12.5px;
+  line-height: 1.6;
+  border: 1px solid var(--ax-accent-ring);
+  background: var(--ax-accent-muted);
+  border-radius: var(--ax-r-element);
+  padding: var(--ax-sp-2) var(--ax-sp-3);
+}
+.axw-prov-quote mark {
+  background: oklch(0.92 0.09 95);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.axw-prov-src {
+  font-size: 11.5px;
+  color: var(--ax-text-disabled);
+  margin-top: var(--ax-sp-1);
+}
+.axw-detail-actions {
+  display: flex;
+  gap: var(--ax-sp-2);
+  margin-top: var(--ax-sp-3);
+  flex-wrap: wrap;
+}
+.axw-conflict-pair { display: grid; gap: var(--ax-sp-2); }
+.axw-conflict-side {
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-r-element);
+  padding: var(--ax-sp-2) var(--ax-sp-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ax-text-primary);
+}
+.axw-conflict-side.newer {
+  border-color: var(--ax-accent-ring);
+  background: var(--ax-accent-muted);
+}
+.axw-conflict-src {
+  font-size: 11px;
+  color: var(--ax-text-disabled);
+  display: block;
+  margin-bottom: 4px;
+}
+.axw-conflict-hint {
+  font-size: 12px;
+  color: var(--ax-text-secondary);
+  margin-top: var(--ax-sp-2);
+  line-height: 1.5;
+}
+.axw-empty-detail {
+  color: var(--ax-text-disabled);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 32px var(--ax-sp-3);
+  line-height: 1.6;
+}
+
+/* Ask drawer */
+.axw-ask {
+  border-top: 1px solid var(--ax-border);
+  padding: var(--ax-sp-2) var(--ax-sp-3) var(--ax-sp-3);
+  flex: none;
+}
+.axw-ask-log {
+  max-height: 190px;
+  overflow-y: auto;
+  margin-bottom: var(--ax-sp-2);
+}
+.axw-ask-q {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ax-text-primary);
+  margin: var(--ax-sp-2) 0 var(--ax-sp-1);
+}
+.axw-ask-a {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ax-text-primary);
+  background: var(--ax-bg-muted);
+  border-radius: var(--ax-r-element);
+  padding: var(--ax-sp-2) var(--ax-sp-3);
+}
+.axw-ask-row { display: flex; gap: var(--ax-sp-1); }
+.axw-ask-input {
+  flex: 1;
+  height: var(--ax-ctrl-md);
+  border: 1px solid var(--ax-border-strong);
+  border-radius: var(--ax-r-element);
+  padding: 0 var(--ax-sp-3);
+  font: inherit;
+  font-size: 12.5px;
+  background: var(--ax-bg-surface);
+  color: var(--ax-text-primary);
+  box-shadow: var(--ax-bezel);
+  transition: box-shadow var(--ax-dur) var(--ax-ease), border-color var(--ax-dur) var(--ax-ease);
+}
+.axw-ask-input::placeholder { color: var(--ax-text-disabled); }
+.axw-ask-input:focus {
+  outline: none;
+  border-color: var(--ax-accent);
+  box-shadow: inset 0 0 0 2px var(--ax-accent-ring);
+}
+.axw-ask-hint {
+  font-size: 11px;
+  color: var(--ax-text-disabled);
+  margin-top: var(--ax-sp-1);
+  line-height: 1.5;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   UPLOAD DIALOG — shadow-high overlay; Astryx Dialog anatomy
+══════════════════════════════════════════════════════════════════ */
+
+.axw-overlay {
+  position: fixed;
+  inset: 0;
+  /* Astryx overlay: light-dark scrim */
+  background: light-dark(rgba(1,18,40,.4), rgba(17,17,18,.6));
+  display: grid;
+  place-items: center;
+  z-index: 60;
+}
+.axw-dialog {
+  width: min(460px, 92vw);
+  background: var(--ax-bg-popover);
+  border-radius: var(--ax-r-container);
+  border: 1px solid var(--ax-border-strong);
+  /* shadow-high for modal elevation; bezel for dark */
+  box-shadow: var(--ax-shadow-high), var(--ax-bezel);
+  padding: var(--ax-sp-5) var(--ax-sp-5) var(--ax-sp-5);
+}
+.axw-dialog h3 {
+  margin: 0 0 var(--ax-sp-1);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ax-text-primary);
+}
+.axw-dialog .axw-dialog-sub {
+  font-size: 12.5px;
+  color: var(--ax-text-secondary);
+  margin: 0 0 var(--ax-sp-3);
+}
+.axw-drop {
+  border: 2px dashed var(--ax-border-strong);
+  border-radius: var(--ax-r-container);
+  padding: 28px var(--ax-sp-3);
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--ax-text-secondary);
+  cursor: pointer;
+  transition:
+    border-color var(--ax-dur) var(--ax-ease),
+    background var(--ax-dur) var(--ax-ease);
+}
+.axw-drop:hover {
+  border-color: var(--ax-accent);
+  background: var(--ax-accent-muted);
+}
+.axw-drop-hint { font-size: 11px; color: var(--ax-text-disabled); display: block; margin-top: var(--ax-sp-1); }
+.axw-dialog-footer { display: flex; gap: var(--ax-sp-2); margin-top: var(--ax-sp-3); }
+
+/* ══════════════════════════════════════════════════════════════════
+   TOAST
+══════════════════════════════════════════════════════════════════ */
+
+.axw-toast {
+  position: fixed;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ax-text-primary);
+  color: var(--ax-bg-body);
+  font-size: 12.8px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 9px var(--ax-sp-5);
+  z-index: 80;
+  box-shadow: var(--ax-shadow-high);
+  animation: axw-toast-in var(--ax-dur) var(--ax-ease);
+  white-space: nowrap;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   THEME CONTROL STRIP — Astryx SegmentedControl anatomy
+   Muted track background, segment buttons, active = accent fill
+══════════════════════════════════════════════════════════════════ */
+
+.axw-controls {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: var(--ax-sp-2);
+  background: var(--ax-bg-surface);
+  border: 1px solid var(--ax-border-strong);
+  border-radius: var(--ax-r-element);
+  box-shadow: var(--ax-shadow-med), var(--ax-bezel);
+  padding: var(--ax-sp-1) var(--ax-sp-2);
+  font-family: var(--ax-font-body);
+}
+.axw-controls-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ax-text-disabled);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: default;
+  white-space: nowrap;
+}
+/* SegmentedControl: muted track */
+.axw-seg {
+  display: flex;
+  background: var(--ax-bg-muted);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-r-inner);
+  overflow: hidden;
+}
+.axw-seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--ax-text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  font-family: var(--ax-font-body);
+  padding: 3px 9px;
+  cursor: pointer;
+  transition:
+    background var(--ax-dur) var(--ax-ease),
+    color var(--ax-dur) var(--ax-ease);
+  white-space: nowrap;
+}
+.axw-seg-btn:hover { background: var(--ax-overlay-hover); color: var(--ax-text-primary); }
+.axw-seg-btn.is-active {
+  background: var(--ax-accent);
+  color: var(--ax-accent-on);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   ANIMATIONS
+   Rules: transform/opacity only. No bounce/elastic (--ax-ease single).
+══════════════════════════════════════════════════════════════════ */
+
+@keyframes axw-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes axw-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+@keyframes axw-rot {
+  to { transform: rotate(360deg); }
+}
+@keyframes axw-toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+
+@media (max-width: 1100px) {
+  .axw-root { grid-template-columns: 220px 1fr 280px; }
+}
+@media (max-width: 900px) {
+  .axw-root { grid-template-columns: 200px 1fr; }
+  .axw-detail {
+    position: fixed;
+    right: 0;
+    top: 0;
+    height: 100%;
+    width: 300px;
+    z-index: 40;
+    box-shadow: var(--ax-shadow-high), var(--ax-bezel);
+  }
+}
