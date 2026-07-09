@@ -75,14 +75,9 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/workspaces/{wid}/mounts/{mount_id}",
             delete(mount::delete_mount),
         )
-        // Browser file API over the unified tree (local + mounts). `tree` is
-        // JSON; `file` streams bytes (plain route). Both header-authed via the
-        // `auth_required` layer below.
+        // Browser file API over the unified tree: `tree` (JSON) and `file` (bytes).
         .api_route("/workspaces/{wid}/tree", get(files::list_tree))
-        .route(
-            "/workspaces/{wid}/file",
-            axum::routing::get(files::read_file),
-        )
+        .api_route("/workspaces/{wid}/file", get(files::read_file))
         .api_route(
             "/agents",
             get(agent::list_agents).post(agent::create_agent),
