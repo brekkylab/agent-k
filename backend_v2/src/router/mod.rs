@@ -14,6 +14,7 @@ pub(crate) mod error;
 
 mod agent;
 mod auth;
+mod files;
 mod message;
 mod mount;
 mod session;
@@ -73,6 +74,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .api_route(
             "/workspaces/{wid}/mounts/{mount_id}",
             delete(mount::delete_mount),
+        )
+        // Browser file API over the unified tree (local + mounts). `tree` is
+        // JSON; `file` streams bytes (plain route). Both header-authed via the
+        // `auth_required` layer below.
+        .api_route("/workspaces/{wid}/tree", get(files::list_tree))
+        .route(
+            "/workspaces/{wid}/file",
+            axum::routing::get(files::read_file),
         )
         .api_route(
             "/agents",
