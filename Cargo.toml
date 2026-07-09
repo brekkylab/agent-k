@@ -13,4 +13,4 @@ exclude = [
 agent-k = { path = "./agent-k" }
 # branch allow-host-egress: microsandbox 0.6.6 + SandboxBuilder::allow_host_egress
 # / Sandbox::try_from_archive_with_host_egress.
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "0ac855b7d2e7cd84d1053b5234e5d77f5c87203c", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "faf7da1c419e85535034456aee47b43b8f30c1d9", features = ["sandbox"] }
