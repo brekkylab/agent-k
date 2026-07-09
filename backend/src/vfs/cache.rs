@@ -26,9 +26,12 @@ const DEFAULT_TTL: Duration = Duration::from_secs(600);
 struct Entry {
     is_dir: bool,
     size: u64,
-    /// Per-entry last-modified, carried from `readdir` so the stat fast-path
-    /// (`ls -l`) returns a real mtime instead of the epoch (R2).
+    /// Per-entry times carried from `readdir` so the stat fast-path (`ls -l`)
+    /// returns real times instead of the epoch (R2). `atime`/`ctime` are `None`
+    /// for backends that don't report them (e.g. S3).
     mtime: Option<std::time::SystemTime>,
+    atime: Option<std::time::SystemTime>,
+    ctime: Option<std::time::SystemTime>,
 }
 
 #[derive(Default)]
@@ -90,6 +93,8 @@ impl IndexCache {
                     },
                     size: e.size,
                     mtime: e.mtime,
+                    atime: e.atime,
+                    ctime: e.ctime,
                 })
             })
             .collect();
@@ -114,6 +119,8 @@ impl IndexCache {
                     is_dir: matches!(e.kind, FileKind::Dir),
                     size: e.size,
                     mtime: e.mtime,
+                    atime: e.atime,
+                    ctime: e.ctime,
                 },
             );
             child_keys.push(full);
@@ -194,16 +201,21 @@ impl Resource for CachedResource {
             Some(e) if e.is_dir => {
                 return Ok(FileStat {
                     kind: FileKind::Dir,
+                    mtime: e.mtime,
+                    atime: e.atime,
+                    ctime: e.ctime,
                     ..Default::default()
                 });
             }
-            // A file with a known (>0) size: serve it (with the cached mtime so
-            // `ls -l` shows a real time, not the epoch — R2).
+            // A file with a known (>0) size: serve it (with the cached times so
+            // `ls -l` shows real times, not the epoch — R2).
             Some(e) if e.size > 0 => {
                 return Ok(FileStat {
                     kind: FileKind::File,
                     size: e.size,
                     mtime: e.mtime,
+                    atime: e.atime,
+                    ctime: e.ctime,
                     ..Default::default()
                 });
             }
@@ -298,6 +310,8 @@ mod tests {
             kind,
             size,
             mtime: None,
+            atime: None,
+            ctime: None,
         }
     }
 
@@ -355,6 +369,8 @@ mod tests {
                 kind: FileKind::File,
                 size: 10,
                 mtime: Some(t),
+                atime: None,
+                ctime: None,
             }],
         );
         // fast-path source: get() returns the stored mtime (not None/epoch).

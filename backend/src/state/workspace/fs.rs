@@ -1108,6 +1108,8 @@ mod tests {
                     kind: FileKind::File,
                     size: self.content.len() as u64,
                     mtime: None,
+                    atime: None,
+                    ctime: None,
                 }])
             } else {
                 Err(VfsError::NotFound)

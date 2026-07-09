@@ -100,6 +100,8 @@ impl Resource for S3Resource {
                     kind: FileKind::Dir,
                     size: 0,
                     mtime: None,
+                    atime: None,
+                    ctime: None,
                 });
             }
         }
@@ -113,8 +115,11 @@ impl Resource for S3Resource {
                     kind: FileKind::File,
                     size: obj.size,
                     // Carry per-entry mtime so the stat fast-path (`ls -l`)
-                    // serves it from cache instead of the epoch (R2).
+                    // serves it from cache instead of the epoch (R2). S3 has no
+                    // access/change time.
                     mtime: Some(obj.last_modified.into()),
+                    atime: None,
+                    ctime: None,
                 });
             }
         }
