@@ -1,24 +1,23 @@
-// Home composer surface for the `/` route. Ported (slimmed) from the original
-// Cowork app's ProjectHomeComposer: a roomier multiline textarea with an
-// agent-type picker + optional model input in the footer, plus a send button.
-// The @mention/command/attachment/view-transition machinery from the original
-// is intentionally left out — app_v2's home is a single-user "new chat" surface.
+// Home composer surface for the `/` route: a roomier multiline textarea with
+// an agent-type picker + optional model input in the footer, plus a send
+// button. No @mention/command/attachment/view-transition machinery —
+// app_v2's home is a single-user "new chat" surface.
 
 import { useEffect, useRef, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '@/components/Icon';
 import type { AgentType } from '@/api/types';
 
-export interface ProjectHomeComposerSubmission {
+export interface HomeComposerSubmission {
   text: string;
 }
 
 const AGENT_TYPES: AgentType[] = ['coworker', 'deep_research'];
 
-interface ProjectHomeComposerProps {
+interface HomeComposerProps {
   value: string;
   onChange: (next: string) => void;
-  onSubmit: (submission: ProjectHomeComposerSubmission) => void | Promise<void>;
+  onSubmit: (submission: HomeComposerSubmission) => void | Promise<void>;
   agentType: AgentType;
   onAgentTypeChange: (next: AgentType) => void;
   model: string;
@@ -34,7 +33,7 @@ interface ProjectHomeComposerProps {
 
 const MAX_TEXTAREA_HEIGHT = 200;
 
-export function ProjectHomeComposer({
+export function HomeComposer({
   value,
   onChange,
   onSubmit,
@@ -46,7 +45,7 @@ export function ProjectHomeComposer({
   pending = false,
   placeholder,
   error,
-}: ProjectHomeComposerProps) {
+}: HomeComposerProps) {
   const { t } = useTranslation('session');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const canSubmit = value.trim().length > 0 && !disabled;

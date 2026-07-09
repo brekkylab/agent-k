@@ -1,8 +1,9 @@
-// App shell — fixed left sidebar + scrollable main content, ported from the
-// original Cowork app's shell/Sidebar visual language (class names reused so the
-// design-system CSS applies). app_v2's sidebar is single-user: brand at top, a
-// prominent "New Chat" primary action, a Workspace nav link (with a subtle
-// divider below it), a Recents session list, and the LanguageToggle in the footer.
+// App shell — fixed left sidebar + scrollable main content. Reuses the
+// design system's shell/Sidebar class names directly (see
+// cowork-design-system.css) so its CSS applies without duplication. app_v2's
+// sidebar is single-user: brand at top, a prominent "New Chat" primary
+// action, a Workspace nav link (with a subtle divider below it), a Recents
+// session list, and the LanguageToggle in the footer.
 
 import type { ReactNode } from 'react';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';

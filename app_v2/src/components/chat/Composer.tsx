@@ -5,7 +5,8 @@ import { stopRun } from '@/api/messages';
 interface ComposerProps {
   running: boolean;
   sessionId: string;
-  onSend: (text: string) => void;
+  /** Returns true if the send was accepted; false restores the typed text. */
+  onSend: (text: string) => Promise<boolean>;
 }
 
 export function Composer({ running, sessionId, onSend }: ComposerProps) {
@@ -16,15 +17,18 @@ export function Composer({ running, sessionId, onSend }: ComposerProps) {
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      submit();
+      void submit();
     }
   }
 
-  function submit() {
+  async function submit() {
     const text = value.trim();
     if (!text || running) return;
+    // Clear optimistically for a snappy input; restore if the send is rejected
+    // (e.g. a 409 while the previous run's tail is still archiving).
     setValue('');
-    onSend(text);
+    const accepted = await onSend(text);
+    if (!accepted) setValue(text);
   }
 
   function handleStop() {
@@ -56,7 +60,7 @@ export function Composer({ running, sessionId, onSend }: ComposerProps) {
               type="button"
               className="cw-composer-send"
               aria-label={t('ui.send_aria')}
-              onClick={submit}
+              onClick={() => void submit()}
               disabled={!canSend}
             >
               Send

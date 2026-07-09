@@ -61,20 +61,18 @@
   --cw-warn-border:  oklch(0.910 0.060 85);   /* warning box border */
   --cw-warn-fg:      oklch(0.470 0.080 65);   /* warning box text */
 
-  /* @mention accent — kept in the indigo-violet family (NOT the original's
-     true-blue 260) so mention tokens read as a brighter sibling of the accent,
-     preserving the divergent identity. */
+  /* @mention accent — indigo-violet family, a brighter sibling of the accent
+     token. */
   --cw-mention:      oklch(0.520 0.200 285);
   --cw-mention-soft: oklch(0.965 0.030 285);
 
   /* ── Overlays ────────────────────────────────────────────────────────── */
   --cw-scrim:        oklch(0 0 0 / 0.42);     /* dialog backdrop */
 
-  /* ── Design-system semantic aliases (ported from cowork-design-system.css).
-     The ported CSS derives these from the base tokens above, so they normally
-     inherit the divergent palette for free. They are re-declared here so this
-     file remains the single source of truth for color and theme.css can load
-     LAST and win regardless of cascade order. Non-color tokens (radii, spacing,
+  /* ── Design-system semantic aliases (also declared in cowork-design-system.css,
+     derived there from its own base tokens). Re-declared here so this file
+     remains the single source of truth for color and theme.css can load LAST
+     and win regardless of cascade order. Non-color tokens (radii, spacing,
      type, shadows, layout) intentionally stay in the design system. */
   --cw-bg:            var(--cw-paper);
   --cw-bg-subtle:     var(--cw-paper-2);
@@ -93,9 +91,8 @@
   --cw-border-strong: var(--cw-line-strong);
   --cw-ring:          var(--cw-ink-3);
 
-  /* Primary button = solid accent (the app's committed indigo-violet), unlike
-     the original app whose primary was warm ink. This keeps the strongest CTA
-     wearing the divergent accent. */
+  /* Primary button = solid accent (the app's committed indigo-violet) — the
+     strongest CTA color. */
   --cw-primary:       var(--cw-accent);
   --cw-primary-hover: var(--cw-accent-2);
   --cw-secondary:     var(--cw-paper-3);

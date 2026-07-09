@@ -1,6 +1,6 @@
-/* Webfonts — Pretendard / JetBrains Mono were remote @import in the original app.
-   app_v2 drops the network imports and relies on the font-family fallback stack
-   (system-ui / SF Mono) so styling stays self-contained with no external fetch. */
+/* Webfonts — no remote @import for Pretendard / JetBrains Mono; relies on the
+   font-family fallback stack (system-ui / SF Mono) so styling stays
+   self-contained with no external fetch. */
 
 /* ============================================================================
    Cowork for Teams — Foundation CSS
@@ -354,14 +354,14 @@ html, body {
 
 .cw-btn--primary {
   /* app_v2: primary CTA wears the committed accent (--cw-primary maps to the
-     accent in theme.css), not the original's warm ink. */
+     accent in theme.css). */
   background: var(--cw-primary);
   color: var(--cw-on-accent);
   border-color: var(--cw-primary);
 }
 .cw-btn--primary:hover {
   /* app_v2: primary is the accent (see --cw-primary in theme.css), so the hover
-     tracks the accent hover token instead of the original's warm-ink darken. */
+     tracks the accent hover token. */
   background: var(--cw-primary-hover);
   border-color: var(--cw-primary-hover);
 }

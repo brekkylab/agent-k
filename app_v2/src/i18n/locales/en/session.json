@@ -40,7 +40,7 @@
     "send_aria": "Send",
     "stop_generation": "Stop generating",
     "stopping": "Stopping… a final message may still arrive.",
-    "composer_placeholder": "Message Cowork and the team…",
+    "composer_placeholder": "Message Cowork…",
     "composer_hint": "Enter to send · # attach a file · @ mention a member",
     "command_no_results": "No matches",
     "command_loading": "Loading…",

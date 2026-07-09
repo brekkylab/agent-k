@@ -1,14 +1,12 @@
 /* app_v2 global styles.
  *
- * Layout & component visual language are ported from the original Cowork app's
- * design system (cowork-design-system.css + chat.css, imported below). All
- * COLOR values live in theme.css, which loads LAST (see main.tsx) and overrides
- * the design system's base tokens with app_v2's divergent cool-slate + indigo-
- * violet palette. Do NOT add raw colors here — reference var(--cw-*) tokens.
+ * Layout & component visual language live in cowork-design-system.css +
+ * chat.css (imported below). All COLOR values live in theme.css, which loads
+ * LAST (see main.tsx) and overrides the design system's base tokens with
+ * app_v2's cool-slate + indigo-violet palette. Do NOT add raw colors here —
+ * reference var(--cw-*) tokens.
  *
- * This file only carries the shell + page rules app_v2 actually uses, adapted
- * from the original globals.css (which also served project/members/automation
- * features that app_v2 does not have). */
+ * This file only carries the shell + page rules app_v2 actually uses. */
 
 @import "./cowork-design-system.css";
 @import "./chat.css";
@@ -556,7 +554,6 @@ select.cw-input { appearance: auto; }
 .cw-toolcall-copy:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
 
 /* ── Home composer (`/` new-chat surface) ───────────────────────────────── */
-/* Ported (slimmed) from the original Cowork app's project-home composer. */
 
 @keyframes cw-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes cw-spin { to { transform: rotate(360deg); } }

@@ -11,11 +11,12 @@ import { createSession } from '@/api/sessions';
 import { sendMessage } from '@/api/messages';
 import { ApiError } from '@/api/client';
 import {
-  ProjectHomeComposer,
-  type ProjectHomeComposerSubmission,
-} from '@/components/chat/ProjectHomeComposer';
+  HomeComposer,
+  type HomeComposerSubmission,
+} from '@/components/chat/HomeComposer';
 import type { AgentType } from '@/api/types';
 import { takePendingAttachment, type PendingAttachment } from '@/stores/pendingAttachment';
+import { setPendingMessage } from '@/stores/pendingMessage';
 
 export const Route = createFileRoute('/')({
   component: HomePage,
@@ -47,7 +48,7 @@ export function HomePage() {
 
   // create → send → navigate. On any failure, surface an inline error on the
   // composer and do NOT navigate.
-  async function handleSubmit({ text }: ProjectHomeComposerSubmission) {
+  async function handleSubmit({ text }: HomeComposerSubmission) {
     if (pending) return;
     setPending(true);
     setError(null);
@@ -64,6 +65,10 @@ export function HomePage() {
       setAttachment(null);
       void qc.invalidateQueries({ queryKey: ['sessions'] });
       setComposerText('');
+      // Hand the just-sent text to the session view so it shows immediately,
+      // rather than waiting for the SSE catch-up (which only echoes the user
+      // message after the run's sandbox restore).
+      setPendingMessage(finalText);
       void navigate({ to: '/sessions/$sessionId', params: { sessionId: session.id } });
     } catch (err) {
       const message =
@@ -98,7 +103,7 @@ export function HomePage() {
           {attachment && (
             <p className="cw-home-attachment-hint">{t('home.attachmentHint')}</p>
           )}
-          <ProjectHomeComposer
+          <HomeComposer
             value={composerText}
             onChange={setComposerText}
             onSubmit={handleSubmit}
