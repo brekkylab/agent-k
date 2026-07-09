@@ -351,7 +351,21 @@ impl DavDirEntry for DavDirEntryAdapter {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
+    use uuid::Uuid;
+
     use super::parse_wid;
+    use crate::{
+        auth::{JwtConfig, Role, hash_password},
+        router::get_router,
+        state::{AppState, NewUser},
+    };
 
     #[test]
     fn parse_wid_requires_canonical_form() {
@@ -368,5 +382,98 @@ mod tests {
         // Malformed or missing id segment.
         assert!(parse_wid("/workspaces/not-a-uuid/files").is_none());
         assert!(parse_wid(&format!("/workspaces/{canon}")).is_none());
+    }
+
+    async fn make_state() -> Arc<AppState> {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_url = format!("sqlite://{}/test.db", tmp.path().display());
+        let jwt = JwtConfig::new("test-secret", 3600);
+        let state = AppState::new(&db_url, tmp.path().to_path_buf(), jwt)
+            .await
+            .expect("AppState::new failed");
+        // Leak the tempdir so the on-disk workspace tree outlives the test —
+        // dropping it would remove the directories these tests assert on.
+        std::mem::forget(tmp);
+        Arc::new(state)
+    }
+
+    /// Create a user with its default workspace (id == user id) and return the
+    /// workspace id together with a signed Bearer token for the user.
+    async fn create_user_ws_and_token(state: &Arc<AppState>) -> (Uuid, String) {
+        let id = Uuid::new_v4();
+        let password_hash = hash_password("Password1!").expect("hash");
+        let user = state
+            .users
+            .create(NewUser {
+                id,
+                username: format!("testuser-{id}"),
+                password_hash,
+                role: Role::User,
+                display_name: None,
+                is_active: true,
+                preferred_language: "en".to_string(),
+            })
+            .await
+            .expect("create user");
+        state
+            .workspaces
+            .create_default(&user)
+            .await
+            .expect("create default workspace");
+        let token = state
+            .jwt
+            .encode(id, format!("testuser-{id}"), Role::User)
+            .expect("encode jwt");
+        (id, token)
+    }
+
+    #[tokio::test]
+    async fn propfind_with_trailing_slash_returns_207() {
+        let state = make_state().await;
+        let (wid, token) = create_user_ws_and_token(&state).await;
+        let app = get_router(state);
+
+        // The npm webdav client addresses collections with a trailing slash;
+        // matchit treats /files/ as distinct from both non-slash forms, so it
+        // needs its own route (regression: this 404'd in live E2E). Auth is
+        // query-token-only by design (see `router::handle` doc comment).
+        let req = Request::builder()
+            .method("PROPFIND")
+            .uri(format!("/workspaces/{wid}/files/?token={token}"))
+            .header("Depth", "1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::MULTI_STATUS);
+    }
+
+    #[tokio::test]
+    async fn propfind_heals_missing_file_root_for_existing_workspace() {
+        let state = make_state().await;
+        let (wid, token) = create_user_ws_and_token(&state).await;
+
+        tokio::fs::remove_dir_all(state.workspaces.files_root(wid))
+            .await
+            .expect("remove provisioned file root");
+
+        let app = get_router(state);
+        let req = Request::builder()
+            .method("PROPFIND")
+            .uri(format!("/workspaces/{wid}/files/?token={token}"))
+            .header("Depth", "1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::MULTI_STATUS);
+
+        let req = Request::builder()
+            .method("PUT")
+            .uri(format!("/workspaces/{wid}/files/healed-upload.md?token={token}"))
+            .body(Body::from("# healed\n"))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
     }
 }

@@ -73,3 +73,58 @@ pub struct MessageEvent {
     pub seq: i64,
     pub message: Message,
 }
+
+/// Run lifecycle payload on the `message/{session_id}` channel. Tagged by the
+/// `run` field so payloads serialize as `{"run":"started"}`,
+/// `{"run":"finished"}`, `{"run":"error","message":"..."}`. Carries no `seq`,
+/// which the WS handler already skips — old WS clients are unaffected.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "run", rename_all = "snake_case")]
+pub enum RunEvent {
+    Started,
+    Finished,
+    /// Terminal failure; `message` is the formatted anyhow error chain.
+    Error { message: String },
+    /// Attach-time status snapshot synthesized by the SSE handler when no
+    /// run is active. Never published on the channel itself.
+    Idle,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_event_started_json() {
+        let json = serde_json::to_string(&RunEvent::Started).unwrap();
+        assert_eq!(json, r#"{"run":"started"}"#);
+    }
+
+    #[test]
+    fn run_event_finished_json() {
+        let json = serde_json::to_string(&RunEvent::Finished).unwrap();
+        assert_eq!(json, r#"{"run":"finished"}"#);
+    }
+
+    #[test]
+    fn run_event_error_json() {
+        let json = serde_json::to_string(&RunEvent::Error {
+            message: "x".into(),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"run":"error","message":"x"}"#);
+    }
+
+    #[test]
+    fn run_event_idle_json() {
+        let json = serde_json::to_string(&RunEvent::Idle).unwrap();
+        assert_eq!(json, r#"{"run":"idle"}"#);
+    }
+
+    #[test]
+    fn run_event_started_round_trip() {
+        let original = r#"{"run":"started"}"#;
+        let event: RunEvent = serde_json::from_str(original).unwrap();
+        assert!(matches!(event, RunEvent::Started));
+    }
+}

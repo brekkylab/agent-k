@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
+use agent_k::agents::{
+    get_coworker_agent_runenv, get_coworker_agent_spec, get_deep_research_agent_spec,
+};
 use ailoy::agent::AgentSpec;
 use ailoy::runenv::SandboxBuilder;
 use axum::{
@@ -162,12 +164,72 @@ pub(super) async fn create_session(
     if let Some(t) = payload.title {
         session = session.with_title(t);
     }
-    // Build a sandbox (runenv) when requested. The agent then runs in a VM and
-    // reads the workspace — local files plus the external mounts — as one FUSE
-    // tree at /mnt/workspace (see `SessionsState::run`). Coworker image + host
-    // egress so the in-guest forwarder can reach the host forward server.
-    // `insert` stops + archives it; each run restores it (with host egress).
-    let runenv = if payload.runenv.unwrap_or(false) {
+    // Two independent triggers for a sandboxed session, unioned below:
+    //   - Coworker: always sandboxed. The agent needs a writable /root for its
+    //     skills/tools plus the workspace's local files mounted read-only as
+    //     shared data (attached/shared/artifacts bind mounts, via
+    //     `get_coworker_agent_runenv`). Host egress is on so the in-guest VFS
+    //     forwarder that `SessionsState::run` mounts can reach the host.
+    //   - `runenv: true`: an explicit opt-in sandbox for any other session type,
+    //     so e.g. a deep_research or stored-agent session can also read the
+    //     workspace's external mounts (Notion/S3) as one FUSE tree at
+    //     /mnt/workspace (see `SessionsState::run`).
+    // deep_research/stored-agent sessions with `runenv` unset run without one.
+    // `insert` stops + archives the sandbox; each run restores it (with host
+    // egress).
+    if matches!(payload.agent_type, Some(AgentType::Coworker)) {
+        let session_dir = state.sessions.session_dir(session.id);
+        let inputs_dir = session_dir.join("inputs");
+        let artifacts_dir = session_dir.join("artifacts");
+        // The workspace file root is mounted read-only as the shared data dir.
+        let shared_dir = state.workspaces.files_root(payload.workspace_id);
+
+        // Ensure the three bind-mount roots exist; clean up on any failure.
+        if let Err(e) = async {
+            tokio::fs::create_dir_all(&inputs_dir).await?;
+            tokio::fs::create_dir_all(&artifacts_dir).await?;
+            tokio::fs::create_dir_all(&shared_dir).await?;
+            Ok::<(), std::io::Error>(())
+        }
+        .await
+        {
+            let dir = session_dir.clone();
+            tokio::spawn(async move {
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+            });
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to create session dirs: {e}"),
+            ));
+        }
+
+        // Boot the sandbox (may pull the container image on first run).
+        let sandbox = get_coworker_agent_runenv(&inputs_dir, &shared_dir, &artifacts_dir)
+            .await
+            .map_err(|e| {
+                let dir = session_dir.clone();
+                tokio::spawn(async move {
+                    let _ = tokio::fs::remove_dir_all(&dir).await;
+                });
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("sandbox creation failed: {e:#}"),
+                )
+            })?;
+
+        // insert() stops + archives the sandbox to sandbox.tar.zst.
+        state
+            .sessions
+            .insert(session.clone(), Some(sandbox))
+            .await
+            .map_err(|e| {
+                let dir = session_dir.clone();
+                tokio::spawn(async move {
+                    let _ = tokio::fs::remove_dir_all(&dir).await;
+                });
+                ApiError::from(e)
+            })?;
+    } else if payload.runenv.unwrap_or(false) {
         let sandbox = SandboxBuilder::new()
             .image("brekkylab/agent-k-libreoffice:latest")
             .cpus(8)
@@ -181,11 +243,10 @@ pub(super) async fn create_session(
                     format!("sandbox build failed: {e:#}"),
                 )
             })?;
-        Some(sandbox)
+        state.sessions.insert(session.clone(), Some(sandbox)).await?;
     } else {
-        None
-    };
-    state.sessions.insert(session.clone(), runenv).await?;
+        state.sessions.insert(session.clone(), None).await?;
+    }
     Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
 }
 

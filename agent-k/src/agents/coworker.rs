@@ -138,6 +138,7 @@ pub async fn get_coworker_agent_runenv(
         .image("brekkylab/agent-k-libreoffice:latest")
         .cpus(8)
         .memory_mib(1024)
+        .allow_host_egress(true)
         .mount(VolumeMount::Bind {
             host: input_dir.as_ref().to_path_buf(),
             guest: GUEST_ATTACHED_DIR.to_string(),

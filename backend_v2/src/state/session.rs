@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{StateError, StateResult, parse_ts, parse_uuid};
-use crate::event::{EventQueue, MessageEvent, message_channel};
+use crate::event::{EventQueue, MessageEvent, RunEvent, message_channel};
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -114,6 +114,13 @@ impl SessionsState {
             runs: Arc::new(Mutex::new(HashMap::new())),
             events,
         }
+    }
+
+    /// Absolute on-disk path of session `id`'s directory
+    /// (`data_root/sessions/{id}`), holding the sandbox archive and the
+    /// inputs/artifacts bind-mount roots.
+    pub fn session_dir(&self, id: Uuid) -> PathBuf {
+        self.data_root.join("sessions").join(id.to_string())
     }
 
     /// Every session in `workspace_id`, oldest first.
@@ -242,6 +249,12 @@ impl SessionsState {
         self.events.remove_channel(&message_channel(id));
     }
 
+    /// Whether a run is currently in flight for `id`. Used by streaming
+    /// handlers to emit an attach-time run-status snapshot.
+    pub async fn is_running(&self, id: Uuid) -> bool {
+        self.runs.lock().await.contains_key(&id)
+    }
+
     /// Request that any in-flight run for `id` stop at the next safe point.
     /// Returns `true` if a run was found and signaled, `false` if no run was
     /// active. Non-blocking; the spawned task will clean up its own entry.
@@ -310,6 +323,13 @@ impl SessionsState {
         let data_root = self.data_root.clone();
         let events = self.events.clone();
         let runs = self.runs.clone();
+
+        // Publishing before spawn guarantees a subscriber attached before the
+        // POST 202 returns observes `started` before the user-message event.
+        self.events.publish(
+            &message_channel(id),
+            serde_json::to_string(&RunEvent::Started)?,
+        );
 
         tokio::spawn(async move {
             let session_key = id.to_string();
@@ -453,9 +473,9 @@ impl SessionsState {
                 }
                 .await;
 
-                if let Some(runenv) = runenv {
+                let archive_result = if let Some(runenv) = runenv {
                     let mut sandbox = runenv.lock().await;
-                    let archive: anyhow::Result<()> = async {
+                    let res: anyhow::Result<()> = async {
                         sandbox.stop().await?;
                         if tokio::fs::try_exists(&archive_path).await? {
                             tokio::fs::remove_file(&archive_path).await?;
@@ -464,21 +484,60 @@ impl SessionsState {
                         Ok(())
                     }
                     .await;
-                    if let Err(e) = archive {
+                    if let Err(ref e) = res {
                         tracing::error!(session = %id, "sandbox archive failed: {e:#}");
                     }
-                }
+                    res.map_err(|e| anyhow::anyhow!(e).context("sandbox archive failed"))
+                } else {
+                    Ok(())
+                };
 
-                drive
+                // Fold archive failure into the run result: if the drive
+                // succeeded but archiving failed, surface the archive error.
+                drive.and(archive_result)
             }
             .await;
 
-            if let Err(e) = result {
-                tracing::error!(session = %id, "run failed: {e:#}");
-            }
+            // Free the run slot BEFORE publishing the terminal event. A client
+            // that attaches in between then sees either `is_running == false`
+            // or the terminal event on its already-open subscription — never
+            // neither. (The reverse order would let a client subscribe after
+            // the publish but read `is_running == true`, waiting forever on a
+            // run that already ended.)
             runs.lock().await.remove(&id);
+            let terminal = match &result {
+                Ok(()) => RunEvent::Finished,
+                Err(e) => {
+                    tracing::error!(session = %id, "run failed: {e:#}");
+                    RunEvent::Error {
+                        message: format!("{e:#}"),
+                    }
+                }
+            };
+            if let Ok(payload) = serde_json::to_string(&terminal) {
+                events.publish(&channel, payload);
+            }
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn fresh_db() -> SqlitePool {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn is_running_false_for_unknown_id() {
+        let pool = fresh_db().await;
+        let state = SessionsState::new(pool, std::env::temp_dir(), EventQueue::new());
+        let unknown_id = Uuid::new_v4();
+        assert!(!state.is_running(unknown_id).await);
     }
 }

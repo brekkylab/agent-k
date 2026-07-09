@@ -95,7 +95,11 @@ impl WorkspacesState {
     /// indistinguishable from a missing one (`None`), so existence can't be
     /// probed.
     pub async fn get_for_user(&self, user_id: Uuid, wid: Uuid) -> StateResult<Option<Workspace>> {
-        Ok(self.get(wid).await?.filter(|w| w.user_id == user_id))
+        let workspace = self.get(wid).await?.filter(|w| w.user_id == user_id);
+        if let Some(ws) = &workspace {
+            self.ensure_file_root(ws).await?;
+        }
+        Ok(workspace)
     }
 
     /// Insert or update by `id`. Returns the prior row if one was overwritten,
@@ -119,10 +123,20 @@ impl WorkspacesState {
         .execute(&self.db)
         .await?;
 
-        // Provision the file root. The DB row is the sole source of truth for
-        // the workspace's data (title); nothing is mirrored to disk.
-        tokio::fs::create_dir_all(self.get_root(id)).await?;
+        self.ensure_file_root(&item).await?;
         Ok(prior)
+    }
+
+    /// Ensure the on-disk file root exists for an existing workspace row.
+    ///
+    /// Older local E2E data can have a `workspaces` row without its file root
+    /// directory (e.g. stale seed data). WebDAV then reports `404` for PROPFIND
+    /// and `409 Conflict` for PUT because the parent collection is missing.
+    /// `create_dir_all` is idempotent, so callers can safely heal stale local
+    /// data at any access boundary.
+    async fn ensure_file_root(&self, item: &Workspace) -> StateResult<()> {
+        tokio::fs::create_dir_all(self.get_root(item.id)).await?;
+        Ok(())
     }
 
     /// Delete the on-disk files first, then the row. Cascades (agents, sessions)
@@ -166,9 +180,7 @@ impl WorkspacesState {
                 self.create_default(user).await?;
             }
             Some(ws) => {
-                if !tokio::fs::try_exists(self.get_root(ws.id)).await? {
-                    tokio::fs::create_dir_all(self.get_root(ws.id)).await?;
-                }
+                self.ensure_file_root(&ws).await?;
             }
         }
         Ok(())
@@ -180,6 +192,13 @@ impl WorkspacesState {
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
         let vfs = self.build_vfs(wid).await?;
         Ok(WorkspaceFs::new(self.get_root(wid), wid).with_vfs(vfs))
+    }
+
+    /// Absolute on-disk path of workspace `wid`'s file root
+    /// (`data_root/workspaces/{wid}/files`) — the tree served over WebDAV and
+    /// mounted read-only into the coworker sandbox as its shared data dir.
+    pub fn files_root(&self, wid: Uuid) -> PathBuf {
+        self.get_root(wid)
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root

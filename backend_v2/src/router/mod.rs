@@ -29,6 +29,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
     //   (admin + `/me` + workspaces + sessions HTTP), wrapping them as the
     //   outer layer so `AuthUser` is populated before `admin_required`
     //   inspects the role.
+    // - The SSE stream route (`/sessions/{id}/messages/stream`) uses a plain
+    //   `.route()` (no OpenAPI entry) and is registered inside the
+    //   `auth_required` layer so it authenticates via the standard
+    //   `Authorization: Bearer` header — unlike the WS route below.
     // - Public routes (`/auth/*`, the WS endpoint) are registered after
     //   both layers and therefore bypass them. The WS endpoint authenticates
     //   inline via a `?token=…` query parameter because browser `WebSocket`
@@ -93,6 +97,13 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             get(message::list_messages).post(message::start_run),
         )
         .api_route("/sessions/{id}/messages/stop", post(message::stop_run))
+        // SSE stream — plain `.route` (no OpenAPI entry; the stream response has no
+        // meaningful schema). Registered before `route_layer(auth_required)` so it is
+        // guarded by the standard Bearer middleware, unlike the `?token=` WS route.
+        .route(
+            "/sessions/{id}/messages/stream",
+            axum::routing::get(message::stream_messages_sse),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,
@@ -103,10 +114,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/sessions/{id}/messages/ws",
             axum::routing::get(message::stream_messages),
         )
-        // Two routes: matchit's `{*rest}` wildcard requires one-or-more
-        // segments, so the bare collection path (`/…/files`) needs its
-        // own entry — without it, `PROPFIND` on the workspace root 404s.
+        // Three routes: matchit's `{*rest}` wildcard requires one-or-more
+        // segments, so both the bare collection path (`/…/files`) and the
+        // trailing-slash form (`/…/files/`) need their own entries — without
+        // them, `PROPFIND` on the workspace root 404s. WebDAV clients (e.g. the
+        // npm webdav client) address collections with a trailing slash; matchit
+        // treats `/files/` as distinct from both non-slash forms.
         .route_service("/workspaces/{wid}/files", webdav::router(state.clone()))
+        .route_service("/workspaces/{wid}/files/", webdav::router(state.clone()))
         .route_service(
             "/workspaces/{wid}/files/{*rest}",
             webdav::router(state.clone()),
