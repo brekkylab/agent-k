@@ -46,6 +46,8 @@ async fn main() -> std::io::Result<()> {
 
     tracing::info!("data root: {}", data_root.display());
 
+    agent_k::agents::ensure_api_search_registered();
+
     let jwt_secret = std::env::var("AGENT_K_JWT_SECRET").unwrap_or_else(|_| {
         tracing::warn!(
             "AGENT_K_JWT_SECRET is not set — falling back to an insecure default. \

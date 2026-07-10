@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use agent_k::agents::{
-    get_coworker_agent_runenv, get_coworker_agent_spec, get_deep_research_agent_spec,
+    get_coworker_agent_runenv, get_coworker_agent_spec, get_deep_research_chat_spec,
 };
 use ailoy::agent::AgentSpec;
 use ailoy::runenv::SandboxBuilder;
@@ -82,7 +82,9 @@ fn build_spec(agent_type: AgentType, model: Option<&str>) -> AgentSpec {
                 true,
             )
         }
-        AgentType::DeepResearch => get_deep_research_agent_spec(
+        // Chat-only: researches the web and returns the report in the reply,
+        // writing no files — so it needs no sandbox (see `create_session`).
+        AgentType::DeepResearch => get_deep_research_chat_spec(
             SESSION_AGENT_NAME,
             model.unwrap_or(DEFAULT_MODEL_DEEP_RESEARCH),
         ),
@@ -174,7 +176,8 @@ pub(super) async fn create_session(
     //     so e.g. a deep_research or stored-agent session can also read the
     //     workspace's external mounts (Notion/S3) as one FUSE tree at
     //     /mnt/workspace (see `SessionsState::run`).
-    // deep_research/stored-agent sessions with `runenv` unset run without one.
+    // deep_research/stored-agent sessions with `runenv` unset run without one
+    // (chat-only deep_research writes no files, so it needs no sandbox).
     // `insert` stops + archives the sandbox; each run restores it (with host
     // egress).
     if matches!(payload.agent_type, Some(AgentType::Coworker)) {
