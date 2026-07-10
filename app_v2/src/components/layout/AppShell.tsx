@@ -5,14 +5,162 @@
 // action, a Workspace nav link (with a subtle divider below it), a Recents
 // session list, and the LanguageToggle in the footer.
 
-import type { ReactNode } from 'react';
+import { useState, useRef, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { listSessions } from '@/api/sessions';
+import { listSessions, updateSessionTitle } from '@/api/sessions';
+import type { SessionResponse } from '@/api/types';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import { SessionTitle } from '@/components/SessionTitle';
 import { Icon } from '@/components/Icon';
+
+/** One Recents row: opens the session on click, with a hover ⋯ menu that
+ *  swaps the title into an inline rename input (same save/cancel rules as the
+ *  chat header). */
+function SessionRow({
+  session,
+  isActive,
+  onOpen,
+}: {
+  session: SessionResponse;
+  isActive: boolean;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation('common');
+  const qc = useQueryClient();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const cancelEditRef = useRef(false);
+
+  function patchTitle(next: string | null) {
+    qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
+      list?.map((s) => (s.id === session.id ? { ...s, title: next } : s)),
+    );
+  }
+
+  function startEdit() {
+    setMenuOpen(false);
+    cancelEditRef.current = false;
+    setDraft(session.title ?? '');
+    setEditing(true);
+  }
+
+  async function commitEdit() {
+    setEditing(false);
+    if (cancelEditRef.current) {
+      cancelEditRef.current = false;
+      return;
+    }
+    const next = draft.trim();
+    if (next === '' || next === session.title) return;
+    const prev = session.title;
+    patchTitle(next); // optimistic; the server echoes a title event too
+    try {
+      await updateSessionTitle(session.id, next);
+    } catch {
+      patchTitle(prev); // revert on failure
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className={`cw-session-row${isActive ? ' is-active' : ''}`}>
+        <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
+        <input
+          className="cw-session-rename-input"
+          value={draft}
+          autoFocus
+          maxLength={200}
+          aria-label={t('nav.rename', 'Rename session')}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={(e) => e.currentTarget.select()}
+          onClick={(e) => e.stopPropagation()}
+          onBlur={() => void commitEdit()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.currentTarget.blur(); // routes through onBlur → commit
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              cancelEditRef.current = true;
+              e.currentTarget.blur();
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`cw-session-row${isActive ? ' is-active' : ''}`}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      title={session.title ?? undefined}
+    >
+      <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
+      <SessionTitle
+        title={session.title}
+        createdAt={session.created_at}
+        className="cw-session-title"
+        skeletonClassName="cw-title-skeleton--row"
+        fallback={session.id.slice(0, 8)}
+      />
+      <span className="cw-session-menu-wrap">
+        <button
+          type="button"
+          className="cw-session-menu-btn"
+          aria-label={t('nav.more', 'More')}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpen((v) => !v);
+          }}
+        >
+          <Icon name="more" size={14} />
+        </button>
+        {menuOpen && (
+          <>
+            {/* Full-viewport click-away catcher; closes the menu without a
+                document listener and swallows the click so it doesn't open the
+                session. */}
+            <div
+              className="cw-session-menu-overlay"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(false);
+              }}
+            />
+            <div className="cw-session-menu" role="menu">
+              <button
+                type="button"
+                className="cw-session-menu-item"
+                role="menuitem"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startEdit();
+                }}
+              >
+                <Icon name="writing" size={13} />
+                <span>{t('nav.rename', 'Rename')}</span>
+              </button>
+            </div>
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
 
 function SessionNavList() {
   const { t } = useTranslation('common');
@@ -30,34 +178,14 @@ function SessionNavList() {
 
   return (
     <div className="cw-sessions-list">
-      {sessions.map((s) => {
-        const isActive = s.id === activeSessionId;
-        return (
-          <div
-            key={s.id}
-            className={`cw-session-row${isActive ? ' is-active' : ''}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => navigate({ to: '/sessions/$sessionId', params: { sessionId: s.id } })}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                void navigate({ to: '/sessions/$sessionId', params: { sessionId: s.id } });
-              }
-            }}
-            title={s.title ?? undefined}
-          >
-            <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
-            <SessionTitle
-              title={s.title}
-              createdAt={s.created_at}
-              className="cw-session-title"
-              skeletonClassName="cw-title-skeleton--row"
-              fallback={s.id.slice(0, 8)}
-            />
-          </div>
-        );
-      })}
+      {sessions.map((s) => (
+        <SessionRow
+          key={s.id}
+          session={s}
+          isActive={s.id === activeSessionId}
+          onOpen={() => navigate({ to: '/sessions/$sessionId', params: { sessionId: s.id } })}
+        />
+      ))}
     </div>
   );
 }

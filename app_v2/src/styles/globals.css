@@ -187,6 +187,42 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .cw-session-row:focus-within .cw-session-row-delete { opacity: 1; }
 .cw-session-row-delete:hover { background: var(--cw-destructive-soft); color: var(--cw-destructive); }
 
+/* ── Session row ⋯ menu (rename) ─────────────────────────────────────────── */
+.cw-session-menu-wrap { position: relative; flex-shrink: 0; display: inline-flex; }
+.cw-session-menu-btn {
+  opacity: 0; flex-shrink: 0;
+  width: 22px; height: 22px; border: 0; border-radius: var(--cw-radius-sm);
+  background: transparent; color: var(--cw-fg-4);
+  display: inline-grid; place-items: center; cursor: pointer;
+  transition: opacity 120ms, background 120ms, color 120ms;
+}
+.cw-session-row:hover .cw-session-menu-btn,
+.cw-session-row:focus-within .cw-session-menu-btn,
+.cw-session-menu-btn[aria-expanded="true"] { opacity: 1; }
+.cw-session-menu-btn:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+/* Full-viewport click-away catcher, painted under the open menu. */
+.cw-session-menu-overlay { position: fixed; inset: 0; z-index: 200; }
+.cw-session-menu {
+  position: absolute; top: calc(100% + 2px); right: 0; z-index: 201;
+  min-width: 132px; padding: 4px;
+  background: var(--cw-bg-elevated); border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-md); box-shadow: var(--cw-shadow-lg);
+}
+.cw-session-menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 8px; border: 0; background: transparent; cursor: pointer;
+  border-radius: var(--cw-radius-sm); color: var(--cw-fg-2);
+  font-size: 12.5px; text-align: left;
+}
+.cw-session-menu-item:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+/* Inline rename input inside a session row. */
+.cw-session-rename-input {
+  flex: 1; min-width: 0; font: inherit; font-size: 12.5px;
+  color: var(--cw-fg-1); background: var(--cw-bg-elevated);
+  border: 1px solid var(--cw-border-strong, var(--cw-border-hover));
+  border-radius: var(--cw-radius-sm); padding: 2px 6px; outline: none;
+}
+
 /* ── Icon pocket (nav / session leading glyph) ──────────────────────────── */
 .cw-pocket {
   width: 18px; height: 18px; border-radius: 5px;

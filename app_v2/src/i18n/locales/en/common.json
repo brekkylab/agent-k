@@ -33,7 +33,9 @@
     "new_chat": "New Chat",
     "recents": "Recents",
     "recents_empty": "No recent chats yet",
-    "workspace": "Workspace"
+    "workspace": "Workspace",
+    "more": "More",
+    "rename": "Rename"
   },
   "intent": {
     "general": { "label": "General", "note": "Start freely" },
