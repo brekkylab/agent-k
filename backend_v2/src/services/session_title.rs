@@ -47,9 +47,10 @@ async fn call_llm_for_session_title(text: &str) -> Result<String, String> {
     let mut agent = AgentBuilder::new(TITLE_MODEL)
         .instruction(format!(
             "You are a concise title generator. \
-             Try to summarize user's question in a single short phrase (under {TITLE_MAX_LEN} characters). \
-             Just summarize it, DO NOT try to generate the answer of the question. \
-             No quotes, no trailing punctuation."
+             Summarize the user's request as a single short title phrase (under {TITLE_MAX_LEN} characters). \
+             Output ONLY the title, on ONE line, as plain text: \
+             no markdown, no formatting, no headings, no quotes, no trailing punctuation. \
+             Do NOT answer the question or add any extra lines."
         ))
         .build()
         .map_err(|e| e.to_string())?;
@@ -70,12 +71,29 @@ async fn call_llm_for_session_title(text: &str) -> Result<String, String> {
     Ok(parts.join(""))
 }
 
-/// Strip control characters and clamp to [`TITLE_MAX_LEN`] characters.
+/// Reduce a raw model (or fallback) string to a clean one-line title.
+///
+/// Titles are a single line, so only the first non-empty line is kept — models
+/// occasionally tack on a second line (a section header, or the answer itself).
+/// Markdown emphasis/heading markers are turned into spaces (so removing `**`
+/// doesn't glue two words together), non-whitespace control chars are dropped,
+/// internal whitespace is collapsed, and the result is clamped to
+/// [`TITLE_MAX_LEN`] characters.
 fn sanitize_session_title(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .trim()
+    let line = s
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let cleaned: String = line
+        .chars()
+        .map(|c| if matches!(c, '*' | '_' | '`' | '#') { ' ' } else { c })
+        .filter(|c| !(c.is_control() && !c.is_whitespace()))
+        .collect();
+    cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
         .chars()
         .take(TITLE_MAX_LEN)
         .collect()
@@ -94,6 +112,22 @@ mod tests {
 
     #[test]
     fn sanitize_drops_control_chars() {
-        assert_eq!(sanitize_session_title("a\tb\u{7}c"), "abc");
+        // Bell is dropped; the tab collapses to a single space.
+        assert_eq!(sanitize_session_title("a\tb\u{7}c"), "a bc");
+    }
+
+    #[test]
+    fn sanitize_keeps_only_first_line() {
+        assert_eq!(
+            sanitize_session_title("Walking Benefits Research Report\n**Physical Health Benefits**"),
+            "Walking Benefits Research Report"
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_markdown_without_gluing_words() {
+        assert_eq!(sanitize_session_title("**Bold Title**"), "Bold Title");
+        assert_eq!(sanitize_session_title("Report**Physical"), "Report Physical");
+        assert_eq!(sanitize_session_title("# Heading"), "Heading");
     }
 }
