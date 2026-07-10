@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMessageStream } from '@/hooks/useMessageStream';
 import { buildTranscript, type TranscriptEntry } from '@/lib/transcript';
 import { sendMessage } from '@/api/messages';
-import { listSessions } from '@/api/sessions';
+import { listSessions, updateSessionTitle } from '@/api/sessions';
+import type { SessionResponse } from '@/api/types';
 import { ApiError } from '@/api/client';
 import { MessageList } from '@/components/chat/MessageList';
 import { Composer } from '@/components/chat/Composer';
 import { SessionTitle } from '@/components/SessionTitle';
+import { Icon } from '@/components/Icon';
 import { takePendingMessage } from '@/stores/pendingMessage';
 
 export const Route = createFileRoute('/sessions/$sessionId')({
@@ -19,6 +21,7 @@ function SessionPage() {
   const { sessionId } = Route.useParams();
   const { messages, running, runError } = useMessageStream(sessionId);
   const [sendError, setSendError] = useState<string | null>(null);
+  const qc = useQueryClient();
 
   // Session title, read from the shared ['sessions'] cache (populated by the
   // sidebar and live-patched by useMessageStream when the auto-title arrives).
@@ -29,6 +32,44 @@ function SessionPage() {
   });
   const session = sessions?.find((s) => s.id === sessionId);
   const title = session?.title ?? null;
+
+  // Inline title rename. Editing routes save/cancel through the input's blur
+  // so Enter and click-away commit exactly once; Escape flags a cancel first.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const cancelEditRef = useRef(false);
+
+  function startEdit() {
+    if (title == null) return; // can't rename a title that hasn't generated yet
+    cancelEditRef.current = false;
+    setDraft(title);
+    setEditing(true);
+  }
+
+  function patchTitle(next: string | null) {
+    qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
+      list?.map((s) => (s.id === sessionId ? { ...s, title: next } : s)),
+    );
+  }
+
+  async function commitEdit() {
+    setEditing(false);
+    if (cancelEditRef.current) {
+      cancelEditRef.current = false;
+      return;
+    }
+    const next = draft.trim();
+    // Empty is rejected (never clears the title); no-op if unchanged.
+    if (next === '' || next === title) return;
+
+    const prev = title;
+    patchTitle(next); // optimistic; the server echoes a title event too
+    try {
+      await updateSessionTitle(sessionId, next);
+    } catch {
+      patchTitle(prev); // revert on failure
+    }
+  }
 
   // Optimistically-rendered user message: shown the instant it is sent, before
   // the server echoes it back over SSE (which only happens after the run's
@@ -94,18 +135,54 @@ function SessionPage() {
   return (
     <div className="cw-chat-surface">
       <div className="cw-chat-head">
-        {/* Key by sessionId so switching sessions remounts the title: the
-            router reuses this component across param changes, and without a
-            fresh mount an already-titled session would inherit the previous
-            session's null→value transition and appear to "type" itself. */}
-        <SessionTitle
-          key={sessionId}
-          title={title}
-          createdAt={session?.created_at}
-          className="cw-chat-title"
-          skeletonClassName="cw-title-skeleton--head"
-          fallback={sessionId.slice(0, 8)}
-        />
+        {editing ? (
+          <input
+            className="cw-chat-title-input"
+            value={draft}
+            autoFocus
+            maxLength={200}
+            aria-label="세션 제목"
+            onChange={(e) => setDraft(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={() => void commitEdit()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.currentTarget.blur(); // routes through onBlur → commit
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelEditRef.current = true;
+                e.currentTarget.blur();
+              }
+            }}
+          />
+        ) : (
+          <>
+            {/* Key by sessionId so switching sessions remounts the title: the
+                router reuses this component across param changes, and without a
+                fresh mount an already-titled session would inherit the previous
+                session's null→value transition and appear to "type" itself. */}
+            <SessionTitle
+              key={sessionId}
+              title={title}
+              createdAt={session?.created_at}
+              className="cw-chat-title"
+              skeletonClassName="cw-title-skeleton--head"
+              fallback={sessionId.slice(0, 8)}
+            />
+            {title != null && (
+              <button
+                type="button"
+                className="cw-title-edit"
+                onClick={startEdit}
+                aria-label="이름 변경"
+                title="이름 변경"
+              >
+                <Icon name="writing" size={13} />
+              </button>
+            )}
+          </>
+        )}
       </div>
 
       {runError && (

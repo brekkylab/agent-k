@@ -218,6 +218,24 @@ impl SessionsState {
         Ok(())
     }
 
+    /// Set a session's title and bump `updated_at`. Backs the manual rename
+    /// endpoint; the auto-titler writes its own UPDATE inline (see
+    /// [`Self::maybe_generate_title`]).
+    pub async fn set_title(&self, id: Uuid, title: &str) -> StateResult<()> {
+        let now = Utc::now().to_rfc3339();
+        let affected = sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+            .bind(title)
+            .bind(now)
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await?
+            .rows_affected();
+        if affected == 0 {
+            return Err(StateError::NotFound);
+        }
+        Ok(())
+    }
+
     /// Whether `id` exists and has no title yet — the gate for auto-titling.
     async fn needs_title(&self, id: Uuid) -> StateResult<bool> {
         let row = sqlx::query("SELECT title FROM sessions WHERE id = ?")
@@ -602,5 +620,13 @@ mod tests {
         let state = SessionsState::new(pool, std::env::temp_dir(), EventQueue::new());
         let unknown_id = Uuid::new_v4();
         assert!(!state.is_running(unknown_id).await);
+    }
+
+    #[tokio::test]
+    async fn set_title_missing_session_is_not_found() {
+        let pool = fresh_db().await;
+        let state = SessionsState::new(pool, std::env::temp_dir(), EventQueue::new());
+        let result = state.set_title(Uuid::new_v4(), "x").await;
+        assert!(matches!(result, Err(StateError::NotFound)));
     }
 }

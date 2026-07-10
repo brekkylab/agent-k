@@ -26,3 +26,11 @@ export async function createSession(input: {
 export async function deleteSession(id: string): Promise<void> {
   await request<void>(`/sessions/${id}`, { method: 'DELETE' });
 }
+
+/** Rename a session. The server rejects an empty/whitespace-only title. */
+export async function updateSessionTitle(id: string, title: string): Promise<SessionResponse> {
+  return request<SessionResponse>(`/sessions/${id}`, {
+    method: 'PATCH',
+    body: { title },
+  });
+}

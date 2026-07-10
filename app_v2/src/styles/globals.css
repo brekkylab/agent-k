@@ -313,6 +313,26 @@ select.cw-input { appearance: auto; }
   font-size: var(--cw-text-sm); font-weight: 600; color: var(--cw-fg-1);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
+/* Pencil affordance — hidden until the header is hovered or the button is
+   keyboard-focused, so it doesn't clutter the header at rest. */
+.cw-title-edit {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--cw-fg-3); cursor: pointer;
+  padding: 3px; border-radius: var(--cw-radius-sm, 4px); flex-shrink: 0;
+  opacity: 0; transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.cw-chat-head:hover .cw-title-edit,
+.cw-title-edit:focus-visible { opacity: 1; }
+.cw-title-edit:hover { color: var(--cw-fg-1); background: var(--cw-bg-subtle); }
+/* Inline rename input, styled to sit in place of the title text. */
+.cw-chat-title-input {
+  font: inherit; font-size: var(--cw-text-sm); font-weight: 600; color: var(--cw-fg-1);
+  flex: 1; min-width: 0; max-width: 460px;
+  padding: 3px 8px; border-radius: var(--cw-radius-md, 6px);
+  background: var(--cw-bg-subtle); border: 1px solid var(--cw-border);
+  outline: none;
+}
+.cw-chat-title-input:focus { border-color: var(--cw-border-strong, var(--cw-border-hover)); }
 /* Shimmer skeleton shown in a title slot while the auto-title is being
    generated (see SessionTitle) — the real text is typed in when it arrives. */
 .cw-title-skeleton {
