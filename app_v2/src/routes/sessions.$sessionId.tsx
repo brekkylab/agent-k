@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMessageStream } from '@/hooks/useMessageStream';
 import { buildTranscript, type TranscriptEntry } from '@/lib/transcript';
 import { sendMessage } from '@/api/messages';
-import { listSessions, updateSessionTitle } from '@/api/sessions';
+import { listSessions, updateSessionTitle, SESSION_TITLE_MAX_LEN } from '@/api/sessions';
 import type { SessionResponse } from '@/api/types';
 import { ApiError } from '@/api/client';
 import { MessageList } from '@/components/chat/MessageList';
@@ -136,26 +136,33 @@ function SessionPage() {
     <div className="cw-chat-surface">
       <div className="cw-chat-head">
         {editing ? (
-          <input
-            className="cw-chat-title-input"
-            value={draft}
-            autoFocus
-            maxLength={200}
-            aria-label="세션 제목"
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={(e) => e.currentTarget.select()}
-            onBlur={() => void commitEdit()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                e.currentTarget.blur(); // routes through onBlur → commit
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                cancelEditRef.current = true;
-                e.currentTarget.blur();
-              }
-            }}
-          />
+          <>
+            <input
+              className="cw-chat-title-input"
+              value={draft}
+              autoFocus
+              maxLength={SESSION_TITLE_MAX_LEN}
+              aria-label="세션 제목"
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={() => void commitEdit()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.currentTarget.blur(); // routes through onBlur → commit
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  cancelEditRef.current = true;
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+            {draft.length >= SESSION_TITLE_MAX_LEN - 15 && (
+              <span className="cw-title-count">
+                {draft.length}/{SESSION_TITLE_MAX_LEN}
+              </span>
+            )}
+          </>
         ) : (
           <>
             {/* Key by sessionId so switching sessions remounts the title: the

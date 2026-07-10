@@ -369,6 +369,11 @@ select.cw-input { appearance: auto; }
   outline: none;
 }
 .cw-chat-title-input:focus { border-color: var(--cw-border-strong, var(--cw-border-hover)); }
+/* Character counter, shown only as the title nears the length limit. */
+.cw-title-count {
+  flex-shrink: 0; font-size: var(--cw-text-xs); color: var(--cw-fg-3);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 /* Shimmer skeleton shown in a title slot while the auto-title is being
    generated (see SessionTitle) — the real text is typed in when it arrives. */
 .cw-title-skeleton {

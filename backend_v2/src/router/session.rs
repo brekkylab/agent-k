@@ -21,9 +21,9 @@ use crate::{
     state::{AppState, Session},
 };
 
-/// Upper bound on a manually-set title. Generous versus the auto-title's 60,
-/// but bounded so a crafted request can't bloat the row or the header.
-const MAX_TITLE_LEN: usize = 200;
+/// Upper bound on a manually-set title. Matches the auto-title limit (60) so
+/// both surfaces agree.
+const MAX_TITLE_LEN: usize = 60;
 
 use super::{
     error::{ApiError, err},

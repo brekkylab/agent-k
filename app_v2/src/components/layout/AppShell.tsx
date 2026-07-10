@@ -9,7 +9,7 @@ import { useState, useRef, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { listSessions, updateSessionTitle } from '@/api/sessions';
+import { listSessions, updateSessionTitle, SESSION_TITLE_MAX_LEN } from '@/api/sessions';
 import type { SessionResponse } from '@/api/types';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import { SessionTitle } from '@/components/SessionTitle';
@@ -72,7 +72,7 @@ function SessionRow({
           className="cw-session-rename-input"
           value={draft}
           autoFocus
-          maxLength={200}
+          maxLength={SESSION_TITLE_MAX_LEN}
           aria-label={t('nav.rename', 'Rename session')}
           onChange={(e) => setDraft(e.target.value)}
           onFocus={(e) => e.currentTarget.select()}
@@ -89,6 +89,11 @@ function SessionRow({
             }
           }}
         />
+        {draft.length >= SESSION_TITLE_MAX_LEN - 15 && (
+          <span className="cw-title-count">
+            {draft.length}/{SESSION_TITLE_MAX_LEN}
+          </span>
+        )}
       </div>
     );
   }

@@ -2,6 +2,9 @@ import { request } from './client';
 import { getWorkspaceId } from '@/stores/workspace';
 import type { SessionResponse, AgentType } from './types';
 
+/** Max length for a session title, matching the backend clamp (auto + manual). */
+export const SESSION_TITLE_MAX_LEN = 60;
+
 export async function listSessions(): Promise<SessionResponse[]> {
   const result = await request<{ items: SessionResponse[] }>('/sessions');
   return result.items;
