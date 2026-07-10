@@ -16,10 +16,10 @@ vi.mock('@/api/messages', () => ({
   listMessages: vi.fn(),
 }));
 
-import { streamSessionMessages } from '@/api/messages';
+import { streamSessionMessages, type StreamEvent } from '@/api/messages';
 import { ApiError } from '@/api/client';
 import { useMessageStream } from '@/hooks/useMessageStream';
-import type { MessageItem, RunEventPayload } from '@/api/types';
+import type { MessageItem, RunEventPayload, SessionResponse } from '@/api/types';
 
 function wrapper({ children }: { children: ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -27,9 +27,9 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 async function* makeStream(
-  events: Array<{ kind: 'message'; item: MessageItem } | { kind: 'run'; payload: RunEventPayload }>,
+  events: StreamEvent[],
   holdOpen = false,
-): AsyncGenerator<{ kind: 'message'; item: MessageItem } | { kind: 'run'; payload: RunEventPayload }> {
+): AsyncGenerator<StreamEvent> {
   for (const ev of events) yield ev;
   if (holdOpen) {
     // Never resolve — simulates an open connection.
@@ -72,6 +72,35 @@ describe('useMessageStream', () => {
 
     const { result } = renderHook(() => useMessageStream('s1'), { wrapper });
     await waitFor(() => expect(result.current.running).toBe(false));
+  });
+
+  it('patches the sessions cache on a title event', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData<SessionResponse[]>(['sessions'], [
+      {
+        id: 's1',
+        workspace_id: 'w1',
+        agent_id: null,
+        title: null,
+        spec: {},
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+    const exposingWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+
+    vi.mocked(streamSessionMessages)
+      .mockReturnValueOnce(makeStream([{ kind: 'title', title: 'Generated Title' }]))
+      .mockReturnValue(makeStream([], true)); // hold reconnect open
+
+    renderHook(() => useMessageStream('s1'), { wrapper: exposingWrapper });
+
+    await waitFor(() => {
+      const cached = qc.getQueryData<SessionResponse[]>(['sessions']);
+      expect(cached?.[0]?.title).toBe('Generated Title');
+    });
   });
 
   it('sets runError on run:error event', async () => {

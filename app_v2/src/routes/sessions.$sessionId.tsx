@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
+import { useQuery } from '@tanstack/react-query';
 import { useMessageStream } from '@/hooks/useMessageStream';
 import { buildTranscript, type TranscriptEntry } from '@/lib/transcript';
 import { sendMessage } from '@/api/messages';
+import { listSessions } from '@/api/sessions';
 import { ApiError } from '@/api/client';
 import { MessageList } from '@/components/chat/MessageList';
 import { Composer } from '@/components/chat/Composer';
+import { SessionTitle } from '@/components/SessionTitle';
 import { takePendingMessage } from '@/stores/pendingMessage';
 
 export const Route = createFileRoute('/sessions/$sessionId')({
@@ -14,8 +17,18 @@ export const Route = createFileRoute('/sessions/$sessionId')({
 
 function SessionPage() {
   const { sessionId } = Route.useParams();
-  const { messages, running, runError, connected } = useMessageStream(sessionId);
+  const { messages, running, runError } = useMessageStream(sessionId);
   const [sendError, setSendError] = useState<string | null>(null);
+
+  // Session title, read from the shared ['sessions'] cache (populated by the
+  // sidebar and live-patched by useMessageStream when the auto-title arrives).
+  const { data: sessions } = useQuery({
+    queryKey: ['sessions'],
+    queryFn: listSessions,
+    staleTime: 30_000,
+  });
+  const session = sessions?.find((s) => s.id === sessionId);
+  const title = session?.title ?? null;
 
   // Optimistically-rendered user message: shown the instant it is sent, before
   // the server echoes it back over SSE (which only happens after the run's
@@ -81,14 +94,18 @@ function SessionPage() {
   return (
     <div className="cw-chat-surface">
       <div className="cw-chat-head">
-        <div className="cw-chat-status">
-          {connected ? (
-            <span className="cw-status-dot cw-status-dot--connected" title="Connected" />
-          ) : (
-            <span className="cw-status-dot cw-status-dot--disconnected" title="Connecting…" />
-          )}
-          {running && <span className="cw-status-running">AI is responding…</span>}
-        </div>
+        {/* Key by sessionId so switching sessions remounts the title: the
+            router reuses this component across param changes, and without a
+            fresh mount an already-titled session would inherit the previous
+            session's null→value transition and appear to "type" itself. */}
+        <SessionTitle
+          key={sessionId}
+          title={title}
+          createdAt={session?.created_at}
+          className="cw-chat-title"
+          skeletonClassName="cw-title-skeleton--head"
+          fallback={sessionId.slice(0, 8)}
+        />
       </div>
 
       {runError && (

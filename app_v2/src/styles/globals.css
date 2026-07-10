@@ -309,7 +309,48 @@ select.cw-input { appearance: auto; }
   border-bottom: 1px solid var(--cw-border);
   display: flex; align-items: center; gap: 10px; flex-shrink: 0;
 }
+.cw-chat-title {
+  font-size: var(--cw-text-sm); font-weight: 600; color: var(--cw-fg-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+/* Shimmer skeleton shown in a title slot while the auto-title is being
+   generated (see SessionTitle) — the real text is typed in when it arrives. */
+.cw-title-skeleton {
+  display: inline-block; height: 1.05em; min-width: 80px;
+  border-radius: var(--cw-radius-md, 6px);
+  background: linear-gradient(
+    100deg,
+    var(--cw-bg-subtle) 30%,
+    var(--cw-bg-muted) 50%,
+    var(--cw-bg-subtle) 70%
+  );
+  background-size: 200% 100%;
+  animation: cw-title-shimmer 1.3s ease-in-out infinite;
+  vertical-align: middle;
+}
+.cw-title-skeleton--head { width: 180px; max-width: 45%; }
+.cw-title-skeleton--row { width: 70%; height: 0.95em; }
+/* Blinking caret trailing the text during the typewriter reveal. */
+.cw-title-caret {
+  display: inline-block; width: 2px; height: 1em; margin-left: 1px;
+  background: currentColor; vertical-align: text-bottom;
+  animation: cw-caret-blink 0.9s step-end infinite;
+}
+@keyframes cw-title-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@keyframes cw-caret-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .cw-title-skeleton { animation: none; }
+  .cw-title-caret { animation: none; }
+}
 .cw-chat-status { display: flex; align-items: center; gap: 8px; font-size: var(--cw-text-xs); color: var(--cw-fg-3); }
+/* "AI is responding…" typing indicator, rendered below the last message while
+   a run is in flight (see MessageList). Disappears with the run. */
+.cw-typing { display: flex; align-items: center; gap: 8px; font-size: var(--cw-text-xs); color: var(--cw-fg-3); }
+.cw-typing .cw-status-dot { animation: cw-typing-pulse 1.2s ease-in-out infinite; }
+@keyframes cw-typing-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .cw-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .cw-status-dot--connected { background: var(--cw-ok); }
 .cw-status-dot--disconnected { background: var(--cw-warn); }

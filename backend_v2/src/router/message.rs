@@ -193,6 +193,10 @@ pub(super) async fn stream_messages(
 ///   event: message   data: {"seq":N,"message":{...}}          (MessageEvent)
 ///   event: run       data: {"run":"started"|"finished"|"idle"} or
 ///                          {"run":"error","message":"..."}     (RunEvent)
+///   event: title     data: {"title":"..."}                     (TitleEvent)
+///
+/// The `title` frame fires once, when an untitled session's auto-generated
+/// title is first persisted (concurrent with the run that triggered it).
 ///
 /// A run-status snapshot (`started`/`idle`) is emitted after EVERY DB
 /// catch-up (initial attach and post-Lagged reconciliation), so re-attaching
@@ -262,9 +266,13 @@ pub(super) async fn stream_messages_sse(
                                 last_seq = seq;
                             }
                             None => {
-                                // Seq-less payloads are run lifecycle events.
+                                // Seq-less payloads are lifecycle events, tagged
+                                // by their discriminant field: `run` for run
+                                // status, `title` for an auto-generated title.
                                 if value.as_ref().is_some_and(|v| v.get("run").is_some()) {
                                     yield Ok(Event::default().event("run").data(payload));
+                                } else if value.as_ref().is_some_and(|v| v.get("title").is_some()) {
+                                    yield Ok(Event::default().event("title").data(payload));
                                 }
                             }
                         }

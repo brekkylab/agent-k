@@ -11,10 +11,11 @@ interface MessageListProps {
 export function MessageList({ entries, running }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new entries arrive.
+  // Auto-scroll to bottom when new entries arrive or the run status toggles
+  // (so the "responding" indicator is scrolled into view when it appears).
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [entries.length]);
+  }, [entries.length, running]);
 
   return (
     <div className="cw-messages-scroll">
@@ -43,6 +44,14 @@ export function MessageList({ entries, running }: MessageListProps) {
             </div>
           </div>
         ))}
+        {/* Typing indicator below the last message — only while a run is in
+            flight, so it (and its dot) disappear the moment the run ends. */}
+        {running && (
+          <div className="cw-typing" aria-live="polite">
+            <span className="cw-status-dot cw-status-dot--connected" aria-hidden="true" />
+            <span className="cw-status-running">AI is responding…</span>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
     </div>

@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{StateError, StateResult, parse_ts, parse_uuid};
-use crate::event::{EventQueue, MessageEvent, RunEvent, message_channel};
+use crate::event::{EventQueue, MessageEvent, RunEvent, TitleEvent, message_channel};
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -90,6 +90,12 @@ impl Session {
             updated_at: parse_ts(&row.get::<String, _>("updated_at"), "sessions.updated_at")?,
         })
     }
+}
+
+/// Concatenate the text parts of a user turn for title generation. Non-text
+/// parts (images, tool calls) are skipped.
+fn first_user_text(parts: &[Part]) -> String {
+    parts.iter().filter_map(|p| p.as_text()).collect()
 }
 
 pub struct SessionsState {
@@ -212,6 +218,57 @@ impl SessionsState {
         Ok(())
     }
 
+    /// Whether `id` exists and has no title yet — the gate for auto-titling.
+    async fn needs_title(&self, id: Uuid) -> StateResult<bool> {
+        let row = sqlx::query("SELECT title FROM sessions WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_optional(&self.db)
+            .await?;
+        Ok(matches!(row, Some(r) if r.get::<Option<String>, _>("title").is_none()))
+    }
+
+    /// If `id` still has no title, spawn a best-effort background task that
+    /// summarises `first_text` into one, persists it, and publishes a
+    /// [`TitleEvent`] on the session channel. Runs concurrently with the agent
+    /// run and never blocks or fails it: on any error the title is simply left
+    /// unset and can be regenerated on the next turn.
+    async fn maybe_generate_title(&self, id: Uuid, first_text: String) {
+        if first_text.trim().is_empty() {
+            return;
+        }
+        match self.needs_title(id).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!(session = %id, "title precheck failed: {e}");
+                return;
+            }
+        }
+
+        let db = self.db.clone();
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            let title = crate::services::session_title::generate_session_title(&first_text).await;
+            let now = Utc::now().to_rfc3339();
+            if let Err(e) = sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+                .bind(&title)
+                .bind(&now)
+                .bind(id.to_string())
+                .execute(&db)
+                .await
+            {
+                tracing::warn!(session = %id, "failed to persist session title: {e}");
+                return;
+            }
+            match serde_json::to_string(&TitleEvent { title }) {
+                Ok(payload) => {
+                    events.publish(&message_channel(id), payload);
+                }
+                Err(e) => tracing::error!(session = %id, "title event serialize failed: {e}"),
+            }
+        });
+    }
+
     pub async fn remove(&self, id: Uuid) -> StateResult<Session> {
         let existing = self.get(id).await?.ok_or(StateError::NotFound)?;
         // Signal any in-flight run to stop before we tear down the row. The
@@ -323,6 +380,12 @@ impl SessionsState {
         let data_root = self.data_root.clone();
         let events = self.events.clone();
         let runs = self.runs.clone();
+
+        // Auto-title an untitled session from this user turn, concurrent with
+        // the run. `query` is moved into the run task below, so extract the
+        // text first. Best-effort: `maybe_generate_title` only does a quick
+        // "needs a title?" check inline, then spawns the LLM call.
+        self.maybe_generate_title(id, first_user_text(&query)).await;
 
         // Publishing before spawn guarantees a subscriber attached before the
         // POST 202 returns observes `started` before the user-message event.

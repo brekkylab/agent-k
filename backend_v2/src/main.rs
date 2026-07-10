@@ -1,6 +1,7 @@
 mod auth;
 mod event;
 mod router;
+mod services;
 mod state;
 mod vfs;
 

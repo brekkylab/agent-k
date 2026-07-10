@@ -66,3 +66,9 @@ export interface MessageItem {
 export type RunEventPayload =
   | { run: 'started' | 'finished' | 'idle' }
   | { run: 'error'; message: string };
+
+/// `title` SSE frame: an auto-generated session title, published once when an
+/// untitled session's title is first persisted (concurrent with its run).
+export interface TitleEventPayload {
+  title: string;
+}

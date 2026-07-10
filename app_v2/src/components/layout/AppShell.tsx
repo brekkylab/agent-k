@@ -11,6 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listSessions } from '@/api/sessions';
 import { LanguageToggle } from '@/components/LanguageToggle';
+import { SessionTitle } from '@/components/SessionTitle';
 import { Icon } from '@/components/Icon';
 
 function SessionNavList() {
@@ -31,7 +32,6 @@ function SessionNavList() {
     <div className="cw-sessions-list">
       {sessions.map((s) => {
         const isActive = s.id === activeSessionId;
-        const title = s.title ?? s.id.slice(0, 8);
         return (
           <div
             key={s.id}
@@ -45,10 +45,16 @@ function SessionNavList() {
                 void navigate({ to: '/sessions/$sessionId', params: { sessionId: s.id } });
               }
             }}
-            title={title}
+            title={s.title ?? undefined}
           >
             <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
-            <span className="cw-session-title">{title}</span>
+            <SessionTitle
+              title={s.title}
+              createdAt={s.created_at}
+              className="cw-session-title"
+              skeletonClassName="cw-title-skeleton--row"
+              fallback={s.id.slice(0, 8)}
+            />
           </div>
         );
       })}
