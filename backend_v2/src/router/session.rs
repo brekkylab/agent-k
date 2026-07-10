@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use agent_k::agents::{
-    get_coworker_agent_runenv, get_coworker_agent_spec, get_deep_research_chat_spec,
+    get_coworker_agent_runenv, get_coworker_agent_spec, get_deep_research_agent_spec,
 };
 use ailoy::agent::AgentSpec;
 use ailoy::runenv::SandboxBuilder;
@@ -82,9 +82,9 @@ fn build_spec(agent_type: AgentType, model: Option<&str>) -> AgentSpec {
                 true,
             )
         }
-        // Chat-only: researches the web and returns the report in the reply,
-        // writing no files — so it needs no sandbox (see `create_session`).
-        AgentType::DeepResearch => get_deep_research_chat_spec(
+        // Writes its report/citations to `artifacts/` in the sandbox, which the
+        // VM snapshot persists across the session's runs.
+        AgentType::DeepResearch => get_deep_research_agent_spec(
             SESSION_AGENT_NAME,
             model.unwrap_or(DEFAULT_MODEL_DEEP_RESEARCH),
         ),
@@ -166,21 +166,22 @@ pub(super) async fn create_session(
     if let Some(t) = payload.title {
         session = session.with_title(t);
     }
-    // Two independent triggers for a sandboxed session, unioned below:
-    //   - Coworker: always sandboxed. The agent needs a writable /root for its
-    //     skills/tools plus the workspace's local files mounted read-only as
-    //     shared data (attached/shared/artifacts bind mounts, via
-    //     `get_coworker_agent_runenv`). Host egress is on so the in-guest VFS
-    //     forwarder that `SessionsState::run` mounts can reach the host.
+    // Triggers for a sandboxed session, unioned below:
+    //   - Coworker & Deep Research: always sandboxed. Both write outputs into
+    //     the artifacts dir (`get_coworker_agent_runenv`: attached/shared/
+    //     artifacts) — Coworker its deliverables, Deep Research its report.
+    //     Host egress is on so the in-guest VFS forwarder that
+    //     `SessionsState::run` mounts can reach the host.
     //   - `runenv: true`: an explicit opt-in sandbox for any other session type,
-    //     so e.g. a deep_research or stored-agent session can also read the
-    //     workspace's external mounts (Notion/S3) as one FUSE tree at
-    //     /mnt/workspace (see `SessionsState::run`).
-    // deep_research/stored-agent sessions with `runenv` unset run without one
-    // (chat-only deep_research writes no files, so it needs no sandbox).
+    //     so e.g. a stored-agent session can also read the workspace's external
+    //     mounts (Notion/S3) as one FUSE tree at /mnt/workspace.
+    // Stored-agent sessions with `runenv` unset run without one.
     // `insert` stops + archives the sandbox; each run restores it (with host
     // egress).
-    if matches!(payload.agent_type, Some(AgentType::Coworker)) {
+    if matches!(
+        payload.agent_type,
+        Some(AgentType::Coworker | AgentType::DeepResearch)
+    ) {
         let session_dir = state.sessions.session_dir(session.id);
         let inputs_dir = session_dir.join("inputs");
         let artifacts_dir = session_dir.join("artifacts");

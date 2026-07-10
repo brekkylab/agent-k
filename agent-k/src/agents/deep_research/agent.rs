@@ -47,49 +47,7 @@ Sequential is correct only when a later call genuinely depends on an earlier res
 ## Information
 - Current time: {{TIME}}"#;
 
-const DEEP_RESEARCH_CHAT_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to produce a long-form research report grounded in multiple web sources with inline citations, delivered directly as your chat reply. You do not write files — the report lives in the conversation.
-
-## Workflow
-1. Plan: decide 3-8 sections to cover. You may briefly state the plan before researching.
-2. Research phase: for each section, do `api_search` then `web_fetch`. Track which URLs you actually fetched and the supporting quote for each claim.
-3. Writing phase: when research is done, write the whole report as your final reply. Every factual sentence ends with one or more `[^N]` markers.
-4. Cite: end the reply with a `## Sources` section mapping each `[^N]` to its title and URL. Verify every `[^N]` maps to a source, every cited URL was actually fetched this session, and every `##` section draws on at least 3 distinct domains.
-
-## Parallel tool calls
-Whenever you need N independent pieces of information at the same point, fire all N as one batched `tool_calls` block (results return together) instead of N sequential turns:
-- 3 entities to research → three `api_search` calls in one batch.
-- 4 URLs to read → four `web_fetch` calls in one batch (one URL per call).
-Sequential is correct only when a later call genuinely depends on an earlier result (e.g. you need a URL from a search before fetching it).
-
-## Citations
-- Cite only URLs you actually `web_fetch`ed in this session. A URL seen only in a search snippet is not enough.
-- Quote text you rely on must appear verbatim in the fetched body, or be a paraphrase you can defend.
-
-## Tool budget
-- `api_search`: ≤ 8 calls per report. Keep queries short and specific (3-8 words).
-- `web_fetch`: one `url` per call (no array form). Call as many times as you need — fetching more sources is good, just batch the parallel ones into a single tool_calls block. Use `offset` to continue reading the same URL.
-- Hard cap: 32 total tool calls. If you are approaching it, stop researching and write the report.
-
-## Output
-- Deliver the ENTIRE report as your chat reply, in Markdown: a title, `##` sections with `[^N]` citations, then the `## Sources` list. Do not write files and do not truncate — the full report is the reply.
-
-## Language
-- Write the final report and your reply in the language the user used.
-- Search queries should be in the language with the best sources for the topic. For technical, scientific, historical, or international topics the best sources are usually English. When the user asks in Korean about such topics, still search in English, read English sources, and translate into Korean only at the writing step.
-
-## Information
-- Current time: {{TIME}}"#;
-
-/// Register the `api_search` factory in the global `default` tool provider.
-///
-/// The Deep Research [`AgentSpec`] only *references* `api_search` by desc; the
-/// factory must be present in the process registry before an agent built from
-/// that spec runs. [`get_deep_research_agent_spec`] calls this at build time,
-/// but a spec loaded from storage (e.g. a persisted session replayed after a
-/// restart) never rebuilds the spec — so a server hosting Deep Research
-/// sessions must also call this once at boot. Idempotent: re-inserting the
-/// factory just overwrites the prior entry.
-pub fn ensure_api_search_registered() {
+fn ensure_api_search_registered() {
     let mut providers = get_tool_providers_mut();
     if let Some(provider) = providers.get_mut("default") {
         provider.insert_func_factory("api_search", get_api_search_tool_factory());
@@ -138,25 +96,6 @@ pub fn get_deep_research_agent_spec(
     AgentSpec::new(model.as_ref())
         .instruction(inst)
         .system_tools()
-        .tool(get_api_search_tool_desc())
-        .web_fetch_tool()
-        .max_tokens(32_000)
-}
-
-/// Chat-only Deep Research: researches the web and returns the whole report as
-/// its chat reply, writing no files. Unlike [`get_deep_research_agent_spec`] it
-/// has no filesystem/shell tools and needs no run environment — only
-/// `api_search` + `web_fetch` — so a session built from it runs without a
-/// sandbox and keeps its output in the conversation history.
-pub fn get_deep_research_chat_spec(name: impl AsRef<str>, model: impl AsRef<str>) -> AgentSpec {
-    let inst = DEEP_RESEARCH_CHAT_INSTRUCTION
-        .replace("{{NAME}}", name.as_ref())
-        .replace("{{TIME}}", &now_utc_iso8601());
-
-    ensure_api_search_registered();
-
-    AgentSpec::new(model.as_ref())
-        .instruction(inst)
         .tool(get_api_search_tool_desc())
         .web_fetch_tool()
         .max_tokens(32_000)
