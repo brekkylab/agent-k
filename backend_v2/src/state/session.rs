@@ -129,11 +129,11 @@ impl SessionsState {
         self.data_root.join("sessions").join(id.to_string())
     }
 
-    /// Every session in `workspace_id`, oldest first.
+    /// Every session in `workspace_id`, newest first (for the Recents list).
     pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Session>> {
         let rows = sqlx::query(
             "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
-             FROM sessions WHERE workspace_id = ? ORDER BY created_at ASC",
+             FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC",
         )
         .bind(workspace_id.to_string())
         .fetch_all(&self.db)
