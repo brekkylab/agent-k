@@ -2,8 +2,11 @@
 resolver = "3"
 members = [
     "./agent-k",
-    "./backend_v2",
+    "./backend",
     "./docling-sys",
+]
+exclude = [
+    "./backend-v1",
 ]
 
 [workspace.dependencies]
