@@ -2,11 +2,11 @@ use uuid::Uuid;
 
 use crate::{
     auth::{Role, hash_password},
-    state::{NewUser, UsersState, WorkspacesState},
+    repository::{AppRepository, NewUser},
 };
 
-pub async fn bootstrap_admin_if_needed(users: &UsersState, workspaces: &WorkspacesState) {
-    let count = match users.count_admins().await {
+pub async fn bootstrap_admin_if_needed(repo: &AppRepository) {
+    let count = match repo.count_admins().await {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("failed to count admin users: {e}");
@@ -31,8 +31,8 @@ pub async fn bootstrap_admin_if_needed(users: &UsersState, workspaces: &Workspac
                 }
             };
 
-            match users
-                .create(NewUser {
+            match repo
+                .create_user_with_personal_project(NewUser {
                     id: Uuid::new_v4(),
                     username: u.clone(),
                     password_hash,
@@ -43,15 +43,9 @@ pub async fn bootstrap_admin_if_needed(users: &UsersState, workspaces: &Workspac
                 })
                 .await
             {
-                Ok(user) => {
-                    if let Err(e) = workspaces.create_default(&user).await {
-                        tracing::error!(
-                            id = %user.id,
-                            "failed to provision workspace for bootstrap admin: {e}"
-                        );
-                    }
+                Ok((user, project)) => {
                     tracing::info!(
-                        id = %user.id, username = %u,
+                        id = %user.id, username = %u, project_id = %project.id,
                         "bootstrap admin user created from env"
                     );
                 }
@@ -62,7 +56,8 @@ pub async fn bootstrap_admin_if_needed(users: &UsersState, workspaces: &Workspac
         }
         _ => {
             tracing::warn!(
-                "no admin user exists — set AGENT_K_ADMIN_USERNAME/AGENT_K_ADMIN_PASSWORD"
+                "no admin user exists — set AGENT_K_ADMIN_USERNAME/AGENT_K_ADMIN_PASSWORD \
+                 or run `agent-k-backend create-admin`"
             );
         }
     }
