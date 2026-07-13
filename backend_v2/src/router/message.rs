@@ -421,4 +421,82 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
+
+    // ── PATCH /sessions/{id} (rename) ──────────────────────────────────────
+
+    async fn read_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn patch_title_req(sid: Uuid, token: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method("PATCH")
+            .uri(format!("/sessions/{sid}"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn patch_session_trims_and_returns_new_title() {
+        let state = make_state().await;
+        let (user, token) = create_user_and_token(&state).await;
+        let sid = create_session(&state, &user).await;
+        let app = get_router(state);
+        let resp = app
+            .oneshot(patch_title_req(sid, &token, r#"{"title":"  My Renamed Session  "}"#))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = read_json(resp).await;
+        assert_eq!(body["title"], "My Renamed Session");
+    }
+
+    #[tokio::test]
+    async fn patch_session_rejects_blank_title() {
+        let state = make_state().await;
+        let (user, token) = create_user_and_token(&state).await;
+        let sid = create_session(&state, &user).await;
+        let app = get_router(state);
+        let resp = app
+            .oneshot(patch_title_req(sid, &token, r#"{"title":"   "}"#))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn patch_session_clamps_to_max_len() {
+        let state = make_state().await;
+        let (user, token) = create_user_and_token(&state).await;
+        let sid = create_session(&state, &user).await;
+        let app = get_router(state);
+        let long = "a".repeat(100);
+        let resp = app
+            .oneshot(patch_title_req(sid, &token, &format!(r#"{{"title":"{long}"}}"#)))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = read_json(resp).await;
+        assert_eq!(body["title"].as_str().unwrap().chars().count(), 60);
+    }
+
+    #[tokio::test]
+    async fn patch_session_without_auth_is_401() {
+        let state = make_state().await;
+        let sid = Uuid::new_v4(); // 401 fires before the session is looked up
+        let app = get_router(state);
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!("/sessions/{sid}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"title":"x"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
 }
