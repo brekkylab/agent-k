@@ -74,7 +74,7 @@ def main() -> None:
 
     def title_ts(offset_sec: int) -> str:
         # Match the backend's deterministic format in
-        # `backend/src/repository/automation.rs::automation_session_title`:
+        # `backend-v1/src/repository/automation.rs::automation_session_title`:
         # "{automation_name} · {kind_label} · %Y-%m-%d %H:%M".
         return (base + timedelta(seconds=offset_sec)).strftime("%Y-%m-%d %H:%M")
 

@@ -139,7 +139,7 @@ export interface MessageOutput {
 }
 
 // ── Automation ─────────────────────────────────────────────────────────────
-// Mirrors backend/src/model/automation.rs. snake_case is preserved here;
+// Mirrors backend-v1/src/model/automation.rs. snake_case is preserved here;
 // transformers.ts maps these onto camelCase domain types.
 
 export interface BackendAutomation {

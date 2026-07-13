@@ -15,7 +15,7 @@ export function setUnauthorizedHandler(cb: (reason: UnauthorizedReason) => void)
   unauthorizedTriggered = false;
 }
 
-// Source: backend/src/auth/jwt.rs — the error message emitted on ExpiredSignature.
+// Source: backend-v1/src/auth/jwt.rs — the error message emitted on ExpiredSignature.
 // If this string changes the expired-session banner will silently stop appearing.
 const JWT_EXPIRED_MESSAGE = 'token has expired';
 
