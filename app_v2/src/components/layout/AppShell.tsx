@@ -5,7 +5,7 @@
 // action, a Workspace nav link (with a subtle divider below it), a Recents
 // session list, and the LanguageToggle in the footer.
 
-import { useState, useRef, type ReactNode } from 'react';
+import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -15,6 +15,10 @@ import { LanguageToggle } from '@/components/LanguageToggle';
 import { SessionTitle } from '@/components/SessionTitle';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Icon } from '@/components/Icon';
+
+// Duration of the row's delete exit animation; keep in sync with the
+// `.cw-session-row.is-removing` transition in globals.css.
+const REMOVE_ANIM_MS = 220;
 
 /** One Recents row: opens the session on click, with a hover ⋯ menu that
  *  swaps the title into an inline rename input (same save/cancel rules as the
@@ -37,6 +41,20 @@ function SessionRow({
   const cancelEditRef = useRef(false);
   const [deleting, setDeleting] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const menuRef = useRef<HTMLSpanElement>(null);
+
+  // Close the ⋯ menu on any click outside it (standard dropdown dismissal).
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [menuOpen]);
 
   function patchTitle(next: string | null) {
     qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
@@ -77,18 +95,23 @@ function SessionRow({
     setDeletePending(true);
     try {
       await deleteSession(session.id);
-      // Drop it from the cached list immediately, then reconcile from the server.
+    } catch {
+      setDeletePending(false); // keep the dialog open so the user can retry
+      return;
+    }
+    // Server delete succeeded: close the dialog, play the fade + height-collapse
+    // exit, then drop the row from the cache (which unmounts it).
+    setDeleting(false);
+    setDeletePending(false);
+    setRemoving(true);
+    // If the open session was the one deleted, leave its (now-404) route.
+    if (isActive) void navigate({ to: '/' });
+    window.setTimeout(() => {
       qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
         list?.filter((s) => s.id !== session.id),
       );
       void qc.invalidateQueries({ queryKey: ['sessions'] });
-      setDeleting(false);
-      setDeletePending(false);
-      // If the open session was the one deleted, leave its (now-404) route.
-      if (isActive) void navigate({ to: '/' });
-    } catch {
-      setDeletePending(false); // keep the dialog open so the user can retry
-    }
+    }, REMOVE_ANIM_MS);
   }
 
   if (editing) {
@@ -128,7 +151,7 @@ function SessionRow({
   return (
     <>
       <div
-        className={`cw-session-row${isActive ? ' is-active' : ''}`}
+        className={`cw-session-row${isActive ? ' is-active' : ''}${menuOpen ? ' is-menu-open' : ''}${removing ? ' is-removing' : ''}`}
         role="button"
         tabIndex={0}
         onClick={onOpen}
@@ -148,7 +171,7 @@ function SessionRow({
           skeletonClassName="cw-title-skeleton--row"
           fallback={session.id.slice(0, 8)}
         />
-        <span className="cw-session-menu-wrap">
+        <span className="cw-session-menu-wrap" ref={menuRef}>
           <button
             type="button"
             className="cw-session-menu-btn"
@@ -163,17 +186,6 @@ function SessionRow({
             <Icon name="more" size={14} />
           </button>
           {menuOpen && (
-            <>
-              {/* Full-viewport click-away catcher; closes the menu without a
-                  document listener and swallows the click so it doesn't open the
-                  session. */}
-              <div
-                className="cw-session-menu-overlay"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMenuOpen(false);
-                }}
-              />
               <div className="cw-session-menu" role="menu">
                 {/* Rename only after the title lands (not during generation). */}
                 {session.title != null && (
@@ -203,7 +215,6 @@ function SessionRow({
                   <span>{t('nav.delete', 'Delete')}</span>
                 </button>
               </div>
-            </>
           )}
         </span>
       </div>

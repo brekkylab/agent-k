@@ -161,7 +161,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   transition: background 120ms, color 120ms, transform 120ms;
 }
 .cw-nav-row:hover, .cw-session-row:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
-.cw-nav-row:active, .cw-session-row:active { transform: translateY(1px); }
+.cw-nav-row:active { transform: translateY(1px); }
+/* Press animation for the row, but not when the press is on the ⋯ button or its
+   menu (whose active state otherwise propagates up to the row). */
+.cw-session-row:active:not(:has(.cw-session-menu-wrap:active)) { transform: translateY(1px); }
 .cw-nav-row.is-active { background: var(--cw-bg-muted); color: var(--cw-fg-1); font-weight: 600; }
 .cw-nav-row span, .cw-session-row span:not(.cw-pocket):not(.cw-session-menu-wrap) {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -170,6 +173,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .cw-session-row {
   min-height: 28px; padding: 5px 8px; font-size: 12.5px;
   color: var(--cw-fg-3); cursor: pointer;
+  /* Baseline for the delete collapse to animate from (rows are single-line). */
+  max-height: 40px;
+}
+/* Delete exit: fade out while the row collapses so the rows below slide up. */
+.cw-session-row.is-removing {
+  opacity: 0; max-height: 0; min-height: 0;
+  padding-top: 0; padding-bottom: 0;
+  overflow: hidden; pointer-events: none;
+  transition: opacity 0.15s ease, max-height 0.22s ease,
+    min-height 0.22s ease, padding 0.22s ease;
 }
 .cw-session-row .cw-session-title { flex: 1; min-width: 0; }
 .cw-session-row.is-active {
@@ -188,6 +201,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .cw-session-row-delete:hover { background: var(--cw-destructive-soft); color: var(--cw-destructive); }
 
 /* ── Session row ⋯ menu (rename) ─────────────────────────────────────────── */
+/* Lift the whole row while its menu is open, so the dropdown paints above the
+   following rows instead of behind them (which would let clicks fall through
+   to the next row's ⋯). */
+.cw-session-row.is-menu-open { position: relative; z-index: 20; }
 .cw-session-menu-wrap { position: relative; flex-shrink: 0; display: inline-flex; }
 .cw-session-menu-btn {
   opacity: 0; flex-shrink: 0;
@@ -200,8 +217,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .cw-session-row:focus-within .cw-session-menu-btn,
 .cw-session-menu-btn[aria-expanded="true"] { opacity: 1; }
 .cw-session-menu-btn:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
-/* Full-viewport click-away catcher, painted under the open menu. */
-.cw-session-menu-overlay { position: fixed; inset: 0; z-index: 200; }
 .cw-session-menu {
   position: absolute; top: calc(100% + 2px); right: 0; z-index: 201;
   min-width: 132px; padding: 4px;
