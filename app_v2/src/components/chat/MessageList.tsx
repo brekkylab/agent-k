@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ToolCallDetails } from './ToolCallDetails';
 import type { TranscriptEntry } from '@/lib/transcript';
+import { formatMessageDate, formatMessageDateFull } from '@/lib/formatMessageDate';
 
 interface MessageListProps {
   entries: TranscriptEntry[];
@@ -10,6 +12,10 @@ interface MessageListProps {
 
 export function MessageList({ entries, running }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Subscribe to language changes so timestamps re-render on toggle (not just
+  // after a refresh); the value is passed into the date formatters below.
+  const { i18n } = useTranslation();
+  const lng = i18n.language;
 
   // Auto-scroll to bottom when new entries arrive or the run status toggles
   // (so the "responding" indicator is scrolled into view when it appears).
@@ -40,6 +46,16 @@ export function MessageList({ entries, running }: MessageListProps) {
                     <ToolCallDetails key={tc.id} tc={tc} isStreaming={running && idx === entries.length - 1} />
                   ))}
                 </div>
+              )}
+              {/* Timestamp revealed on hover of the message. */}
+              {entry.createdAt && (
+                <time
+                  className="cw-message-time"
+                  dateTime={entry.createdAt}
+                  title={formatMessageDateFull(entry.createdAt, lng)}
+                >
+                  {formatMessageDate(entry.createdAt, lng)}
+                </time>
               )}
             </div>
           </div>

@@ -132,7 +132,7 @@ function SessionPage() {
   // (guards the one-render window between the message arriving and the effect).
   const showOptimistic = optimistic !== null && userMsgCount <= baselineUsers.current;
   const entries: TranscriptEntry[] = showOptimistic
-    ? [...transcript, { kind: 'user', text: optimistic, toolCalls: [] }]
+    ? [...transcript, { kind: 'user', text: optimistic, toolCalls: [], createdAt: new Date().toISOString() }]
     : transcript;
 
   return (

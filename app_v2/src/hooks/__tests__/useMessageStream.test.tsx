@@ -47,7 +47,7 @@ afterEach(() => {
 
 describe('useMessageStream', () => {
   it('deduplicates messages by seq', async () => {
-    const item: MessageItem = { seq: 1, message: { role: 'user', contents: [] } };
+    const item: MessageItem = { seq: 1, message: { role: 'user', contents: [] }, created_at: '2026-01-01T00:00:00Z' };
     // Return stream twice so reconnect after first stream completes doesn't hang.
     vi.mocked(streamSessionMessages)
       .mockReturnValueOnce(makeStream([
@@ -168,9 +168,9 @@ describe('useMessageStream', () => {
   // call failed the guard and returned prev, dropping every frame.
   it('delivers all frames under React StrictMode (regression: impure updater)', async () => {
     const items: MessageItem[] = [
-      { seq: 0, message: { role: 'user', contents: [] } },
-      { seq: 1, message: { role: 'assistant', contents: [] } },
-      { seq: 2, message: { role: 'user', contents: [] } },
+      { seq: 0, message: { role: 'user', contents: [] }, created_at: '2026-01-01T00:00:00Z' },
+      { seq: 1, message: { role: 'assistant', contents: [] }, created_at: '2026-01-01T00:00:01Z' },
+      { seq: 2, message: { role: 'user', contents: [] }, created_at: '2026-01-01T00:00:02Z' },
     ];
 
     vi.mocked(streamSessionMessages)

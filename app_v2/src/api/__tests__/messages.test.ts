@@ -58,7 +58,7 @@ describe('streamSessionMessages', () => {
   }
 
   it('maps message frames correctly', async () => {
-    const item: MessageItem = { seq: 1, message: { role: 'user', contents: [{ type: 'text', text: 'hi' }] } };
+    const item: MessageItem = { seq: 1, message: { role: 'user', contents: [{ type: 'text', text: 'hi' }] }, created_at: '2026-01-01T00:00:00Z' };
     vi.mocked(streamSse).mockReturnValue(makeStream([
       { event: 'message', data: JSON.stringify(item) },
     ]));

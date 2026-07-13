@@ -61,6 +61,8 @@ export type AgentType = 'coworker' | 'deep_research';
 export interface MessageItem {
   seq: number;
   message: AiloyMessage;
+  /** RFC3339 timestamp of when the message was persisted. */
+  created_at: string;
 }
 
 export type RunEventPayload =

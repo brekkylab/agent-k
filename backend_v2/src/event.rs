@@ -72,6 +72,8 @@ pub fn message_channel(session_id: Uuid) -> String {
 pub struct MessageEvent {
     pub seq: i64,
     pub message: Message,
+    /// RFC3339 timestamp of when the message was persisted.
+    pub created_at: String,
 }
 
 /// Run lifecycle payload on the `message/{session_id}` channel. Tagged by the

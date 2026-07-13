@@ -347,21 +347,22 @@ impl SessionsState {
 
     /// Return all messages for `session_id`, ordered by `seq` ascending. Backs
     /// the `GET /sessions/{id}/messages` endpoint; the WS catch-up path uses
-    /// [`SessionsState::list_messages_since`] instead.
-    pub async fn list_messages(&self, session_id: Uuid) -> StateResult<Vec<(i64, Message)>> {
+    /// [`SessionsState::list_messages_since`] instead. Each tuple is
+    /// `(seq, message, created_at)` where `created_at` is an RFC3339 string.
+    pub async fn list_messages(&self, session_id: Uuid) -> StateResult<Vec<(i64, Message, String)>> {
         self.list_messages_since(session_id, -1).await
     }
 
     /// Return messages for `session_id` with `seq > since`, ordered ascending.
     /// The WS handler uses this for catch-up before switching to the live
-    /// event subscription.
+    /// event subscription. Tuples are `(seq, message, created_at)`.
     pub async fn list_messages_since(
         &self,
         session_id: Uuid,
         since: i64,
-    ) -> StateResult<Vec<(i64, Message)>> {
+    ) -> StateResult<Vec<(i64, Message, String)>> {
         let rows = sqlx::query(
-            "SELECT seq, content FROM messages \
+            "SELECT seq, content, created_at FROM messages \
              WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
         )
         .bind(session_id.to_string())
@@ -369,11 +370,12 @@ impl SessionsState {
         .fetch_all(&self.db)
         .await?;
         rows.into_iter()
-            .map(|r| -> StateResult<(i64, Message)> {
+            .map(|r| -> StateResult<(i64, Message, String)> {
                 let seq: i64 = r.get("seq");
                 let content: String = r.get("content");
+                let created_at: String = r.get("created_at");
                 let message: Message = serde_json::from_str(&content)?;
-                Ok((seq, message))
+                Ok((seq, message, created_at))
             })
             .collect()
     }
@@ -512,6 +514,7 @@ impl SessionsState {
                     let mut agent = Agent::try_with_state(spec, state)?;
 
                     let user_msg = Message::new(Role::User).with_contents(query);
+                    let created_at = Utc::now().to_rfc3339();
                     sqlx::query(
                         "INSERT INTO messages (session_id, seq, content, created_at) \
                          VALUES (?, ?, ?, ?)",
@@ -519,7 +522,7 @@ impl SessionsState {
                     .bind(&session_key)
                     .bind(next_seq)
                     .bind(serde_json::to_string(&user_msg)?)
-                    .bind(Utc::now().to_rfc3339())
+                    .bind(&created_at)
                     .execute(&db)
                     .await?;
                     events.publish(
@@ -527,6 +530,7 @@ impl SessionsState {
                         serde_json::to_string(&MessageEvent {
                             seq: next_seq,
                             message: user_msg.clone(),
+                            created_at,
                         })?,
                     );
                     next_seq += 1;
@@ -539,6 +543,7 @@ impl SessionsState {
                             next = stream.next() => {
                                 let Some(output) = next else { break };
                                 let output = output?;
+                                let created_at = Utc::now().to_rfc3339();
                                 sqlx::query(
                                     "INSERT INTO messages (session_id, seq, content, created_at) \
                                      VALUES (?, ?, ?, ?)",
@@ -546,7 +551,7 @@ impl SessionsState {
                                 .bind(&session_key)
                                 .bind(next_seq)
                                 .bind(serde_json::to_string(&output.message)?)
-                                .bind(Utc::now().to_rfc3339())
+                                .bind(&created_at)
                                 .execute(&db)
                                 .await?;
                                 events.publish(
@@ -554,6 +559,7 @@ impl SessionsState {
                                     serde_json::to_string(&MessageEvent {
                                         seq: next_seq,
                                         message: output.message,
+                                        created_at,
                                     })?,
                                 );
                                 next_seq += 1;

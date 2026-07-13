@@ -34,6 +34,8 @@ use super::{error::{ApiError, err}, workspace::require_owned_session};
 pub struct MessageResponse {
     pub seq: i64,
     pub message: Message,
+    /// RFC3339 timestamp of when the message was persisted.
+    pub created_at: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -80,7 +82,11 @@ pub(super) async fn list_messages(
     Ok(Json(MessageListResponse {
         items: messages
             .into_iter()
-            .map(|(seq, message)| MessageResponse { seq, message })
+            .map(|(seq, message, created_at)| MessageResponse {
+                seq,
+                message,
+                created_at,
+            })
             .collect(),
     }))
 }
@@ -142,8 +148,8 @@ pub(super) async fn stream_messages(
                     return;
                 }
             };
-            for (seq, message) in rows {
-                let payload = match serde_json::to_string(&MessageEvent { seq, message }) {
+            for (seq, message, created_at) in rows {
+                let payload = match serde_json::to_string(&MessageEvent { seq, message, created_at }) {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::error!(session = %sid, "ws catch-up serialize error: {e}");
@@ -229,8 +235,8 @@ pub(super) async fn stream_messages_sse(
                     return;
                 }
             };
-            for (seq, message) in rows {
-                let data = match serde_json::to_string(&MessageEvent { seq, message }) {
+            for (seq, message, created_at) in rows {
+                let data = match serde_json::to_string(&MessageEvent { seq, message, created_at }) {
                     Ok(d) => d,
                     Err(e) => {
                         tracing::error!(session = %sid, "sse catch-up serialize error: {e}");

@@ -449,9 +449,21 @@ select.cw-input { appearance: auto; }
 .cw-message { display: flex; align-items: flex-start; gap: 10px; width: 100%; margin-bottom: 22px; }
 .cw-message.is-self { flex-direction: row-reverse; }
 .cw-message-body {
+  position: relative;
   min-width: 0; max-width: min(560px, calc(100% - 44px));
   display: flex; flex-direction: column; gap: 4px;
 }
+/* Timestamp under a message, revealed on hover. Absolutely placed into the
+   inter-message margin so it never shifts the layout. */
+.cw-message-time {
+  position: absolute; top: calc(100% + 2px);
+  font-size: var(--cw-text-xs); color: var(--cw-fg-3);
+  white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity 0.12s ease;
+}
+.cw-message.is-ai .cw-message-time { left: 2px; }
+.cw-message.is-self .cw-message-time { right: 2px; }
+.cw-message:hover .cw-message-time { opacity: 1; }
 .cw-message.is-self .cw-message-body { align-items: flex-end; }
 .cw-message-bubble {
   padding: 9px 13px; border-radius: 12px;
