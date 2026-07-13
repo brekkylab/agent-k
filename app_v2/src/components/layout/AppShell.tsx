@@ -175,18 +175,21 @@ function SessionRow({
                 }}
               />
               <div className="cw-session-menu" role="menu">
-                <button
-                  type="button"
-                  className="cw-session-menu-item"
-                  role="menuitem"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    startEdit();
-                  }}
-                >
-                  <Icon name="writing" size={13} />
-                  <span>{t('nav.rename', 'Rename')}</span>
-                </button>
+                {/* Rename only after the title lands (not during generation). */}
+                {session.title != null && (
+                  <button
+                    type="button"
+                    className="cw-session-menu-item"
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEdit();
+                    }}
+                  >
+                    <Icon name="writing" size={13} />
+                    <span>{t('nav.rename', 'Rename')}</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="cw-session-menu-item cw-session-menu-item--danger"
