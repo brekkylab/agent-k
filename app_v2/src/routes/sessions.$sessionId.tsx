@@ -33,6 +33,14 @@ function SessionPage() {
   const session = sessions?.find((s) => s.id === sessionId);
   const title = session?.title ?? null;
 
+  // Reflect the session title in the browser tab; restore the base on leave.
+  useEffect(() => {
+    document.title = title ? `${title} · Cowork` : 'Cowork';
+    return () => {
+      document.title = 'Cowork';
+    };
+  }, [title]);
+
   // Inline title rename. Editing routes save/cancel through the input's blur
   // so Enter and click-away commit exactly once; Escape flags a cancel first.
   const [editing, setEditing] = useState(false);
