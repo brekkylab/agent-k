@@ -1,3 +1,4 @@
+use axum::http::StatusCode;
 use chrono::Utc;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
@@ -5,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::role::Role,
-    error::{ApiError, AppError},
+    router::error::{ApiError, err},
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -42,8 +43,10 @@ impl JwtConfig {
             iat: now,
             exp: now + self.expiry_secs as i64,
         };
-        encode(&Header::default(), &claims, &self.encoding_key)
-            .map_err(|e| AppError::internal(format!("JWT encode error: {e}")))
+        encode(&Header::default(), &claims, &self.encoding_key).map_err(|e| {
+            tracing::error!("JWT encode error: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        })
     }
 
     pub fn decode(&self, token: &str) -> Result<Claims, ApiError> {
@@ -53,9 +56,9 @@ impl JwtConfig {
             .map(|d| d.claims)
             .map_err(|e| match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
-                    AppError::unauthorized("token has expired")
+                    err(StatusCode::UNAUTHORIZED, "token has expired")
                 }
-                _ => AppError::unauthorized("invalid token"),
+                _ => err(StatusCode::UNAUTHORIZED, "invalid token"),
             })
     }
 }
