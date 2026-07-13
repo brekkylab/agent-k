@@ -220,14 +220,14 @@ impl SessionsState {
         Ok(())
     }
 
-    /// Set a session's title and bump `updated_at`. Backs the manual rename
-    /// endpoint; the auto-titler writes its own UPDATE inline (see
-    /// [`Self::maybe_generate_title`]).
+    /// Set a session's title. Backs the manual rename endpoint; the auto-titler
+    /// writes its own UPDATE inline (see [`Self::maybe_generate_title`]).
+    ///
+    /// Deliberately does NOT touch `updated_at`: a rename must not reorder the
+    /// Recents list, which sorts by last activity (see [`Self::list_by_workspace`]).
     pub async fn set_title(&self, id: Uuid, title: &str) -> StateResult<()> {
-        let now = Utc::now().to_rfc3339();
-        let affected = sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+        let affected = sqlx::query("UPDATE sessions SET title = ? WHERE id = ?")
             .bind(title)
-            .bind(now)
             .bind(id.to_string())
             .execute(&self.db)
             .await?
@@ -269,10 +269,10 @@ impl SessionsState {
         let events = self.events.clone();
         tokio::spawn(async move {
             let title = crate::services::session_title::generate_session_title(&first_text).await;
-            let now = Utc::now().to_rfc3339();
-            if let Err(e) = sqlx::query("UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?")
+            // Like `set_title`, does not touch updated_at — titling shouldn't
+            // reorder Recents.
+            if let Err(e) = sqlx::query("UPDATE sessions SET title = ? WHERE id = ?")
                 .bind(&title)
-                .bind(&now)
                 .bind(id.to_string())
                 .execute(&db)
                 .await
