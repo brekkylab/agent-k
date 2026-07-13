@@ -215,6 +215,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   font-size: 12.5px; text-align: left;
 }
 .cw-session-menu-item:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+.cw-session-menu-item--danger { color: var(--cw-destructive); }
+.cw-session-menu-item--danger:hover { background: var(--cw-destructive-soft); color: var(--cw-destructive); }
 /* Inline rename input inside a session row. */
 .cw-session-rename-input {
   flex: 1; min-width: 0; font: inherit; font-size: 12.5px;

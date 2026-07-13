@@ -9,10 +9,11 @@ import { useState, useRef, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { listSessions, updateSessionTitle, SESSION_TITLE_MAX_LEN } from '@/api/sessions';
+import { listSessions, updateSessionTitle, deleteSession, SESSION_TITLE_MAX_LEN } from '@/api/sessions';
 import type { SessionResponse } from '@/api/types';
 import { LanguageToggle } from '@/components/LanguageToggle';
 import { SessionTitle } from '@/components/SessionTitle';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Icon } from '@/components/Icon';
 
 /** One Recents row: opens the session on click, with a hover ⋯ menu that
@@ -29,10 +30,13 @@ function SessionRow({
 }) {
   const { t } = useTranslation('common');
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const cancelEditRef = useRef(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
 
   function patchTitle(next: string | null) {
     qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
@@ -61,6 +65,29 @@ function SessionRow({
       await updateSessionTitle(session.id, next);
     } catch {
       patchTitle(prev); // revert on failure
+    }
+  }
+
+  function openDelete() {
+    setMenuOpen(false);
+    setDeleting(true);
+  }
+
+  async function confirmDelete() {
+    setDeletePending(true);
+    try {
+      await deleteSession(session.id);
+      // Drop it from the cached list immediately, then reconcile from the server.
+      qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
+        list?.filter((s) => s.id !== session.id),
+      );
+      void qc.invalidateQueries({ queryKey: ['sessions'] });
+      setDeleting(false);
+      setDeletePending(false);
+      // If the open session was the one deleted, leave its (now-404) route.
+      if (isActive) void navigate({ to: '/' });
+    } catch {
+      setDeletePending(false); // keep the dialog open so the user can retry
     }
   }
 
@@ -99,71 +126,99 @@ function SessionRow({
   }
 
   return (
-    <div
-      className={`cw-session-row${isActive ? ' is-active' : ''}`}
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      title={session.title ?? undefined}
-    >
-      <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
-      <SessionTitle
-        title={session.title}
-        createdAt={session.created_at}
-        className="cw-session-title"
-        skeletonClassName="cw-title-skeleton--row"
-        fallback={session.id.slice(0, 8)}
-      />
-      <span className="cw-session-menu-wrap">
-        <button
-          type="button"
-          className="cw-session-menu-btn"
-          aria-label={t('nav.more', 'More')}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={(e) => {
-            e.stopPropagation();
-            setMenuOpen((v) => !v);
-          }}
-        >
-          <Icon name="more" size={14} />
-        </button>
-        {menuOpen && (
-          <>
-            {/* Full-viewport click-away catcher; closes the menu without a
-                document listener and swallows the click so it doesn't open the
-                session. */}
-            <div
-              className="cw-session-menu-overlay"
-              onClick={(e) => {
-                e.stopPropagation();
-                setMenuOpen(false);
-              }}
-            />
-            <div className="cw-session-menu" role="menu">
-              <button
-                type="button"
-                className="cw-session-menu-item"
-                role="menuitem"
+    <>
+      <div
+        className={`cw-session-row${isActive ? ' is-active' : ''}`}
+        role="button"
+        tabIndex={0}
+        onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
+        title={session.title ?? undefined}
+      >
+        <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
+        <SessionTitle
+          title={session.title}
+          createdAt={session.created_at}
+          className="cw-session-title"
+          skeletonClassName="cw-title-skeleton--row"
+          fallback={session.id.slice(0, 8)}
+        />
+        <span className="cw-session-menu-wrap">
+          <button
+            type="button"
+            className="cw-session-menu-btn"
+            aria-label={t('nav.more', 'More')}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((v) => !v);
+            }}
+          >
+            <Icon name="more" size={14} />
+          </button>
+          {menuOpen && (
+            <>
+              {/* Full-viewport click-away catcher; closes the menu without a
+                  document listener and swallows the click so it doesn't open the
+                  session. */}
+              <div
+                className="cw-session-menu-overlay"
                 onClick={(e) => {
                   e.stopPropagation();
-                  startEdit();
+                  setMenuOpen(false);
                 }}
-              >
-                <Icon name="writing" size={13} />
-                <span>{t('nav.rename', 'Rename')}</span>
-              </button>
-            </div>
-          </>
-        )}
-      </span>
-    </div>
+              />
+              <div className="cw-session-menu" role="menu">
+                <button
+                  type="button"
+                  className="cw-session-menu-item"
+                  role="menuitem"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startEdit();
+                  }}
+                >
+                  <Icon name="writing" size={13} />
+                  <span>{t('nav.rename', 'Rename')}</span>
+                </button>
+                <button
+                  type="button"
+                  className="cw-session-menu-item cw-session-menu-item--danger"
+                  role="menuitem"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openDelete();
+                  }}
+                >
+                  <Icon name="trash" size={13} />
+                  <span>{t('nav.delete', 'Delete')}</span>
+                </button>
+              </div>
+            </>
+          )}
+        </span>
+      </div>
+      {deleting && (
+        <ConfirmDialog
+          title={t('session_delete.title', 'Delete session')}
+          body={t(
+            'session_delete.body',
+            'This session and its messages will be permanently deleted. This cannot be undone.',
+          )}
+          confirmLabel={t('session_delete.confirm', 'Delete')}
+          destructive
+          pending={deletePending}
+          onConfirm={() => void confirmDelete()}
+          onClose={() => setDeleting(false)}
+        />
+      )}
+    </>
   );
 }
 
