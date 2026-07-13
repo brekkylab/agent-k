@@ -113,6 +113,9 @@ function SessionPage() {
     setOptimistic(text);
     try {
       await sendMessage(sessionId, text);
+      // The server bumps the session's updated_at on run; refresh the list so
+      // Recents reorders this session to the top.
+      void qc.invalidateQueries({ queryKey: ['sessions'] });
       return true;
     } catch (err) {
       setOptimistic(null);

@@ -129,11 +129,13 @@ impl SessionsState {
         self.data_root.join("sessions").join(id.to_string())
     }
 
-    /// Every session in `workspace_id`, newest first (for the Recents list).
+    /// Every session in `workspace_id`, most-recently-active first (for the
+    /// Recents list). `updated_at` is bumped on each run (see [`Self::run`]),
+    /// so a session rises to the top when the user messages it.
     pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Session>> {
         let rows = sqlx::query(
             "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
-             FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC",
+             FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC",
         )
         .bind(workspace_id.to_string())
         .fetch_all(&self.db)
@@ -398,6 +400,14 @@ impl SessionsState {
         let data_root = self.data_root.clone();
         let events = self.events.clone();
         let runs = self.runs.clone();
+
+        // Bump last-activity so the Recents list surfaces this session first.
+        // Best-effort: a failure here must never block starting the run.
+        let _ = sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await;
 
         // Auto-title an untitled session from this user turn, concurrent with
         // the run. `query` is moved into the run task below, so extract the
