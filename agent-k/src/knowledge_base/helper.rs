@@ -82,13 +82,17 @@ pub(super) trait HelperAgent {
     where
         Self::Output: From<String>,
     {
-        let name = std::any::type_name::<Self>().rsplit("::").next().unwrap_or("?");
+        let name = std::any::type_name::<Self>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("?");
         let registered: Vec<&'static str> = {
-            let provider = ailoy::agent::default_provider();
+            let providers = ailoy::lang_model::get_lm_providers();
+            let provider = providers.get("default");
             Self::MODELS
                 .iter()
                 .copied()
-                .filter(|m| provider.models.get(m).is_some())
+                .filter(|m| provider.map(|p| p.get(m).is_some()).unwrap_or(false))
                 .collect()
         };
 
@@ -114,16 +118,24 @@ pub(super) trait HelperAgent {
             match outcome {
                 Ok(resp) => match Self::process(&resp) {
                     Some(v) => return Ok(v),
-                    None => log::warn!("{name}: {model} returned empty/malformed response; trying next"),
+                    None => {
+                        log::warn!("{name}: {model} returned empty/malformed response; trying next")
+                    }
                 },
                 Err(e) => log::warn!("{name}: {model} call failed ({e}); trying next"),
             }
         }
 
         if registered.is_empty() {
-            log::warn!("{name}: no provider registered for any of {:?}; using fallback", Self::MODELS);
+            log::warn!(
+                "{name}: no provider registered for any of {:?}; using fallback",
+                Self::MODELS
+            );
         } else {
-            log::warn!("{name}: all {} registered model(s) failed; using fallback", registered.len());
+            log::warn!(
+                "{name}: all {} registered model(s) failed; using fallback",
+                registered.len()
+            );
         }
         Ok(Self::fallback(&input))
     }

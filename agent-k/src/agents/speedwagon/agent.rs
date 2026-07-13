@@ -1,4 +1,7 @@
-use ailoy::agent::{Agent, AgentBuilder, AgentCard, AgentProvider, AgentSpec, default_provider};
+use ailoy::agent::{
+    Agent, AgentBuilder, AgentCard, AgentProvider, AgentSpec, get_agent_providers_mut,
+};
+use ailoy::tool::get_tool_providers_mut;
 
 use super::tool::{
     build_tools, get_calculate_tool_desc, get_find_in_document_tool_desc,
@@ -115,7 +118,7 @@ impl SpeedwagonSpec {
             spec = spec.web_search_tool(vec![]);
         }
         if self.shell {
-            spec = spec.shell_tool();
+            spec = spec.system_tools();
         }
         spec
     }
@@ -202,26 +205,37 @@ impl From<SpeedwagonSpec> for AgentSpec {
 /// [`SpeedwagonSpec::with_shell`]). Tools run on a local [`RunEnv`].
 ///
 /// [`RunEnv`]: ailoy::runenv::RunEnv
+/// Process-local counter giving each [`get_speedwagon_agent`] call a unique
+/// provider-registry key (see the registration dance in its body).
+static PROVIDER_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub async fn get_speedwagon_agent(
     name: impl AsRef<str>,
     model: impl AsRef<str>,
     store: SharedStore,
     with_shell: bool,
 ) -> anyhow::Result<Agent> {
-    // Models come from the global provider (env-populated); the tool registry
-    // is the store-bound one. `web_search` / `shell` resolve against the
-    // built-in factories that `build_tools` (via `ToolProvider::new`)
-    // pre-registers, so no extra wiring is needed here.
-    let provider = AgentProvider {
-        models: default_provider().models.clone(),
-        tools: build_tools(store),
-    };
+    // ailoy resolves providers by name from process-global registries. Register
+    // a per-agent tool provider bound to `store` — it carries the corpus tools
+    // plus the built-in `web_search`/`shell` factories that `ToolProvider::new`
+    // seeds — then an agent-provider bundle pairing it with the default,
+    // env-populated lang-model provider. The name is unique per call so
+    // concurrent agents over different stores never alias each other.
+    let provider_name = format!(
+        "speedwagon-{}",
+        PROVIDER_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    get_tool_providers_mut().insert(provider_name.clone(), build_tools(store));
+    get_agent_providers_mut().insert(
+        provider_name.clone(),
+        AgentProvider::new("default", provider_name.clone()),
+    );
 
     let instruction = SYSTEM_PROMPT
         .replace("{{NAME}}", name.as_ref())
         .replace("{{TIME}}", &chrono::Utc::now().to_rfc3339());
     let mut builder = AgentBuilder::new(model.as_ref())
-        .provider(provider)
+        .agent_provider(provider_name.clone())
         .instruction(instruction)
         .tools([
             get_search_document_tool_desc(),
@@ -231,9 +245,18 @@ pub async fn get_speedwagon_agent(
         ])
         .web_search_tool(vec![]);
     if with_shell {
-        builder = builder.shell_tool();
+        builder = builder.system_tools();
     }
-    builder.build()
+    let agent = builder.build();
+
+    // `build()` materialises the model and tools into the Agent (see ailoy's
+    // `Agent::try_with_provider_and_state`); a leaf agent like this keeps no
+    // reference to the provider name afterwards, so drop the registry entries
+    // to keep the global registries from growing one bundle per call.
+    get_agent_providers_mut().remove(&provider_name);
+    get_tool_providers_mut().remove(&provider_name);
+
+    agent
 }
 
 #[cfg(test)]
