@@ -15,7 +15,8 @@ export function Composer({ running, sessionId, onSend }: ComposerProps) {
   const canSend = value.trim().length > 0 && !running;
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Skip Enter mid-IME-composition — it commits the composed char, not submit.
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       void submit();
     }
