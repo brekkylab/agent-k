@@ -13,6 +13,7 @@ use crate::{
 pub(crate) mod error;
 
 mod agent;
+mod automation;
 mod auth;
 mod knowledge;
 mod message;
@@ -112,6 +113,38 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .route(
             "/sessions/{id}/messages/stream",
             axum::routing::get(message::stream_messages),
+        )
+        .api_route(
+            "/automations",
+            get(automation::list_automations).post(automation::create_automation),
+        )
+        .api_route(
+            "/automations/{id}",
+            get(automation::get_automation)
+                .patch(automation::update_automation)
+                .delete(automation::delete_automation),
+        )
+        .api_route(
+            "/automations/{id}/triggers",
+            get(automation::list_triggers).post(automation::create_trigger),
+        )
+        .api_route(
+            "/automations/{id}/triggers/{trigger_id}",
+            delete(automation::delete_trigger),
+        )
+        // Runs are a top-level resource, independent of automations.
+        .api_route(
+            "/automation-runs",
+            get(automation::list_runs).post(automation::create_run),
+        )
+        .api_route("/automation-runs/{run_id}", get(automation::get_run))
+        .api_route(
+            "/automation-runs/{run_id}/cancel",
+            post(automation::cancel_run),
+        )
+        .api_route(
+            "/automation-runs/{run_id}/logs",
+            get(automation::list_run_logs),
         )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
