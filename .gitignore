@@ -30,6 +30,10 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Local automation dev DB + local API test console (not committed)
+/data/
+backend/automation-console.html
+
 # Logs
 *.log
 

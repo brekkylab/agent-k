@@ -4,6 +4,7 @@
 
 pub mod agent_stream;
 pub mod auth;
+mod cron;
 pub mod event;
 pub mod model;
 pub mod router;
