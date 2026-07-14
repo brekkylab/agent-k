@@ -11,6 +11,4 @@ exclude = [
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-# branch allow-host-egress: microsandbox 0.6.6 + SandboxBuilder::network(SandboxNetwork)
-# / Sandbox::try_from_archive_with_network.
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "4acf653963559c1e351e0433d0412b8930c83b39", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "e3f909153c3d3f9b9d58af456fd9a47a3ca32894", features = ["sandbox"] }
