@@ -51,7 +51,10 @@
     "new_message": "새 메시지",
     "scroll_to_bottom": "맨 아래로",
     "copy": "복사",
-    "title_fallback": "…"
+    "title_fallback": "…",
+    "title_generating": "제목 생성 중",
+    "title_input_aria": "세션 제목",
+    "rename": "이름 변경"
   },
   "chat": {
     "started_by": "시작한 사람:",

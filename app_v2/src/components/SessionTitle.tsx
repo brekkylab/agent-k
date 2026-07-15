@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 // Per-character reveal speed and the ceiling on how long the shimmer runs
 // before giving up and showing the fallback (a recent session whose generation
@@ -49,6 +50,7 @@ export function SessionTitle({
   skeletonClassName,
   fallback,
 }: SessionTitleProps) {
+  const { t } = useTranslation('session');
   const pending = isTitlePending(title, createdAt);
   const [shown, setShown] = useState(title ?? '');
   const [expired, setExpired] = useState(false);
@@ -100,7 +102,7 @@ export function SessionTitle({
       <span
         className={`cw-title-skeleton${skeletonClassName ? ` ${skeletonClassName}` : ''}`}
         role="status"
-        aria-label="제목 생성 중"
+        aria-label={t('ui.title_generating')}
       />
     );
   }

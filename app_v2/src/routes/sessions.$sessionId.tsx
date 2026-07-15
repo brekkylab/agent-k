@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createFileRoute } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMessageStream } from '@/hooks/useMessageStream';
@@ -19,6 +20,7 @@ export const Route = createFileRoute('/sessions/$sessionId')({
 
 function SessionPage() {
   const { sessionId } = Route.useParams();
+  const { t } = useTranslation('session');
   const { messages, running, runError } = useMessageStream(sessionId);
   const [sendError, setSendError] = useState<string | null>(null);
   const qc = useQueryClient();
@@ -153,7 +155,7 @@ function SessionPage() {
               value={draft}
               autoFocus
               maxLength={SESSION_TITLE_MAX_LEN}
-              aria-label="세션 제목"
+              aria-label={t('ui.title_input_aria')}
               onChange={(e) => setDraft(e.target.value)}
               onFocus={(e) => e.currentTarget.select()}
               onBlur={() => void commitEdit()}
@@ -193,8 +195,8 @@ function SessionPage() {
                 type="button"
                 className="cw-title-edit"
                 onClick={startEdit}
-                aria-label="이름 변경"
-                title="이름 변경"
+                aria-label={t('ui.rename')}
+                title={t('ui.rename')}
               >
                 <Icon name="writing" size={13} />
               </button>

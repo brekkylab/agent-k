@@ -51,7 +51,10 @@
     "new_message": "New message",
     "scroll_to_bottom": "Scroll to bottom",
     "copy": "Copy",
-    "title_fallback": "…"
+    "title_fallback": "…",
+    "title_generating": "Generating title",
+    "title_input_aria": "Session title",
+    "rename": "Rename"
   },
   "chat": {
     "started_by": "Started by",
