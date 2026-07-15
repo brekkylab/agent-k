@@ -156,6 +156,11 @@ function SessionRow({
         tabIndex={0}
         onClick={onOpen}
         onKeyDown={(e) => {
+          // Only the row itself opens on Enter/Space. Keydowns bubbling up from
+          // the nested ⋯ button or menu items (which stopPropagation only on
+          // click) must not also navigate, or activating the menu by keyboard
+          // would open the session too.
+          if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             onOpen();
