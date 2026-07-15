@@ -6,6 +6,13 @@ const NOTION_VERSION: &str = "2022-06-28";
 /// Recursion ceiling for `list_block_tree`.
 const MAX_BLOCK_DEPTH: usize = 10;
 
+/// Reject non-UUID ids before they reach a request URL: the `url` crate honors
+/// `../`/`?`/`#`, so an unchecked id could rewrite the path to another endpoint.
+/// Length guard excludes `try_parse`'s braced/urn forms (Notion emits only 32/36).
+fn valid_notion_id(s: &str) -> bool {
+    matches!(s.len(), 32 | 36) && uuid::Uuid::try_parse(s).is_ok()
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NotionConfig {
     pub api_key: String,
@@ -80,12 +87,14 @@ impl NotionAccessor {
     }
 
     pub async fn get_page(&self, id: &str) -> anyhow::Result<Value> {
+        anyhow::ensure!(valid_notion_id(id), "invalid notion page id: {id:?}");
         self.send(self.client.get(format!("{API}/pages/{id}")))
             .await
     }
 
     /// All immediate block children of `id`, paging through every result.
     pub async fn list_children(&self, id: &str) -> anyhow::Result<Vec<Value>> {
+        anyhow::ensure!(valid_notion_id(id), "invalid notion block id: {id:?}");
         let mut results = Vec::new();
         let mut cursor: Option<String> = None;
         loop {
@@ -157,6 +166,7 @@ impl NotionAccessor {
     }
 
     pub async fn append_blocks(&self, block_id: &str, children: Value) -> anyhow::Result<Value> {
+        anyhow::ensure!(valid_notion_id(block_id), "invalid notion block id: {block_id:?}");
         let body = json!({ "children": children });
         self.send(
             self.client
@@ -169,5 +179,19 @@ impl NotionAccessor {
     pub async fn add_comment(&self, body: Value) -> anyhow::Result<Value> {
         self.send(self.client.post(format!("{API}/comments")).json(&body))
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_notion_id;
+
+    #[test]
+    fn notion_id_validation_rejects_url_escapes() {
+        assert!(valid_notion_id("22222222222222222222222222222222"));
+        assert!(valid_notion_id("22222222-2222-2222-2222-222222222222"));
+        for bad in ["../pages/2222?", "..%2Fpages", "abc/def", "x?y", "x#y", ""] {
+            assert!(!valid_notion_id(bad), "should reject {bad:?}");
+        }
     }
 }
