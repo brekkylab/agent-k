@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { EmptyState } from '@/components/uiPrimitives';
-import type { SourceEntry, SourceProvider } from '@/workspace/types';
+import type { SourceEntry, SourceProvider } from '@/workspace-connections/types';
 
 interface NotionPageViewProps {
   provider: SourceProvider;
@@ -31,10 +31,9 @@ export function NotionPageView({ provider, onSelect }: NotionPageViewProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const { data: pages, isLoading, isError } = useQuery({
-    // Key on `connected` so the query refetches when the provider swaps from the
-    // disconnected catalog placeholder to the real, mount-backed one — both
-    // share id 'notion', so keying on id alone would serve the placeholder's
-    // empty result. `enabled` skips querying the placeholder entirely.
+    // `enabled` guards against querying an unconnected provider — defensive
+    // only. In this instance-scoped model, NotionPageView is only ever
+    // rendered for a real, connected mount (the rail lists connections only).
     queryKey: ['ws', provider.id, 'pages', provider.connected],
     queryFn: () => provider.list({}),
     enabled: provider.connected,
@@ -174,7 +173,7 @@ export function NotionPageView({ provider, onSelect }: NotionPageViewProps) {
     <div className="cw-ws-notion">
       <nav className="cw-ws-notion-sidebar" aria-label="Notion pages">
         <div className="cw-ws-notion-sidebar-head">
-          <span>{t(provider.nameKey)}</span>
+          <span>{provider.label ?? t(provider.nameKey)}</span>
           <strong>{pageList.length}</strong>
         </div>
         <ul className="cw-ws-notion-tree-list" data-testid="notion-page-tree">

@@ -75,8 +75,16 @@ const knowledgeEntries = [
   },
 ];
 
+// providers.ts is imported by SourcePage's loader guard (getProviderMeta); the
+// component itself resolves the provider via the mount-aware useProvider hook.
 vi.mock('@/workspace/providers', () => ({
-  getProvider: (id: string) => {
+  getProviderMeta: (id: string) => ({ id, kind: 'items' }),
+}));
+
+vi.mock('@/workspace/hooks/useProviders', () => ({
+  useProviders: () => [],
+  useMounts: () => ({ data: [] }),
+  useProvider: (id: string) => {
     if (id === 'knowledge') {
       return {
         id: 'knowledge',

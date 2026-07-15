@@ -128,8 +128,9 @@
       "slack": "Slack",
       "knowledge": "Knowledge"
     },
-    "addSource": "소스 추가",
+    "addSource": "연결 관리",
     "addSourceBody": "소스를 고르고 필요한 값을 확인한 뒤, 이 화면에서 바로 mock 소스로 연결해요.",
+    "addConnection": "연결 추가",
     "hideUnconnected": "연결 안 된 소스 숨기기",
     "connect": {
       "cta": "추가",
@@ -138,6 +139,11 @@
       "connectedHint": "이미 연결된 소스예요. 열어서 workspace 데이터를 둘러볼 수 있어요.",
       "action": "Mock 소스 연결",
       "open": "소스 열기",
+      "existingConnections": "기존 연결",
+      "disconnect": "연결 해제",
+      "disconnecting": "연결 해제 중…",
+      "prefixTaken": "그 이름의 연결이 이미 있어요",
+      "hint": "{{name}} 연결해보세요",
       "tabs": {
         "label": "연결 상세 모드",
         "connect": "연결",
@@ -147,7 +153,9 @@
         "dropbox": "Dropbox 계정 이메일과 범위가 제한된 access token으로 연결합니다.",
         "figma": "Figma team URL과 token을 연결해 디자인 파일을 프로젝트 문서 옆에서 볼 수 있게 합니다.",
         "github": "Repository URL과 access token을 연결해 issue, PR, decision을 workspace에서 둘러봅니다.",
-        "linear": "Linear workspace URL과 API key를 연결해 issue를 workspace로 가져옵니다."
+        "linear": "Linear workspace URL과 API key를 연결해 issue를 workspace로 가져옵니다.",
+        "notion": "Notion에서 internal integration을 만들고 페이지를 공유한 뒤, token을 붙여넣어 여기서 둘러봅니다.",
+        "s3": "읽기 전용 자격증명으로 S3 버킷을 연결해, 그 객체들을 프로젝트 파일 옆에서 둘러봅니다."
       },
       "fields": {
         "accountEmail": "계정 이메일",
@@ -155,7 +163,8 @@
         "teamUrl": "Team URL",
         "repositoryUrl": "Repository URL",
         "workspaceUrl": "Workspace URL",
-        "apiKey": "API key"
+        "apiKey": "API key",
+        "label": "이름"
       },
       "placeholders": {
         "accountEmail": "ops@example.com",
@@ -163,7 +172,8 @@
         "teamUrl": "https://figma.com/files/team/...",
         "repositoryUrl": "https://github.com/acme/app",
         "workspaceUrl": "https://linear.app/acme",
-        "apiKey": "lin_api_mock"
+        "apiKey": "lin_api_mock",
+        "label": "예: 마케팅 버킷"
       },
       "guides": {
         "permissions": "필요한 접근 권한",
@@ -190,6 +200,58 @@
           "scopeRead": "Workspace read access",
           "scopeIssues": "Issues and projects read access",
           "note": "API key는 비공개로 다뤄야 합니다. 이 mock은 입력값이 아니라 연결된 source id만 로컬에 저장합니다."
+        },
+        "notion": {
+          "title": "Notion 연결 설정",
+          "intro": "세 단계면 됩니다 — integration 만들기, 볼 항목 공유, 연결. 대부분의 \"항목 없음\"은 2단계 공유를 빠뜨려서 생깁니다.",
+          "create": {
+            "title": "1. Integration 만들기",
+            "step1": "https://www.notion.so/my-integrations 를 열고 New integration → Internal 을 선택합니다.",
+            "step2": "이름을 정하고, Capabilities에서 Read content만 켭니다 (쓰기·댓글 권한은 불필요).",
+            "step3": "Internal Integration Token(ntn_ 로 시작)을 복사합니다. 다시 표시되지 않으니 안전하게 보관하세요."
+          },
+          "share": {
+            "title": "2. 페이지·데이터베이스 공유하기",
+            "step1": "공유는 항목마다 개별입니다. 둘러볼 최상위 페이지(또는 데이터베이스)를 엽니다.",
+            "step2": "우측 상단 ⋯ 메뉴 → Connections → 방금 만든 integration을 추가합니다.",
+            "step3": "상위 페이지를 공유하면 하위 페이지도 함께 보입니다. 서로 다른 최상위 페이지는 각각 공유해야 합니다."
+          },
+          "connect": {
+            "title": "3. 연결하고 확인하기",
+            "step1": "연결 탭에서 token을 붙여넣고 mount 이름을 정한 뒤 Connect Notion을 누릅니다.",
+            "step2": "공유한 최상위 페이지가 폴더로 나타납니다. 페이지 안의 표는 인라인으로 보이지만, 독립 데이터베이스는 아직 제한적입니다(페이지 위주)."
+          },
+          "scopeRead": "콘텐츠 읽기",
+          "scopeShared": "integration에 공유된 페이지만 보입니다",
+          "note": "여기서 token은 쓰기 전용이라 다시 표시되지 않습니다. 변경하려면 연결 해제 후 다시 연결하세요."
+        },
+        "s3": {
+          "title": "S3 연결 설정",
+          "intro": "네 단계 — IAM 사용자, 읽기 전용 정책, 액세스 키, 연결. 둘러볼 버킷에만 권한을 준 최소 권한 키를 쓰세요.",
+          "user": {
+            "title": "1. IAM 사용자 만들기",
+            "step1": "AWS IAM 콘솔 → Users → Create user (전용 사용자 재사용도 가능, 예: cowork-s3-readonly).",
+            "step2": "프로그래밍 방식 접근이면 충분합니다 — 콘솔 로그인 불필요. 키는 3단계에서 발급합니다."
+          },
+          "policy": {
+            "title": "2. 읽기 전용 정책 붙이기",
+            "step1": "계정 전체 S3가 아니라, 이 버킷으로만 범위를 제한한 정책을 붙입니다.",
+            "step2": "버킷(arn:aws:s3:::BUCKET)에 s3:ListBucket, 그 객체(arn:aws:s3:::BUCKET/*)에 s3:GetObject를 허용합니다.",
+            "step3": "그 외엔 아무것도 주지 마세요 — 쓰기·삭제 금지. 최소 권한이면 키가 유출돼도 무해합니다."
+          },
+          "key": {
+            "title": "3. 액세스 키 발급",
+            "step1": "그 사용자의 Security credentials 탭에서 애플리케이션용 액세스 키를 만듭니다.",
+            "step2": "Access key ID와 Secret access key를 복사합니다. secret은 한 번만 표시됩니다."
+          },
+          "connect": {
+            "title": "4. 연결하기",
+            "step1": "연결 탭에서 버킷·리전·키 두 개를 입력하고 Connect S3를 누릅니다.",
+            "step2": "S3 호환 스토리지(MinIO, Cloudflare R2)라면 endpoint도 설정하세요. 하위 폴더만 보려면 key prefix를 씁니다."
+          },
+          "scopeList": "버킷에 대한 s3:ListBucket",
+          "scopeGet": "버킷 객체에 대한 s3:GetObject",
+          "note": "secret key는 쓰기 전용이라 다시 표시되지 않습니다. 변경하려면 연결 해제 후 다시 연결하세요. 최소 권한의 읽기 전용 키를 권장합니다."
         }
       }
     },
@@ -222,6 +284,8 @@
     "loading": "불러오는 중…",
     "emptySource": "항목 없음",
     "emptySourceHint": "이 소스에 항목이 없습니다.",
+    "notionEmptyTitle": "공유된 페이지가 없습니다",
+    "notionEmptyHint": "토큰은 유효하지만 integration에 공유된 페이지가 없습니다. Notion에서 페이지를 열고 ⋯ → Connections에서 integration을 추가한 뒤 새로고침하세요.",
     "folderEmpty": "이 폴더는 비어 있습니다",
     "folderEmptyHint": "이 폴더에 추가한 파일이 여기에 표시돼요",
     "detail": {

@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WorkspaceGRouteImport } from './routes/workspace-g'
 import { Route as WorkspaceFRouteImport } from './routes/workspace-f'
 import { Route as WorkspaceERouteImport } from './routes/workspace-e'
 import { Route as WorkspaceDRouteImport } from './routes/workspace-d'
@@ -20,6 +21,11 @@ import { Route as WorkspaceIndexRouteImport } from './routes/workspace.index'
 import { Route as WorkspaceSourceIdRouteImport } from './routes/workspace.$sourceId'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
 
+const WorkspaceGRoute = WorkspaceGRouteImport.update({
+  id: '/workspace-g',
+  path: '/workspace-g',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WorkspaceFRoute = WorkspaceFRouteImport.update({
   id: '/workspace-f',
   path: '/workspace-f',
@@ -79,6 +85,7 @@ export interface FileRoutesByFullPath {
   '/workspace-d': typeof WorkspaceDRoute
   '/workspace-e': typeof WorkspaceERoute
   '/workspace-f': typeof WorkspaceFRoute
+  '/workspace-g': typeof WorkspaceGRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/workspace/$sourceId': typeof WorkspaceSourceIdRoute
   '/workspace/': typeof WorkspaceIndexRoute
@@ -90,6 +97,7 @@ export interface FileRoutesByTo {
   '/workspace-d': typeof WorkspaceDRoute
   '/workspace-e': typeof WorkspaceERoute
   '/workspace-f': typeof WorkspaceFRoute
+  '/workspace-g': typeof WorkspaceGRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/workspace/$sourceId': typeof WorkspaceSourceIdRoute
   '/workspace': typeof WorkspaceIndexRoute
@@ -103,6 +111,7 @@ export interface FileRoutesById {
   '/workspace-d': typeof WorkspaceDRoute
   '/workspace-e': typeof WorkspaceERoute
   '/workspace-f': typeof WorkspaceFRoute
+  '/workspace-g': typeof WorkspaceGRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/workspace/$sourceId': typeof WorkspaceSourceIdRoute
   '/workspace/': typeof WorkspaceIndexRoute
@@ -117,6 +126,7 @@ export interface FileRouteTypes {
     | '/workspace-d'
     | '/workspace-e'
     | '/workspace-f'
+    | '/workspace-g'
     | '/sessions/$sessionId'
     | '/workspace/$sourceId'
     | '/workspace/'
@@ -128,6 +138,7 @@ export interface FileRouteTypes {
     | '/workspace-d'
     | '/workspace-e'
     | '/workspace-f'
+    | '/workspace-g'
     | '/sessions/$sessionId'
     | '/workspace/$sourceId'
     | '/workspace'
@@ -140,6 +151,7 @@ export interface FileRouteTypes {
     | '/workspace-d'
     | '/workspace-e'
     | '/workspace-f'
+    | '/workspace-g'
     | '/sessions/$sessionId'
     | '/workspace/$sourceId'
     | '/workspace/'
@@ -153,11 +165,19 @@ export interface RootRouteChildren {
   WorkspaceDRoute: typeof WorkspaceDRoute
   WorkspaceERoute: typeof WorkspaceERoute
   WorkspaceFRoute: typeof WorkspaceFRoute
+  WorkspaceGRoute: typeof WorkspaceGRoute
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/workspace-g': {
+      id: '/workspace-g'
+      path: '/workspace-g'
+      fullPath: '/workspace-g'
+      preLoaderRoute: typeof WorkspaceGRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/workspace-f': {
       id: '/workspace-f'
       path: '/workspace-f'
@@ -253,6 +273,7 @@ const rootRouteChildren: RootRouteChildren = {
   WorkspaceDRoute: WorkspaceDRoute,
   WorkspaceERoute: WorkspaceERoute,
   WorkspaceFRoute: WorkspaceFRoute,
+  WorkspaceGRoute: WorkspaceGRoute,
   SessionsSessionIdRoute: SessionsSessionIdRoute,
 }
 export const routeTree = rootRouteImport

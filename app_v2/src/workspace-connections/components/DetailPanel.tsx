@@ -6,10 +6,11 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FilePreviewModal } from '@/components/FilePreviewModal';
 import { Icon } from '@/components/Icon';
 import { useDialogEscape } from '@/lib/useDialogEscape';
-import { SourceIcon } from '@/workspace/icons';
-import { evidenceForRecord, getKnowledgeRecordsForSource, sourceEntryFromEvidence } from '@/workspace/knowledge';
-import { useProvider } from '@/workspace/hooks/useProviders';
-import type { SourceEntry } from '@/workspace/types';
+import { SourceIcon } from '@/workspace-connections/icons';
+import { evidenceForRecord, getKnowledgeRecordsForSource, sourceEntryFromEvidence } from '@/workspace-connections/knowledge';
+import { getProviderMeta } from '@/workspace-connections/providers';
+import { useProvider } from '@/workspace-connections/hooks/useProviders';
+import type { SourceEntry } from '@/workspace-connections/types';
 
 interface DetailPanelProps {
   entry: SourceEntry;
@@ -109,6 +110,18 @@ export function DetailPanel({ entry, onClose, onAttach, onSelectEntry }: DetailP
   // over it (a hook can't be called inside queryFn). undefined only during the
   // brief mounts-loading window, so the query waits via `enabled`.
   const provider = useProvider(entry.sourceId);
+  // Knowledge evidence produces synthetic entries whose sourceId is a TYPE
+  // (e.g. 'notion'), not a live instance id — useProvider() can't resolve
+  // those (mount-backed types have no static-catalog instance). Fall back to
+  // the static catalog by id (== type for every non-instance entry) so the
+  // header still shows a translated name/icon instead of the raw type string.
+  const catalogFallback = provider ? undefined : getProviderMeta(entry.sourceId);
+  const headerType = provider?.type ?? catalogFallback?.type ?? entry.sourceId;
+  const headerName = provider
+    ? provider.label ?? t(provider.nameKey)
+    : catalogFallback
+      ? t(catalogFallback.nameKey)
+      : entry.sourceId;
 
   const detailQuery = useQuery({
     queryKey: ['ws-detail', entry.sourceId, entry.id],
@@ -196,8 +209,8 @@ export function DetailPanel({ entry, onClose, onAttach, onSelectEntry }: DetailP
     <div className="cw-ws-detail-panel">
       <div className="cw-ws-detail-header">
         <span className="cw-ws-detail-badge">
-          <SourceIcon sourceId={entry.sourceId} size={14} />
-          {provider ? t(provider.nameKey) : entry.sourceId}
+          <SourceIcon sourceId={headerType} size={14} />
+          {headerName}
         </span>
         <button
           type="button"
@@ -319,7 +332,7 @@ export function DetailPanel({ entry, onClose, onAttach, onSelectEntry }: DetailP
         {isDocumentEntry && detail?.bodyPreview && (
           <div className="cw-ws-page-preview" data-testid="source-document-preview">
             <div className="cw-ws-page-icon" aria-hidden="true">
-              {entry.emoji ?? (provider ? <SourceIcon sourceId={provider.id} size={22} /> : '📄')}
+              {entry.emoji ?? (provider ? <SourceIcon sourceId={provider.type} size={22} /> : '📄')}
             </div>
             {renderDocumentBody(detail.bodyPreview)}
           </div>

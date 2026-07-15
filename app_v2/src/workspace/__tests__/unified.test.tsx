@@ -15,6 +15,13 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, to }: { children: ReactNode; to: string }) => <a href={to}>{children}</a>,
 }));
 
+// UnifiedList resolves provider nameKeys via useProviders(); an empty list makes
+// it fall back to `workspace.src.<id>` (exactly what these rows assert on) and
+// avoids needing a QueryClientProvider.
+vi.mock('@/workspace/hooks/useProviders', () => ({
+  useProviders: () => [],
+}));
+
 import { UnifiedList } from '../components/UnifiedList';
 import type { SourceEntry } from '../types';
 

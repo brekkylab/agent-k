@@ -63,6 +63,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const onSessions = pathname === '/' || pathname.startsWith('/sessions');
   // Exact-prefix match: '/workspace-b' etc. are sibling candidate tabs, not sub-routes.
   const onWorkspace = pathname === '/workspace' || pathname.startsWith('/workspace/');
+  const onWorkspaceG = pathname.startsWith('/workspace-g');
   const onWorkspaceB = pathname.startsWith('/workspace-b');
   const onWorkspaceC = pathname.startsWith('/workspace-c');
   const onWorkspaceD = pathname.startsWith('/workspace-d');
@@ -95,6 +96,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             <span className="cw-pocket"><Icon name="folder-open" size={13} /></span>
             <span>{t('nav.workspace', 'Workspace')}</span>
+          </Link>
+
+          {/* Multi-connection sources variant — isolated fork of Workspace with
+              N connections per mount-backed type (S3/Notion). */}
+          <Link
+            to="/workspace-g"
+            className={`cw-nav-row${onWorkspaceG ? ' is-active' : ''}`}
+          >
+            <span className="cw-pocket"><Icon name="cloud" size={13} /></span>
+            <span>연결</span>
           </Link>
 
           {/* Workspace design candidates — mockup tabs for comparing workspace directions. */}

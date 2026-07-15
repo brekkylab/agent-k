@@ -128,8 +128,9 @@
       "slack": "Slack",
       "knowledge": "Knowledge"
     },
-    "addSource": "Add source",
+    "addSource": "Manage connections",
     "addSourceBody": "Pick a source, check what it needs, then connect the mock source from here.",
+    "addConnection": "Add connection",
     "hideUnconnected": "Hide unconnected",
     "connect": {
       "cta": "Add",
@@ -138,6 +139,11 @@
       "connectedHint": "This source is already connected. Open it to browse its workspace data.",
       "action": "Connect mock source",
       "open": "Open source",
+      "existingConnections": "Existing connections",
+      "disconnect": "Disconnect",
+      "disconnecting": "Disconnecting…",
+      "prefixTaken": "A connection with that name already exists",
+      "hint": "Try connecting {{name}}",
       "tabs": {
         "label": "Connection detail mode",
         "connect": "Connect",
@@ -147,7 +153,9 @@
         "dropbox": "Connect with a Dropbox account email and a scoped access token.",
         "figma": "Connect a Figma team URL and token so design files can appear beside project docs.",
         "github": "Connect a repository URL and access token to browse issues, PRs, and decisions.",
-        "linear": "Connect a Linear workspace URL and API key to bring issues into the workspace."
+        "linear": "Connect a Linear workspace URL and API key to bring issues into the workspace.",
+        "notion": "Create an internal Notion integration, share your pages with it, then paste the token to browse them here.",
+        "s3": "Connect an S3 bucket with read-only credentials to browse its objects beside your project files."
       },
       "fields": {
         "accountEmail": "Account email",
@@ -155,7 +163,8 @@
         "teamUrl": "Team URL",
         "repositoryUrl": "Repository URL",
         "workspaceUrl": "Workspace URL",
-        "apiKey": "API key"
+        "apiKey": "API key",
+        "label": "Name"
       },
       "placeholders": {
         "accountEmail": "ops@example.com",
@@ -163,7 +172,8 @@
         "teamUrl": "https://figma.com/files/team/...",
         "repositoryUrl": "https://github.com/acme/app",
         "workspaceUrl": "https://linear.app/acme",
-        "apiKey": "lin_api_mock"
+        "apiKey": "lin_api_mock",
+        "label": "e.g. Marketing bucket"
       },
       "guides": {
         "permissions": "Required access",
@@ -190,6 +200,58 @@
           "scopeRead": "Workspace read access",
           "scopeIssues": "Issues and projects read access",
           "note": "Keep the API key private. This mock stores only the connected source id locally, not the field values."
+        },
+        "notion": {
+          "title": "Set up your Notion connection",
+          "intro": "Three quick stages — create an integration, share what to read, then connect. Most \"no items\" cases are just a missed share in stage 2.",
+          "create": {
+            "title": "1. Create an integration",
+            "step1": "Open https://www.notion.so/my-integrations and click New integration → Internal.",
+            "step2": "Name it and, under Capabilities, enable Read content only (no write or comment access needed).",
+            "step3": "Copy the Internal Integration Token (starts with ntn_). It isn't shown again, so keep it somewhere safe."
+          },
+          "share": {
+            "title": "2. Share pages & databases with it",
+            "step1": "Sharing is per-item: open a top-level page (or database) you want to browse.",
+            "step2": "Open the top-right ⋯ menu → Connections → add the integration you just created.",
+            "step3": "Sharing a parent page includes its sub-pages; share each separate top-level page on its own."
+          },
+          "connect": {
+            "title": "3. Connect & verify",
+            "step1": "In the Connect tab, paste the token, pick a mount name, and press Connect Notion.",
+            "step2": "Shared top-level pages appear as folders. Tables inside a page show inline; standalone databases are still limited (page-focused for now)."
+          },
+          "scopeRead": "Read content",
+          "scopeShared": "Only pages shared with the integration are visible",
+          "note": "The token is write-only here — it is never shown again. To change it, disconnect and reconnect."
+        },
+        "s3": {
+          "title": "Set up your S3 connection",
+          "intro": "Four stages — IAM user, read-only policy, access key, connect. Use a least-privilege key scoped to just the bucket you want to browse.",
+          "user": {
+            "title": "1. Create an IAM user",
+            "step1": "Open the AWS IAM console → Users → Create user (or reuse a dedicated one, e.g. cowork-s3-readonly).",
+            "step2": "Programmatic access is enough — no console sign-in needed. You'll add the key in stage 3."
+          },
+          "policy": {
+            "title": "2. Attach a read-only policy",
+            "step1": "Attach a policy scoped to just this bucket — not account-wide S3 access.",
+            "step2": "Allow s3:ListBucket on the bucket (arn:aws:s3:::BUCKET) and s3:GetObject on its objects (arn:aws:s3:::BUCKET/*).",
+            "step3": "Grant nothing else — no write or delete. Least privilege keeps a leaked key harmless."
+          },
+          "key": {
+            "title": "3. Create an access key",
+            "step1": "In the user's Security credentials tab, create an access key for application use.",
+            "step2": "Copy the Access key ID and Secret access key. The secret is shown only once."
+          },
+          "connect": {
+            "title": "4. Connect",
+            "step1": "In the Connect tab, enter the bucket, region, and the two keys, then press Connect S3.",
+            "step2": "For S3-compatible storage (MinIO, Cloudflare R2) set the endpoint too; use a key prefix to scope to a subfolder."
+          },
+          "scopeList": "s3:ListBucket on the bucket",
+          "scopeGet": "s3:GetObject on the bucket's objects",
+          "note": "The secret key is write-only here — it is never shown again. To change it, disconnect and reconnect. Prefer a least-privilege, read-only key."
         }
       }
     },
@@ -222,6 +284,8 @@
     "loading": "Loading…",
     "emptySource": "No items",
     "emptySourceHint": "This source has no items yet.",
+    "notionEmptyTitle": "No shared pages yet",
+    "notionEmptyHint": "The token is valid, but no pages are shared with the integration. In Notion, open a page → ⋯ → Connections and add your integration, then refresh.",
     "folderEmpty": "This folder is empty",
     "folderEmptyHint": "Files you add to this folder will appear here",
     "detail": {

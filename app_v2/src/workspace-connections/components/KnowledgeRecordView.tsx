@@ -2,10 +2,10 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { EmptyState } from '@/components/uiPrimitives';
-import { SourceIcon } from '@/workspace/icons';
-import { getKnowledgeSourceDocuments, statusCounts } from '@/workspace/knowledge';
-import { useProviders } from '@/workspace/hooks/useProviders';
-import type { KnowledgeStatus, SourceEntry, SourceProvider } from '@/workspace/types';
+import { SourceIcon } from '@/workspace-connections/icons';
+import { getKnowledgeSourceDocuments, statusCounts } from '@/workspace-connections/knowledge';
+import { PROVIDERS } from '@/workspace-connections/providers';
+import type { KnowledgeStatus, SourceEntry, SourceProvider } from '@/workspace-connections/types';
 
 interface KnowledgeRecordViewProps {
   provider: SourceProvider;
@@ -33,7 +33,6 @@ type KnowledgeViewMode = 'records' | 'sources' | 'conflicts';
 
 export function KnowledgeRecordView({ provider, onSelect }: KnowledgeRecordViewProps) {
   const { t } = useTranslation('files');
-  const providers = useProviders();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<KnowledgeViewMode>('records');
 
@@ -193,8 +192,12 @@ export function KnowledgeRecordView({ provider, onSelect }: KnowledgeRecordViewP
       ) : mode === 'sources' ? (
         <ul className="cw-ws-knowledge-list">
           {filteredSourceDocuments.map((document) => {
-            const sourceProvider = providers.find((p) => p.id === document.evidence.sourceId);
-            const sourceName = sourceProvider ? t(sourceProvider.nameKey) : document.evidence.sourceId;
+            // Evidence carries a TYPE id (e.g. 'notion'), not a live instance —
+            // resolve name/icon via the static catalog rather than the
+            // mount-aware provider list (which no longer has a 'notion'/'s3'
+            // entry once a real mount exists for that type).
+            const sourceMeta = PROVIDERS.find((p) => p.type === document.evidence.sourceId);
+            const sourceName = sourceMeta ? sourceMeta.label ?? t(sourceMeta.nameKey) : document.evidence.sourceId;
             const title = sourceDocumentTitle(document.evidence.label);
 
             return (
@@ -204,7 +207,7 @@ export function KnowledgeRecordView({ provider, onSelect }: KnowledgeRecordViewP
                   onClick={() => onSelect(document.sourceEntry)}
                 >
                   <span className="cw-ws-knowledge-source-origin">
-                    <SourceIcon sourceId={document.evidence.sourceId} size={18} />
+                    <SourceIcon sourceId={sourceMeta?.type ?? document.evidence.sourceId} size={18} />
                     <span>{sourceName}</span>
                   </span>
                   <span className="cw-ws-knowledge-source-main">

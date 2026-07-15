@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 const navigate = vi.fn();
@@ -15,7 +16,20 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
 }));
 
+// The rail resolves providers via useMounts(); with no mounts, useProviders
+// falls back to the static catalog (what these catalog-dialog tests assert on).
+vi.mock('@/api/mounts', () => ({
+  listMounts: vi.fn().mockResolvedValue([]),
+  createMount: vi.fn(),
+  deleteMount: vi.fn(),
+}));
+
 import { SourceRail } from '../components/SourceRail';
+
+function wrapper({ children }: { children: ReactNode }) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
 
 describe('SourceRail add source catalog', () => {
   beforeEach(() => {
@@ -24,7 +38,7 @@ describe('SourceRail add source catalog', () => {
   });
 
   it('shows unconnected sources faintly and can hide them from the rail', () => {
-    render(<SourceRail activeSourceId={null} />);
+    render(<SourceRail activeSourceId={null} />, { wrapper });
 
     expect(screen.getByText('workspace.groups.sources')).toBeTruthy();
     expect(screen.getByText('workspace.groups.knowledge')).toBeTruthy();
@@ -38,7 +52,7 @@ describe('SourceRail add source catalog', () => {
   });
 
   it('shows connection instructions, required values, then opens the connected source', () => {
-    render(<SourceRail activeSourceId={null} />);
+    render(<SourceRail activeSourceId={null} />, { wrapper });
 
     fireEvent.click(screen.getByText('workspace.addSource'));
     const dialog = screen.getByRole('dialog');
@@ -65,7 +79,7 @@ describe('SourceRail add source catalog', () => {
   });
 
   it('shows a setup guide inside the same dialog for token-based sources', () => {
-    render(<SourceRail activeSourceId={null} />);
+    render(<SourceRail activeSourceId={null} />, { wrapper });
 
     fireEvent.click(screen.getByText('workspace.addSource'));
     const dialog = screen.getByRole('dialog');

@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import dayjs from 'dayjs';
-import { SourceIcon } from '@/workspace/icons';
-import { useProviders } from '@/workspace/hooks/useProviders';
-import type { SourceEntry } from '@/workspace/types';
+import { SourceIcon } from '@/workspace-connections/icons';
+import { useProviders } from '@/workspace-connections/hooks/useProviders';
+import type { SourceEntry } from '@/workspace-connections/types';
 
 interface UnifiedListProps {
   entries: SourceEntry[];
@@ -56,8 +56,8 @@ export function UnifiedList({ entries, onSelect, loading = false }: UnifiedListP
               className="cw-ws-row"
               onClick={() => onSelect(entry)}
             >
-              <SourceIcon sourceId={entry.sourceId} size={18} />
-              <span className="cw-ws-row-source">{t(nameKey)}</span>
+              <SourceIcon sourceId={provider?.type ?? entry.sourceId} size={18} />
+              <span className="cw-ws-row-source">{provider?.label ?? t(nameKey)}</span>
               <span className="cw-ws-row-title" data-testid="unified-row-title">
                 {entry.title}
               </span>

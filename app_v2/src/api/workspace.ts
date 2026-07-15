@@ -51,6 +51,17 @@ export async function getFileBlob(path: string): Promise<Blob> {
   });
 }
 
+// Text read for small structured files (e.g. a mount's synthesized page.json).
+// Uses the webdav client's text format directly so callers don't juggle Blob
+// (jsdom's Blob implements neither .text() nor .arrayBuffer(), which would break
+// unit tests that exercise the parse path).
+export async function getFileText(path: string): Promise<string> {
+  return withReauth(async () => {
+    const content = await workspaceClient().getFileContents(path, { format: 'text' });
+    return content as string;
+  });
+}
+
 export async function putFile(path: string, data: Blob | ArrayBuffer): Promise<void> {
   return withReauth(async () => {
     const buf = data instanceof Blob ? await data.arrayBuffer() : data;

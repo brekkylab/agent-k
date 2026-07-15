@@ -61,33 +61,40 @@ vi.mock('@/workspace/providers', () => ({
       detail: vi.fn().mockResolvedValue({ entry: null, externalUrl: '#' }),
     },
   ],
-  getProvider: (id: string) => {
-    if (id !== 'jira') return undefined;
-    return {
-      id: 'jira',
-      nameKey: 'workspace.src.jira',
-      category: 'docs',
-      kind: 'items' as const,
-      connected: true,
-      attachable: false,
-      count: 1,
-      list: () =>
-        Promise.resolve([
-          {
-            id: 'jira-issue-TEST-1',
-            sourceId: 'jira',
-            title: MY_JIRA_TICKET,
-            subtitle: '[TEST-1] Done',
-            kind: 'item' as const,
-            modifiedAt: '2026-07-03T10:00:00.000Z',
-          },
-        ]),
-      recent: () => Promise.resolve([]),
-      detail: vi.fn().mockResolvedValue({ entry: null, externalUrl: '#' }),
-    };
-  },
-  allRecent: () => Promise.resolve([]),
+  getProviderMeta: (id: string) => (id === 'jira' ? { id: 'jira', kind: 'items' } : undefined),
+  recentAcross: () => Promise.resolve([]),
 }));
+
+// Mount-aware resolution mock: SourcePage resolves the provider via useProvider.
+vi.mock('@/workspace/hooks/useProviders', () => {
+  const jira = {
+    id: 'jira',
+    nameKey: 'workspace.src.jira',
+    category: 'docs',
+    kind: 'items' as const,
+    connected: true,
+    attachable: false,
+    count: 1,
+    list: () =>
+      Promise.resolve([
+        {
+          id: 'jira-issue-TEST-1',
+          sourceId: 'jira',
+          title: MY_JIRA_TICKET,
+          subtitle: '[TEST-1] Done',
+          kind: 'item' as const,
+          modifiedAt: '2026-07-03T10:00:00.000Z',
+        },
+      ]),
+    recent: () => Promise.resolve([]),
+    detail: vi.fn().mockResolvedValue({ entry: null, externalUrl: '#' }),
+  };
+  return {
+    useProvider: (id: string) => (id === 'jira' ? jira : undefined),
+    useProviders: () => [jira],
+    useMounts: () => ({ data: [] }),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Mock WorkspaceShell's heavy internal dependencies so we can use the REAL

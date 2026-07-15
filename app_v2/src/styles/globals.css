@@ -1630,17 +1630,29 @@ select.cw-input { appearance: auto; }
 .cw-ws-add-dialog {
   width: min(760px, calc(100vw - 48px));
   max-width: 760px;
+  /* Cap to the viewport and lay out as a column so the catalog fills the
+     remaining height and scrolls internally — a long setup guide must not grow
+     the dialog past the screen and clip. */
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 48px);
 }
 
 .cw-ws-add-catalog {
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
   gap: 16px;
-  min-height: 390px;
+  /* Uniform dialog height across every state: lock the catalog to the tallest
+     case (the Notion setup guide) so switching sources or tabs never resizes
+     the dialog. Bounded to the viewport so it still scrolls internally — rather
+     than clip — on short screens. Shorter content just leaves whitespace. */
+  height: min(820px, calc(100vh - 176px));
+  min-height: 0;
 }
 
 .cw-ws-add-list {
   overflow-y: auto;
+  min-height: 0;
   border: 1px solid var(--cw-line-soft);
   border-radius: var(--cw-radius-lg);
   background: var(--cw-paper-1);
@@ -1705,10 +1717,48 @@ select.cw-input { appearance: auto; }
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Scroll a long guide / tall connect form inside the panel rather than
+     growing the dialog. */
+  min-height: 0;
+  overflow-y: auto;
   border: 1px solid var(--cw-line-soft);
   border-radius: var(--cw-radius-lg);
   background: var(--cw-bg-subtle);
   padding: 16px;
+}
+
+/* Scroll areas in the connect dialog: keep the scrollbar present but nearly
+   transparent when idle (never fully auto-hide), darkening on hover. It only
+   appears when the content actually overflows, so a guide that fits shows none.
+   `--cw-fg-1` keeps it theme-aware in light/dark. */
+.cw-ws-add-list,
+.cw-ws-add-detail {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: color-mix(in oklch, var(--cw-fg-1) 14%, transparent) transparent;
+}
+.cw-ws-add-list::-webkit-scrollbar,
+.cw-ws-add-detail::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.cw-ws-add-list::-webkit-scrollbar-track,
+.cw-ws-add-detail::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cw-ws-add-list::-webkit-scrollbar-thumb,
+.cw-ws-add-detail::-webkit-scrollbar-thumb {
+  /* Faint idle thumb; inset via a transparent border so it reads as a thin pill. */
+  background-color: color-mix(in oklch, var(--cw-fg-1) 14%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  transition: background-color 160ms ease;
+}
+.cw-ws-add-list:hover::-webkit-scrollbar-thumb,
+.cw-ws-add-detail:hover::-webkit-scrollbar-thumb,
+.cw-ws-add-list::-webkit-scrollbar-thumb:hover,
+.cw-ws-add-detail::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklch, var(--cw-fg-1) 36%, transparent);
 }
 
 .cw-ws-add-detail-head {
@@ -1854,4 +1904,14 @@ select.cw-input { appearance: auto; }
 .cw-ws-add-guide-note {
   color: var(--cw-fg-3);
   font-size: 12px;
+}
+/* Multi-stage guides split into labelled sections; a divider between adjacent
+   sections makes the stages (create → share → connect) read as distinct. */
+.cw-ws-add-guide-section {
+  display: grid;
+  gap: 7px;
+}
+.cw-ws-add-guide-section + .cw-ws-add-guide-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--cw-line-soft);
 }

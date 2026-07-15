@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@/api/workspace', () => ({
   listDirectory: vi.fn().mockResolvedValue([]),
   getFileBlob: vi.fn(),
+  getFileText: vi.fn(),
   putFile: vi.fn(),
   deleteEntry: vi.fn(),
   createDirectory: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock('@/stores/workspace', () => ({
   setWorkspaceId: vi.fn(),
 }));
 
-import { PROVIDERS, allRecent, getProvider } from '../providers';
+import { PROVIDERS, recentAcross, getProviderMeta } from '../providers';
 import enFiles from '@/i18n/locales/en/files.json';
 import koFiles from '@/i18n/locales/ko/files.json';
 
@@ -45,10 +46,12 @@ describe('provider registry', () => {
       'linear',
     ]);
   });
-  it('keeps catalog-only sources disconnected until a mock connection is added', () => {
+  it('keeps catalog-only sources disconnected until connected (notion/s3 need a real mount)', () => {
     expect(PROVIDERS.filter((p) => !p.connected).map((p) => p.id)).toEqual([
+      's3',
       'dropbox',
       'figma',
+      'notion',
       'github',
       'linear',
     ]);
@@ -57,7 +60,7 @@ describe('provider registry', () => {
     expect(PROVIDERS.filter((p) => p.attachable).map((p) => p.id)).toEqual(['local']);
   });
   it('labels the WebDAV-backed local provider as Shared Files', () => {
-    expect(getProvider('local')?.nameKey).toBe('workspace.src.local');
+    expect(getProviderMeta('local')?.nameKey).toBe('workspace.src.local');
     expect(enFiles.workspace.src.local).toBe('Shared Files');
     expect(koFiles.workspace.src.local).toBe('Shared Files');
   });
@@ -66,33 +69,29 @@ describe('provider registry', () => {
     expect(cats).toEqual(new Set(['files', 'docs', 'messages', 'knowledge']));
     expect(PROVIDERS.filter((p) => p.category === 'knowledge').map((p) => p.id)).toEqual(['knowledge']);
   });
-  it('allRecent merges newest-first across providers', async () => {
-    const merged = await allRecent();
+  it('recentAcross merges newest-first across providers', async () => {
+    const merged = await recentAcross(PROVIDERS);
     expect(merged.length).toBeGreaterThan(10);
     const times = merged.map((e) => e.modifiedAt);
     expect([...times].sort().reverse()).toEqual(times);
     expect(new Set(merged.map((e) => e.sourceId)).size).toBeGreaterThanOrEqual(6);
   });
   it('mock provider list/detail round-trip', async () => {
-    const jira = getProvider('jira')!;
+    const jira = getProviderMeta('jira')!;
     const list = await jira.list({});
     const d = await jira.detail(list[0].id);
     expect(d.entry.id).toBe(list[0].id);
     expect(d.bodyPreview).toBeTruthy();
   });
-  it('provides Notion pages with parent relationships', async () => {
-    const notion = getProvider('notion')!;
+  it('lists notion as a catalog-only pages source (no fixture data; real tree comes from a mount)', () => {
+    // Notion is disconnected until a real mount overlays it; the page-tree
+    // behavior is covered by notion-provider.test.ts (the real WebDAV provider).
+    const notion = getProviderMeta('notion')!;
     expect(notion.kind).toBe('pages');
-
-    const pages = await notion.list({});
-    expect(pages.some((page) => page.title === 'Company OS' && page.parentId == null)).toBe(true);
-    expect(pages.some((page) => page.title === 'Workspace Source Grounding' && page.parentId === 'notion-page-q3-product-strategy')).toBe(true);
-
-    const detail = await notion.detail('notion-page-workspace-source-grounding');
-    expect(detail.bodyPreview).toContain('Workspace');
+    expect(notion.connected).toBe(false);
   });
   it('provides curated knowledge records with provenance', async () => {
-    const knowledge = getProvider('knowledge')!;
+    const knowledge = getProviderMeta('knowledge')!;
     expect(knowledge.kind).toBe('records');
 
     const records = await knowledge.list({});

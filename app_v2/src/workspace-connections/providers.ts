@@ -1,4 +1,4 @@
-import type { SourceEntry, SourceProvider } from './types';
+import type { SourceEntry, SourceProvider, SourceType } from './types';
 import type { MountResponse } from '@/api/mounts';
 import { localProvider } from './providers/local';
 import { makeMockProvider } from './providers/mock';
@@ -51,25 +51,29 @@ export function getProviderMeta(id: string): SourceProvider | undefined {
   return PROVIDERS.find((p) => p.id === id);
 }
 
-// Map a workspace mount to a real provider bound to its prefix. Notion and S3
-// are wired; other provider types fall through to the static catalog entry.
+// Provider types that connect via a real workspace VFS mount (0..N instances
+// each). Their static catalog entries are the add-dialog/hint placeholders only;
+// the browseable providers are the per-mount instances from `buildProviders`.
+export const MOUNT_BACKED_TYPES = new Set<SourceType>(['s3', 'notion']);
+
+// Map a workspace mount to a real per-instance provider (id = mount.id).
 function realProviderForMount(mount: MountResponse): SourceProvider | null {
-  if (mount.provider.type === 'notion') return makeNotionProvider(mount.prefix);
-  if (mount.provider.type === 's3') return makeS3Provider(mount.prefix);
+  if (mount.provider.type === 'notion') return makeNotionProvider(mount);
+  if (mount.provider.type === 's3') return makeS3Provider(mount);
   return null;
 }
 
-// The static catalog overlaid with a real provider for each active mount. A
-// source with no mount stays its mock/catalog entry. Pure function of `mounts`
-// so callers can memoize on the mounts list for stable provider identity.
+// One provider PER mount (instance-scoped), plus the static catalog MINUS the
+// mount-backed placeholders (s3/notion) — those types are represented only by
+// their real instances here; their catalog entries live on in `PROVIDERS` for
+// the add-dialog type-picker + hint candidates. Pure function of `mounts` so
+// callers memoize on the mounts list for stable provider identity.
 export function buildProviders(mounts: MountResponse[]): SourceProvider[] {
-  const overlay = new Map<string, SourceProvider>();
-  for (const mount of mounts) {
-    const real = realProviderForMount(mount);
-    if (real) overlay.set(real.id, real);
-  }
-  if (overlay.size === 0) return PROVIDERS;
-  return PROVIDERS.map((p) => overlay.get(p.id) ?? p);
+  const instances = mounts
+    .map(realProviderForMount)
+    .filter((p): p is SourceProvider => p !== null);
+  const base = PROVIDERS.filter((p) => !MOUNT_BACKED_TYPES.has(p.type));
+  return [...base, ...instances];
 }
 
 // Merge newest-first recents across the connected providers. A per-provider

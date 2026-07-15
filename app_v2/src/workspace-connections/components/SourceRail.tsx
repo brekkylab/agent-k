@@ -1,21 +1,23 @@
 import { useState, type ReactNode } from 'react';
-import { Link, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
-import { SourceIcon } from '@/workspace/icons';
-import { useProviders, useMounts } from '@/workspace/hooks/useProviders';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { SourceIcon } from '@/workspace-connections/icons';
+import { useProviders, useMounts, useUnconnectedCatalog } from '@/workspace-connections/hooks/useProviders';
+import { PROVIDERS, MOUNT_BACKED_TYPES } from '@/workspace-connections/providers';
+import { deleteMount, type MountResponse } from '@/api/mounts';
 import { NotionMountForm } from './NotionMountForm';
 import { S3MountForm } from './S3MountForm';
-import type { SourceCategory, SourceProvider } from '@/workspace/types';
-
-// Sources that connect via a real workspace VFS mount (a MountForm) rather than
-// the mock localStorage catalog-connect.
-const MOUNT_BACKED = new Set<SourceProvider['id']>(['notion', 's3']);
+import type { SourceCategory, SourceProvider, SourceType } from '@/workspace-connections/types';
 
 interface SourceRailProps {
-  activeSourceId: string | null | undefined;
+  activeSourceId: string | null;
+  onOpenSource: (id: string | null) => void;
 }
 
-const CONNECTED_STORAGE_KEY = 'cw.workspace.connectedSources';
+// Isolated from the original `/workspace` variant's localStorage state so
+// mock-connecting a source here never leaks into (or is leaked into by) the
+// frozen original tab.
+const CONNECTED_STORAGE_KEY = 'cw.workspace-connections.connectedSources';
 
 type SourceCatalogCategory = Exclude<SourceCategory, 'knowledge'>;
 
@@ -26,7 +28,9 @@ const SOURCE_CATEGORIES: { key: SourceCatalogCategory; labelKey: string }[] = [
   { key: 'messages', labelKey: 'workspace.cat.messages' },
 ];
 
-const CONNECTION_FIELDS: Partial<Record<SourceProvider['id'], string[]>> = {
+// Keyed on the catalog TYPE, not a provider instance id — the add-dialog
+// type-picker always operates on types (a type has 0..N connection instances).
+const CONNECTION_FIELDS: Partial<Record<SourceType, string[]>> = {
   dropbox: ['accountEmail', 'accessToken'],
   figma: ['teamUrl', 'accessToken'],
   github: ['repositoryUrl', 'accessToken'],
@@ -46,7 +50,7 @@ type GuideDef = {
   noteKey: string;
 };
 
-const CONNECTION_GUIDES: Partial<Record<SourceProvider['id'], GuideDef>> = {
+const CONNECTION_GUIDES: Partial<Record<SourceType, GuideDef>> = {
   github: {
     titleKey: 'workspace.connect.guides.github.title',
     introKey: 'workspace.connect.guides.github.intro',
@@ -170,6 +174,10 @@ function writeConnectedSourceIds(ids: Set<string>) {
   window.localStorage.setItem(CONNECTED_STORAGE_KEY, JSON.stringify([...ids]));
 }
 
+// Real instances are always `connected: true`. Mock-connectable catalog types
+// (github/linear/dropbox/figma) are gated by localStorage `connectedIds` —
+// kept so the mock Connect action still surfaces its target afterward instead
+// of dead-ending into an invisible rail.
 function isProviderConnected(provider: SourceProvider, connectedIds: Set<string>): boolean {
   return provider.connected || connectedIds.has(provider.id);
 }
@@ -231,43 +239,61 @@ function GuideBody({ guide }: { guide: GuideDef }) {
 
 function AddSourceDialog({
   connectedIds,
-  initialSourceId,
+  initialType,
   onClose,
-  onConnect,
+  onMockConnect,
+  onOpenSource,
 }: {
   connectedIds: Set<string>;
-  initialSourceId: string | null;
+  initialType: SourceType | null;
   onClose: () => void;
-  onConnect: (provider: SourceProvider) => void;
+  onMockConnect: (provider: SourceProvider) => void;
+  onOpenSource: (id: string) => void;
 }) {
   const { t } = useTranslation('files');
-  const allProviders = useProviders();
   const { data: mounts } = useMounts();
-  const firstUnconnected = allProviders.find((provider) => !isProviderConnected(provider, connectedIds));
-  const initialProvider =
-    allProviders.find((provider) => provider.id === initialSourceId) ?? firstUnconnected ?? allProviders[0]!;
-  const [selectedId, setSelectedId] = useState<SourceProvider['id']>(initialProvider.id);
-  const [detailMode, setDetailMode] = useState<'connect' | 'guide'>('connect');
-  const selected = allProviders.find((provider) => provider.id === selectedId) ?? initialProvider;
-  const selectedConnected = isProviderConnected(selected, connectedIds);
-  const requiredFields = selectedConnected ? [] : CONNECTION_FIELDS[selected.id] ?? ['workspaceUrl', 'apiKey'];
-  const selectedGuide = selectedConnected ? undefined : CONNECTION_GUIDES[selected.id];
-  const mode = selectedGuide ? detailMode : 'connect';
-  // The existing mount for a mount-backed source (its provider.type equals the
-  // provider id), so the form can offer Disconnect instead of a fresh connect.
-  const existingMount = mounts?.find((m) => m.provider.type === selected.id);
+  const qc = useQueryClient();
 
-  function handleConnect() {
-    onConnect(selected);
+  // Type-picker always iterates the static catalog (types), never instances —
+  // a type can have 0..N real connections, listed separately below.
+  const firstUnconnected = PROVIDERS.find((provider) => !isProviderConnected(provider, connectedIds));
+  const initialProvider =
+    PROVIDERS.find((provider) => provider.type === initialType) ?? firstUnconnected ?? PROVIDERS[0]!;
+  const [selectedType, setSelectedType] = useState<SourceType>(initialProvider.type);
+  const [detailMode, setDetailMode] = useState<'connect' | 'guide'>('connect');
+  const selected = PROVIDERS.find((provider) => provider.type === selectedType) ?? initialProvider;
+  const selectedConnected = isProviderConnected(selected, connectedIds);
+  const requiredFields = selectedConnected ? [] : CONNECTION_FIELDS[selected.type] ?? ['workspaceUrl', 'apiKey'];
+  const selectedGuide = selectedConnected ? undefined : CONNECTION_GUIDES[selected.type];
+  const mode = selectedGuide ? detailMode : 'connect';
+  const isMountBacked = MOUNT_BACKED_TYPES.has(selected.type);
+  // Every existing real connection of the selected type, each independently
+  // disconnectable — a type-picker selection is never an instance id.
+  const existingConnections = isMountBacked
+    ? (mounts ?? []).filter((m) => m.provider.type === selected.type)
+    : [];
+
+  const disconnect = useMutation({
+    mutationFn: (id: string) => deleteMount(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['workspace', 'mounts'] }),
+  });
+
+  function handleMockConnect() {
+    onMockConnect(selected);
   }
 
-  function handleSelectProvider(provider: SourceProvider) {
-    setSelectedId(provider.id);
+  function handleSelectProvider(type: SourceType) {
+    setSelectedType(type);
     setDetailMode('connect');
   }
 
+  function handleMountCreated(mount: MountResponse) {
+    onClose();
+    onOpenSource(mount.id);
+  }
+
   const providersByCategory = (category: SourceCatalogCategory): SourceProvider[] =>
-    allProviders.filter((provider) => provider.category === category);
+    PROVIDERS.filter((provider) => provider.category === category);
 
   return (
     <div
@@ -301,12 +327,12 @@ function AddSourceDialog({
                     return (
                       <button
                         type="button"
-                        key={provider.id}
-                        className={`cw-ws-add-source${selected.id === provider.id ? ' is-active' : ''}${connected ? '' : ' is-unconnected'}`}
-                        onClick={() => handleSelectProvider(provider)}
+                        key={provider.type}
+                        className={`cw-ws-add-source${selected.type === provider.type ? ' is-active' : ''}${connected ? '' : ' is-unconnected'}`}
+                        onClick={() => handleSelectProvider(provider.type)}
                       >
-                        <SourceIcon sourceId={provider.id} size={18} />
-                        <span>{t(provider.nameKey)}</span>
+                        <SourceIcon sourceId={provider.type} size={18} />
+                        <span>{provider.label ?? t(provider.nameKey)}</span>
                         <em>{connected ? t('workspace.connect.connected') : t('workspace.connect.notConnected')}</em>
                       </button>
                     );
@@ -317,18 +343,41 @@ function AddSourceDialog({
           </div>
           <div className="cw-ws-add-detail">
             <div className="cw-ws-add-detail-head">
-              <SourceIcon sourceId={selected.id} size={22} />
+              <SourceIcon sourceId={selected.type} size={22} />
               <div>
                 <strong>{t(selected.nameKey)}</strong>
-                <span>{selectedConnected ? t('workspace.connect.connectedHint') : t(`workspace.connect.instructions.${selected.id}`)}</span>
+                <span>{selectedConnected ? t('workspace.connect.connectedHint') : t(`workspace.connect.instructions.${selected.type}`)}</span>
               </div>
             </div>
-            {MOUNT_BACKED.has(selected.id) ? (
+            {isMountBacked ? (
               // Notion/S3 connect via a real workspace mount (a MountForm), not
-              // the mock localStorage catalog-connect. A connect/guide tab toggle
-              // mirrors the other token sources; the guide explains how to obtain
-              // the credentials and what access they need.
+              // the mock localStorage catalog-connect. Existing connections of
+              // this type are listed with their own Disconnect; the form below
+              // is always available to add another connection.
               <>
+                {existingConnections.length > 0 && (
+                  <div className="cw-ws-add-fields">
+                    <strong style={{ fontSize: 12, color: 'var(--cw-fg-3)' }}>
+                      {t('workspace.connect.existingConnections', 'Existing connections')}
+                    </strong>
+                    {existingConnections.map((mount) => (
+                      <div key={mount.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                        <span style={{ fontSize: 13, color: 'var(--cw-fg-2)' }}>{mount.label ?? mount.prefix}</span>
+                        <button
+                          type="button"
+                          className="cw-btn"
+                          disabled={disconnect.isPending}
+                          onClick={() => disconnect.mutate(mount.id)}
+                        >
+                          {t('workspace.connect.disconnect', 'Disconnect')}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <strong style={{ fontSize: 13, display: 'block', margin: existingConnections.length > 0 ? '12px 0 0' : 0 }}>
+                  {t('workspace.addConnection')}
+                </strong>
                 {selectedGuide && (
                   <div className="cw-ws-add-tabs" aria-label={t('workspace.connect.tabs.label')}>
                     <button
@@ -351,10 +400,10 @@ function AddSourceDialog({
                 )}
                 {mode === 'guide' && selectedGuide ? (
                   <GuideBody guide={selectedGuide} />
-                ) : selected.id === 'notion' ? (
-                  <NotionMountForm existingMount={existingMount} onConnected={onClose} />
+                ) : selected.type === 'notion' ? (
+                  <NotionMountForm onCreated={handleMountCreated} />
                 ) : (
-                  <S3MountForm existingMount={existingMount} onConnected={onClose} />
+                  <S3MountForm onCreated={handleMountCreated} />
                 )}
               </>
             ) : (
@@ -407,7 +456,7 @@ function AddSourceDialog({
                   <button
                     type="button"
                     className="cw-btn-primary"
-                    onClick={handleConnect}
+                    onClick={handleMockConnect}
                   >
                     {selectedConnected ? t('workspace.connect.open') : t('workspace.connect.action')}
                   </button>
@@ -421,46 +470,55 @@ function AddSourceDialog({
   );
 }
 
-export function SourceRail({ activeSourceId }: SourceRailProps) {
+export function SourceRail({ activeSourceId, onOpenSource }: SourceRailProps) {
   const { t } = useTranslation('files');
-  const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [dialogSourceId, setDialogSourceId] = useState<string | null>(null);
-  const [hideUnconnected, setHideUnconnected] = useState(false);
+  const [dialogInitialType, setDialogInitialType] = useState<SourceType | null>(null);
   const [connectedIds, setConnectedIds] = useState<Set<string>>(() => readConnectedSourceIds());
   const allProviders = useProviders();
+  const hintCandidates = useUnconnectedCatalog(connectedIds);
 
+  // Rail = connections only. A provider (real instance or mock-connected
+  // catalog entry) renders iff `isProviderConnected` — disconnected catalog
+  // placeholders (including the s3/notion static entries, already excluded
+  // from `useProviders()`) never reach the rail.
   const providersByCategory = (category: SourceCatalogCategory): SourceProvider[] =>
-    allProviders.filter((p) => p.category === category)
-      .filter((provider) => !hideUnconnected || isProviderConnected(provider, connectedIds));
+    allProviders
+      .filter((p) => p.category === category)
+      .filter((provider) => isProviderConnected(provider, connectedIds));
   const knowledgeProviders = allProviders.filter((provider) => provider.category === 'knowledge');
 
-  function openAddDialog(sourceId: string | null = null) {
-    setDialogSourceId(sourceId);
+  // Discovery hint: stable within a ~60s window (never re-rolled every
+  // render), hidden entirely once there is nothing left to suggest.
+  const hintProvider =
+    hintCandidates.length > 0
+      ? hintCandidates[Math.floor(Date.now() / 60000) % hintCandidates.length]
+      : null;
+
+  function openAddDialog(type: SourceType | null = null) {
+    setDialogInitialType(type);
     setDialogOpen(true);
   }
 
-  function handleConnect(provider: SourceProvider) {
+  function handleMockConnect(provider: SourceProvider) {
     const next = new Set(connectedIds);
     next.add(provider.id);
     setConnectedIds(next);
     writeConnectedSourceIds(next);
     setDialogOpen(false);
-    navigate({
-      to: '/workspace/$sourceId',
-      params: { sourceId: provider.id },
-    });
+    onOpenSource(provider.id);
   }
 
   return (
     <>
-      {/* "All sources" button — navigates to /workspace (no sourceId) */}
-      <Link
-        to="/workspace"
+      {/* "All sources" button — internal state, no navigation in this variant. */}
+      <button
+        type="button"
         className={`cw-ws-rail-all${activeSourceId == null ? ' is-active' : ''}`}
+        onClick={() => onOpenSource(null)}
       >
         {t('workspace.all')}
-      </Link>
+      </button>
 
       <div className="cw-ws-rail-group-label">{t('workspace.groups.sources')}</div>
       {SOURCE_CATEGORIES.map(({ key, labelKey }) => {
@@ -470,32 +528,19 @@ export function SourceRail({ activeSourceId }: SourceRailProps) {
           <div key={key}>
             <div className="cw-ws-rail-cat">{t(labelKey)}</div>
             {providers.map((provider) => (
-              isProviderConnected(provider, connectedIds) ? (
-                <Link
-                  key={provider.id}
-                  to="/workspace/$sourceId"
-                  params={{ sourceId: provider.id }}
-                  className={`cw-ws-rail-row${activeSourceId === provider.id ? ' is-active' : ''}`}
-                >
-                  <SourceIcon sourceId={provider.id} size={18} />
-                  <span className="cw-ws-rail-row-name">{t(provider.nameKey)}</span>
-                  <span className="cw-ws-rail-badge">
-                    {provider.count != null ? provider.count : '—'}
-                  </span>
-                </Link>
-              ) : (
-                <button
-                  type="button"
-                  key={provider.id}
-                  className="cw-ws-rail-row is-unconnected"
-                  onClick={() => openAddDialog(provider.id)}
-                >
-                  <SourceIcon sourceId={provider.id} size={18} />
-                  <span className="cw-ws-rail-row-name">{t(provider.nameKey)}</span>
-                  <span className="cw-ws-rail-badge">{t('workspace.connect.cta')}</span>
-                </button>
-              ))
-            )}
+              <button
+                type="button"
+                key={provider.id}
+                className={`cw-ws-rail-row${activeSourceId === provider.id ? ' is-active' : ''}`}
+                onClick={() => onOpenSource(provider.id)}
+              >
+                <SourceIcon sourceId={provider.type} size={18} />
+                <span className="cw-ws-rail-row-name">{provider.label ?? t(provider.nameKey)}</span>
+                <span className="cw-ws-rail-badge">
+                  {provider.count != null ? provider.count : '—'}
+                </span>
+              </button>
+            ))}
           </div>
         );
       })}
@@ -504,34 +549,40 @@ export function SourceRail({ activeSourceId }: SourceRailProps) {
         <div className="cw-ws-rail-knowledge">
           <div className="cw-ws-rail-group-label">{t('workspace.groups.knowledge')}</div>
           {knowledgeProviders.map((provider) => (
-            <Link
+            <button
+              type="button"
               key={provider.id}
-              to="/workspace/$sourceId"
-              params={{ sourceId: provider.id }}
               className={`cw-ws-rail-row cw-ws-rail-row-knowledge${activeSourceId === provider.id ? ' is-active' : ''}`}
+              onClick={() => onOpenSource(provider.id)}
             >
-              <SourceIcon sourceId={provider.id} size={18} />
-              <span className="cw-ws-rail-row-name">{t(provider.nameKey)}</span>
+              <SourceIcon sourceId={provider.type} size={18} />
+              <span className="cw-ws-rail-row-name">{provider.label ?? t(provider.nameKey)}</span>
               <span className="cw-ws-rail-badge">
                 {provider.count != null ? provider.count : '—'}
               </span>
-            </Link>
+            </button>
           ))}
         </div>
       )}
 
-      <label className="cw-ws-rail-toggle" style={{ marginTop: 'auto' }}>
-        <input
-          type="checkbox"
-          checked={hideUnconnected}
-          onChange={(event) => setHideUnconnected(event.target.checked)}
-        />
-        <span>{t('workspace.hideUnconnected')}</span>
-      </label>
+      {hintProvider && (
+        <button
+          type="button"
+          className="cw-ws-rail-row"
+          style={{ marginTop: 'auto', fontStyle: 'italic', color: 'var(--cw-fg-4)' }}
+          onClick={() => openAddDialog(hintProvider.type)}
+        >
+          <SourceIcon sourceId={hintProvider.type} size={16} />
+          <span className="cw-ws-rail-row-name">
+            {t('workspace.connect.hint', { name: t(hintProvider.nameKey) })}
+          </span>
+        </button>
+      )}
 
       {/* Add source button */}
       <button
         className="cw-ws-rail-add"
+        style={hintProvider ? undefined : { marginTop: 'auto' }}
         onClick={() => openAddDialog()}
       >
         <span aria-hidden="true">＋</span> {t('workspace.addSource')}
@@ -540,9 +591,10 @@ export function SourceRail({ activeSourceId }: SourceRailProps) {
       {dialogOpen && (
         <AddSourceDialog
           connectedIds={connectedIds}
-          initialSourceId={dialogSourceId}
+          initialType={dialogInitialType}
           onClose={() => setDialogOpen(false)}
-          onConnect={handleConnect}
+          onMockConnect={handleMockConnect}
+          onOpenSource={onOpenSource}
         />
       )}
     </>

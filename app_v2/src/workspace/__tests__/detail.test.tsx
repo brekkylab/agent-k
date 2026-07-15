@@ -20,9 +20,10 @@ vi.mock('@/stores/workspace', () => ({
   getWorkspaceId: vi.fn(() => 'test-wid'),
   setWorkspaceId: vi.fn(),
 }));
-// Provider registry mock — each test installs its own detail() behavior
-vi.mock('@/workspace/providers', () => ({
-  getProvider: vi.fn(),
+// Provider resolution mock — DetailPanel resolves the mount-aware provider via
+// useProvider(); each test installs its own detail() behavior.
+vi.mock('@/workspace/hooks/useProviders', () => ({
+  useProvider: vi.fn(),
 }));
 // Lightbox mock — the real modal pulls in pdfjs (needs DOMMatrix, absent in
 // jsdom) and its internals are covered elsewhere; here we only care that the
@@ -32,7 +33,7 @@ vi.mock('@/components/FilePreviewModal', () => ({
 }));
 
 import { deleteEntry } from '@/api/workspace';
-import { getProvider } from '@/workspace/providers';
+import { useProvider } from '@/workspace/hooks/useProviders';
 import { DetailPanel } from '../components/DetailPanel';
 import type { SourceDetail, SourceEntry, SourceProvider } from '../types';
 
@@ -58,14 +59,14 @@ function installProvider(
     recent: vi.fn().mockResolvedValue([]),
     detail: vi.fn().mockResolvedValue(detail),
   };
-  (getProvider as ReturnType<typeof vi.fn>).mockImplementation((pid: string) =>
+  (useProvider as ReturnType<typeof vi.fn>).mockImplementation((pid: string) =>
     pid === id ? provider : undefined,
   );
   return provider;
 }
 
 beforeEach(() => {
-  vi.mocked(getProvider).mockReset();
+  vi.mocked(useProvider).mockReset();
   vi.mocked(deleteEntry).mockClear();
 });
 
