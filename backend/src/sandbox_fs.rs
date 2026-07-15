@@ -1,20 +1,91 @@
-//! Sandbox VFS frontend — exposes the [`Vfs`](crate::vfs::Vfs) core to an
-//! in-guest FUSE forwarder so a sandboxed agent can read mounts as real files.
+//! In-guest FUSE forwarder bootstrap — the production counterpart of the e2e
+//! test. Injects the cross-built forwarder ELF into a sandbox, starts it, and
+//! mounts the VFS inside the guest so the agent reads mounts as real files.
 //!
-//! Vendored/adapted from ailoy's `src/vfs/sandbox/` (61c4c43). This first step
-//! ports only the host-side forward server ([`VfsForward`]) — a tiny HTTP server
-//! with **no microsandbox coupling**, hence no environment risk. The guest
-//! binary injection + session run-loop wiring (ailoy's `guest.rs` / `AgentVfs`)
-//! land in later steps and must be adapted to agent-k's ailoy `Console` API.
-mod forward;
-mod fwdfs;
-mod guest;
+//! Adapted from ailoy's `src/vfs/sandbox/guest.rs`, retargeted onto agent-k's
+//! ailoy `Console` API (`write` + `exec_shell`).
 
-pub use forward::VfsForward;
-pub use fwdfs::{ForwardFs, FwdEntry, FwdStat};
-pub(crate) use fwdfs::secs_since_epoch;
-pub use guest::{forwarder_available, mount_vfs_in_guest};
+use std::path::Path;
+use std::sync::Arc;
 
+use ailoy::runenv::Console;
+
+use workspace::{ForwardFs, VfsForward};
+
+/// Guest path the forwarder binary is written to.
+const GUEST_FWD_BIN: &str = "/opt/ailoy/vfs-fwd";
+
+/// The static in-guest FUSE forwarder ELF, cross-compiled for the guest arch by
+/// [`build.rs`](../../../build.rs). Empty if the build couldn't produce it (e.g.
+/// the `…-linux-musl` target isn't installed) — [`mount_vfs_in_guest`] then
+/// errors clearly instead of silently doing nothing.
+const FORWARDER_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ailoy-vfs-fwd"));
+
+/// Whether an in-guest forwarder ELF was built into this binary.
+pub fn forwarder_available() -> bool {
+    !FORWARDER_ELF.is_empty()
+}
+
+/// Spawn a host forward server for `fs`, inject + start the in-guest FUSE
+/// forwarder in `console`'s sandbox, and mount the filesystem at `mount_root`
+/// inside the guest. Returns the live [`VfsForward`] — keep it alive as long as
+/// the mount is needed; dropping it tears the host server down. Blocks until the
+/// mount appears in the guest's `/proc/mounts`.
+///
+/// `fs` is any [`ForwardFs`]: a provider-only [`Vfs`](workspace::Vfs) or the
+/// unified `WorkspaceFs`. The guest reaches the host forward server via
+/// `host.microsandbox.internal:<port>`, so the sandbox must have been built with
+/// host egress allowed (`SandboxBuilder::allow_host_egress(true)`).
+pub async fn mount_vfs_in_guest(
+    console: &impl Console,
+    fs: Arc<dyn ForwardFs>,
+    mount_root: &str,
+) -> anyhow::Result<VfsForward> {
+    if !forwarder_available() {
+        anyhow::bail!(
+            "in-guest VFS forwarder was not built into this binary \
+             (see backend/build.rs; is the <arch>-unknown-linux-musl target installed?)"
+        );
+    }
+
+    let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current())?;
+    console
+        .write(Path::new(GUEST_FWD_BIN), FORWARDER_ELF)
+        .await?;
+
+    let port = fwd.port();
+    let token = fwd.token();
+    // Detach any stale mount first (e.g. a dead forwarder left the mountpoint in
+    // "Transport endpoint is not connected"), then start the forwarder in its own
+    // session so it survives this exec, and wait for the mount to appear.
+    let script = format!(
+        r#"set -e
+mkdir -p /opt/ailoy
+umount -l {mount_root} 2>/dev/null || fusermount3 -u {mount_root} 2>/dev/null || true
+mkdir -p {mount_root}
+chmod +x {GUEST_FWD_BIN}
+export VFS_HOST="http://host.microsandbox.internal:{port}"
+export VFS_TOKEN="{token}"
+setsid sh -c '{GUEST_FWD_BIN} {mount_root} </dev/null >/tmp/ailoy-vfs.log 2>&1' </dev/null >/dev/null 2>&1 &
+for _ in $(seq 1 100); do
+  if grep -q " {mount_root} " /proc/mounts 2>/dev/null; then exit 0; fi
+  sleep 0.1
+done
+echo "forwarder mount did not appear at {mount_root}" >&2
+cat /tmp/ailoy-vfs.log >&2 2>/dev/null || true
+exit 1
+"#
+    );
+    let out = console.exec_shell(script, Some(30)).await?;
+    if out.exit_code != 0 {
+        anyhow::bail!(
+            "in-guest forwarder mount failed (exit {}): {}",
+            out.exit_code,
+            out.stderr.trim()
+        );
+    }
+    Ok(fwd)
+}
 #[cfg(test)]
 mod e2e {
     //! In-VM checks for the unified FUSE mount. Boots a sandbox VM, injects the
@@ -25,12 +96,11 @@ mod e2e {
     //! (for the Notion read) `NOTION_API_KEY`:
     //!
     //!   NOTION_API_KEY=ntn_… cargo test -p agent-k-backend unified_workspace_readable_in_guest -- --ignored --nocapture
-    use std::path::Path;
     use std::sync::Arc;
 
     use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder, SandboxNetwork};
 
-    use crate::vfs::{MountSpec, NotionConfig, ProviderConfig, Vfs, VfsConfig, VfsForward};
+    use ::workspace::{MountSpec, NotionConfig, ProviderConfig, Vfs, VfsConfig, VfsForward};
 
     // Multi-thread runtime so the host forward server's accept loop is driven on
     // its own worker while the test awaits long-running guest execs.
@@ -51,7 +121,7 @@ mod e2e {
 
         // A forward server over an empty workspace is enough — we only probe reachability.
         let data_root = tempfile::tempdir().expect("tempdir");
-        let fs: Arc<dyn crate::vfs::ForwardFs> =
+        let fs: Arc<dyn ::workspace::ForwardFs> =
             Arc::new(crate::state::workspace_fs(data_root.path(), uuid::Uuid::new_v4(), None));
         let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn");
         let port = fwd.port();
@@ -117,7 +187,7 @@ done
         }
         // A forward server over an empty workspace is enough — we only probe reachability.
         let data_root = tempfile::tempdir().expect("tempdir");
-        let fs: Arc<dyn crate::vfs::ForwardFs> =
+        let fs: Arc<dyn ::workspace::ForwardFs> =
             Arc::new(crate::state::workspace_fs(data_root.path(), uuid::Uuid::new_v4(), None));
         let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn");
         let port = fwd.port();
@@ -220,7 +290,7 @@ done
 
         let ws_fs =
             crate::state::workspace_fs(data_root.path(), wid, Some(vfs.clone()));
-        let unified: Arc<dyn crate::vfs::ForwardFs> = Arc::new(ws_fs);
+        let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(ws_fs);
 
         let mut sandbox = SandboxBuilder::new()
             .image("brekkylab/agent-k-libreoffice:latest")

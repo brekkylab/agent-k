@@ -20,10 +20,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use ::workspace::{NotionConfig, ProviderConfig, S3Config};
+
 use crate::{
     auth::AuthUser,
     state::{AppState, WorkspaceMount},
-    vfs::{NotionConfig, ProviderConfig, S3Config},
 };
 
 use super::{error::ApiError, error::err, workspace::require_owned_workspace};

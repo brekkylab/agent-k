@@ -24,6 +24,7 @@ use futures_util::{Stream, StreamExt as _, stream};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
 
+use crate::hook::{FsEvent, FsHook};
 use crate::vfs::sandbox::{ForwardFs, FwdEntry, FwdStat, secs_since_epoch};
 use crate::vfs::{FileKind, FileStat, Resource, VPath, Vfs, VfsError};
 
@@ -208,32 +209,6 @@ impl From<VfsError> for FsError {
     }
 }
 
-/// True when `rel_path` lives under the `knowledge/` directory. Component-wise
-/// match on the leading dir: `knowledge/x` hits, `knowledgebase/x` does not.
-fn is_knowledge(rel_path: &str) -> bool {
-    rel_path.trim_start_matches('/').starts_with("knowledge/")
-}
-
-// Side-processing for `knowledge/` mutations. Stubs for now: the real ingestion
-// (parsing, indexing into / dropping from the knowledge store) lands later;
-// today they only log. `path` is the absolute on-disk path of the affected file.
-
-/// A *new* file appeared (a write/copy/move landing at a previously-absent path).
-fn knowledge_inserted(wid: Uuid, path: &Path) {
-    tracing::info!("insert_knowledge (workspace={wid}, path={})", path.display());
-}
-
-/// An existing file was overwritten in place.
-fn knowledge_updated(wid: Uuid, path: &Path) {
-    tracing::info!("update_knowledge (workspace={wid}, path={})", path.display());
-}
-
-/// A file left `knowledge/` (a delete, or a move whose source was under it).
-/// The file is already gone from disk; `path` is where it lived.
-fn knowledge_removed(wid: Uuid, path: &Path) {
-    tracing::info!("remove_knowledge (workspace={wid}, path={})", path.display());
-}
-
 /// One entry yielded by [`WorkspaceFs::read_dir`]. Metadata is captured eagerly
 /// at listing time.
 pub struct DirEntry {
@@ -260,12 +235,15 @@ pub type DirStream = Pin<Box<dyn Stream<Item = FsResult<DirEntry>> + Send>>;
 /// be reported to the workspace's side-processing.
 struct Observer {
     wid: Uuid,
-    /// Absolute on-disk path of the file, for the knowledge handlers.
-    path: PathBuf,
-    /// Whether the file already existed when opened — distinguishes an insert
+    /// Workspace-relative path of the file, for the change event.
+    rel: String,
+    /// Whether the file already existed when opened — distinguishes a create
     /// from an overwrite at flush time.
     existed: bool,
     wrote: bool,
+    /// The workspace's fs hook, cloned at open time so `flush` can report the
+    /// completed write without reaching back into the [`WorkspaceFs`].
+    hook: Option<Arc<dyn FsHook>>,
 }
 
 /// An open workspace file: either a local on-disk file or a read-only view onto
@@ -397,10 +375,13 @@ impl File {
                 {
                     // Clear first so a second flush on the same handle won't re-report.
                     o.wrote = false;
-                    if o.existed {
-                        knowledge_updated(o.wid, &o.path);
-                    } else {
-                        knowledge_inserted(o.wid, &o.path);
+                    if let Some(h) = &o.hook {
+                        let ev = if o.existed {
+                            FsEvent::Modified(&o.rel)
+                        } else {
+                            FsEvent::Created(&o.rel)
+                        };
+                        h.on_change(o.wid, ev);
                     }
                 }
                 Ok(())
@@ -421,22 +402,39 @@ pub struct WorkspaceFs {
     /// External-provider mounts, if any. Paths under a mount prefix are served
     /// by the provider (read-only); every other path stays on local disk.
     vfs: Option<Arc<Vfs>>,
+    /// Change hook, injected by the host. `None` fires nothing.
+    hook: Option<Arc<dyn FsHook>>,
 }
 
 impl WorkspaceFs {
-    pub(super) fn new(root: PathBuf, wid: Uuid) -> Self {
+    /// A workspace filesystem rooted at `root` (the workspace's local file tree)
+    /// with no provider mounts and no change hook.
+    pub fn new(root: PathBuf, wid: Uuid) -> Self {
         Self {
             root,
             wid,
             vfs: None,
+            hook: None,
         }
     }
 
     /// Attach a set of external-provider mounts. Paths under a mount prefix are
     /// routed to the provider; all others stay local. `None` clears mounts.
-    pub(super) fn with_vfs(mut self, vfs: Option<Arc<Vfs>>) -> Self {
+    pub fn with_vfs(mut self, vfs: Option<Arc<Vfs>>) -> Self {
         self.vfs = vfs;
         self
+    }
+
+    /// Attach an [`FsHook`] fired on every local-file mutation. `None` clears it.
+    pub fn with_hook(mut self, hook: Option<Arc<dyn FsHook>>) -> Self {
+        self.hook = hook;
+        self
+    }
+
+    fn fire(&self, event: FsEvent<'_>) {
+        if let Some(h) = &self.hook {
+            h.on_change(self.wid, event);
+        }
     }
 
     /// Route a workspace-relative path to the mount that owns it, if any.
@@ -575,13 +573,14 @@ impl WorkspaceFs {
             .open(&path)
             .await
             .map_err(FsError::from)?;
-        // Only knowledge writes need observing; the flush hook then reports an
-        // insert or update without re-classifying.
-        let observer = (is_write && is_knowledge(rel_path)).then_some(Observer {
+        // Observe every write when a hook is attached; the flush then reports a
+        // create or modify.
+        let observer = (is_write && self.hook.is_some()).then_some(Observer {
             wid: self.wid,
-            path,
+            rel: rel_path.to_string(),
             existed,
             wrote: false,
+            hook: self.hook.clone(),
         });
         Ok(File::Local(LocalFile {
             file,
@@ -609,18 +608,19 @@ impl WorkspaceFs {
         }
         tokio::fs::remove_dir(self.resolve(rel_path))
             .await
-            .map_err(FsError::from)
+            .map_err(FsError::from)?;
+        self.fire(FsEvent::Removed(rel_path));
+        Ok(())
     }
 
     pub async fn remove_file(&self, rel_path: &str) -> FsResult<()> {
         if self.route(rel_path).is_some() {
             return Err(FsError::Forbidden);
         }
-        let path = self.resolve(rel_path);
-        tokio::fs::remove_file(&path).await.map_err(FsError::from)?;
-        if is_knowledge(rel_path) {
-            knowledge_removed(self.wid, &path);
-        }
+        tokio::fs::remove_file(self.resolve(rel_path))
+            .await
+            .map_err(FsError::from)?;
+        self.fire(FsEvent::Removed(rel_path));
         Ok(())
     }
 
@@ -638,17 +638,13 @@ impl WorkspaceFs {
         rename_compat(&from_path, &to_path)
             .await
             .map_err(FsError::from)?;
-        // The source path left `knowledge/`; the destination arrived in it.
-        if is_knowledge(from) {
-            knowledge_removed(self.wid, &from_path);
-        }
-        if is_knowledge(to) {
-            if to_existed {
-                knowledge_updated(self.wid, &to_path);
-            } else {
-                knowledge_inserted(self.wid, &to_path);
-            }
-        }
+        // The source path is gone; the destination arrived (fresh or replaced).
+        self.fire(FsEvent::Removed(from));
+        self.fire(if to_existed {
+            FsEvent::Modified(to)
+        } else {
+            FsEvent::Created(to)
+        });
         Ok(())
     }
 
@@ -663,13 +659,11 @@ impl WorkspaceFs {
         tokio::fs::copy(&from_path, &to_path)
             .await
             .map_err(FsError::from)?;
-        if is_knowledge(to) {
-            if to_existed {
-                knowledge_updated(self.wid, &to_path);
-            } else {
-                knowledge_inserted(self.wid, &to_path);
-            }
-        }
+        self.fire(if to_existed {
+            FsEvent::Modified(to)
+        } else {
+            FsEvent::Created(to)
+        });
         Ok(())
     }
 }
@@ -1065,8 +1059,7 @@ mod tests {
     use futures_util::StreamExt;
     use uuid::Uuid;
 
-    use super::{File, OpenOptions, ReadDirMeta, WorkspaceFs};
-    use crate::state::FsError;
+    use super::{File, FsError, OpenOptions, ReadDirMeta, WorkspaceFs};
     use crate::vfs::{
         DirEntry as VfsDirEntry, FileKind, FileStat, Mount, Resource, VPath, Vfs, VfsError,
         VfsResult,

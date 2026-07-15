@@ -23,9 +23,10 @@ use futures_util::StreamExt;
 use uuid::Uuid;
 
 use crate::auth::authenticate;
-use crate::state::{
-    AppState, DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError,
-    OpenOptions as WsOpenOptions, ReadDirMeta as WsReadDirMeta, Stat, WorkspaceFs,
+use crate::state::AppState;
+use workspace::{
+    DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError, OpenOptions as WsOpenOptions,
+    ReadDirMeta as WsReadDirMeta, Stat, WorkspaceFs,
 };
 
 /// WebDAV workspace router. Mounted by [`super::get_router`] at
