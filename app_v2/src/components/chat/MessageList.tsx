@@ -14,7 +14,7 @@ export function MessageList({ entries, running }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   // Subscribe to language changes so timestamps re-render on toggle (not just
   // after a refresh); the value is passed into the date formatters below.
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation('session');
   const lng = i18n.language;
 
   // Auto-scroll to bottom when new entries arrive or the run status toggles
@@ -65,7 +65,7 @@ export function MessageList({ entries, running }: MessageListProps) {
         {running && (
           <div className="cw-typing" aria-live="polite">
             <span className="cw-status-dot cw-status-dot--connected" aria-hidden="true" />
-            <span className="cw-status-running">AI is responding…</span>
+            <span className="cw-status-running">{t('ui.ai_responding')}</span>
           </div>
         )}
         <div ref={bottomRef} />
