@@ -43,6 +43,16 @@ function SessionRow({
   const [deletePending, setDeletePending] = useState(false);
   const [removing, setRemoving] = useState(false);
   const menuRef = useRef<HTMLSpanElement>(null);
+  const removeTimerRef = useRef<number | null>(null);
+
+  // Cancel the pending post-animation removal if the row unmounts first (e.g. a
+  // concurrent ['sessions'] refetch drops it), so the timer can't fire a stale
+  // cache write afterwards.
+  useEffect(() => {
+    return () => {
+      if (removeTimerRef.current !== null) window.clearTimeout(removeTimerRef.current);
+    };
+  }, []);
 
   // Close the ⋯ menu on any click outside it (standard dropdown dismissal).
   useEffect(() => {
@@ -106,11 +116,13 @@ function SessionRow({
     setRemoving(true);
     // If the open session was the one deleted, leave its (now-404) route.
     if (isActive) void navigate({ to: '/' });
-    window.setTimeout(() => {
+    // Drop the row from the cache once the exit animation has played. The
+    // server delete already succeeded and this local filter reflects it, so no
+    // refetch is needed. Tracked in a ref so an early unmount can cancel it.
+    removeTimerRef.current = window.setTimeout(() => {
       qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
         list?.filter((s) => s.id !== session.id),
       );
-      void qc.invalidateQueries({ queryKey: ['sessions'] });
     }, REMOVE_ANIM_MS);
   }
 
