@@ -269,6 +269,13 @@ impl SessionsState {
         let events = self.events.clone();
         tokio::spawn(async move {
             let title = crate::services::session_title::generate_session_title(&first_text).await;
+            // A markdown-only first message (e.g. "###") sanitizes to "" and the
+            // fallback is empty too. Persisting "" would leave a non-null but
+            // blank title — an empty title bar with no shimmer/fallback. Skip
+            // the write so the title stays NULL and can be regenerated later.
+            if title.trim().is_empty() {
+                return;
+            }
             // Gate on `title IS NULL`: the inline `needs_title` precheck ran
             // before the (slow) LLM call, so a manual rename (`set_title`) may
             // have landed since. Writing conditionally means we only ever fill
