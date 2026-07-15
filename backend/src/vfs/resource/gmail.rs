@@ -578,31 +578,85 @@ fn header(raw: &Value, name: &str) -> String {
         .to_string()
 }
 
-/// Recursively decode the first text/plain body part.
+/// Readable text body from a payload: prefers `text/plain`, falling back to a
+/// `text/html` part stripped to text (see [`html_to_text`]) for HTML-only mail.
 fn decode_body(payload: &Value) -> String {
-    if payload.get("mimeType").and_then(|m| m.as_str()) == Some("text/plain")
+    if let Some(plain) = find_part(payload, "text/plain") {
+        return plain;
+    }
+    if let Some(html) = find_part(payload, "text/html") {
+        return html_to_text(&html);
+    }
+    String::new()
+}
+
+/// Depth-first search for the first part of `mime` whose body decodes to
+/// non-empty text. `None` if no such part exists (or its base64 is invalid).
+fn find_part(payload: &Value, mime: &str) -> Option<String> {
+    if payload.get("mimeType").and_then(|m| m.as_str()) == Some(mime)
         && let Some(data) = payload
             .get("body")
             .and_then(|b| b.get("data"))
             .and_then(|d| d.as_str())
         && !data.is_empty()
+        && let Some(text) = decode_b64url_str(data)
+        && !text.trim().is_empty()
     {
-        let trimmed = data.trim_end_matches('=');
-        if let Ok(bytes) =
-            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, trimmed)
-        {
-            return String::from_utf8_lossy(&bytes).into_owned();
-        }
+        return Some(text);
     }
     if let Some(parts) = payload.get("parts").and_then(|p| p.as_array()) {
         for part in parts {
-            let t = decode_body(part);
-            if !t.is_empty() {
-                return t;
+            if let Some(t) = find_part(part, mime) {
+                return Some(t);
             }
         }
     }
-    String::new()
+    None
+}
+
+/// Decode a Gmail base64url body payload to a (lossy) UTF-8 string, tolerating
+/// missing padding. `None` only if the base64 itself is invalid.
+fn decode_b64url_str(data: &str) -> Option<String> {
+    let trimmed = data.trim_end_matches('=');
+    base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, trimmed)
+        .ok()
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// HTML → plain text for an email body, via `html2text` (html5ever-backed):
+/// drops `<script>`/`<style>`, decodes entities, tolerates malformed markup.
+/// `raw_mode` linearises the layout tables marketing emails are built from
+/// (single column, no borders/padding) so they don't become token noise;
+/// `TrivialDecorator` keeps it markup-free and `&nbsp;` becomes a space. A
+/// final [`tidy_lines`] pass trims trailing space and collapses blank runs.
+fn html_to_text(html: &str) -> String {
+    let rendered = html2text::config::with_decorator(html2text::render::TrivialDecorator::new())
+        .raw_mode(true)
+        .string_from_read(html.as_bytes(), 10_000)
+        .unwrap_or_default()
+        .replace('\u{a0}', " ");
+    tidy_lines(&rendered)
+}
+
+/// General whitespace hygiene on the rendered text: trim each line's trailing
+/// space and collapse runs of blank lines to a single separator.
+fn tidy_lines(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut pending_blank = false;
+    for line in s.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            pending_blank = true;
+            continue;
+        }
+        if pending_blank && !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+        out.push('\n');
+        pending_blank = false;
+    }
+    out.trim_end().to_string()
 }
 
 fn parse_address(raw: &str) -> Value {
@@ -926,6 +980,73 @@ mod tests {
             let days = days_from_civil(y, m, d);
             assert_eq!(civil_from_days(days), (y, m as u32, d as u32));
         }
+    }
+
+    #[test]
+    fn html_to_text_strips_scripts_styles_and_decodes() {
+        let html = "<html><head>\
+            <style>.x{color:red}</style>\
+            <script>alert('nope')</script></head><body>\
+            <p>Hello&nbsp;<b>World</b></p>\
+            <div>line2 &amp; more &#39;quoted&#39;</div>\
+            <!-- drop me --></body></html>";
+        let t = html_to_text(html);
+        assert!(t.contains("Hello World"), "got: {t:?}");
+        assert!(t.contains("line2 & more 'quoted'"), "got: {t:?}");
+        assert!(!t.contains("color:red"), "style content must be dropped: {t:?}");
+        assert!(!t.contains("alert"), "script content must be dropped: {t:?}");
+        assert!(!t.contains("drop me"), "comments must be dropped: {t:?}");
+        assert!(!t.contains('<'), "tags must be stripped: {t:?}");
+    }
+
+    #[test]
+    fn html_to_text_linearises_tables_without_border_noise() {
+        // Marketing emails are built from layout tables; `raw_mode` must render
+        // them as linear text — no box-drawing borders, cell padding, or blank
+        // runs (all pure token noise for the agent).
+        let html = "<table><tr><td>Line A</td></tr><tr><td>Line B</td></tr></table>";
+        let t = html_to_text(html);
+        assert_eq!(t, "Line A\nLine B", "got: {t:?}");
+        assert!(
+            !t.chars().any(|c| ('\u{2500}'..='\u{257f}').contains(&c)),
+            "table-border box chars leaked: {t:?}"
+        );
+    }
+
+    #[test]
+    fn html_to_text_preserves_utf8_and_survives_malformed() {
+        // Non-ASCII text is preserved; an unclosed tag doesn't panic.
+        assert_eq!(html_to_text("<p>안녕 <b>세계"), "안녕 세계");
+        assert_eq!(html_to_text("plain, no tags"), "plain, no tags");
+        assert_eq!(html_to_text(""), "");
+    }
+
+    #[test]
+    fn decode_body_prefers_plain_then_falls_back_to_html() {
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+
+        // text/plain present → used verbatim (html ignored).
+        let both = json!({
+            "mimeType": "multipart/alternative",
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": b64("plain body")}},
+                {"mimeType": "text/html",  "body": {"data": b64("<p>html body</p>")}},
+            ]
+        });
+        assert_eq!(decode_body(&both).trim(), "plain body");
+
+        // html-only → stripped to text.
+        let html_only = json!({
+            "mimeType": "multipart/alternative",
+            "parts": [
+                {"mimeType": "text/html", "body": {"data": b64("<p>only <i>html</i></p>")}},
+            ]
+        });
+        assert_eq!(decode_body(&html_only).trim(), "only html");
+
+        // neither → empty.
+        let none = json!({ "mimeType": "multipart/mixed", "parts": [] });
+        assert_eq!(decode_body(&none), "");
     }
 
     #[test]
