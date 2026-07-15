@@ -110,6 +110,8 @@ pub struct MountResponse {
     pub workspace_id: Uuid,
     pub prefix: String,
     pub provider: ProviderInfo,
+    /// User-chosen display name, if any (distinct from `prefix`).
+    pub label: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -121,6 +123,7 @@ impl From<WorkspaceMount> for MountResponse {
             workspace_id: m.workspace_id,
             prefix: m.prefix,
             provider: ProviderInfo::from(&m.provider),
+            label: m.label,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
@@ -139,6 +142,9 @@ pub struct CreateMountRequest {
     /// single absolute segment.
     pub prefix: String,
     pub provider: ProviderSpec,
+    /// Optional display name; falls back to the prefix when omitted.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// `GET /workspaces/{wid}/mounts` — list the workspace's mounts.
@@ -166,7 +172,8 @@ pub(super) async fn create_mount(
     Json(payload): Json<CreateMountRequest>,
 ) -> Result<(StatusCode, Json<MountResponse>), ApiError> {
     require_owned_workspace(&state, &auth, wid).await?;
-    let mount = WorkspaceMount::new(wid, payload.prefix, payload.provider.into());
+    let mut mount = WorkspaceMount::new(wid, payload.prefix, payload.provider.into());
+    mount.label = payload.label;
     let created = state.workspaces.create_mount(mount).await?;
     Ok((StatusCode::CREATED, Json(MountResponse::from(created))))
 }

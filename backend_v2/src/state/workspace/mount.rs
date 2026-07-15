@@ -17,7 +17,7 @@ use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
 use crate::vfs::{MountSpec, NotionConfig, ProviderConfig, S3Config, Vfs, VfsConfig};
 
 const SELECT_COLUMNS: &str =
-    "id, workspace_id, prefix, provider, config, created_at, updated_at";
+    "id, workspace_id, prefix, provider, config, label, created_at, updated_at";
 
 /// A configured external-provider mount for a workspace.
 #[derive(Clone)]
@@ -28,6 +28,9 @@ pub struct WorkspaceMount {
     pub prefix: String,
     /// Provider kind plus its credentials.
     pub provider: ProviderConfig,
+    /// Optional user-chosen display name, distinct from `prefix`. `None` for
+    /// older rows / callers that don't set one; the UI falls back to the prefix.
+    pub label: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -40,6 +43,7 @@ impl WorkspaceMount {
             workspace_id,
             prefix,
             provider,
+            label: None,
             created_at: now,
             updated_at: now,
         }
@@ -56,6 +60,8 @@ impl WorkspaceMount {
             )?,
             prefix: row.get("prefix"),
             provider: decode_provider(&provider_kind, &config_json)?,
+            // Nullable column (added in 0003); a plain String get would panic on NULL.
+            label: row.get::<Option<String>, _>("label"),
             created_at: parse_ts(
                 &row.get::<String, _>("created_at"),
                 "workspace_mounts.created_at",
@@ -134,14 +140,15 @@ impl WorkspacesState {
         let (provider, config) = mount.encode()?;
         sqlx::query(
             "INSERT INTO workspace_mounts \
-                 (id, workspace_id, prefix, provider, config, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (id, workspace_id, prefix, provider, config, label, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(mount.id.to_string())
         .bind(mount.workspace_id.to_string())
         .bind(&mount.prefix)
         .bind(provider)
         .bind(config)
+        .bind(&mount.label)
         .bind(mount.created_at.to_rfc3339())
         .bind(mount.updated_at.to_rfc3339())
         .execute(&self.db)
