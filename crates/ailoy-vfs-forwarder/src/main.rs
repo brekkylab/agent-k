@@ -386,9 +386,10 @@ impl Inner {
     }
     /// Read-modify-write flush: read current content (unless truncated to empty),
     /// apply truncate, splice the buffered chunks, write the merged result.
-    /// Returns `false` when the existing-content preload failed transiently on a
-    /// file that does exist — the PUT is skipped to preserve the original, and
-    /// the caller maps that to EIO (R1). All legitimate outcomes return `true`.
+    /// Returns `false` (caller maps to EIO) when the existing-content preload
+    /// failed transiently on a file that does exist — the PUT is skipped to
+    /// preserve the original (R1) — or when the PUT itself fails (transport
+    /// error or non-200, e.g. a read-only provider rejecting the write).
     fn put(&self, ino: u64) -> bool {
         let Some(p) = self.wbuf.lock().unwrap().remove(&ino) else {
             return true;
@@ -428,19 +429,22 @@ impl Inner {
             }
             merged[*off as usize..end].copy_from_slice(chunk);
         }
-        if let Ok((200, body)) = http(
+        match http(
             "PUT",
             "/write",
             &format!("path={}", pct(&path)),
             Some(&merged),
         ) {
-            // C4: a `.cmd/<op>` write returns the command result — cache it so a
-            // read of that path returns it (e.g. the new page id).
-            if path.contains("/.cmd/") {
-                self.cmd_results.lock().unwrap().insert(path, body);
+            Ok((200, body)) => {
+                // C4: a `.cmd/<op>` write returns the command result — cache it so a
+                // read of that path returns it (e.g. the new page id).
+                if path.contains("/.cmd/") {
+                    self.cmd_results.lock().unwrap().insert(path, body);
+                }
+                true
             }
+            _ => false,
         }
-        true
     }
 }
 
