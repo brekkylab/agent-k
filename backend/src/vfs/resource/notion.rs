@@ -170,13 +170,12 @@ impl Resource for NotionResource {
                     })
                 } else {
                     // N1: don't blindly report a page dir as existing — verify the
-                    // page is real (render fails → NotFound instead of a Dir whose
-                    // readdir later errors). Reuse the render for the page's times.
+                    // page is real by rendering it (also reused for the times). A
+                    // render failure propagates as a backend error rather than a
+                    // flat NotFound, so a transient rate-limit isn't misreported as
+                    // a missing page.
                     let id = page_id(rest.last().unwrap());
-                    let bytes = self
-                        .render_page_json(&id)
-                        .await
-                        .map_err(|_| VfsError::NotFound)?;
+                    let bytes = self.render_page_json(&id).await?;
                     let (mtime, ctime) = page_times(&bytes);
                     Ok(FileStat {
                         kind: FileKind::Dir,
