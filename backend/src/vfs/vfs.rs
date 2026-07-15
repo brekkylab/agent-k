@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use crate::vfs::{
-    accessor::{NotionConfig, S3Config},
+    accessor::{GmailConfig, NotionConfig, S3Config},
     cache::CachedResource,
     path::VPath,
-    resource::{NotionResource, Resource, S3Resource},
+    resource::{GmailResource, NotionResource, Resource, S3Resource},
 };
 
 /// Per-mount provider configuration (carries credentials, host-only).
@@ -12,6 +12,7 @@ use crate::vfs::{
 pub enum ProviderConfig {
     S3(S3Config),
     Notion(NotionConfig),
+    Gmail(GmailConfig),
 }
 
 /// One mount: a virtual top-level prefix bound to a provider config. The same
@@ -69,6 +70,7 @@ impl Vfs {
             let provider: Arc<dyn Resource> = match spec.provider {
                 ProviderConfig::S3(c) => Arc::new(S3Resource::new(&c)?),
                 ProviderConfig::Notion(c) => Arc::new(NotionResource::new(&c)?),
+                ProviderConfig::Gmail(c) => Arc::new(GmailResource::new(&c)?),
             };
             // Wrap every provider in the metadata index cache so `stat` after a
             // `readdir` (e.g. `ls -la`) is served from memory.

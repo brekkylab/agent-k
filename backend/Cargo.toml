@@ -17,6 +17,7 @@ async-stream = "0.3"
 async-trait = "0.1.89"
 axum = { version = "0.8", features = ["multipart", "ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
+base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4.42", features = ["serde", "clock"] }
 chrono-tz = "0.10"

@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
-use crate::vfs::{MountSpec, NotionConfig, ProviderConfig, S3Config, Vfs, VfsConfig};
+use crate::vfs::{GmailConfig, MountSpec, NotionConfig, ProviderConfig, S3Config, Vfs, VfsConfig};
 
 const SELECT_COLUMNS: &str =
     "id, workspace_id, prefix, provider, config, created_at, updated_at";
@@ -72,6 +72,7 @@ impl WorkspaceMount {
         Ok(match &self.provider {
             ProviderConfig::S3(c) => ("s3", serde_json::to_string(c)?),
             ProviderConfig::Notion(c) => ("notion", serde_json::to_string(c)?),
+            ProviderConfig::Gmail(c) => ("gmail", serde_json::to_string(c)?),
         })
     }
 }
@@ -83,6 +84,9 @@ fn decode_provider(kind: &str, config_json: &str) -> StateResult<ProviderConfig>
             config_json,
         )?)),
         "notion" => Ok(ProviderConfig::Notion(serde_json::from_str::<NotionConfig>(
+            config_json,
+        )?)),
+        "gmail" => Ok(ProviderConfig::Gmail(serde_json::from_str::<GmailConfig>(
             config_json,
         )?)),
         other => Err(StateError::InvalidData(format!(

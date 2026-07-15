@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     state::{AppState, WorkspaceMount},
-    vfs::{NotionConfig, ProviderConfig, S3Config},
+    vfs::{GmailConfig, NotionConfig, ProviderConfig, S3Config},
 };
 
 use super::{error::ApiError, error::err, workspace::require_owned_workspace};
@@ -49,6 +49,13 @@ pub enum ProviderSpec {
     Notion {
         api_key: String,
     },
+    /// Google OAuth credentials whose scope covers Gmail (e.g.
+    /// `https://www.googleapis.com/auth/gmail.modify`).
+    Gmail {
+        client_id: String,
+        client_secret: String,
+        refresh_token: String,
+    },
 }
 
 impl From<ProviderSpec> for ProviderConfig {
@@ -70,6 +77,15 @@ impl From<ProviderSpec> for ProviderConfig {
                 key_prefix,
             }),
             ProviderSpec::Notion { api_key } => ProviderConfig::Notion(NotionConfig { api_key }),
+            ProviderSpec::Gmail {
+                client_id,
+                client_secret,
+                refresh_token,
+            } => ProviderConfig::Gmail(GmailConfig {
+                client_id,
+                client_secret,
+                refresh_token,
+            }),
         }
     }
 }
@@ -88,6 +104,8 @@ pub enum ProviderInfo {
     },
     /// Notion carries only the API token, which is a secret — nothing to show.
     Notion {},
+    /// Gmail carries only OAuth secrets — nothing non-secret to show.
+    Gmail {},
 }
 
 impl From<&ProviderConfig> for ProviderInfo {
@@ -100,6 +118,7 @@ impl From<&ProviderConfig> for ProviderInfo {
                 key_prefix: c.key_prefix.clone(),
             },
             ProviderConfig::Notion(_) => ProviderInfo::Notion {},
+            ProviderConfig::Gmail(_) => ProviderInfo::Gmail {},
         }
     }
 }

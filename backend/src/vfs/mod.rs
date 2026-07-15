@@ -27,7 +27,7 @@ pub mod sandbox;
 #[allow(clippy::module_inception)]
 mod vfs;
 
-pub use accessor::{NotionConfig, S3Config};
+pub use accessor::{GmailConfig, NotionConfig, S3Config};
 pub use error::{VfsError, VfsResult};
 pub use path::VPath;
 pub use resource::{DirEntry, FileKind, FileStat, Resource, S3Resource};
