@@ -12,8 +12,9 @@
 //! *every* caller of the filesystem — not just the WebDAV one — observes the
 //! same effects.
 
+use std::ffi::OsString;
 use std::io::{self, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -215,8 +216,32 @@ impl WorkspaceFs {
 
     /// Absolute on-disk path of `rel_path` (a workspace-relative path such as
     /// `/knowledge/foo.txt`) inside this workspace.
+    ///
+    /// Containment is enforced here so it holds for every caller, not just the
+    /// protocol layers that happen to pre-normalise (WebDAV's `DavPath`). We fold
+    /// the relative path in isolation — pushing `Normal` segments and popping on
+    /// `..` — then append it to an untouched `self.root`. Because `..` only ever
+    /// pops from `parts` (never from the root) and a pop on an empty stack is a
+    /// no-op, a `..` can never climb above the workspace root: an escaping path
+    /// like `/../../etc/passwd` folds back to an in-root path rather than reaching
+    /// the host filesystem. This is lexical (POSIX-style `/..` == `/`); it does
+    /// not resolve symlinks, which are not creatable through this API.
     fn resolve(&self, rel_path: &str) -> PathBuf {
-        self.root.join(rel_path.trim_start_matches('/'))
+        let mut parts: Vec<OsString> = Vec::new();
+        for comp in Path::new(rel_path.trim_start_matches('/')).components() {
+            match comp {
+                Component::Normal(c) => parts.push(c.to_os_string()),
+                Component::ParentDir => {
+                    parts.pop();
+                }
+                // `CurDir` is a no-op; `RootDir`/`Prefix` can't reach the root
+                // (the leading `/` is already trimmed) so they're ignored too.
+                _ => {}
+            }
+        }
+        let mut out = self.root.clone();
+        out.extend(parts);
+        out
     }
 
     pub async fn metadata(&self, rel_path: &str) -> FsResult<std::fs::Metadata> {
@@ -407,6 +432,51 @@ async fn rename_compat(from: &Path, to: &Path) -> io::Result<()> {
             } else {
                 Err(e)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::WorkspaceFs;
+    use std::path::{Path, PathBuf};
+    use uuid::Uuid;
+
+    fn fs(root: &str) -> WorkspaceFs {
+        WorkspaceFs::new(PathBuf::from(root), Uuid::new_v4())
+    }
+
+    #[test]
+    fn resolves_normal_paths_and_folds_legit_dotdot() {
+        let f = fs("/data/ws/123/files");
+        assert_eq!(
+            f.resolve("/knowledge/foo.txt"),
+            PathBuf::from("/data/ws/123/files/knowledge/foo.txt"),
+        );
+        // A legitimate `..` is folded, not rejected (would break a valid `/a/b/../c`).
+        assert_eq!(f.resolve("/a/b/../c"), PathBuf::from("/data/ws/123/files/a/c"));
+        assert_eq!(f.resolve("/a/./b/../c"), PathBuf::from("/data/ws/123/files/a/c"));
+    }
+
+    #[test]
+    fn dotdot_can_never_escape_the_root() {
+        let root = Path::new("/data/ws/123/files");
+        let f = fs("/data/ws/123/files");
+        for input in [
+            "/../../etc/passwd",
+            "/../../../../../../../../etc/passwd",
+            "/files/../../../sibling/secret",
+            "/../ws/456/files/other-tenant.txt",
+            "/a/../../../../b",
+            "/..",
+            "/",
+            "",
+        ] {
+            let got = f.resolve(input);
+            assert!(
+                got.starts_with(root),
+                "escaped root: {input:?} -> {got:?}",
+            );
         }
     }
 }
