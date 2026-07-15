@@ -269,15 +269,30 @@ impl SessionsState {
         let events = self.events.clone();
         tokio::spawn(async move {
             let title = crate::services::session_title::generate_session_title(&first_text).await;
+            // Gate on `title IS NULL`: the inline `needs_title` precheck ran
+            // before the (slow) LLM call, so a manual rename (`set_title`) may
+            // have landed since. Writing conditionally means we only ever fill
+            // an untitled session and never clobber a user's rename.
+            //
             // Like `set_title`, does not touch updated_at — titling shouldn't
             // reorder Recents.
-            if let Err(e) = sqlx::query("UPDATE sessions SET title = ? WHERE id = ?")
-                .bind(&title)
-                .bind(id.to_string())
-                .execute(&db)
-                .await
+            let affected = match sqlx::query(
+                "UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL",
+            )
+            .bind(&title)
+            .bind(id.to_string())
+            .execute(&db)
+            .await
             {
-                tracing::warn!(session = %id, "failed to persist session title: {e}");
+                Ok(r) => r.rows_affected(),
+                Err(e) => {
+                    tracing::warn!(session = %id, "failed to persist session title: {e}");
+                    return;
+                }
+            };
+            // A rename beat us to it — leave their title in place and don't
+            // publish, or we'd broadcast a title the DB no longer holds.
+            if affected == 0 {
                 return;
             }
             match serde_json::to_string(&TitleEvent { title }) {
