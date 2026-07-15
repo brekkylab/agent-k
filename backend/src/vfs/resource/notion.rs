@@ -152,7 +152,13 @@ impl Resource for NotionResource {
             }),
             [p, rest @ ..] if p == "pages" && !rest.is_empty() => {
                 if rest.last().map(String::as_str) == Some("page.json") {
-                    let id = page_id(&rest[rest.len() - 2]);
+                    // The enclosing page dir is the segment before page.json;
+                    // a bare /pages/page.json has none — NotFound, not an
+                    // index underflow on rest[rest.len() - 2].
+                    let Some(dir) = rest.iter().nth_back(1) else {
+                        return Err(VfsError::NotFound);
+                    };
+                    let id = page_id(dir);
                     let bytes = self.render_page_json(&id).await?;
                     let (mtime, ctime) = page_times(&bytes);
                     Ok(FileStat {
@@ -558,7 +564,7 @@ mod live {
     //!
     //!   NOTION_API_KEY=ntn_… cargo test -p agent-k-backend notion_live_read -- --ignored --nocapture
     use super::NotionResource;
-    use crate::vfs::{NotionConfig, Resource, VPath};
+    use crate::vfs::{NotionConfig, Resource, VPath, VfsError};
 
     #[tokio::test]
     #[ignore = "requires NOTION_API_KEY + network"]
@@ -597,5 +603,20 @@ mod live {
         let text = String::from_utf8_lossy(&bytes);
         println!("--- {page_json} ({} bytes) ---", bytes.len());
         println!("{}", &text[..text.len().min(1500)]);
+    }
+
+    /// `/pages/page.json` has no enclosing page dir: stat must return NotFound,
+    /// not underflow `rest[rest.len() - 2]`. Short-circuits before any render,
+    /// so no key/network is needed.
+    #[tokio::test]
+    async fn stat_pages_page_json_is_not_found_not_panic() {
+        let res = NotionResource::new(&NotionConfig {
+            api_key: "test".into(),
+        })
+        .expect("build NotionResource");
+        assert!(matches!(
+            res.stat(&VPath::new("/pages/page.json")).await,
+            Err(VfsError::NotFound)
+        ));
     }
 }
