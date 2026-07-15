@@ -223,6 +223,12 @@ impl CachedResource {
         }
     }
 
+    /// Cached bytes for `key` regardless of version — used to serve continuation
+    /// chunks of a sequential read without re-validating (the first chunk did).
+    fn content_peek(&self, key: &str) -> Option<Arc<Vec<u8>>> {
+        self.content.lock().unwrap().get(key).map(|(_, b)| b.clone())
+    }
+
     fn content_put(&self, key: &str, version: Version, bytes: Vec<u8>) {
         if version.known() && bytes.len() as u64 <= MAX_CONTENT_BYTES {
             self.content
@@ -238,6 +244,33 @@ impl CachedResource {
 
     fn content_clear(&self) {
         self.content.lock().unwrap().clear();
+    }
+
+    /// True length of a file the backend listed as size 0 (sizing it needs a
+    /// render, e.g. Notion `page.json`): render once *through the content cache*
+    /// so the size is known and a following read is a hit. Cheap on a cache hit;
+    /// 0 if the render fails.
+    async fn resolve_size(&self, path: &VPath, version: &Version) -> u64 {
+        if let Some(bytes) = self.content_get(path.as_str(), version) {
+            return bytes.len() as u64;
+        }
+        match self.inner.read_bytes(path, None).await {
+            Ok(bytes) => {
+                let n = bytes.len() as u64;
+                self.content_put(path.as_str(), version.clone(), bytes);
+                n
+            }
+            Err(_) => 0,
+        }
+    }
+}
+
+/// A child path under `dir` (handles the root so the result has no `//`).
+fn child_path(dir: &VPath, name: &str) -> VPath {
+    if dir.is_root() {
+        VPath::new(format!("/{name}"))
+    } else {
+        VPath::new(format!("{}/{}", dir.as_str(), name))
     }
 }
 
@@ -257,7 +290,16 @@ fn slice(data: &[u8], range: &Option<Range<u64>>) -> Vec<u8> {
 impl Resource for CachedResource {
     async fn read_bytes(&self, path: &VPath, range: Option<Range<u64>>) -> VfsResult<Vec<u8>> {
         let key = path.as_str();
-        // Probe the cheap version; serve cached bytes only while it matches.
+        // Continuation chunk of a sequential stream: serve from the snapshot the
+        // first chunk cached, skipping the per-chunk provider stat (a Notion
+        // `get_page` is a network round-trip — an N-chunk read would be N stats).
+        if matches!(&range, Some(r) if r.start > 0)
+            && let Some(full) = self.content_peek(key)
+        {
+            return Ok(slice(&full, &range));
+        }
+        // First chunk / whole read / uncached: validate the cheap version and
+        // serve cached bytes only while it matches.
         let st = self.inner.stat(path).await?;
         let version = Version::of(&st);
         if let Some(full) = self.content_get(key, &version) {
@@ -290,7 +332,23 @@ impl Resource for CachedResource {
         if let Some(entries) = self.cache.list_dir_entries(path.as_str()) {
             return Ok(entries);
         }
-        let entries = self.inner.readdir(path).await?;
+        let mut entries = self.inner.readdir(path).await?;
+        // Eagerly size (and content-cache) files the backend listed as 0 because
+        // sizing needs a render (Notion page.json): render once here so the entry
+        // shows a real size AND a following read is a cache hit. This adds that
+        // render to the listing's latency — the trade for correct sizes up front.
+        for e in entries.iter_mut() {
+            if matches!(e.kind, FileKind::File) && e.size == 0 {
+                let child = child_path(path, &e.name);
+                // Take the version from the provider's own stat, not the listing
+                // DirEntry (which may omit mtime, e.g. Notion `page.json`): the
+                // content cached here must be validated against the same token a
+                // later read computes, or the read misses and re-renders.
+                if let Ok(st) = self.inner.stat(&child).await {
+                    e.size = self.resolve_size(&child, &Version::of(&st)).await;
+                }
+            }
+        }
         self.cache.set_dir(path.as_str(), &entries);
         Ok(entries)
     }
@@ -319,11 +377,10 @@ impl Resource for CachedResource {
                     ..Default::default()
                 });
             }
-            // A file with size 0 is ambiguous: providers report 0 for sizes
-            // they don't cheaply know (rendered Notion page.json, exported
-            // Google docs). Don't trust it — compute via the provider so reads
-            // aren't clamped to nothing. (A genuinely empty file just re-stats.)
-            Some(_) => return self.inner.stat(path).await,
+            // A file cached with size 0 is ambiguous (providers report 0 for
+            // sizes they don't cheaply know): resolve it below rather than trust
+            // it, so reads/Content-Length aren't clamped to nothing.
+            Some(_) => {}
             None => {
                 // Negative cache: a fresh parent listing that lacks this path
                 // proves it does not exist — skip the network probe.
@@ -332,7 +389,16 @@ impl Resource for CachedResource {
                 }
             }
         }
-        self.inner.stat(path).await
+        let st = self.inner.stat(path).await?;
+        // A file the backend can't cheaply size (render-on-read, e.g. Notion
+        // page.json) reports 0 — resolve its real length via the content cache so
+        // stat/HEAD/PROPFIND are correct and a following read is a hit.
+        if matches!(st.kind, FileKind::File) && st.size == 0 {
+            let version = Version::of(&st);
+            let size = self.resolve_size(path, &version).await;
+            return Ok(FileStat { size, ..st });
+        }
+        Ok(st)
     }
 
     async fn unlink(&self, path: &VPath) -> VfsResult<()> {
