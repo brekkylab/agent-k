@@ -244,4 +244,63 @@ mod tests {
             );
         }
     }
+
+    /// An [`S3Config`] from `S3_*` env vars, or `None` when the required ones
+    /// (bucket + credentials) are unset. Point `S3_ENDPOINT` at MinIO/localstack
+    /// for a local run, or leave it unset for real AWS.
+    fn live_config() -> Option<S3Config> {
+        Some(S3Config {
+            bucket: std::env::var("S3_BUCKET").ok()?,
+            region: std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".into()),
+            access_key_id: std::env::var("S3_ACCESS_KEY_ID").ok()?,
+            secret_access_key: std::env::var("S3_SECRET_ACCESS_KEY").ok()?,
+            endpoint: std::env::var("S3_ENDPOINT").ok(),
+            key_prefix: std::env::var("S3_KEY_PREFIX").ok(),
+        })
+    }
+
+    /// Live round-trip against a real S3-compatible bucket: write -> stat ->
+    /// read (full + ranged) -> readdir -> delete. Ignored by default; set the
+    /// `S3_*` env vars to run:
+    ///
+    ///   S3_BUCKET=… S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… [S3_REGION=…] \
+    ///   [S3_ENDPOINT=…] cargo test -p workspace s3_live_round_trip -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "requires S3_* env + network"]
+    async fn s3_live_round_trip() {
+        let Some(cfg) = live_config() else {
+            eprintln!("set S3_BUCKET / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY to run");
+            return;
+        };
+        let r = S3Resource::new(&cfg).expect("build S3Resource");
+
+        // Unique key under a dedicated test prefix so a stray failure can't
+        // clobber real data.
+        let name = format!("agentk-livetest-{}.txt", uuid::Uuid::new_v4());
+        let dir = VPath::new("/agentk-livetest");
+        let vp = VPath::new(format!("/agentk-livetest/{name}"));
+        let body = b"hello s3 live".to_vec();
+
+        r.write_bytes(&vp, body.clone()).await.expect("write");
+
+        let st = r.stat(&vp).await.expect("stat");
+        assert!(matches!(st.kind, FileKind::File));
+        assert_eq!(st.size, body.len() as u64);
+
+        assert_eq!(r.read_bytes(&vp, None).await.expect("read"), body);
+        assert_eq!(
+            r.read_bytes(&vp, Some(6..13)).await.expect("ranged read"),
+            b"s3 live"
+        );
+
+        let entries = r.readdir(&dir).await.expect("readdir");
+        assert!(
+            entries.iter().any(|e| e.name == name),
+            "listing missing {name}: {:?}",
+            entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
+
+        r.unlink(&vp).await.expect("unlink");
+        assert!(matches!(r.stat(&vp).await, Err(VfsError::NotFound)));
+    }
 }
