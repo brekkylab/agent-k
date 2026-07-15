@@ -59,9 +59,19 @@ impl IndexCache {
         }
     }
 
-    /// Entry metadata for a path, if known.
+    /// Entry metadata for a path, if its owning listing (the parent directory)
+    /// is still fresh. An entry outlives its listing only until the next access:
+    /// a stale/expired one is dropped here and reported as absent, so a deleted
+    /// or TTL-expired object stops stat'ing as present.
     fn get(&self, path: &str) -> Option<Entry> {
-        self.inner.lock().unwrap().entries.get(path).copied()
+        let parent = parent_of(path);
+        let mut inner = self.inner.lock().unwrap();
+        let fresh = matches!(inner.expiry.get(parent), Some(exp) if *exp > Instant::now());
+        if !fresh {
+            inner.entries.remove(path);
+            return None;
+        }
+        inner.entries.get(path).copied()
     }
 
     /// Whether `path`'s listing is present and unexpired (basis for negative
@@ -110,9 +120,25 @@ impl IndexCache {
             format!("{path}/")
         };
         let mut inner = self.inner.lock().unwrap();
-        let mut child_keys = Vec::with_capacity(entries.len());
-        for e in entries {
-            let full = format!("{prefix}{}", e.name);
+        let child_keys: Vec<String> =
+            entries.iter().map(|e| format!("{prefix}{}", e.name)).collect();
+        // Drop the subtree of any child present in the previous listing but gone
+        // from this one, so a deleted child can't keep stat'ing as present.
+        let vanished: Vec<String> = match inner.children.get(path) {
+            Some(old) => {
+                let fresh: std::collections::HashSet<&str> =
+                    child_keys.iter().map(String::as_str).collect();
+                old.iter()
+                    .filter(|c| !fresh.contains(c.as_str()))
+                    .cloned()
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        for v in &vanished {
+            purge_prefix(&mut inner, v);
+        }
+        for (e, full) in entries.iter().zip(&child_keys) {
             inner.entries.insert(
                 full.clone(),
                 Entry {
@@ -123,7 +149,6 @@ impl IndexCache {
                     ctime: e.ctime,
                 },
             );
-            child_keys.push(full);
         }
         inner.children.insert(path.to_string(), child_keys);
         inner
@@ -131,14 +156,11 @@ impl IndexCache {
             .insert(path.to_string(), Instant::now() + self.ttl);
     }
 
+    /// Drop `path` and its entire subtree (a direct-child sweep would leave
+    /// grandchild entries/listings behind after a subtree `rmdir`/`rename`).
     fn invalidate_dir(&self, path: &str) {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(children) = inner.children.remove(path) {
-            for c in children {
-                inner.entries.remove(&c);
-            }
-        }
-        inner.expiry.remove(path);
+        purge_prefix(&mut inner, path);
     }
 
     /// Invalidate the listing of `path`'s parent directory (so a created /
@@ -300,6 +322,15 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// Remove `p` and everything under `p/` from every map (entries/children/expiry).
+fn purge_prefix(inner: &mut Inner, p: &str) {
+    let sub = if p == "/" { "/".to_string() } else { format!("{p}/") };
+    let stale = |k: &str| k == p || k.starts_with(sub.as_str());
+    inner.entries.retain(|k, _| !stale(k));
+    inner.children.retain(|k, _| !stale(k));
+    inner.expiry.retain(|k, _| !stale(k));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +418,35 @@ mod tests {
         // TTL 0 -> already expired
         assert!(!c.is_listed("/"));
         assert!(c.list_dir_entries("/").is_none());
+    }
+
+    // get() honors the owning listing's TTL: an expired entry is dropped and
+    // reported absent, not served via a no-TTL fast path.
+    #[test]
+    fn expired_entry_is_not_served_as_fresh() {
+        let c = IndexCache::new(Duration::from_millis(0));
+        c.set_dir("/", &[de("gone.txt", FileKind::File, 10)]);
+        assert!(!c.is_listed("/"));
+        assert!(c.get("/gone.txt").is_none());
+    }
+
+    // Re-listing a directory drops children that disappeared, so a deleted
+    // object stops stat'ing as present even while the listing is fresh.
+    #[test]
+    fn relisting_a_dir_drops_vanished_children() {
+        let c = IndexCache::new(Duration::from_secs(600));
+        c.set_dir("/d", &[de("gone.txt", FileKind::File, 3)]);
+        c.set_dir("/d", &[]); // gone.txt deleted upstream
+        assert!(c.get("/d/gone.txt").is_none());
+    }
+
+    // Invalidating a directory drops its whole subtree, not just direct children.
+    #[test]
+    fn subtree_invalidation_drops_grandchildren() {
+        let c = IndexCache::new(Duration::from_secs(600));
+        c.set_dir("/a/b", &[de("sub", FileKind::Dir, 0)]);
+        c.set_dir("/a/b/sub", &[de("d.txt", FileKind::File, 7)]);
+        c.invalidate_dir("/a/b");
+        assert!(c.get("/a/b/sub/d.txt").is_none());
     }
 }
