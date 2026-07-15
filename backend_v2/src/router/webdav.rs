@@ -34,10 +34,11 @@ use crate::state::{
 ///
 /// Routes via `fallback` so axum forwards every HTTP method — including
 /// WebDAV-specific ones (`PROPFIND`, `MKCOL`, `COPY`, `MOVE`, `LOCK`, …) —
-/// straight to [`dav_server`]. Auth mirrors the WS route: JWT is read from
-/// `?token=…` because the eventual target audience (browser fetch + native
-/// WebDAV clients) cannot reliably set custom auth headers. The token's subject
-/// must own the workspace.
+/// straight to [`dav_server`]. Auth: JWT is read from `?token=…` first (the
+/// transport FUSE / native WebDAV clients that can't set headers must use), with
+/// an `Authorization: Bearer` fallback for clients that can (the browser
+/// fetch-based client keeps the token out of the URL). The token's subject must
+/// own the workspace.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new().fallback(handle).with_state(state)
 }
@@ -48,7 +49,15 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
         None => return (StatusCode::BAD_REQUEST, "invalid workspace id").into_response(),
     };
 
-    let token = req.uri().query().and_then(extract_token);
+    // Prefer the `?token=` query param (the transport FUSE / native clients that
+    // can't set headers must use); fall back to an `Authorization: Bearer` header
+    // for clients that can (e.g. the browser fetch-based WebDAV client, which
+    // deliberately keeps the token out of the URL).
+    let token = req
+        .uri()
+        .query()
+        .and_then(extract_token)
+        .or_else(|| extract_bearer(req.headers()));
     let Some(token) = token else {
         return (StatusCode::UNAUTHORIZED, "missing token").into_response();
     };
@@ -85,7 +94,17 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
         .strip_prefix(format!("/workspaces/{wid}/files"))
         .build_handler();
 
-    dav.handle(req).await.map(Body::new)
+    // WebDAV bodies are dynamic: render-on-read provider files (e.g. Notion
+    // `page.json`) can't be cheaply sized, so a browser would heuristically
+    // cache them (no `Cache-Control` + a `Last-Modified`) and later serve a
+    // stale/empty body to click-triggered fetches (which a hard reload doesn't
+    // revalidate). Mark every WebDAV response uncacheable.
+    let mut resp = dav.handle(req).await.map(Body::new);
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    resp
 }
 
 fn parse_wid(path: &str) -> Option<Uuid> {
@@ -103,6 +122,16 @@ fn extract_token(query: &str) -> Option<String> {
     url::form_urlencoded::parse(query.as_bytes())
         .find(|(k, _)| k == "token")
         .map(|(_, v)| v.into_owned())
+}
+
+/// Pull the bearer token out of an `Authorization: Bearer <jwt>` header, if any.
+fn extract_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .map(str::to_owned)
 }
 
 /// Workspace-relative path (leading `/`) in the shape [`WorkspaceFs`] expects.
@@ -475,5 +504,41 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn propfind_authenticates_via_bearer_header() {
+        let state = make_state().await;
+        let (wid, token) = create_user_ws_and_token(&state).await;
+        let app = get_router(state);
+
+        // The browser fetch-based WebDAV client keeps the token out of the URL
+        // and sends `Authorization: Bearer` instead; the handler falls back to it
+        // when `?token=` is absent.
+        let req = Request::builder()
+            .method("PROPFIND")
+            .uri(format!("/workspaces/{wid}/files/"))
+            .header("Depth", "1")
+            .header("Authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::MULTI_STATUS);
+    }
+
+    #[tokio::test]
+    async fn propfind_without_any_token_returns_401() {
+        let state = make_state().await;
+        let (wid, _token) = create_user_ws_and_token(&state).await;
+        let app = get_router(state);
+
+        let req = Request::builder()
+            .method("PROPFIND")
+            .uri(format!("/workspaces/{wid}/files/"))
+            .header("Depth", "1")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }
