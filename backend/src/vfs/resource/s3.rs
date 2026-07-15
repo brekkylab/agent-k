@@ -30,16 +30,21 @@ impl S3Resource {
         })
     }
 
-    fn os_path(&self, path: &VPath) -> OsPath {
-        OsPath::from(self.accessor.key(path))
+    // `Path::parse` (not `Path::from`): `from` percent-encodes `% # ? [ ] ~`, so a
+    // key readdir surfaced raw (`50%off.txt`) would be addressed as `50%25off.txt`
+    // by stat/read/write — a different object. `parse` preserves those bytes, and
+    // still rejects `.`/`..` segments, so the mount can't address keys outside
+    // `key_prefix`. An unparseable key can't name an object → NotFound.
+    fn os_path(&self, path: &VPath) -> VfsResult<OsPath> {
+        OsPath::parse(self.accessor.key(path)).map_err(|_| VfsError::NotFound)
     }
 
-    fn list_prefix(&self, path: &VPath) -> Option<OsPath> {
+    fn list_prefix(&self, path: &VPath) -> VfsResult<Option<OsPath>> {
         let key = self.accessor.key(path);
         if key.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(OsPath::from(key))
+            Ok(Some(OsPath::parse(key).map_err(|_| VfsError::NotFound)?))
         }
     }
 }
@@ -47,16 +52,12 @@ impl S3Resource {
 #[async_trait]
 impl Resource for S3Resource {
     async fn read_bytes(&self, path: &VPath, range: Option<Range<u64>>) -> VfsResult<Vec<u8>> {
+        let os_path = self.os_path(path)?;
         let opts = GetOptions {
             range: range.clone().map(GetRange::Bounded),
             ..Default::default()
         };
-        match self
-            .accessor
-            .store
-            .get_opts(&self.os_path(path), opts)
-            .await
-        {
+        match self.accessor.store.get_opts(&os_path, opts).await {
             Ok(res) => Ok(res.bytes().await?.to_vec()),
             Err(e) => {
                 // S3-2: a bounded range starting at/after EOF returns 416. Treat
@@ -64,7 +65,7 @@ impl Resource for S3Resource {
                 // direct_io mount (size unknown up front) stop cleanly. Only the
                 // error path pays the extra head.
                 if let Some(r) = &range
-                    && let Ok(meta) = self.accessor.store.head(&self.os_path(path)).await
+                    && let Ok(meta) = self.accessor.store.head(&os_path).await
                     && r.start >= meta.size
                 {
                     return Ok(Vec::new());
@@ -77,13 +78,13 @@ impl Resource for S3Resource {
     async fn write_bytes(&self, path: &VPath, data: Vec<u8>) -> VfsResult<()> {
         self.accessor
             .store
-            .put(&self.os_path(path), PutPayload::from(data))
+            .put(&self.os_path(path)?, PutPayload::from(data))
             .await?;
         Ok(())
     }
 
     async fn readdir(&self, path: &VPath) -> VfsResult<Vec<DirEntry>> {
-        let listing = self.list_prefix(path);
+        let listing = self.list_prefix(path)?;
         let res = self
             .accessor
             .store
@@ -136,7 +137,7 @@ impl Resource for S3Resource {
                 ..Default::default()
             });
         }
-        match self.accessor.store.head(&self.os_path(path)).await {
+        match self.accessor.store.head(&self.os_path(path)?).await {
             Ok(meta) => Ok(FileStat {
                 kind: FileKind::File,
                 size: meta.size,
@@ -151,7 +152,7 @@ impl Resource for S3Resource {
                 let res = self
                     .accessor
                     .store
-                    .list_with_delimiter(self.list_prefix(path).as_ref())
+                    .list_with_delimiter(self.list_prefix(path)?.as_ref())
                     .await?;
                 if res.common_prefixes.is_empty() && res.objects.is_empty() {
                     return Err(VfsError::NotFound);
@@ -166,7 +167,7 @@ impl Resource for S3Resource {
     }
 
     async fn unlink(&self, path: &VPath) -> VfsResult<()> {
-        self.accessor.store.delete(&self.os_path(path)).await?;
+        self.accessor.store.delete(&self.os_path(path)?).await?;
         Ok(())
     }
 
@@ -181,7 +182,7 @@ impl Resource for S3Resource {
     async fn rmdir(&self, path: &VPath) -> VfsResult<()> {
         // Recursively delete everything under the prefix (mirrors mirage's
         // prefix batch delete).
-        let prefix = self.list_prefix(path);
+        let prefix = self.list_prefix(path)?;
         let mut stream = self.accessor.store.list(prefix.as_ref());
         while let Some(item) = stream.next().await {
             let meta = item?;
@@ -192,7 +193,7 @@ impl Resource for S3Resource {
 
     async fn rename(&self, from: &VPath, to: &VPath) -> VfsResult<()> {
         // S3 has no native rename: copy then delete the source (mirrors mirage).
-        let (from, to) = (self.os_path(from), self.os_path(to));
+        let (from, to) = (self.os_path(from)?, self.os_path(to)?);
         self.accessor.store.copy(&from, &to).await?;
         self.accessor.store.delete(&from).await?;
         Ok(())
@@ -200,5 +201,47 @@ impl Resource for S3Resource {
 
     fn prompt(&self) -> &str {
         S3_PROMPT
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vfs::accessor::S3Config;
+
+    fn resource() -> S3Resource {
+        S3Resource::new(&S3Config {
+            bucket: "b".into(),
+            region: "us-east-1".into(),
+            access_key_id: "k".into(),
+            secret_access_key: "s".into(),
+            endpoint: None,
+            key_prefix: None,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn special_char_key_round_trips() {
+        let r = resource();
+        for name in ["50%off.txt", "a#b.txt", "note~1", "q?x", "a[b]"] {
+            let vp = VPath::new(&format!("/{name}"));
+            assert_eq!(
+                r.os_path(&vp).unwrap().as_ref(),
+                r.accessor.key(&vp),
+                "round-trip broken for {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dot_segments_are_rejected() {
+        let r = resource();
+        for bad in ["/../up", "/a/../b", "/."] {
+            assert!(
+                matches!(r.os_path(&VPath::new(bad)), Err(VfsError::NotFound)),
+                "should reject {bad:?}"
+            );
+        }
     }
 }
