@@ -1,4 +1,4 @@
-//! Standalone e2e for the host-side forward server ([`VfsForward`]): spins it up
+//! Standalone e2e for the host-side forward server ([`ForwardServer`]): spins it up
 //! over a [`WorkspaceFs`] and drives the full HTTP/1.1 forward protocol
 //! (readdir/stat/read/write/mkdir/rename/unlink/rmdir + token auth) over a real
 //! loopback socket — the same wire the in-guest FUSE forwarder speaks, but with
@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use workspace::{ForwardFs, VfsForward, WorkspaceFs};
+use workspace::{ForwardFs, ForwardServer, WorkspaceFs};
 
 struct Resp {
     status: u16,
@@ -25,7 +25,9 @@ impl Resp {
 /// `Connection: close`, so one request per socket). `target` is the raw
 /// path+query, e.g. `/stat?path=/files/x`.
 async fn call(port: u16, token: &str, method: &str, target: &str, body: &[u8]) -> Resp {
-    let mut s = TcpStream::connect(("127.0.0.1", port)).await.expect("connect");
+    let mut s = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
     let head = format!(
         "{method} {target} HTTP/1.1\r\nHost: localhost\r\nx-vfs-token: {token}\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n",
@@ -54,9 +56,9 @@ async fn call(port: u16, token: &str, method: &str, target: &str, body: &[u8]) -
     }
 }
 
-fn serve(root: std::path::PathBuf) -> VfsForward {
+fn serve(root: std::path::PathBuf) -> ForwardServer {
     let fs: Arc<dyn ForwardFs> = Arc::new(WorkspaceFs::local(root));
-    VfsForward::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn forward server")
+    ForwardServer::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn forward server")
 }
 
 // Multi-thread so the server's accept loop runs on its own worker while the
@@ -69,9 +71,15 @@ async fn forward_http_drives_workspace_over_the_wire() {
 
     // write -> stat -> read (full + ranged) under the reserved local `files/`.
     assert_eq!(
-        call(port, &token, "PUT", "/write?path=/files/note.txt", b"hello http")
-            .await
-            .status,
+        call(
+            port,
+            &token,
+            "PUT",
+            "/write?path=/files/note.txt",
+            b"hello http"
+        )
+        .await
+        .status,
         200
     );
 
@@ -83,13 +91,21 @@ async fn forward_http_drives_workspace_over_the_wire() {
     assert!(t.contains("\"size\":10"), "{t}");
 
     assert_eq!(
-        call(port, &token, "GET", "/read?path=/files/note.txt", b"").await.body,
+        call(port, &token, "GET", "/read?path=/files/note.txt", b"")
+            .await
+            .body,
         b"hello http"
     );
     assert_eq!(
-        call(port, &token, "GET", "/read?path=/files/note.txt&offset=6&size=4", b"")
-            .await
-            .body,
+        call(
+            port,
+            &token,
+            "GET",
+            "/read?path=/files/note.txt&offset=6&size=4",
+            b""
+        )
+        .await
+        .body,
         b"http"
     );
 
@@ -108,9 +124,16 @@ async fn forward_http_drives_workspace_over_the_wire() {
     );
 
     // mkdir -> nested write -> list.
-    assert_eq!(call(port, &token, "POST", "/mkdir?path=/files/sub", b"").await.status, 200);
     assert_eq!(
-        call(port, &token, "PUT", "/write?path=/files/sub/a.txt", b"x").await.status,
+        call(port, &token, "POST", "/mkdir?path=/files/sub", b"")
+            .await
+            .status,
+        200
+    );
+    assert_eq!(
+        call(port, &token, "PUT", "/write?path=/files/sub/a.txt", b"x")
+            .await
+            .status,
         200
     );
     assert!(
@@ -122,9 +145,15 @@ async fn forward_http_drives_workspace_over_the_wire() {
 
     // rename -> the source is gone, the destination exists.
     assert_eq!(
-        call(port, &token, "POST", "/rename?path=/files/note.txt&to=/files/renamed.txt", b"")
-            .await
-            .status,
+        call(
+            port,
+            &token,
+            "POST",
+            "/rename?path=/files/note.txt&to=/files/renamed.txt",
+            b""
+        )
+        .await
+        .status,
         200
     );
     assert!(
@@ -142,14 +171,29 @@ async fn forward_http_drives_workspace_over_the_wire() {
 
     // unlink + rmdir clean up.
     assert_eq!(
-        call(port, &token, "DELETE", "/unlink?path=/files/renamed.txt", b"").await.status,
+        call(
+            port,
+            &token,
+            "DELETE",
+            "/unlink?path=/files/renamed.txt",
+            b""
+        )
+        .await
+        .status,
         200
     );
     assert_eq!(
-        call(port, &token, "DELETE", "/unlink?path=/files/sub/a.txt", b"").await.status,
+        call(port, &token, "DELETE", "/unlink?path=/files/sub/a.txt", b"")
+            .await
+            .status,
         200
     );
-    assert_eq!(call(port, &token, "DELETE", "/rmdir?path=/files/sub", b"").await.status, 200);
+    assert_eq!(
+        call(port, &token, "DELETE", "/rmdir?path=/files/sub", b"")
+            .await
+            .status,
+        200
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

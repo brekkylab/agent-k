@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ::workspace::{FsEvent, FsHook, Vfs, VfsConfig, WorkspaceFs};
+use ::workspace::{FsConfig, FsEvent, FsHook, WorkspaceFs};
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
@@ -178,9 +178,9 @@ impl WorkspacesState {
     /// workspace's external-provider mounts attached (paths under a mount prefix
     /// route to the provider; everything else stays local).
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
-        // `build_vfs` assembles the full mount table (local `/files` + providers).
-        let vfs = self.build_vfs(wid).await?;
-        Ok(WorkspaceFs::new(vfs).with_hook(knowledge_hook(wid)))
+        // `build_fs` assembles the full mount table (local `/files` + providers).
+        let fs = self.build_fs(wid).await?;
+        Ok(fs.with_hook(knowledge_hook(wid)))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root
@@ -248,15 +248,16 @@ fn knowledge_hook(wid: Uuid) -> Option<Arc<dyn FsHook>> {
 pub(crate) fn workspace_fs(
     data_root: &std::path::Path,
     wid: Uuid,
-    mut config: VfsConfig,
+    mut config: FsConfig,
 ) -> StateResult<WorkspaceFs> {
     let root = data_root
         .join("workspaces")
         .join(wid.to_string())
         .join("files");
     config.local_root = Some(root);
-    let vfs = Vfs::from_config(config).map_err(|e| StateError::InvalidData(format!("vfs: {e}")))?;
-    Ok(WorkspaceFs::new(Arc::new(vfs)).with_hook(knowledge_hook(wid)))
+    let fs = WorkspaceFs::from_config(config)
+        .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
+    Ok(fs.with_hook(knowledge_hook(wid)))
 }
 
 #[cfg(test)]
@@ -330,7 +331,11 @@ mod tests {
         let removed = state.remove(id).await.unwrap();
         assert_eq!(removed.id, id);
         assert!(state.get(id).await.unwrap().is_none());
-        assert!(!tokio::fs::try_exists(state.workspace_dir(id)).await.unwrap());
+        assert!(
+            !tokio::fs::try_exists(state.workspace_dir(id))
+                .await
+                .unwrap()
+        );
         assert!(matches!(state.remove(id).await, Err(StateError::NotFound)));
     }
 
@@ -344,17 +349,35 @@ mod tests {
 
         let uid = owner.id;
         // A default workspace (id == uid) and a non-default one, both owned by uid.
-        state.upsert(Workspace::with_id(uid, uid, "W".into())).await.unwrap();
+        state
+            .upsert(Workspace::with_id(uid, uid, "W".into()))
+            .await
+            .unwrap();
         let other = Uuid::new_v4();
-        state.upsert(Workspace::with_id(other, uid, "W2".into())).await.unwrap();
+        state
+            .upsert(Workspace::with_id(other, uid, "W2".into()))
+            .await
+            .unwrap();
 
         // The owner reaches both — including the non-default (id != uid).
         assert!(state.get_for_user(uid, uid).await.unwrap().is_some());
         assert!(state.get_for_user(uid, other).await.unwrap().is_some());
         // A different user gets None even though the workspace exists — no leak.
-        assert!(state.get_for_user(Uuid::new_v4(), other).await.unwrap().is_none());
+        assert!(
+            state
+                .get_for_user(Uuid::new_v4(), other)
+                .await
+                .unwrap()
+                .is_none()
+        );
         // A workspace that doesn't exist → None.
-        assert!(state.get_for_user(uid, Uuid::new_v4()).await.unwrap().is_none());
+        assert!(
+            state
+                .get_for_user(uid, Uuid::new_v4())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -373,11 +396,19 @@ mod tests {
         assert_eq!(ws.title, "tester's workspace");
 
         // The file root lives under workspaces/{uid}/files.
-        assert!(tokio::fs::try_exists(state.get_root(user_id)).await.unwrap());
+        assert!(
+            tokio::fs::try_exists(state.get_root(user_id))
+                .await
+                .unwrap()
+        );
 
         // Removal drops the on-disk directory.
         state.remove(user_id).await.unwrap();
-        assert!(!tokio::fs::try_exists(state.workspace_dir(user_id)).await.unwrap());
+        assert!(
+            !tokio::fs::try_exists(state.workspace_dir(user_id))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 
 use crate::vfs::{
     accessor::{NotionAccessor, NotionConfig},
-    error::{VfsError, VfsResult},
-    path::VPath,
+    error::{ResourceError, ResourceResult},
+    path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
@@ -15,7 +15,11 @@ fn page_times(page_json: &[u8]) -> (Option<std::time::SystemTime>, Option<std::t
     let Ok(v) = serde_json::from_slice::<Value>(page_json) else {
         return (None, None);
     };
-    let t = |key: &str| v.get(key).and_then(|x| x.as_str()).and_then(rfc3339_to_systemtime);
+    let t = |key: &str| {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .and_then(rfc3339_to_systemtime)
+    };
     (t("last_edited_time"), t("created_time"))
 }
 
@@ -104,9 +108,9 @@ impl NotionResource {
 impl Resource for NotionResource {
     async fn read_bytes(
         &self,
-        path: &VPath,
+        path: &MountPath,
         range: Option<std::ops::Range<u64>>,
-    ) -> VfsResult<Vec<u8>> {
+    ) -> ResourceResult<Vec<u8>> {
         let segs = segments(path);
         if segs.len() >= 3
             && segs[0] == "pages"
@@ -116,34 +120,37 @@ impl Resource for NotionResource {
             let data = self.render_page_json(&id).await?;
             return Ok(slice(data, range));
         }
-        Err(VfsError::NotFound)
+        Err(ResourceError::NotFound)
     }
 
-    async fn write_bytes(&self, _path: &VPath, _data: Vec<u8>) -> VfsResult<()> {
+    async fn write_bytes(&self, _path: &MountPath, _data: Vec<u8>) -> ResourceResult<()> {
         // Notion is read-only for file writes; domain writes go through the
         // `.cmd/` control path (see [`Self::command`]).
-        Err(VfsError::Unsupported)
+        Err(ResourceError::Unsupported)
     }
 
-    async fn readdir(&self, path: &VPath) -> VfsResult<Vec<DirEntry>> {
+    async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<DirEntry>> {
         let segs = segments(path);
         match segs.as_slice() {
             [] => Ok(vec![dir("pages")]),
-            [p] if p == "pages" => self.top_level_page_dirs().await.map_err(VfsError::from),
+            [p] if p == "pages" => self
+                .top_level_page_dirs()
+                .await
+                .map_err(ResourceError::from),
             [p, rest @ ..] if p == "pages" && !rest.is_empty() => {
                 let last = rest.last().unwrap();
                 if last == "page.json" {
-                    return Err(VfsError::NotFound);
+                    return Err(ResourceError::NotFound);
                 }
                 self.page_dir_entries(&page_id(last))
                     .await
-                    .map_err(VfsError::from)
+                    .map_err(ResourceError::from)
             }
-            _ => Err(VfsError::NotFound),
+            _ => Err(ResourceError::NotFound),
         }
     }
 
-    async fn stat(&self, path: &VPath) -> VfsResult<FileStat> {
+    async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
         let segs = segments(path);
         match segs.as_slice() {
             [] | [_] => Ok(FileStat {
@@ -156,7 +163,7 @@ impl Resource for NotionResource {
                     // a bare /pages/page.json has none — NotFound, not an
                     // index underflow on rest[rest.len() - 2].
                     let Some(dir) = rest.iter().nth_back(1) else {
-                        return Err(VfsError::NotFound);
+                        return Err(ResourceError::NotFound);
                     };
                     let id = page_id(dir);
                     let bytes = self.render_page_json(&id).await?;
@@ -185,13 +192,14 @@ impl Resource for NotionResource {
                     })
                 }
             }
-            _ => Err(VfsError::NotFound),
+            _ => Err(ResourceError::NotFound),
         }
     }
 
-    async fn command(&self, name: &str, body: &[u8]) -> VfsResult<Vec<u8>> {
-        let v: Value = serde_json::from_slice(body)
-            .map_err(|e| VfsError::Backend(anyhow::anyhow!("notion {name}: invalid JSON body: {e}")))?;
+    async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
+        let v: Value = serde_json::from_slice(body).map_err(|e| {
+            ResourceError::Backend(anyhow::anyhow!("notion {name}: invalid JSON body: {e}"))
+        })?;
         let result = match name {
             "page-create" => self.accessor.create_page(v).await?,
             "block-append" => {
@@ -206,7 +214,7 @@ impl Resource for NotionResource {
                 self.accessor.append_blocks(block_id, children).await?
             }
             "comment-add" => self.accessor.add_comment(v).await?,
-            _ => return Err(VfsError::Unsupported),
+            _ => return Err(ResourceError::Unsupported),
         };
         Ok(serde_json::to_vec(&result)?)
     }
@@ -216,7 +224,7 @@ impl Resource for NotionResource {
     }
 }
 
-fn segments(path: &VPath) -> Vec<String> {
+fn segments(path: &MountPath) -> Vec<String> {
     path.as_str()
         .trim_matches('/')
         .split('/')
@@ -541,7 +549,9 @@ fn dir_t(
 /// Read an RFC 3339 timestamp field (e.g. `last_edited_time`) off a Notion
 /// page/block object into a `SystemTime`.
 fn page_time(v: &Value, key: &str) -> Option<std::time::SystemTime> {
-    v.get(key).and_then(|x| x.as_str()).and_then(rfc3339_to_systemtime)
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .and_then(rfc3339_to_systemtime)
 }
 
 fn file(name: &str, size: u64) -> DirEntry {
@@ -566,7 +576,7 @@ mod live {
     //!
     //!   NOTION_API_KEY=ntn_… cargo test -p agent-k-backend notion_live_read -- --ignored --nocapture
     use super::NotionResource;
-    use crate::vfs::{NotionConfig, Resource, VPath, VfsError};
+    use crate::vfs::{MountPath, NotionConfig, Resource, ResourceError};
 
     #[tokio::test]
     #[ignore = "requires NOTION_API_KEY + network"]
@@ -576,7 +586,7 @@ mod live {
         let res = NotionResource::new(&NotionConfig { api_key }).expect("build NotionResource");
 
         // Root lists `pages/`.
-        let root = res.readdir(&VPath::root()).await.expect("readdir /");
+        let root = res.readdir(&MountPath::root()).await.expect("readdir /");
         println!(
             "root entries: {:?}",
             root.iter().map(|e| e.name.as_str()).collect::<Vec<_>>()
@@ -584,7 +594,7 @@ mod live {
 
         // Top-level (workspace) pages shared with the integration.
         let pages = res
-            .readdir(&VPath::new("/pages"))
+            .readdir(&MountPath::new("/pages"))
             .await
             .expect("readdir /pages");
         println!("{} top-level page dir(s):", pages.len());
@@ -599,7 +609,7 @@ mod live {
         };
         let page_json = format!("/pages/{}/page.json", first.name);
         let bytes = res
-            .read_bytes(&VPath::new(&page_json), None)
+            .read_bytes(&MountPath::new(&page_json), None)
             .await
             .expect("read page.json");
         let text = String::from_utf8_lossy(&bytes);
@@ -617,8 +627,8 @@ mod live {
         })
         .expect("build NotionResource");
         assert!(matches!(
-            res.stat(&VPath::new("/pages/page.json")).await,
-            Err(VfsError::NotFound)
+            res.stat(&MountPath::new("/pages/page.json")).await,
+            Err(ResourceError::NotFound)
         ));
     }
 }

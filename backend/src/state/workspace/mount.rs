@@ -2,11 +2,9 @@
 //!
 //! Each [`WorkspaceMount`] binds a virtual top-level prefix (e.g. `/s3-prod`)
 //! to a [`ProviderConfig`] carrying that mount's credentials. Rows are loaded
-//! and assembled into a [`Vfs`] by [`WorkspacesState::build_vfs`], which
+//! and assembled into a [`WorkspaceFs`] by [`WorkspacesState::build_fs`], which
 //! [`WorkspacesState::get_fs`](super::WorkspacesState::get_fs) injects into the
 //! per-workspace filesystem so mount prefixes route to the provider.
-
-use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
@@ -14,10 +12,11 @@ use uuid::Uuid;
 
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
-use ::workspace::{LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config, Vfs, VfsConfig};
+use ::workspace::{
+    FsConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config, WorkspaceFs,
+};
 
-const SELECT_COLUMNS: &str =
-    "id, workspace_id, prefix, provider, config, created_at, updated_at";
+const SELECT_COLUMNS: &str = "id, workspace_id, prefix, provider, config, created_at, updated_at";
 
 /// A configured external-provider mount for a workspace.
 #[derive(Clone)]
@@ -82,9 +81,9 @@ fn decode_provider(kind: &str, config_json: &str) -> StateResult<ProviderConfig>
         "s3" => Ok(ProviderConfig::S3(serde_json::from_str::<S3Config>(
             config_json,
         )?)),
-        "notion" => Ok(ProviderConfig::Notion(serde_json::from_str::<NotionConfig>(
-            config_json,
-        )?)),
+        "notion" => Ok(ProviderConfig::Notion(
+            serde_json::from_str::<NotionConfig>(config_json)?,
+        )),
         other => Err(StateError::InvalidData(format!(
             "workspace_mounts.provider: unknown provider {other}"
         ))),
@@ -165,25 +164,24 @@ impl WorkspacesState {
         Ok(existing)
     }
 
-    /// Assemble the workspace's mounts into a live [`Vfs`], or `None` when the
-    /// workspace has no mounts (so the filesystem stays purely local).
-    pub(super) async fn build_vfs(&self, workspace_id: Uuid) -> StateResult<Arc<Vfs>> {
+    /// Build the workspace's filesystem: the local `/files` mount plus any
+    /// configured provider mounts.
+    pub(super) async fn build_fs(&self, workspace_id: Uuid) -> StateResult<WorkspaceFs> {
         let mut config = build_workspace_vfs(&self.db, workspace_id).await?;
         config.local_root = Some(self.get_root(workspace_id));
-        let vfs =
-            Vfs::from_config(config).map_err(|e| StateError::InvalidData(format!("vfs: {e}")))?;
-        Ok(Arc::new(vfs))
+        WorkspaceFs::from_config(config)
+            .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))
     }
 }
 
-/// Load a workspace's provider mounts into a [`VfsConfig`], with `local_root`
+/// Load a workspace's provider mounts into an [`FsConfig`], with `local_root`
 /// left unset — the caller fills it, since only it knows the on-disk file root.
-/// Standalone (takes the pool) so both [`WorkspacesState::build_vfs`] and the
+/// Standalone (takes the pool) so both [`WorkspacesState::build_fs`] and the
 /// session run loop (which only holds the pool) can build it.
 pub(crate) async fn build_workspace_vfs(
     db: &SqlitePool,
     workspace_id: Uuid,
-) -> StateResult<VfsConfig> {
+) -> StateResult<FsConfig> {
     let rows = sqlx::query(&format!(
         "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC"
     ))
@@ -194,7 +192,7 @@ pub(crate) async fn build_workspace_vfs(
         .iter()
         .map(WorkspaceMount::from_row)
         .collect::<StateResult<Vec<_>>>()?;
-    Ok(VfsConfig {
+    Ok(FsConfig {
         local_root: None,
         mounts: mounts
             .into_iter()
@@ -297,9 +295,9 @@ mod tests {
             _ => panic!("expected S3"),
         }
 
-        // build_vfs assembles the mount (no network — just client construction),
+        // build_fs assembles the mount (no network — just client construction),
         // alongside the always-present local `/files` mount.
-        let vfs = state.build_vfs(wid).await.unwrap();
+        let vfs = state.build_fs(wid).await.unwrap();
         let mut names = vfs.mount_names();
         names.sort();
         assert_eq!(names, vec!["files".to_string(), "s3-prod".to_string()]);
@@ -318,7 +316,7 @@ mod tests {
         state.remove_mount(created.id).await.unwrap();
         assert!(state.list_mounts(wid).await.unwrap().is_empty());
         assert_eq!(
-            state.build_vfs(wid).await.unwrap().mount_names(),
+            state.build_fs(wid).await.unwrap().mount_names(),
             vec!["files".to_string()]
         );
         assert!(matches!(

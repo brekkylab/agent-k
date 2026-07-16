@@ -14,8 +14,8 @@ use std::{
 use async_trait::async_trait;
 
 use crate::vfs::{
-    error::{VfsError, VfsResult},
-    path::VPath,
+    error::{ResourceError, ResourceResult},
+    path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
@@ -121,8 +121,10 @@ impl IndexCache {
             format!("{path}/")
         };
         let mut inner = self.inner.lock().unwrap();
-        let child_keys: Vec<String> =
-            entries.iter().map(|e| format!("{prefix}{}", e.name)).collect();
+        let child_keys: Vec<String> = entries
+            .iter()
+            .map(|e| format!("{prefix}{}", e.name))
+            .collect();
         // Drop the subtree of any child present in the previous listing but gone
         // from this one, so a deleted child can't keep stat'ing as present.
         let vanished: Vec<String> = match inner.children.get(path) {
@@ -197,11 +199,15 @@ impl CachedResource {
 
 #[async_trait]
 impl Resource for CachedResource {
-    async fn read_bytes(&self, path: &VPath, range: Option<Range<u64>>) -> VfsResult<Vec<u8>> {
+    async fn read_bytes(
+        &self,
+        path: &MountPath,
+        range: Option<Range<u64>>,
+    ) -> ResourceResult<Vec<u8>> {
         self.inner.read_bytes(path, range).await
     }
 
-    async fn write_bytes(&self, path: &VPath, data: Vec<u8>) -> VfsResult<()> {
+    async fn write_bytes(&self, path: &MountPath, data: Vec<u8>) -> ResourceResult<()> {
         let r = self.inner.write_bytes(path, data).await;
         if r.is_ok() {
             self.cache.invalidate_parent(path.as_str());
@@ -209,7 +215,7 @@ impl Resource for CachedResource {
         r
     }
 
-    async fn readdir(&self, path: &VPath) -> VfsResult<Vec<DirEntry>> {
+    async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<DirEntry>> {
         if let Some(entries) = self.cache.list_dir_entries(path.as_str()) {
             return Ok(entries);
         }
@@ -218,7 +224,7 @@ impl Resource for CachedResource {
         Ok(entries)
     }
 
-    async fn stat(&self, path: &VPath) -> VfsResult<FileStat> {
+    async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
         let key = path.as_str();
         match self.cache.get(key) {
             Some(e) if e.is_dir => {
@@ -251,14 +257,14 @@ impl Resource for CachedResource {
                 // Negative cache: a fresh parent listing that lacks this path
                 // proves it does not exist — skip the network probe.
                 if !path.is_root() && self.cache.is_listed(parent_of(key)) {
-                    return Err(VfsError::NotFound);
+                    return Err(ResourceError::NotFound);
                 }
             }
         }
         self.inner.stat(path).await
     }
 
-    async fn unlink(&self, path: &VPath) -> VfsResult<()> {
+    async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
         let r = self.inner.unlink(path).await;
         if r.is_ok() {
             // The path itself may have been a directory; drop its listing too.
@@ -268,7 +274,7 @@ impl Resource for CachedResource {
         r
     }
 
-    async fn mkdir(&self, path: &VPath) -> VfsResult<()> {
+    async fn mkdir(&self, path: &MountPath) -> ResourceResult<()> {
         let r = self.inner.mkdir(path).await;
         if r.is_ok() {
             self.cache.invalidate_parent(path.as_str());
@@ -276,7 +282,7 @@ impl Resource for CachedResource {
         r
     }
 
-    async fn rmdir(&self, path: &VPath) -> VfsResult<()> {
+    async fn rmdir(&self, path: &MountPath) -> ResourceResult<()> {
         let r = self.inner.rmdir(path).await;
         if r.is_ok() {
             self.cache.invalidate_dir(path.as_str());
@@ -285,7 +291,7 @@ impl Resource for CachedResource {
         r
     }
 
-    async fn rename(&self, from: &VPath, to: &VPath) -> VfsResult<()> {
+    async fn rename(&self, from: &MountPath, to: &MountPath) -> ResourceResult<()> {
         let r = self.inner.rename(from, to).await;
         if r.is_ok() {
             self.cache.invalidate_dir(from.as_str());
@@ -295,7 +301,7 @@ impl Resource for CachedResource {
         r
     }
 
-    async fn command(&self, name: &str, body: &[u8]) -> VfsResult<Vec<u8>> {
+    async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
         let r = self.inner.command(name, body).await;
         // A domain write (e.g. Notion page-create) may change listings anywhere
         // in the mount; conservatively drop the whole index.
@@ -325,7 +331,11 @@ fn basename(path: &str) -> &str {
 
 /// Remove `p` and everything under `p/` from every map (entries/children/expiry).
 fn purge_prefix(inner: &mut Inner, p: &str) {
-    let sub = if p == "/" { "/".to_string() } else { format!("{p}/") };
+    let sub = if p == "/" {
+        "/".to_string()
+    } else {
+        format!("{p}/")
+    };
     let stale = |k: &str| k == p || k.starts_with(sub.as_str());
     inner.entries.retain(|k, _| !stale(k));
     inner.children.retain(|k, _| !stale(k));

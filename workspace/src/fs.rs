@@ -1,6 +1,6 @@
 //! Protocol-agnostic filesystem primitives for a workspace.
 //!
-//! [`WorkspaceFs`] is a thin router over a single [`Vfs`] mount table: the
+//! [`WorkspaceFs`] is a thin router over its own mount table: the
 //! workspace's local files (the [`LOCAL_MOUNT`](crate::vfs::LOCAL_MOUNT) `/files`
 //! mount, a `LocalResource`) and its external-provider mounts (`/notion`, …) are
 //! all [`Resource`]s. Every path operation is `route → delegate`; there is no
@@ -28,7 +28,9 @@ use futures_util::{Stream, StreamExt as _, stream};
 
 use crate::hook::{FsEvent, FsHook};
 use crate::vfs::sandbox::{ForwardFs, FwdEntry, FwdStat, secs_since_epoch};
-use crate::vfs::{FileKind, FileStat, Resource, VPath, Vfs, VfsConfig, VfsError};
+use crate::vfs::{
+    FileKind, FileStat, FsConfig, Mount, MountPath, Resource, ResourceError, build_mounts,
+};
 
 /// Errors a workspace filesystem operation can produce. A protocol-agnostic
 /// subset that the WebDAV layer maps onto `dav_server::fs::FsError`.
@@ -49,15 +51,15 @@ pub enum FsError {
 /// Result alias for filesystem operations.
 pub type FsResult<T> = Result<T, FsError>;
 
-/// Map a provider [`VfsError`] onto the workspace [`FsError`]. The provider
+/// Map a provider [`ResourceError`] onto the workspace [`FsError`]. The provider
 /// classifies the failure itself (typed, not by message): `NotFound` → 404, an
 /// unsupported op → `NotImplemented`, any backend failure → a generic error.
-impl From<VfsError> for FsError {
-    fn from(e: VfsError) -> Self {
+impl From<ResourceError> for FsError {
+    fn from(e: ResourceError) -> Self {
         match e {
-            VfsError::NotFound => FsError::NotFound,
-            VfsError::Unsupported => FsError::NotImplemented,
-            VfsError::Backend(_) => FsError::GeneralFailure,
+            ResourceError::NotFound => FsError::NotFound,
+            ResourceError::Unsupported => FsError::NotImplemented,
+            ResourceError::Backend(_) => FsError::GeneralFailure,
         }
     }
 }
@@ -194,7 +196,7 @@ struct Observer {
 /// (a provider whose `write_bytes` is `Unsupported`, e.g. Notion, fails at flush).
 pub struct File {
     resource: Arc<dyn Resource>,
-    path: VPath,
+    path: MountPath,
     offset: u64,
     /// Whether this handle was opened for writing (gates `write_*`/`flush`).
     write: bool,
@@ -258,7 +260,12 @@ impl File {
             SeekFrom::Current(d) => (self.offset as i64 + d).max(0) as u64,
             // Seeking from the end needs the object size; one stat serves it.
             SeekFrom::End(d) => {
-                let size = self.resource.stat(&self.path).await.map_err(FsError::from)?.size;
+                let size = self
+                    .resource
+                    .stat(&self.path)
+                    .await
+                    .map_err(FsError::from)?
+                    .size;
                 (size as i64 + d).max(0) as u64
             }
         };
@@ -295,33 +302,58 @@ impl File {
     }
 }
 
-/// A filesystem handle scoped to a single workspace: a router over the
-/// workspace's [`Vfs`] mount table (local `/files` + provider mounts). Cheap to
-/// clone (`Arc<Vfs>` + an optional hook); `Send + Sync + 'static`.
+/// A filesystem handle scoped to a single workspace: a router over its own mount
+/// table (the local `/files` mount + provider mounts). Cheap to clone
+/// (`Arc<[Mount]>` + an optional hook); `Send + Sync + 'static`.
 #[derive(Clone)]
 pub struct WorkspaceFs {
-    vfs: Arc<Vfs>,
+    /// Mounts sorted by prefix length descending, for longest-prefix routing.
+    mounts: Arc<[Mount]>,
     /// Change hook, injected by the host. `None` fires nothing. The host bakes
     /// any identity it needs (e.g. the workspace id) into its `FsHook` impl.
     hook: Option<Arc<dyn FsHook>>,
 }
 
 impl WorkspaceFs {
-    /// A workspace filesystem over `vfs` (which already includes the local
-    /// `/files` mount and any provider mounts) with no change hook.
-    pub fn new(vfs: Arc<Vfs>) -> Self {
-        Self { vfs, hook: None }
+    /// Build from live mounts. Rejects empty/relative or duplicate prefixes and
+    /// sorts by prefix length descending so [`Self::route`] does longest-match.
+    pub fn from_mounts(mut mounts: Vec<Mount>) -> anyhow::Result<Self> {
+        for m in &mounts {
+            if m.prefix.is_empty() || !m.prefix.starts_with('/') {
+                anyhow::bail!(
+                    "mount prefix must be absolute and non-empty: {:?}",
+                    m.prefix
+                );
+            }
+        }
+        for i in 0..mounts.len() {
+            for j in (i + 1)..mounts.len() {
+                if mounts[i].prefix == mounts[j].prefix {
+                    anyhow::bail!("duplicate mount prefix: {}", mounts[i].prefix);
+                }
+            }
+        }
+        mounts.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+        Ok(Self {
+            mounts: mounts.into(),
+            hook: None,
+        })
+    }
+
+    /// Instantiate the resources from `config` (the local `/files` mount when
+    /// `local_root` is set, plus provider mounts) and build the filesystem.
+    pub fn from_config(config: FsConfig) -> anyhow::Result<Self> {
+        Self::from_mounts(build_mounts(config)?)
     }
 
     /// A local-only workspace filesystem rooted at `root` (no provider mounts) —
     /// a convenience for standalone use and tests.
     pub fn local(root: PathBuf) -> Self {
-        let vfs = Vfs::from_config(VfsConfig {
+        Self::from_config(FsConfig {
             local_root: Some(root),
             mounts: Vec::new(),
         })
-        .expect("local-only vfs is always valid");
-        Self::new(Arc::new(vfs))
+        .expect("local-only fs is always valid")
     }
 
     /// Attach an [`FsHook`] fired on every mutation. `None` clears it.
@@ -336,21 +368,35 @@ impl WorkspaceFs {
         }
     }
 
-    /// Route a workspace-relative path to the mount that owns it. `None` means
-    /// the path names no node (the virtual root, or a top segment that is neither
-    /// the local mount nor a provider prefix).
-    fn route(&self, rel_path: &str) -> Option<(Arc<dyn Resource>, VPath)> {
+    /// Route a workspace-relative path to the mount that owns it, by longest
+    /// prefix. `None` means the path names no node (the virtual root, or a top
+    /// segment that is neither the local mount nor a provider prefix).
+    fn route(&self, rel_path: &str) -> Option<(Arc<dyn Resource>, MountPath)> {
         let abs = if rel_path.starts_with('/') {
             rel_path.to_string()
         } else {
             format!("/{rel_path}")
         };
-        self.vfs.route(&abs).map(|(r, p)| (Arc::clone(r), p))
+        let abs = abs.trim_end_matches('/');
+        for m in self.mounts.iter() {
+            if abs == m.prefix {
+                return Some((Arc::clone(&m.resource), MountPath::root()));
+            }
+            if let Some(rest) = abs.strip_prefix(&m.prefix)
+                && rest.starts_with('/')
+            {
+                return Some((Arc::clone(&m.resource), MountPath::new(rest)));
+            }
+        }
+        None
     }
 
     /// Top-level mount names (no leading `/`) — the children of the virtual root.
-    fn mount_names(&self) -> Vec<String> {
-        self.vfs.mount_names()
+    pub fn mount_names(&self) -> Vec<String> {
+        self.mounts
+            .iter()
+            .map(|m| m.prefix.trim_start_matches('/').to_string())
+            .collect()
     }
 
     pub async fn metadata(&self, rel_path: &str) -> FsResult<Stat> {
@@ -382,15 +428,16 @@ impl WorkspaceFs {
         }
         let (resource, vpath) = self.route(rel_path).ok_or(FsError::NotFound)?;
         let entries = resource.readdir(&vpath).await.map_err(FsError::from)?;
-        let out: Vec<FsResult<DirEntry>> =
-            entries.into_iter().map(|e| Ok(dir_entry_from_vfs(e))).collect();
+        let out: Vec<FsResult<DirEntry>> = entries
+            .into_iter()
+            .map(|e| Ok(dir_entry_from_vfs(e)))
+            .collect();
         Ok(Box::pin(stream::iter(out)))
     }
 
     pub async fn open(&self, rel_path: &str, options: OpenOptions) -> FsResult<File> {
         let (resource, vpath) = self.route(rel_path).ok_or(FsError::NotFound)?;
-        let is_write =
-            options.write || options.append || options.create || options.create_new;
+        let is_write = options.write || options.append || options.create || options.create_new;
 
         // One stat serves both the existence probe (create/modify distinction,
         // create_new guard) and the read-open directory/existence check.
@@ -411,7 +458,10 @@ impl WorkspaceFs {
         // rewrites the whole object.
         let mut wbuf = Vec::new();
         if options.append && existed {
-            wbuf = resource.read_bytes(&vpath, None).await.map_err(FsError::from)?;
+            wbuf = resource
+                .read_bytes(&vpath, None)
+                .await
+                .map_err(FsError::from)?;
         }
 
         let observer = (is_write && self.hook.is_some()).then(|| Observer {
@@ -695,8 +745,8 @@ mod tests {
 
     use super::{FsError, OpenOptions, WorkspaceFs};
     use crate::vfs::{
-        DirEntry as VfsDirEntry, FileKind, FileStat, LocalResource, Mount, Resource, VPath, Vfs,
-        VfsError, VfsResult,
+        DirEntry as ResourceDirEntry, FileKind, FileStat, LocalResource, Mount, MountPath,
+        Resource, ResourceError, ResourceResult,
     };
 
     /// A tiny read-only provider holding one file, `/file.txt`.
@@ -706,9 +756,13 @@ mod tests {
 
     #[async_trait]
     impl Resource for MockResource {
-        async fn read_bytes(&self, path: &VPath, range: Option<Range<u64>>) -> VfsResult<Vec<u8>> {
+        async fn read_bytes(
+            &self,
+            path: &MountPath,
+            range: Option<Range<u64>>,
+        ) -> ResourceResult<Vec<u8>> {
             if path.as_str() != "/file.txt" {
-                return Err(VfsError::NotFound);
+                return Err(ResourceError::NotFound);
             }
             Ok(match range {
                 Some(r) => {
@@ -720,13 +774,13 @@ mod tests {
             })
         }
 
-        async fn write_bytes(&self, _path: &VPath, _data: Vec<u8>) -> VfsResult<()> {
-            Err(VfsError::Unsupported)
+        async fn write_bytes(&self, _path: &MountPath, _data: Vec<u8>) -> ResourceResult<()> {
+            Err(ResourceError::Unsupported)
         }
 
-        async fn readdir(&self, path: &VPath) -> VfsResult<Vec<VfsDirEntry>> {
+        async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<ResourceDirEntry>> {
             if path.is_root() {
-                Ok(vec![VfsDirEntry {
+                Ok(vec![ResourceDirEntry {
                     name: "file.txt".to_string(),
                     kind: FileKind::File,
                     size: self.content.len() as u64,
@@ -736,11 +790,11 @@ mod tests {
                     created: None,
                 }])
             } else {
-                Err(VfsError::NotFound)
+                Err(ResourceError::NotFound)
             }
         }
 
-        async fn stat(&self, path: &VPath) -> VfsResult<FileStat> {
+        async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
             if path.is_root() {
                 Ok(FileStat {
                     kind: FileKind::Dir,
@@ -753,7 +807,7 @@ mod tests {
                     ..Default::default()
                 })
             } else {
-                Err(VfsError::NotFound)
+                Err(ResourceError::NotFound)
             }
         }
     }
@@ -765,7 +819,7 @@ mod tests {
         let mock: Arc<dyn Resource> = Arc::new(MockResource {
             content: b"hello world".to_vec(),
         });
-        let vfs = Vfs::new(vec![
+        WorkspaceFs::from_mounts(vec![
             Mount {
                 prefix: "/files".to_string(),
                 resource: local,
@@ -775,8 +829,7 @@ mod tests {
                 resource: mock,
             },
         ])
-        .unwrap();
-        WorkspaceFs::new(Arc::new(vfs))
+        .unwrap()
     }
 
     async fn dir_names(fs: &WorkspaceFs, path: &str) -> Vec<String> {
@@ -843,7 +896,10 @@ mod tests {
         assert!(st.is_file());
         assert_eq!(st.len, 4);
         // A bare root-relative path (no mount prefix) names no node.
-        assert_eq!(fs.metadata("/local.txt").await.err(), Some(FsError::NotFound));
+        assert_eq!(
+            fs.metadata("/local.txt").await.err(),
+            Some(FsError::NotFound)
+        );
     }
 
     #[tokio::test]
@@ -868,14 +924,23 @@ mod tests {
         assert_eq!(f.flush().await.err(), Some(FsError::NotImplemented));
 
         // Directory / delete / rename ops the mock doesn't implement → NotImplemented.
-        assert_eq!(fs.create_dir("/mock/x").await.err(), Some(FsError::NotImplemented));
+        assert_eq!(
+            fs.create_dir("/mock/x").await.err(),
+            Some(FsError::NotImplemented)
+        );
         assert_eq!(
             fs.remove_file("/mock/file.txt").await.err(),
             Some(FsError::NotImplemented)
         );
-        assert_eq!(fs.rename("/mock/a", "/mock/b").await.err(), Some(FsError::NotImplemented));
+        assert_eq!(
+            fs.rename("/mock/a", "/mock/b").await.err(),
+            Some(FsError::NotImplemented)
+        );
         // Crossing the local/provider boundary is forbidden.
-        assert_eq!(fs.copy("/files/x", "/mock/b").await.err(), Some(FsError::Forbidden));
+        assert_eq!(
+            fs.copy("/files/x", "/mock/b").await.err(),
+            Some(FsError::Forbidden)
+        );
     }
 
     /// The `ForwardFs` view serves the same unified tree: the mount names at the
@@ -933,21 +998,35 @@ mod tests {
 
         // Full and ranged reads of both a local file and a mounted object.
         assert_eq!(
-            ForwardFs::read(&fs, "/files/local.txt", None, None).await.unwrap(),
+            ForwardFs::read(&fs, "/files/local.txt", None, None)
+                .await
+                .unwrap(),
             b"local-bytes"
         );
         assert_eq!(
-            ForwardFs::read(&fs, "/mock/file.txt", None, None).await.unwrap(),
+            ForwardFs::read(&fs, "/mock/file.txt", None, None)
+                .await
+                .unwrap(),
             b"hello world"
         );
         assert_eq!(
-            ForwardFs::read(&fs, "/mock/file.txt", Some(6), Some(5)).await.unwrap(),
+            ForwardFs::read(&fs, "/mock/file.txt", Some(6), Some(5))
+                .await
+                .unwrap(),
             b"world"
         );
 
         // Local writes succeed; the mock provider stays read-only.
-        assert!(ForwardFs::write(&fs, "/files/local.txt", b"x".to_vec()).await.is_ok());
-        assert!(ForwardFs::write(&fs, "/mock/file.txt", b"x".to_vec()).await.is_err());
+        assert!(
+            ForwardFs::write(&fs, "/files/local.txt", b"x".to_vec())
+                .await
+                .is_ok()
+        );
+        assert!(
+            ForwardFs::write(&fs, "/mock/file.txt", b"x".to_vec())
+                .await
+                .is_err()
+        );
     }
 
     /// The local `/files` mount is read-write through the unified `ForwardFs`
@@ -964,7 +1043,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            ForwardFs::read(&fs, "/files/note.txt", None, None).await.unwrap(),
+            ForwardFs::read(&fs, "/files/note.txt", None, None)
+                .await
+                .unwrap(),
             b"hello"
         );
         assert!(tmp.path().join("note.txt").exists());
@@ -974,7 +1055,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            ForwardFs::read(&fs, "/files/note.txt", None, None).await.unwrap(),
+            ForwardFs::read(&fs, "/files/note.txt", None, None)
+                .await
+                .unwrap(),
             b"world!"
         );
 
@@ -995,13 +1078,32 @@ mod tests {
         ForwardFs::rename(&fs, "/files/note.txt", "/files/renamed.txt")
             .await
             .unwrap();
-        assert!(ForwardFs::stat(&fs, "/files/renamed.txt").await.unwrap().exists);
-        assert!(!ForwardFs::stat(&fs, "/files/note.txt").await.unwrap().exists);
+        assert!(
+            ForwardFs::stat(&fs, "/files/renamed.txt")
+                .await
+                .unwrap()
+                .exists
+        );
+        assert!(
+            !ForwardFs::stat(&fs, "/files/note.txt")
+                .await
+                .unwrap()
+                .exists
+        );
         ForwardFs::unlink(&fs, "/files/renamed.txt").await.unwrap();
-        assert!(!ForwardFs::stat(&fs, "/files/renamed.txt").await.unwrap().exists);
+        assert!(
+            !ForwardFs::stat(&fs, "/files/renamed.txt")
+                .await
+                .unwrap()
+                .exists
+        );
 
         // Provider stays read-only, and crossing the boundary is rejected.
-        assert!(ForwardFs::write(&fs, "/mock/file.txt", b"x".to_vec()).await.is_err());
+        assert!(
+            ForwardFs::write(&fs, "/mock/file.txt", b"x".to_vec())
+                .await
+                .is_err()
+        );
         assert!(ForwardFs::mkdir(&fs, "/mock/newdir").await.is_err());
         assert!(ForwardFs::rename(&fs, "/files/a", "/mock/b").await.is_err());
     }

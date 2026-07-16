@@ -1,4 +1,4 @@
-//! [`ForwardFs`] — the filesystem surface the host [`VfsForward`](super::VfsForward)
+//! [`ForwardFs`] — the filesystem surface the host [`ForwardServer`](super::ForwardServer)
 //! server exposes to the in-guest FUSE forwarder.
 //!
 //! Implemented by `WorkspaceFs` (in [`crate::state`]) — the unified workspace
@@ -51,7 +51,7 @@ impl FwdStat {
     }
 }
 
-/// The filesystem the [`VfsForward`](super::VfsForward) server serves over HTTP.
+/// The filesystem the [`ForwardServer`](super::ForwardServer) server serves over HTTP.
 /// Implemented by `WorkspaceFs` (the unified workspace tree).
 #[async_trait]
 pub trait ForwardFs: Send + Sync + 'static {

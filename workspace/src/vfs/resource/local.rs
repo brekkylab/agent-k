@@ -1,7 +1,6 @@
 //! The workspace's local file tree as a [`Resource`], so it routes through the
-//! same [`Vfs`](crate::vfs::Vfs) machinery as the external-provider mounts (S3,
-//! Notion) instead of a separate `tokio::fs` branch. Mounted at the reserved
-//! `/files` prefix.
+//! same mount machinery as the external-provider mounts (S3, Notion) instead of
+//! a separate `tokio::fs` branch. Mounted at the reserved `/files` prefix.
 //!
 //! Stateless per call (open→op→close), matching the `Resource` contract: reads
 //! pull a byte range, writes replace the whole object. Reports the local
@@ -17,8 +16,8 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 use crate::vfs::{
-    error::{VfsError, VfsResult},
-    path::VPath,
+    error::{ResourceError, ResourceResult},
+    path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
@@ -32,15 +31,15 @@ impl LocalResource {
         Self { root }
     }
 
-    /// Resolve a mount-relative [`VPath`] to an on-disk path under `root`,
+    /// Resolve a mount-relative [`MountPath`] to an on-disk path under `root`,
     /// rejecting `.`/`..` segments so a mount can't address outside its root
     /// (mirrors `S3Resource::os_path`). An escaping path can't name a node →
     /// `NotFound`.
-    fn resolve(&self, path: &VPath) -> VfsResult<PathBuf> {
+    fn resolve(&self, path: &MountPath) -> ResourceResult<PathBuf> {
         let mut out = self.root.clone();
         for seg in path.as_str().split('/').filter(|s| !s.is_empty()) {
             if seg == "." || seg == ".." {
-                return Err(VfsError::NotFound);
+                return Err(ResourceError::NotFound);
             }
             out.push(seg);
         }
@@ -48,14 +47,14 @@ impl LocalResource {
     }
 }
 
-/// Map an I/O error to the typed [`VfsError`], preserving `NotFound` so the
+/// Map an I/O error to the typed [`ResourceError`], preserving `NotFound` so the
 /// WebDAV layer answers 404 (the blanket `From<io::Error>` collapses everything
 /// to `Backend`, which would surface as a 500).
-fn io_err(e: std::io::Error) -> VfsError {
+fn io_err(e: std::io::Error) -> ResourceError {
     if e.kind() == std::io::ErrorKind::NotFound {
-        VfsError::NotFound
+        ResourceError::NotFound
     } else {
-        VfsError::Backend(e.into())
+        ResourceError::Backend(e.into())
     }
 }
 
@@ -91,7 +90,11 @@ fn stat_of(m: &std::fs::Metadata) -> FileStat {
 
 #[async_trait]
 impl Resource for LocalResource {
-    async fn read_bytes(&self, path: &VPath, range: Option<Range<u64>>) -> VfsResult<Vec<u8>> {
+    async fn read_bytes(
+        &self,
+        path: &MountPath,
+        range: Option<Range<u64>>,
+    ) -> ResourceResult<Vec<u8>> {
         let p = self.resolve(path)?;
         let mut f = tokio::fs::File::open(&p).await.map_err(io_err)?;
         let mut buf = Vec::new();
@@ -102,7 +105,11 @@ impl Resource for LocalResource {
             Some(r) => {
                 f.seek(SeekFrom::Start(r.start)).await.map_err(io_err)?;
                 let len = r.end.saturating_sub(r.start);
-                (&mut f).take(len).read_to_end(&mut buf).await.map_err(io_err)?;
+                (&mut f)
+                    .take(len)
+                    .read_to_end(&mut buf)
+                    .await
+                    .map_err(io_err)?;
             }
             None => {
                 f.read_to_end(&mut buf).await.map_err(io_err)?;
@@ -111,7 +118,7 @@ impl Resource for LocalResource {
         Ok(buf)
     }
 
-    async fn write_bytes(&self, path: &VPath, data: Vec<u8>) -> VfsResult<()> {
+    async fn write_bytes(&self, path: &MountPath, data: Vec<u8>) -> ResourceResult<()> {
         let p = self.resolve(path)?;
         let mut oo = tokio::fs::OpenOptions::new();
         oo.write(true).create(true).truncate(true);
@@ -126,7 +133,7 @@ impl Resource for LocalResource {
         Ok(())
     }
 
-    async fn readdir(&self, path: &VPath) -> VfsResult<Vec<DirEntry>> {
+    async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<DirEntry>> {
         let p = self.resolve(path)?;
         let mut rd = tokio::fs::read_dir(&p).await.map_err(io_err)?;
         let mut out = Vec::new();
@@ -161,18 +168,22 @@ impl Resource for LocalResource {
         Ok(out)
     }
 
-    async fn stat(&self, path: &VPath) -> VfsResult<FileStat> {
+    async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
         // Follows symlinks (symlink kind is not modelled — it resolves to its
         // target), matching the previous local `metadata`.
-        let m = tokio::fs::metadata(self.resolve(path)?).await.map_err(io_err)?;
+        let m = tokio::fs::metadata(self.resolve(path)?)
+            .await
+            .map_err(io_err)?;
         Ok(stat_of(&m))
     }
 
-    async fn unlink(&self, path: &VPath) -> VfsResult<()> {
-        tokio::fs::remove_file(self.resolve(path)?).await.map_err(io_err)
+    async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
+        tokio::fs::remove_file(self.resolve(path)?)
+            .await
+            .map_err(io_err)
     }
 
-    async fn mkdir(&self, path: &VPath) -> VfsResult<()> {
+    async fn mkdir(&self, path: &MountPath) -> ResourceResult<()> {
         let p = self.resolve(path)?;
         let mut b = tokio::fs::DirBuilder::new();
         #[cfg(unix)]
@@ -183,11 +194,13 @@ impl Resource for LocalResource {
         b.create(&p).await.map_err(io_err)
     }
 
-    async fn rmdir(&self, path: &VPath) -> VfsResult<()> {
-        tokio::fs::remove_dir(self.resolve(path)?).await.map_err(io_err)
+    async fn rmdir(&self, path: &MountPath) -> ResourceResult<()> {
+        tokio::fs::remove_dir(self.resolve(path)?)
+            .await
+            .map_err(io_err)
     }
 
-    async fn rename(&self, from: &VPath, to: &VPath) -> VfsResult<()> {
+    async fn rename(&self, from: &MountPath, to: &MountPath) -> ResourceResult<()> {
         let (from, to) = (self.resolve(from)?, self.resolve(to)?);
         rename_compat(&from, &to).await.map_err(io_err)
     }
@@ -231,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn round_trip_write_stat_read() {
         let (_tmp, r) = res();
-        let p = VPath::new("/note.txt");
+        let p = MountPath::new("/note.txt");
         r.write_bytes(&p, b"hello local".to_vec()).await.unwrap();
 
         let st = r.stat(&p).await.unwrap();
@@ -250,11 +263,13 @@ mod tests {
     #[tokio::test]
     async fn readdir_and_dir_ops() {
         let (_tmp, r) = res();
-        r.mkdir(&VPath::new("/sub")).await.unwrap();
-        r.write_bytes(&VPath::new("/sub/a.txt"), b"x".to_vec()).await.unwrap();
+        r.mkdir(&MountPath::new("/sub")).await.unwrap();
+        r.write_bytes(&MountPath::new("/sub/a.txt"), b"x".to_vec())
+            .await
+            .unwrap();
 
         let names: Vec<_> = r
-            .readdir(&VPath::new("/sub"))
+            .readdir(&MountPath::new("/sub"))
             .await
             .unwrap()
             .into_iter()
@@ -262,20 +277,34 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["a.txt".to_string()]);
 
-        r.rename(&VPath::new("/sub/a.txt"), &VPath::new("/sub/b.txt")).await.unwrap();
-        assert!(matches!(r.stat(&VPath::new("/sub/a.txt")).await, Err(VfsError::NotFound)));
-        assert_eq!(r.stat(&VPath::new("/sub/b.txt")).await.unwrap().size, 1);
+        r.rename(&MountPath::new("/sub/a.txt"), &MountPath::new("/sub/b.txt"))
+            .await
+            .unwrap();
+        assert!(matches!(
+            r.stat(&MountPath::new("/sub/a.txt")).await,
+            Err(ResourceError::NotFound)
+        ));
+        assert_eq!(r.stat(&MountPath::new("/sub/b.txt")).await.unwrap().size, 1);
 
-        r.unlink(&VPath::new("/sub/b.txt")).await.unwrap();
-        r.rmdir(&VPath::new("/sub")).await.unwrap();
-        assert!(matches!(r.stat(&VPath::new("/sub")).await, Err(VfsError::NotFound)));
+        r.unlink(&MountPath::new("/sub/b.txt")).await.unwrap();
+        r.rmdir(&MountPath::new("/sub")).await.unwrap();
+        assert!(matches!(
+            r.stat(&MountPath::new("/sub")).await,
+            Err(ResourceError::NotFound)
+        ));
     }
 
     #[tokio::test]
     async fn missing_path_is_not_found() {
         let (_tmp, r) = res();
-        assert!(matches!(r.stat(&VPath::new("/nope.txt")).await, Err(VfsError::NotFound)));
-        assert!(matches!(r.read_bytes(&VPath::new("/nope.txt"), None).await, Err(VfsError::NotFound)));
+        assert!(matches!(
+            r.stat(&MountPath::new("/nope.txt")).await,
+            Err(ResourceError::NotFound)
+        ));
+        assert!(matches!(
+            r.read_bytes(&MountPath::new("/nope.txt"), None).await,
+            Err(ResourceError::NotFound)
+        ));
     }
 
     #[tokio::test]
@@ -283,7 +312,10 @@ mod tests {
         let (_tmp, r) = res();
         for bad in ["/../up", "/a/../b", "/."] {
             assert!(
-                matches!(r.stat(&VPath::new(bad)).await, Err(VfsError::NotFound)),
+                matches!(
+                    r.stat(&MountPath::new(bad)).await,
+                    Err(ResourceError::NotFound)
+                ),
                 "should reject {bad:?}"
             );
         }
