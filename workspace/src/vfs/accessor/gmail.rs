@@ -236,6 +236,8 @@ impl GmailAccessor {
             let mut params: Vec<(&str, String)> = vec![
                 ("maxResults", "500".to_string()),
                 ("labelIds", label_id.to_string()),
+                // We only read message ids here; drop threadId/resultSizeEstimate.
+                ("fields", "messages/id,nextPageToken".to_string()),
             ];
             if let Some(t) = &page_token {
                 params.push(("pageToken", t.clone()));
@@ -264,6 +266,18 @@ impl GmailAccessor {
         Ok(ids)
     }
 
+    /// The message-resource query for `format`. `minimal` is only ever used to
+    /// date-bucket a label listing, which reads just `id` + `internalDate`, so we
+    /// add a `fields` mask (partial response) and let Gmail drop the labels /
+    /// `sizeEstimate` / `historyId` we'd otherwise receive and discard. `full`
+    /// carries the whole message (we warm the body cache from it), so no mask.
+    fn msg_query(format: &str) -> String {
+        match format {
+            "minimal" => "format=minimal&fields=id,internalDate".to_string(),
+            other => format!("format={other}"),
+        }
+    }
+
     /// Full message resource (`format=full`): headers, payload parts, labels,
     /// `internalDate`, `sizeEstimate`.
     pub async fn get_message_full(&self, id: &str) -> anyhow::Result<Value> {
@@ -271,10 +285,11 @@ impl GmailAccessor {
         self.get_json(&url).await
     }
 
-    /// Minimal message resource (`format=minimal`): `internalDate` + labels but
-    /// no headers/body. Used to date-bucket a label listing cheaply.
+    /// Minimal message resource (`format=minimal`, masked to `id` + `internalDate`
+    /// — see [`Self::msg_query`]). Used to date-bucket a label listing cheaply.
     pub async fn get_message_minimal(&self, id: &str) -> anyhow::Result<Value> {
-        let url = format!("{GMAIL_API_BASE}/users/me/messages/{id}?format=minimal");
+        let q = Self::msg_query("minimal");
+        let url = format!("{GMAIL_API_BASE}/users/me/messages/{id}?{q}");
         self.get_json(&url).await
     }
 
@@ -301,9 +316,8 @@ impl GmailAccessor {
         for id in ids {
             body.push_str(&format!("--{BOUNDARY}\r\n"));
             body.push_str("Content-Type: application/http\r\n\r\n");
-            body.push_str(&format!(
-                "GET /gmail/v1/users/me/messages/{id}?format={format}\r\n\r\n"
-            ));
+            let q = Self::msg_query(format);
+            body.push_str(&format!("GET /gmail/v1/users/me/messages/{id}?{q}\r\n\r\n"));
         }
         body.push_str(&format!("--{BOUNDARY}--\r\n"));
 
