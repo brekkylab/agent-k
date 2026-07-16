@@ -226,34 +226,42 @@ impl GmailAccessor {
             .unwrap_or_default())
     }
 
-    /// Message stubs (`{id, threadId}`) for a label and/or query.
-    pub async fn list_messages(
-        &self,
-        label_id: Option<&str>,
-        query: Option<&str>,
-        max_results: u32,
-    ) -> anyhow::Result<Vec<Value>> {
-        let mut params: Vec<(&str, String)> = vec![("maxResults", max_results.to_string())];
-        if let Some(l) = label_id {
-            params.push(("labelIds", l.to_string()));
+    /// Every message id under a label, paginating through all pages (500/page,
+    /// `nextPageToken`) with no cap — the caller wants a complete listing, so a
+    /// large label costs several pages.
+    pub async fn list_all_message_ids(&self, label_id: &str) -> anyhow::Result<Vec<String>> {
+        let mut ids = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut params: Vec<(&str, String)> = vec![
+                ("maxResults", "500".to_string()),
+                ("labelIds", label_id.to_string()),
+            ];
+            if let Some(t) = &page_token {
+                params.push(("pageToken", t.clone()));
+            }
+            let url = reqwest::Url::parse_with_params(
+                &format!("{GMAIL_API_BASE}/users/me/messages"),
+                &params,
+            )?;
+            let v = self
+                .send_with_refresh(|t| self.client.get(url.clone()).bearer_auth(t))
+                .await?
+                .error_for_status()?
+                .json::<Value>()
+                .await?;
+            if let Some(arr) = v.get("messages").and_then(|m| m.as_array()) {
+                ids.extend(
+                    arr.iter()
+                        .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from)),
+                );
+            }
+            match v.get("nextPageToken").and_then(|t| t.as_str()) {
+                Some(t) => page_token = Some(t.to_string()),
+                None => break,
+            }
         }
-        if let Some(q) = query {
-            params.push(("q", q.to_string()));
-        }
-        let url = reqwest::Url::parse_with_params(
-            &format!("{GMAIL_API_BASE}/users/me/messages"),
-            &params,
-        )?;
-        let v = self
-            .send_with_refresh(|t| self.client.get(url.clone()).bearer_auth(t))
-            .await?
-            .error_for_status()?
-            .json::<Value>()
-            .await?;
-        Ok(v.get("messages")
-            .and_then(|m| m.as_array())
-            .cloned()
-            .unwrap_or_default())
+        Ok(ids)
     }
 
     /// Full message resource (`format=full`): headers, payload parts, labels,

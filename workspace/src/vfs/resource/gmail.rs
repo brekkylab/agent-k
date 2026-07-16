@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     time::{Duration, Instant},
 };
 
@@ -21,8 +21,9 @@ const LABEL_TTL: Duration = Duration::from_secs(60);
 const MSG_TTL: Duration = Duration::from_secs(30);
 /// Concurrency for the per-message fetches a directory listing fans out.
 const FETCH_CONCURRENCY: usize = 6;
-/// Messages pulled per label / per date dir.
-const MAX_MESSAGES: u32 = 50;
+/// TTL for a label's date→ids index. The index is a full label scan, so it's
+/// cached (like a directory listing) and shared by every `ls` under the label.
+const INDEX_TTL: Duration = Duration::from_secs(600);
 /// Over-estimate reported by `stat` for an `.gmail.json` whose processed length
 /// isn't known without fetching. The guest kernel clamps reads at the reported
 /// size even under direct_io, so this must exceed any real email JSON; reads
@@ -35,18 +36,20 @@ const GMAIL_SUFFIX: &str = ".gmail.json";
 /// `(display_name, label_id)` pairs for every Gmail label.
 type LabelList = Vec<(String, String)>;
 
+/// A label's message ids grouped by received (UTC) date: `yyyy-mm-dd` → ids.
+/// A `BTreeMap` keeps dates sorted so the listing is deterministic.
+type DateIndex = BTreeMap<String, Vec<String>>;
+
 pub struct GmailResource {
     accessor: GmailAccessor,
     /// `(display_name, label_id)` for every label, cached briefly.
     label_cache: tokio::sync::Mutex<Option<(Instant, LabelList)>>,
     /// Full raw message JSON by id, cached briefly.
     msg_cache: tokio::sync::Mutex<HashMap<String, (Instant, Value)>>,
-    /// Dates (`yyyy-mm-dd`) per label that have been visited via a direct
-    /// `ls <label>/<date>` and turned out to have mail. The label listing is
-    /// capped at the newest 50 messages, so older dates don't appear on their
-    /// own; folding these visited dates back in makes the listing grow
-    /// incrementally (and lets tab-completion offer them).
-    seen_dates: tokio::sync::Mutex<HashMap<String, std::collections::BTreeSet<String>>>,
+    /// Per-label "date → message ids" index, built by one full label scan and
+    /// cached ([`INDEX_TTL`]) so every `ls` under the label — and `find` — shares
+    /// that scan instead of re-listing per date. Invalidated on a mutation.
+    date_index: tokio::sync::Mutex<HashMap<String, (Instant, DateIndex)>>,
 }
 
 impl GmailResource {
@@ -55,7 +58,7 @@ impl GmailResource {
             accessor: GmailAccessor::new(config)?,
             label_cache: tokio::sync::Mutex::new(None),
             msg_cache: tokio::sync::Mutex::new(HashMap::new()),
-            seen_dates: tokio::sync::Mutex::new(HashMap::new()),
+            date_index: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -172,64 +175,65 @@ impl GmailResource {
             .collect())
     }
 
-    /// Date dirs present in a label: list the label's messages, bucket by the
-    /// (UTC) received date.
-    async fn readdir_dates(&self, label: &str) -> anyhow::Result<Vec<DirEntry>> {
+    /// The label's date→ids index, rebuilt when absent/stale: scan every message
+    /// id (paginated), batch-fetch each internalDate (minimal), bucket by UTC
+    /// date. Cached and shared by `readdir_dates`/`readdir_messages` so a listing
+    /// scans the label once (and repeat/`find` reuse it).
+    async fn index_for(&self, label: &str) -> anyhow::Result<DateIndex> {
+        {
+            let c = self.date_index.lock().await;
+            if let Some((at, idx)) = c.get(label)
+                && at.elapsed() < INDEX_TTL
+            {
+                return Ok(idx.clone());
+            }
+        }
         let Some(label_id) = self.label_id(label).await? else {
             anyhow::bail!("no such label: {label}");
         };
-        let stubs = self
-            .accessor
-            .list_messages(Some(&label_id), None, MAX_MESSAGES)
-            .await?;
-        let ids: Vec<String> = stubs
-            .iter()
-            .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from))
-            .collect();
-        // Only internalDate is needed here — fetch all in one batch (minimal).
-        let dates: Vec<String> = self
-            .fetch_many(&ids, "minimal")
-            .await
-            .iter()
-            .filter_map(|v| v.get("internalDate").and_then(|d| d.as_str()).map(epoch_ms_to_date))
-            .collect();
-        let mut set: std::collections::BTreeSet<String> = dates.into_iter().collect();
-        // Fold in older dates the user has already visited (capped listing only
-        // covers the newest ~50 messages).
-        if let Some(seen) = self.seen_dates.lock().await.get(label) {
-            set.extend(seen.iter().cloned());
+        let ids = self.accessor.list_all_message_ids(&label_id).await?;
+        let mut idx: DateIndex = BTreeMap::new();
+        for v in &self.fetch_many(&ids, "minimal").await {
+            if let Some(id) = v.get("id").and_then(|i| i.as_str())
+                && let Some(ms) = v.get("internalDate").and_then(|d| d.as_str())
+            {
+                idx.entry(epoch_ms_to_date(ms))
+                    .or_default()
+                    .push(id.to_string());
+            }
         }
-        let mut uniq: Vec<String> = set.into_iter().collect();
-        uniq.sort_by(|a, b| b.cmp(a)); // newest first
-        Ok(uniq.into_iter().map(dir_entry).collect())
+        self.date_index
+            .lock()
+            .await
+            .insert(label.to_string(), (Instant::now(), idx.clone()));
+        Ok(idx)
     }
 
-    /// Messages (and per-message attachment dirs) within `<label>/<date>`.
+    /// Date dirs present in a label — complete and newest-first, from the shared
+    /// [`Self::index_for`] scan.
+    async fn readdir_dates(&self, label: &str) -> anyhow::Result<Vec<DirEntry>> {
+        Ok(self
+            .index_for(label)
+            .await?
+            .keys()
+            .rev()
+            .cloned()
+            .map(dir_entry)
+            .collect())
+    }
+
+    /// Messages (and per-message attachment dirs) within `<label>/<date>` —
+    /// complete, served from the shared label index (no search, no cap).
     async fn readdir_messages(&self, label: &str, date: &str) -> anyhow::Result<Vec<DirEntry>> {
-        let Some(query) = date_dir_to_gmail_query(date) else {
+        if !is_valid_date_dir(date) {
             anyhow::bail!("invalid date dir: {date}");
-        };
-        let Some(label_id) = self.label_id(label).await? else {
-            anyhow::bail!("no such label: {label}");
-        };
-        let stubs = self
-            .accessor
-            .list_messages(Some(&label_id), Some(&query), MAX_MESSAGES)
-            .await?;
-        let ids: Vec<String> = stubs
-            .iter()
-            .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from))
-            .collect();
-        // Remember a visited date that actually has mail so the (capped) label
-        // listing folds it in next time it's rebuilt.
-        if !ids.is_empty() {
-            self.seen_dates
-                .lock()
-                .await
-                .entry(label.to_string())
-                .or_default()
-                .insert(date.to_string());
         }
+        let ids = self
+            .index_for(label)
+            .await?
+            .get(date)
+            .cloned()
+            .unwrap_or_default();
         let raws = self.fetch_full_many(&ids).await;
         let mut out = Vec::new();
         for raw in &raws {
@@ -320,7 +324,10 @@ impl Resource for GmailResource {
         match seg.as_slice() {
             [] => self.readdir_labels().await.map_err(VfsError::from),
             [label] => self.readdir_dates(label).await.map_err(VfsError::from),
-            [label, date] => self.readdir_messages(label, date).await.map_err(VfsError::from),
+            [label, date] => self
+                .readdir_messages(label, date)
+                .await
+                .map_err(VfsError::from),
             // attachment dir: <label>/<date>/<subject>__<id>
             [_label, _date, dir] if !dir.ends_with(GMAIL_SUFFIX) => self
                 .readdir_attachments(&id_from_name(dir))
@@ -344,7 +351,7 @@ impl Resource for GmailResource {
             }
             // a date dir: a well-formed yyyy-mm-dd is a (possibly empty) dir
             [_label, date] => {
-                if date_dir_to_gmail_query(date).is_some() {
+                if is_valid_date_dir(date) {
                     Ok(dir_stat())
                 } else {
                     Err(VfsError::NotFound)
@@ -388,6 +395,9 @@ impl Resource for GmailResource {
                 let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
                 self.accessor.trash(&id).await?;
                 self.msg_cache.lock().await.remove(&id);
+                // The label indexes now list a trashed message; drop them so the
+                // next `ls` rebuilds without it (and it appears under TRASH).
+                self.date_index.lock().await.clear();
                 Ok(())
             }
             _ => Err(VfsError::Unsupported),
@@ -818,24 +828,22 @@ fn epoch_ms_to_date(ms: &str) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// `YYYY-MM-DD` date dir -> a one-day Gmail `after:/before:` query (cheap server
-/// -side narrowing), or `None` if not a valid date.
-fn date_dir_to_gmail_query(name: &str) -> Option<String> {
+/// Whether `name` is a well-formed `yyyy-mm-dd` date-dir segment. Listings are
+/// served from the label index (not a date search), so this only validates the
+/// path shape — a valid-but-empty date is a legitimately empty directory.
+fn is_valid_date_dir(name: &str) -> bool {
     let parts: Vec<&str> = name.split('-').collect();
     if parts.len() != 3 || parts[0].len() != 4 || parts[1].len() != 2 || parts[2].len() != 2 {
-        return None;
+        return false;
     }
-    let y: i64 = parts[0].parse().ok()?;
-    let m: u32 = parts[1].parse().ok()?;
-    let d: u32 = parts[2].parse().ok()?;
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    let days = days_from_civil(y, m as i64, d as i64);
-    let (ny, nm, nd) = civil_from_days(days + 1);
-    Some(format!(
-        "after:{y}/{m:02}/{d:02} before:{ny}/{nm:02}/{nd:02}"
-    ))
+    let (Ok(_y), Ok(m), Ok(d)) = (
+        parts[0].parse::<i64>(),
+        parts[1].parse::<u32>(),
+        parts[2].parse::<u32>(),
+    ) else {
+        return false;
+    };
+    (1..=12).contains(&m) && (1..=31).contains(&d)
 }
 
 /// Days since 1970-01-01 -> (year, month, day). Howard Hinnant's algorithm.
@@ -853,6 +861,9 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 /// (year, month, day) -> days since 1970-01-01. Howard Hinnant's algorithm.
+/// Only the inverse ([`civil_from_days`]) is needed in prod now (date bucketing);
+/// this forward direction is kept for the round-trip test.
+#[cfg(test)]
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = (if y >= 0 { y } else { y - 399 }) / 400;
@@ -967,25 +978,16 @@ mod tests {
     }
 
     #[test]
-    fn date_query_narrowing_and_rollover() {
-        assert_eq!(
-            date_dir_to_gmail_query("2026-05-03").as_deref(),
-            Some("after:2026/05/03 before:2026/05/04")
-        );
-        // month rollover
-        assert_eq!(
-            date_dir_to_gmail_query("2026-01-31").as_deref(),
-            Some("after:2026/01/31 before:2026/02/01")
-        );
-        // year rollover
-        assert_eq!(
-            date_dir_to_gmail_query("2026-12-31").as_deref(),
-            Some("after:2026/12/31 before:2027/01/01")
-        );
-        // invalid shapes -> None
-        assert!(date_dir_to_gmail_query("2026-5-3").is_none());
-        assert!(date_dir_to_gmail_query("not-a-date").is_none());
-        assert!(date_dir_to_gmail_query("2026-13-01").is_none());
+    fn date_dir_validation() {
+        assert!(is_valid_date_dir("2026-05-03"));
+        assert!(is_valid_date_dir("2026-01-31"));
+        assert!(is_valid_date_dir("2026-12-31"));
+        // invalid shapes
+        assert!(!is_valid_date_dir("2026-5-3")); // unpadded
+        assert!(!is_valid_date_dir("not-a-date"));
+        assert!(!is_valid_date_dir("2026-13-01")); // month out of range
+        assert!(!is_valid_date_dir("2026-00-10")); // month 0
+        assert!(!is_valid_date_dir("2026-07")); // wrong arity
     }
 
     #[test]
@@ -1013,8 +1015,14 @@ mod tests {
         let t = html_to_text(html);
         assert!(t.contains("Hello World"), "got: {t:?}");
         assert!(t.contains("line2 & more 'quoted'"), "got: {t:?}");
-        assert!(!t.contains("color:red"), "style content must be dropped: {t:?}");
-        assert!(!t.contains("alert"), "script content must be dropped: {t:?}");
+        assert!(
+            !t.contains("color:red"),
+            "style content must be dropped: {t:?}"
+        );
+        assert!(
+            !t.contains("alert"),
+            "script content must be dropped: {t:?}"
+        );
         assert!(!t.contains("drop me"), "comments must be dropped: {t:?}");
         assert!(!t.contains('<'), "tags must be stripped: {t:?}");
     }
