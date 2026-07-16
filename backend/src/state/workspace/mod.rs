@@ -1,15 +1,15 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use ::workspace::{FsEvent, FsHook, Vfs, WorkspaceFs};
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
 
 use super::{StateError, StateResult, User, parse_ts, parse_uuid};
 
-mod fs;
 mod mount;
 
-pub use fs::*;
 pub use mount::*;
 
 /// A workspace: both a database row and a directory tree on disk.
@@ -179,7 +179,9 @@ impl WorkspacesState {
     /// route to the provider; everything else stays local).
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
         let vfs = self.build_vfs(wid).await?;
-        Ok(WorkspaceFs::new(self.get_root(wid), wid).with_vfs(vfs))
+        Ok(WorkspaceFs::new(self.get_root(wid), wid)
+            .with_vfs(vfs)
+            .with_hook(knowledge_hook()))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root
@@ -193,7 +195,38 @@ impl WorkspacesState {
     fn workspace_dir(&self, wid: Uuid) -> PathBuf {
         self.data_root.join("workspaces").join(wid.to_string())
     }
+}
 
+/// True when a workspace-relative path lives under `knowledge/`. Classification
+/// is the backend's policy, not the `workspace` crate's.
+fn is_knowledge(rel: &str) -> bool {
+    rel.trim_start_matches('/').starts_with("knowledge/")
+}
+
+/// The change hook attached to every [`WorkspaceFs`] this backend builds: it
+/// runs the `knowledge/` side-processing (today just logging; ingestion/indexing
+/// lands later) and ignores everything else.
+struct KnowledgeHook;
+
+impl FsHook for KnowledgeHook {
+    fn on_change(&self, wid: Uuid, event: FsEvent<'_>) {
+        match event {
+            FsEvent::Created(p) if is_knowledge(p) => {
+                tracing::info!("insert_knowledge (workspace={wid}, path={p})");
+            }
+            FsEvent::Modified(p) if is_knowledge(p) => {
+                tracing::info!("update_knowledge (workspace={wid}, path={p})");
+            }
+            FsEvent::Removed(p) if is_knowledge(p) => {
+                tracing::info!("remove_knowledge (workspace={wid}, path={p})");
+            }
+            _ => {}
+        }
+    }
+}
+
+fn knowledge_hook() -> Option<Arc<dyn FsHook>> {
+    Some(Arc::new(KnowledgeHook))
 }
 
 /// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`
@@ -209,13 +242,15 @@ impl WorkspacesState {
 pub(crate) fn workspace_fs(
     data_root: &std::path::Path,
     wid: Uuid,
-    vfs: Option<std::sync::Arc<crate::vfs::Vfs>>,
+    vfs: Option<Arc<Vfs>>,
 ) -> WorkspaceFs {
     let root = data_root
         .join("workspaces")
         .join(wid.to_string())
         .join("files");
-    WorkspaceFs::new(root, wid).with_vfs(vfs)
+    WorkspaceFs::new(root, wid)
+        .with_vfs(vfs)
+        .with_hook(knowledge_hook())
 }
 
 #[cfg(test)]

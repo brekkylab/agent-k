@@ -58,10 +58,8 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-stream",
- "async-trait",
  "axum",
  "axum-extra",
- "base64",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -70,15 +68,11 @@ dependencies = [
  "dashmap",
  "dav-server",
  "dotenvy",
- "futures",
  "futures-util",
- "html2text",
  "http-body-util",
  "jsonwebtoken 9.3.1",
  "mime_guess",
  "nanoid",
- "object_store",
- "reqwest 0.12.28",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -96,6 +90,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "workspace",
 ]
 
 [[package]]
@@ -10487,6 +10482,29 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "workspace"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures",
+ "futures-util",
+ "html2text",
+ "object_store",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

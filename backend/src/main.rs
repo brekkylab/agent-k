@@ -1,8 +1,8 @@
 mod auth;
 mod event;
 mod router;
+mod sandbox_fs;
 mod state;
-mod vfs;
 
 use std::{path::PathBuf, sync::Arc};
 

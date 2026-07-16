@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
-use crate::vfs::{GmailConfig, MountSpec, NotionConfig, ProviderConfig, S3Config, Vfs, VfsConfig};
+use ::workspace::{GmailConfig, MountSpec, NotionConfig, ProviderConfig, S3Config, Vfs, VfsConfig};
 
 const SELECT_COLUMNS: &str =
     "id, workspace_id, prefix, provider, config, created_at, updated_at";
@@ -224,7 +224,7 @@ fn map_mount_sqlx_error(e: sqlx::Error) -> StateError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vfs::S3Config;
+    use ::workspace::S3Config;
 
     /// Fresh in-memory DB with a seeded user + workspace; returns the state and
     /// the workspace id.

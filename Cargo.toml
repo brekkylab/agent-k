@@ -4,6 +4,7 @@ members = [
     "./agent-k",
     "./backend",
     "./docling-sys",
+    "./workspace",
 ]
 exclude = [
     "./backend-v1",
