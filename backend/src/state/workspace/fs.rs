@@ -76,10 +76,35 @@ pub enum ReadDirMeta {
     None,
 }
 
-/// True when `rel_path` lives under the `knowledge/` directory. Component-wise
-/// match on the leading dir: `knowledge/x` hits, `knowledgebase/x` does not.
+/// Fold a workspace-relative path into its normalized components, clamped at the
+/// root: `Normal` segments push, `..` pops (a no-op on the empty base, so it can
+/// never climb above the workspace root), and `.`/`RootDir`/`Prefix` are dropped.
+///
+/// Shared by [`WorkspaceFs::resolve`] (→ on-disk path) and [`is_knowledge`] (→
+/// classification) so the two can't disagree on an unnormalized path: e.g.
+/// `/a/../knowledge/x` folds into `knowledge/` for both, and `/knowledge/../x`
+/// folds out of it for both.
+fn fold_rel(rel_path: &str) -> Vec<OsString> {
+    let mut parts: Vec<OsString> = Vec::new();
+    for comp in Path::new(rel_path.trim_start_matches('/')).components() {
+        match comp {
+            Component::Normal(c) => parts.push(c.to_os_string()),
+            Component::ParentDir => {
+                parts.pop();
+            }
+            _ => {}
+        }
+    }
+    parts
+}
+
+/// True when `rel_path`, once normalized, lives under the `knowledge/` directory.
+/// Derived from the same fold as `resolve`, so classification tracks the actual
+/// on-disk destination even for unnormalized input. Component-wise: `knowledge/x`
+/// hits, `knowledgebase/x` and the bare `knowledge` dir do not.
 fn is_knowledge(rel_path: &str) -> bool {
-    rel_path.trim_start_matches('/').starts_with("knowledge/")
+    let parts = fold_rel(rel_path);
+    parts.len() >= 2 && parts[0].to_str() == Some("knowledge")
 }
 
 // Side-processing for `knowledge/` mutations. Stubs for now: the real ingestion
@@ -217,30 +242,16 @@ impl WorkspaceFs {
     /// Absolute on-disk path of `rel_path` (a workspace-relative path such as
     /// `/knowledge/foo.txt`) inside this workspace.
     ///
-    /// Containment is enforced here so it holds for every caller, not just the
-    /// protocol layers that happen to pre-normalise (WebDAV's `DavPath`). We fold
-    /// the relative path in isolation — pushing `Normal` segments and popping on
-    /// `..` — then append it to an untouched `self.root`. Because `..` only ever
-    /// pops from `parts` (never from the root) and a pop on an empty stack is a
-    /// no-op, a `..` can never climb above the workspace root: an escaping path
-    /// like `/../../etc/passwd` folds back to an in-root path rather than reaching
-    /// the host filesystem. This is lexical (POSIX-style `/..` == `/`); it does
-    /// not resolve symlinks, which are not creatable through this API.
+    /// Containment is enforced here — via [`fold_rel`] — so it holds for every
+    /// caller, not just the protocol layers that happen to pre-normalise (WebDAV's
+    /// `DavPath`). The folded components are appended to an untouched `self.root`,
+    /// so a `..` can never climb above the root: an escaping path like
+    /// `/../../etc/passwd` folds back to an in-root path rather than reaching the
+    /// host filesystem. This is lexical (POSIX-style `/..` == `/`); it does not
+    /// resolve symlinks, which are not creatable through this API.
     fn resolve(&self, rel_path: &str) -> PathBuf {
-        let mut parts: Vec<OsString> = Vec::new();
-        for comp in Path::new(rel_path.trim_start_matches('/')).components() {
-            match comp {
-                Component::Normal(c) => parts.push(c.to_os_string()),
-                Component::ParentDir => {
-                    parts.pop();
-                }
-                // `CurDir` is a no-op; `RootDir`/`Prefix` can't reach the root
-                // (the leading `/` is already trimmed) so they're ignored too.
-                _ => {}
-            }
-        }
         let mut out = self.root.clone();
-        out.extend(parts);
+        out.extend(fold_rel(rel_path));
         out
     }
 
@@ -456,6 +467,27 @@ mod resolve_tests {
         // A legitimate `..` is folded, not rejected (would break a valid `/a/b/../c`).
         assert_eq!(f.resolve("/a/b/../c"), PathBuf::from("/data/ws/123/files/a/c"));
         assert_eq!(f.resolve("/a/./b/../c"), PathBuf::from("/data/ws/123/files/a/c"));
+    }
+
+    #[test]
+    fn is_knowledge_tracks_the_resolved_destination() {
+        use super::is_knowledge;
+        let f = fs("/data/ws/123/files");
+        let kroot = f.resolve("/knowledge");
+
+        // The two cases the review flagged: classification must match where the
+        // path actually resolves, not the raw prefix.
+        // `/knowledge/../secret.txt` resolves OUT of knowledge/ → not knowledge.
+        assert!(!is_knowledge("/knowledge/../secret.txt"));
+        assert!(!f.resolve("/knowledge/../secret.txt").starts_with(&kroot));
+        // `/a/../knowledge/doc.txt` resolves INTO knowledge/ → is knowledge.
+        assert!(is_knowledge("/a/../knowledge/doc.txt"));
+        assert!(f.resolve("/a/../knowledge/doc.txt").starts_with(&kroot));
+
+        // Baselines: a real child hits; the bare dir and a look-alike prefix don't.
+        assert!(is_knowledge("/knowledge/doc.txt"));
+        assert!(!is_knowledge("/knowledge"));
+        assert!(!is_knowledge("/knowledgebase/doc.txt"));
     }
 
     #[test]
