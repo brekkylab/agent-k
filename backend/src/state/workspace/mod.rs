@@ -180,7 +180,7 @@ impl WorkspacesState {
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
         // `build_vfs` assembles the full mount table (local `/files` + providers).
         let vfs = self.build_vfs(wid).await?;
-        Ok(WorkspaceFs::new(vfs, wid).with_hook(knowledge_hook()))
+        Ok(WorkspaceFs::new(vfs).with_hook(knowledge_hook(wid)))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root
@@ -207,10 +207,15 @@ fn is_knowledge(rel: &str) -> bool {
 /// The change hook attached to every [`WorkspaceFs`] this backend builds: it
 /// runs the `knowledge/` side-processing (today just logging; ingestion/indexing
 /// lands later) and ignores everything else.
-struct KnowledgeHook;
+struct KnowledgeHook {
+    /// The workspace this hook is bound to — the crate is workspace-agnostic, so
+    /// the backend carries the DB identity here rather than in `WorkspaceFs`.
+    wid: Uuid,
+}
 
 impl FsHook for KnowledgeHook {
-    fn on_change(&self, wid: Uuid, event: FsEvent<'_>) {
+    fn on_change(&self, event: FsEvent<'_>) {
+        let wid = self.wid;
         match event {
             FsEvent::Created(p) if is_knowledge(p) => {
                 tracing::info!("insert_knowledge (workspace={wid}, path={p})");
@@ -226,8 +231,8 @@ impl FsHook for KnowledgeHook {
     }
 }
 
-fn knowledge_hook() -> Option<Arc<dyn FsHook>> {
-    Some(Arc::new(KnowledgeHook))
+fn knowledge_hook(wid: Uuid) -> Option<Arc<dyn FsHook>> {
+    Some(Arc::new(KnowledgeHook { wid }))
 }
 
 /// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`
@@ -251,7 +256,7 @@ pub(crate) fn workspace_fs(
         .join("files");
     config.local_root = Some(root);
     let vfs = Vfs::from_config(config).map_err(|e| StateError::InvalidData(format!("vfs: {e}")))?;
-    Ok(WorkspaceFs::new(Arc::new(vfs), wid).with_hook(knowledge_hook()))
+    Ok(WorkspaceFs::new(Arc::new(vfs)).with_hook(knowledge_hook(wid)))
 }
 
 #[cfg(test)]

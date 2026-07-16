@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use uuid::Uuid;
 use workspace::{ForwardFs, VfsForward, WorkspaceFs};
 
 struct Resp {
@@ -56,7 +55,7 @@ async fn call(port: u16, token: &str, method: &str, target: &str, body: &[u8]) -
 }
 
 fn serve(root: std::path::PathBuf) -> VfsForward {
-    let fs: Arc<dyn ForwardFs> = Arc::new(WorkspaceFs::local(root, Uuid::new_v4()));
+    let fs: Arc<dyn ForwardFs> = Arc::new(WorkspaceFs::local(root));
     VfsForward::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn forward server")
 }
 

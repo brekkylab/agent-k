@@ -25,7 +25,6 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures_util::{Stream, StreamExt as _, stream};
-use uuid::Uuid;
 
 use crate::hook::{FsEvent, FsHook};
 use crate::vfs::sandbox::{ForwardFs, FwdEntry, FwdStat, secs_since_epoch};
@@ -177,7 +176,6 @@ pub type DirStream = Pin<Box<dyn Stream<Item = FsResult<DirEntry>> + Send>>;
 /// reported to the injected [`FsHook`] exactly once, with the create-vs-modify
 /// distinction. Attached only on a write open when a hook is present.
 struct Observer {
-    wid: Uuid,
     /// Workspace-relative path of the file, for the change event.
     rel: String,
     /// Whether the target already existed when opened — distinguishes a create
@@ -290,7 +288,7 @@ impl File {
                 } else {
                     FsEvent::Created(&o.rel)
                 };
-                h.on_change(o.wid, ev);
+                h.on_change(ev);
             }
         }
         Ok(())
@@ -299,35 +297,31 @@ impl File {
 
 /// A filesystem handle scoped to a single workspace: a router over the
 /// workspace's [`Vfs`] mount table (local `/files` + provider mounts). Cheap to
-/// clone (`Arc<Vfs>` + a `Uuid` + an optional hook); `Send + Sync + 'static`.
+/// clone (`Arc<Vfs>` + an optional hook); `Send + Sync + 'static`.
 #[derive(Clone)]
 pub struct WorkspaceFs {
     vfs: Arc<Vfs>,
-    wid: Uuid,
-    /// Change hook, injected by the host. `None` fires nothing.
+    /// Change hook, injected by the host. `None` fires nothing. The host bakes
+    /// any identity it needs (e.g. the workspace id) into its `FsHook` impl.
     hook: Option<Arc<dyn FsHook>>,
 }
 
 impl WorkspaceFs {
     /// A workspace filesystem over `vfs` (which already includes the local
     /// `/files` mount and any provider mounts) with no change hook.
-    pub fn new(vfs: Arc<Vfs>, wid: Uuid) -> Self {
-        Self {
-            vfs,
-            wid,
-            hook: None,
-        }
+    pub fn new(vfs: Arc<Vfs>) -> Self {
+        Self { vfs, hook: None }
     }
 
     /// A local-only workspace filesystem rooted at `root` (no provider mounts) —
     /// a convenience for standalone use and tests.
-    pub fn local(root: PathBuf, wid: Uuid) -> Self {
+    pub fn local(root: PathBuf) -> Self {
         let vfs = Vfs::from_config(VfsConfig {
             local_root: Some(root),
             mounts: Vec::new(),
         })
         .expect("local-only vfs is always valid");
-        Self::new(Arc::new(vfs), wid)
+        Self::new(Arc::new(vfs))
     }
 
     /// Attach an [`FsHook`] fired on every mutation. `None` clears it.
@@ -338,7 +332,7 @@ impl WorkspaceFs {
 
     fn fire(&self, event: FsEvent<'_>) {
         if let Some(h) = &self.hook {
-            h.on_change(self.wid, event);
+            h.on_change(event);
         }
     }
 
@@ -421,7 +415,6 @@ impl WorkspaceFs {
         }
 
         let observer = (is_write && self.hook.is_some()).then(|| Observer {
-            wid: self.wid,
             rel: rel_path.to_string(),
             existed,
             wrote: false,
@@ -699,9 +692,8 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use futures_util::StreamExt;
-    use uuid::Uuid;
 
-    use super::{File, FsError, OpenOptions, WorkspaceFs};
+    use super::{FsError, OpenOptions, WorkspaceFs};
     use crate::vfs::{
         DirEntry as VfsDirEntry, FileKind, FileStat, LocalResource, Mount, Resource, VPath, Vfs,
         VfsError, VfsResult,
@@ -784,7 +776,7 @@ mod tests {
             },
         ])
         .unwrap();
-        WorkspaceFs::new(Arc::new(vfs), Uuid::new_v4())
+        WorkspaceFs::new(Arc::new(vfs))
     }
 
     async fn dir_names(fs: &WorkspaceFs, path: &str) -> Vec<String> {

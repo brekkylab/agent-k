@@ -5,7 +5,6 @@
 
 use bytes::Bytes;
 use futures_util::StreamExt;
-use uuid::Uuid;
 use workspace::{OpenOptions, WorkspaceFs};
 
 async fn dir_names(fs: &WorkspaceFs, path: &str) -> Vec<String> {
@@ -21,7 +20,7 @@ async fn dir_names(fs: &WorkspaceFs, path: &str) -> Vec<String> {
 #[tokio::test]
 async fn local_file_round_trip_through_public_api() {
     let tmp = tempfile::tempdir().unwrap();
-    let fs = WorkspaceFs::local(tmp.path().to_path_buf(), Uuid::new_v4());
+    let fs = WorkspaceFs::local(tmp.path().to_path_buf());
 
     // Write via the public open/write/flush API.
     let mut f = fs
@@ -68,7 +67,7 @@ async fn local_file_round_trip_through_public_api() {
 #[tokio::test]
 async fn create_and_remove_dir_through_public_api() {
     let tmp = tempfile::tempdir().unwrap();
-    let fs = WorkspaceFs::local(tmp.path().to_path_buf(), Uuid::new_v4());
+    let fs = WorkspaceFs::local(tmp.path().to_path_buf());
 
     fs.create_dir("/files/sub").await.unwrap();
     assert!(fs.metadata("/files/sub").await.unwrap().is_dir());

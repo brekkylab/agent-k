@@ -1,7 +1,5 @@
 //! Change hook for a workspace's local file tree.
 
-use uuid::Uuid;
-
 /// A mutation to a workspace's local files. Paths are workspace-relative
 /// (leading `/`, e.g. `/knowledge/a.txt`).
 pub enum FsEvent<'a> {
@@ -18,7 +16,8 @@ pub enum FsEvent<'a> {
 /// [`WorkspaceFs`](crate::WorkspaceFs) calls this after the on-disk change
 /// lands. Attach with [`WorkspaceFs::with_hook`](crate::WorkspaceFs::with_hook);
 /// when unset the workspace fires nothing. Any classification (e.g. "is this
-/// under `knowledge/`?") lives in the implementation, not the crate.
+/// under `knowledge/`?") lives in the implementation, not the crate — as does
+/// any identity the host needs (e.g. which workspace), captured by the impl.
 pub trait FsHook: Send + Sync {
-    fn on_change(&self, wid: Uuid, event: FsEvent<'_>);
+    fn on_change(&self, event: FsEvent<'_>);
 }

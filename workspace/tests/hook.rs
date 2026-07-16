@@ -4,14 +4,13 @@
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use uuid::Uuid;
 use workspace::{FsEvent, FsHook, OpenOptions, WorkspaceFs};
 
 #[derive(Default)]
 struct Recorder(Mutex<Vec<String>>);
 
 impl FsHook for Recorder {
-    fn on_change(&self, _wid: Uuid, event: FsEvent<'_>) {
+    fn on_change(&self, event: FsEvent<'_>) {
         let line = match event {
             FsEvent::Created(p) => format!("created {p}"),
             FsEvent::Modified(p) => format!("modified {p}"),
@@ -35,7 +34,7 @@ async fn fs_hook_receives_mutation_events_in_order() {
     let tmp = tempfile::tempdir().unwrap();
     let rec = Arc::new(Recorder::default());
     let hook: Arc<dyn FsHook> = rec.clone();
-    let fs = WorkspaceFs::local(tmp.path().to_path_buf(), Uuid::new_v4()).with_hook(Some(hook));
+    let fs = WorkspaceFs::local(tmp.path().to_path_buf()).with_hook(Some(hook));
 
     // create -> modify (same path, second open sees it existing)
     let mut f = fs.open("/files/note.txt", write_opts()).await.unwrap();
@@ -71,7 +70,7 @@ async fn fs_hook_receives_mutation_events_in_order() {
 #[tokio::test]
 async fn no_hook_is_a_silent_no_op() {
     let tmp = tempfile::tempdir().unwrap();
-    let fs = WorkspaceFs::local(tmp.path().to_path_buf(), Uuid::new_v4());
+    let fs = WorkspaceFs::local(tmp.path().to_path_buf());
     // Same mutations, no hook attached: must succeed without firing/panicking.
     let mut f = fs.open("/files/x.txt", write_opts()).await.unwrap();
     f.write_bytes(Bytes::from_static(b"z")).await.unwrap();
