@@ -501,9 +501,12 @@ impl Resource for GmailResource {
         GMAIL_PROMPT
     }
 
-    /// Gmail listings are capped (newest 50 per label/date), so a date or message
-    /// missing from a listing may still exist — disable negative caching so the
-    /// cache probes the adapter (e.g. `ls INBOX/2026-05-01` after `ls INBOX`).
+    /// A listing is complete for the snapshot it was built from (the date index
+    /// holds every date and every id for the label), but that index is cached
+    /// with a TTL, so mail arriving before the TTL expires isn't in it yet.
+    /// Keep negative caching off so a date/message absent from a listing is still
+    /// probed against the adapter rather than answered `NotFound` from a possibly
+    /// stale parent listing (e.g. `stat INBOX/2026-05-01` after `ls INBOX`).
     fn listings_complete(&self) -> bool {
         false
     }
