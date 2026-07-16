@@ -8,6 +8,36 @@ use tokio::sync::Mutex;
 const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GMAIL_API_BASE: &str = "https://gmail.googleapis.com/gmail/v1";
 
+/// Retry budget for a rate-limited/5xx request. A directory listing fans out
+/// many per-message fetches, so a burst can trip Gmail's per-user rate limit; a
+/// bounded retry keeps a transient 429/5xx from failing the whole read.
+const MAX_RETRIES: u32 = 5;
+/// Cap on a single retry wait. Google's exponential-backoff guidance suggests a
+/// `maximum_backoff` of 32–64s, but this call sits behind a FUSE op the agent
+/// blocks on, so we cap far lower — a heavily throttled read still resolves in
+/// bounded time rather than hanging the guest for a minute.
+const MAX_BACKOFF: Duration = Duration::from_secs(8);
+/// Jitter ceiling (Google's algorithm: `+ random_number_milliseconds ≤ 1000ms`),
+/// recomputed per retry to de-synchronise clients that would otherwise retry in
+/// lockstep.
+const JITTER_MAX_MS: u64 = 1000;
+
+/// Exponential backoff with jitter for retry `n` (0-based), per Google's Gmail
+/// API guidance: `min(2^n s + rand(0..=1000ms), maximum_backoff)`.
+fn backoff_delay(n: u32) -> Duration {
+    let base = Duration::from_secs(1u64 << n.min(16));
+    let jitter = Duration::from_millis(fastrand::u64(0..=JITTER_MAX_MS));
+    (base + jitter).min(MAX_BACKOFF)
+}
+
+/// The `Retry-After` delay, if present (an explicit server instruction; capped by
+/// [`MAX_BACKOFF`] at the call site). Google sends delta-seconds; the HTTP-date
+/// form is not honored (treated as absent → falls back to [`backoff_delay`]).
+fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
+    let raw = resp.headers().get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    raw.trim().parse::<u64>().ok().map(Duration::from_secs)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GmailConfig {
     pub client_id: String,
@@ -81,20 +111,43 @@ impl GmailAccessor {
         Ok(token)
     }
 
-    /// Send a request built from the current access token; on 401 (expired or
-    /// revoked despite proactive refresh) drop the token, refresh, and retry once.
+    /// Send a request built from the current access token, retrying transient
+    /// failures. A 401 (expired/revoked despite proactive refresh) drops the
+    /// token, refreshes, and retries once; a 429/5xx retries a bounded number of
+    /// times honoring `Retry-After`, so a rate limit or upstream blip doesn't
+    /// fail the whole read. Non-retryable statuses are returned to the caller,
+    /// which classifies them via `error_for_status`.
     async fn send_with_refresh(
         &self,
         build: impl Fn(&str) -> reqwest::RequestBuilder,
     ) -> anyhow::Result<reqwest::Response> {
-        let token = self.token().await?;
-        let resp = build(&token).send().await?;
-        if resp.status() != reqwest::StatusCode::UNAUTHORIZED {
+        let mut token = self.token().await?;
+        let mut refreshed = false;
+        let mut retries = 0u32;
+        loop {
+            let resp = build(&token).send().await?;
+            let status = resp.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+                *self.access_token.lock().await = None;
+                token = self.token().await?;
+                refreshed = true;
+                continue;
+            }
+            let retryable =
+                status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+            if retryable && retries < MAX_RETRIES {
+                // An explicit Retry-After wins (capped so the agent isn't blocked
+                // too long); otherwise exponential backoff with jitter.
+                let wait = match retry_after(&resp) {
+                    Some(d) => d.min(MAX_BACKOFF),
+                    None => backoff_delay(retries),
+                };
+                retries += 1;
+                tokio::time::sleep(wait).await;
+                continue;
+            }
             return Ok(resp);
         }
-        *self.access_token.lock().await = None;
-        let token = self.token().await?;
-        Ok(build(&token).send().await?)
     }
 
     async fn get_json(&self, url: &str) -> anyhow::Result<Value> {
@@ -216,4 +269,28 @@ fn decode_b64url(s: &str) -> Vec<u8> {
 /// Base64url-encode raw MIME bytes for the Gmail `send` API.
 pub fn encode_b64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE.encode(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_is_exponential_jittered_and_capped() {
+        // Each retry n waits in [2^n s, 2^n s + 1s), never above MAX_BACKOFF.
+        for _ in 0..100 {
+            // n=0 → [1s, 2s)
+            let d0 = backoff_delay(0);
+            assert!(d0 >= Duration::from_secs(1) && d0 <= Duration::from_millis(2000), "{d0:?}");
+            // n=1 → [2s, 3s)
+            let d1 = backoff_delay(1);
+            assert!(d1 >= Duration::from_secs(2) && d1 <= Duration::from_millis(3000), "{d1:?}");
+            // n=2 → [4s, 5s)
+            let d2 = backoff_delay(2);
+            assert!(d2 >= Duration::from_secs(4) && d2 <= Duration::from_millis(5000), "{d2:?}");
+            // large n → capped at MAX_BACKOFF (8s here); 2^4=16s + jitter > cap
+            assert_eq!(backoff_delay(4), MAX_BACKOFF);
+            assert_eq!(backoff_delay(10), MAX_BACKOFF);
+        }
+    }
 }
