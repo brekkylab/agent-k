@@ -34,8 +34,66 @@ fn backoff_delay(n: u32) -> Duration {
 /// [`MAX_BACKOFF`] at the call site). Google sends delta-seconds; the HTTP-date
 /// form is not honored (treated as absent → falls back to [`backoff_delay`]).
 fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
-    let raw = resp.headers().get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    let raw = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?;
     raw.trim().parse::<u64>().ok().map(Duration::from_secs)
+}
+
+/// Extract the message JSON bodies from a Gmail batch (`multipart/mixed`)
+/// response. Rather than parse the multipart/HTTP envelope, scan for each
+/// top-level balanced `{…}` and keep the ones that are message objects (have an
+/// `id`); error sub-responses (`{"error":…}`) are skipped. Tolerant of the
+/// boundary/header noise between parts.
+fn parse_batch_bodies(text: &str) -> Vec<Value> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+        // Find the matching close brace, respecting JSON strings/escapes.
+        let (mut depth, mut in_str, mut esc, mut j) = (0i32, false, false, i);
+        while j < bytes.len() {
+            let c = bytes[j];
+            if in_str {
+                match c {
+                    _ if esc => esc = false,
+                    b'\\' => esc = true,
+                    b'"' => in_str = false,
+                    _ => {}
+                }
+            } else {
+                match c {
+                    b'"' => in_str = true,
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            j += 1;
+        }
+        if depth == 0 && j < bytes.len() {
+            if let Ok(v) = serde_json::from_str::<Value>(&text[i..=j])
+                && v.get("id").is_some()
+            {
+                out.push(v);
+            }
+            i = j + 1;
+        } else {
+            break; // unbalanced tail; stop
+        }
+    }
+    out
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -212,6 +270,59 @@ impl GmailAccessor {
         self.get_json(&url).await
     }
 
+    /// Fetch many messages in a single Gmail **batch** request (`/batch/gmail/v1`,
+    /// multipart/mixed), collapsing N per-message round-trips into one. Returns
+    /// the parsed message JSON for each sub-request that succeeded (order not
+    /// guaranteed — callers key on the `id` field); chunked at Gmail's 100-per-
+    /// batch cap. This is the fan-out path a directory listing takes.
+    pub async fn get_messages_batch(
+        &self,
+        ids: &[String],
+        format: &str,
+    ) -> anyhow::Result<Vec<Value>> {
+        let mut out = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(100) {
+            out.extend(self.batch_chunk(chunk, format).await?);
+        }
+        Ok(out)
+    }
+
+    async fn batch_chunk(&self, ids: &[String], format: &str) -> anyhow::Result<Vec<Value>> {
+        const BOUNDARY: &str = "agentk_gmail_batch_boundary";
+        let mut body = String::new();
+        for id in ids {
+            body.push_str(&format!("--{BOUNDARY}\r\n"));
+            body.push_str("Content-Type: application/http\r\n\r\n");
+            body.push_str(&format!(
+                "GET /gmail/v1/users/me/messages/{id}?format={format}\r\n\r\n"
+            ));
+        }
+        body.push_str(&format!("--{BOUNDARY}--\r\n"));
+
+        // Batch lives at the API origin (…/batch/gmail/v1), not under /gmail/v1.
+        let origin = GMAIL_API_BASE
+            .strip_suffix("/gmail/v1")
+            .unwrap_or(GMAIL_API_BASE);
+        let url = format!("{origin}/batch/gmail/v1");
+        let content_type = format!("multipart/mixed; boundary={BOUNDARY}");
+
+        let resp = self
+            .send_with_refresh(|t| {
+                self.client
+                    .post(&url)
+                    .bearer_auth(t)
+                    .header(reqwest::header::CONTENT_TYPE, &content_type)
+                    .body(body.clone())
+            })
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            anyhow::bail!("gmail batch {status}: {}", &text[..text.len().min(300)]);
+        }
+        Ok(parse_batch_bodies(&text))
+    }
+
     /// Fetch and base64url-decode an attachment's bytes.
     pub async fn get_attachment(
         &self,
@@ -276,18 +387,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_batch_bodies_extracts_messages_and_skips_errors() {
+        // A multipart/mixed batch response with two message parts and one error
+        // part, mirroring Gmail's envelope (boundary + application/http + HTTP).
+        let resp = "--b\r\nContent-Type: application/http\r\n\r\n\
+            HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\
+            {\"id\":\"m1\",\"payload\":{\"headers\":[{\"name\":\"Subject\",\"value\":\"a{b}c\"}]}}\r\n\
+            --b\r\nContent-Type: application/http\r\n\r\n\
+            HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n\
+            {\"error\":{\"code\":404,\"message\":\"not found\"}}\r\n\
+            --b\r\nContent-Type: application/http\r\n\r\n\
+            HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\
+            {\"id\":\"m2\",\"snippet\":\"hi\"}\r\n--b--\r\n";
+        let msgs = parse_batch_bodies(resp);
+        let ids: Vec<&str> = msgs
+            .iter()
+            .filter_map(|m| m.get("id").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["m1", "m2"],
+            "should extract both messages, skip the error part"
+        );
+        // Nested braces inside a JSON string ("a{b}c") must not break parsing.
+        assert_eq!(msgs[0]["payload"]["headers"][0]["value"], "a{b}c");
+    }
+
+    #[test]
     fn backoff_is_exponential_jittered_and_capped() {
         // Each retry n waits in [2^n s, 2^n s + 1s), never above MAX_BACKOFF.
         for _ in 0..100 {
             // n=0 → [1s, 2s)
             let d0 = backoff_delay(0);
-            assert!(d0 >= Duration::from_secs(1) && d0 <= Duration::from_millis(2000), "{d0:?}");
+            assert!(
+                d0 >= Duration::from_secs(1) && d0 <= Duration::from_millis(2000),
+                "{d0:?}"
+            );
             // n=1 → [2s, 3s)
             let d1 = backoff_delay(1);
-            assert!(d1 >= Duration::from_secs(2) && d1 <= Duration::from_millis(3000), "{d1:?}");
+            assert!(
+                d1 >= Duration::from_secs(2) && d1 <= Duration::from_millis(3000),
+                "{d1:?}"
+            );
             // n=2 → [4s, 5s)
             let d2 = backoff_delay(2);
-            assert!(d2 >= Duration::from_secs(4) && d2 <= Duration::from_millis(5000), "{d2:?}");
+            assert!(
+                d2 >= Duration::from_secs(4) && d2 <= Duration::from_millis(5000),
+                "{d2:?}"
+            );
             // large n → capped at MAX_BACKOFF (8s here); 2^4=16s + jitter > cap
             assert_eq!(backoff_delay(4), MAX_BACKOFF);
             assert_eq!(backoff_delay(10), MAX_BACKOFF);

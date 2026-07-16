@@ -121,13 +121,44 @@ impl GmailResource {
         Ok(v)
     }
 
-    async fn fetch_full_many(&self, ids: &[String]) -> Vec<Value> {
+    /// Fetch messages by id in one batch request (`format` = "full"/"minimal"),
+    /// falling back to concurrent per-message fetches if the batch call fails so
+    /// a listing still resolves. Order is not preserved; callers key on `id`.
+    async fn fetch_many(&self, ids: &[String], format: &str) -> Vec<Value> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        if let Ok(raws) = self.accessor.get_messages_batch(ids, format).await
+            && !raws.is_empty()
+        {
+            return raws;
+        }
+        let minimal = format == "minimal";
         stream::iter(ids.iter().cloned())
-            .map(|id| async move { self.message_full(&id).await.ok() })
+            .map(|id| async move {
+                if minimal {
+                    self.accessor.get_message_minimal(&id).await.ok()
+                } else {
+                    self.accessor.get_message_full(&id).await.ok()
+                }
+            })
             .buffer_unordered(FETCH_CONCURRENCY)
             .filter_map(|x| async move { x })
             .collect()
             .await
+    }
+
+    /// Full messages for a listing, warming `msg_cache` so a following `cat` of a
+    /// listed message reuses the body without another fetch.
+    async fn fetch_full_many(&self, ids: &[String]) -> Vec<Value> {
+        let raws = self.fetch_many(ids, "full").await;
+        let mut cache = self.msg_cache.lock().await;
+        for v in &raws {
+            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                cache.insert(id.to_string(), (Instant::now(), v.clone()));
+            }
+        }
+        raws
     }
 
     // ---- readdir levels ---------------------------------------------------
@@ -155,24 +186,13 @@ impl GmailResource {
             .iter()
             .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from))
             .collect();
-        // Only internalDate is needed here — use the minimal fetch.
-        let dates: Vec<String> = stream::iter(ids)
-            .map(|id| async move {
-                self.accessor
-                    .get_message_minimal(&id)
-                    .await
-                    .ok()
-                    .and_then(|v| {
-                        v.get("internalDate")
-                            .and_then(|d| d.as_str())
-                            .map(String::from)
-                    })
-                    .map(|ms| epoch_ms_to_date(&ms))
-            })
-            .buffer_unordered(FETCH_CONCURRENCY)
-            .filter_map(|x| async move { x })
-            .collect()
-            .await;
+        // Only internalDate is needed here — fetch all in one batch (minimal).
+        let dates: Vec<String> = self
+            .fetch_many(&ids, "minimal")
+            .await
+            .iter()
+            .filter_map(|v| v.get("internalDate").and_then(|d| d.as_str()).map(epoch_ms_to_date))
+            .collect();
         let mut set: std::collections::BTreeSet<String> = dates.into_iter().collect();
         // Fold in older dates the user has already visited (capped listing only
         // covers the newest ~50 messages).
