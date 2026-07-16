@@ -30,6 +30,8 @@ mod vfs;
 pub use accessor::{NotionConfig, S3Config};
 pub use error::{VfsError, VfsResult};
 pub use path::VPath;
-pub use resource::{DirEntry, FileKind, FileStat, NotionResource, Resource, S3Resource};
+pub use resource::{
+    DirEntry, FileKind, FileStat, LocalResource, NotionResource, Resource, S3Resource,
+};
 pub use sandbox::{ForwardFs, FwdEntry, FwdStat, VfsForward};
-pub use vfs::{Mount, MountSpec, ProviderConfig, Vfs, VfsConfig};
+pub use vfs::{LOCAL_MOUNT, Mount, MountSpec, ProviderConfig, Vfs, VfsConfig};

@@ -14,13 +14,11 @@ mod hook;
 mod vfs;
 
 pub use fs::{
-    DirEntry, DirStream, File, FsError, FsResult, NodeKind, OpenOptions, ReadDirMeta, Stat,
-    WorkspaceFs,
+    DirEntry, DirStream, File, FsError, FsResult, NodeKind, OpenOptions, Stat, WorkspaceFs,
 };
 pub use hook::{FsEvent, FsHook};
 pub use vfs::{
-    DirEntry as VfsDirEntry, FileKind, FileStat, ForwardFs, FwdEntry, FwdStat, Mount, MountSpec,
-    NotionConfig, NotionResource, ProviderConfig, Resource, S3Config, S3Resource, VPath, Vfs,
-    VfsConfig, VfsError,
-    VfsForward, VfsResult,
+    DirEntry as VfsDirEntry, FileKind, FileStat, ForwardFs, FwdEntry, FwdStat, LOCAL_MOUNT,
+    LocalResource, Mount, MountSpec, NotionConfig, NotionResource, ProviderConfig, Resource,
+    S3Config, S3Resource, VPath, Vfs, VfsConfig, VfsError, VfsForward, VfsResult,
 };

@@ -26,6 +26,9 @@ pub struct DirEntry {
     pub atime: Option<std::time::SystemTime>,
     /// Change/creation time per entry (Notion `created_time`), if reported.
     pub ctime: Option<std::time::SystemTime>,
+    /// Birth/creation time per entry, if the backend reports one (local files);
+    /// `None` for providers that don't distinguish a birth time.
+    pub created: Option<std::time::SystemTime>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,6 +44,9 @@ pub struct FileStat {
     /// Change/creation time, if the backend reports one (Notion `created_time`).
     /// Not POSIX `ctime` exactly — the nearest timestamp the backend exposes.
     pub ctime: Option<std::time::SystemTime>,
+    /// Birth/creation time, if the backend reports one (local files' `created`);
+    /// `None` for providers that don't distinguish a birth time.
+    pub created: Option<std::time::SystemTime>,
     /// Entity tag / content fingerprint, if available (S3 `ETag`).
     pub etag: Option<String>,
     /// Version id, if the backend is versioned (S3 `VersionId`).

@@ -122,7 +122,14 @@ mod e2e {
         // A forward server over an empty workspace is enough — we only probe reachability.
         let data_root = tempfile::tempdir().expect("tempdir");
         let fs: Arc<dyn ::workspace::ForwardFs> =
-            Arc::new(crate::state::workspace_fs(data_root.path(), uuid::Uuid::new_v4(), None));
+            Arc::new(
+                crate::state::workspace_fs(
+                    data_root.path(),
+                    uuid::Uuid::new_v4(),
+                    VfsConfig::default(),
+                )
+                .expect("workspace fs"),
+            );
         let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn");
         let port = fwd.port();
         println!("host forward server on port {port}");
@@ -188,7 +195,14 @@ done
         // A forward server over an empty workspace is enough — we only probe reachability.
         let data_root = tempfile::tempdir().expect("tempdir");
         let fs: Arc<dyn ::workspace::ForwardFs> =
-            Arc::new(crate::state::workspace_fs(data_root.path(), uuid::Uuid::new_v4(), None));
+            Arc::new(
+                crate::state::workspace_fs(
+                    data_root.path(),
+                    uuid::Uuid::new_v4(),
+                    VfsConfig::default(),
+                )
+                .expect("workspace fs"),
+            );
         let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn");
         let port = fwd.port();
 
@@ -269,15 +283,15 @@ done
         std::fs::create_dir_all(&files).unwrap();
         std::fs::write(files.join("notes.txt"), b"unified-local-marker").unwrap();
 
-        let vfs = Arc::new(
-            Vfs::from_config(VfsConfig {
-                mounts: vec![MountSpec {
-                    prefix: "/notion".into(),
-                    provider: ProviderConfig::Notion(NotionConfig { api_key }),
-                }],
-            })
-            .expect("build vfs"),
-        );
+        let config = VfsConfig {
+            local_root: None,
+            mounts: vec![MountSpec {
+                prefix: "/notion".into(),
+                provider: ProviderConfig::Notion(NotionConfig { api_key }),
+            }],
+        };
+        // A raw provider-only Vfs for the host-side target lookup.
+        let vfs = Arc::new(Vfs::from_config(config.clone()).expect("build vfs"));
         // Pick a real page dir to target (host-side lookup on the raw Vfs).
         let (res, vp) = vfs.route("/notion/pages").expect("route /notion/pages");
         let entries = res.readdir(&vp).await.expect("readdir pages");
@@ -289,7 +303,7 @@ done
         println!("target page dir: {page}");
 
         let ws_fs =
-            crate::state::workspace_fs(data_root.path(), wid, Some(vfs.clone()));
+            crate::state::workspace_fs(data_root.path(), wid, config).expect("workspace fs");
         let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(ws_fs);
 
         let mut sandbox = SandboxBuilder::new()

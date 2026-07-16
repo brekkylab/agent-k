@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ::workspace::{FsEvent, FsHook, Vfs, WorkspaceFs};
+use ::workspace::{FsEvent, FsHook, Vfs, VfsConfig, WorkspaceFs};
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
@@ -178,10 +178,9 @@ impl WorkspacesState {
     /// workspace's external-provider mounts attached (paths under a mount prefix
     /// route to the provider; everything else stays local).
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
+        // `build_vfs` assembles the full mount table (local `/files` + providers).
         let vfs = self.build_vfs(wid).await?;
-        Ok(WorkspaceFs::new(self.get_root(wid), wid)
-            .with_vfs(vfs)
-            .with_hook(knowledge_hook()))
+        Ok(WorkspaceFs::new(vfs, wid).with_hook(knowledge_hook()))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root
@@ -200,7 +199,9 @@ impl WorkspacesState {
 /// True when a workspace-relative path lives under `knowledge/`. Classification
 /// is the backend's policy, not the `workspace` crate's.
 fn is_knowledge(rel: &str) -> bool {
-    rel.trim_start_matches('/').starts_with("knowledge/")
+    // Local files live under the `/files` mount, so knowledge files are
+    // `files/knowledge/…` in the unified namespace.
+    rel.trim_start_matches('/').starts_with("files/knowledge/")
 }
 
 /// The change hook attached to every [`WorkspaceFs`] this backend builds: it
@@ -242,15 +243,15 @@ fn knowledge_hook() -> Option<Arc<dyn FsHook>> {
 pub(crate) fn workspace_fs(
     data_root: &std::path::Path,
     wid: Uuid,
-    vfs: Option<Arc<Vfs>>,
-) -> WorkspaceFs {
+    mut config: VfsConfig,
+) -> StateResult<WorkspaceFs> {
     let root = data_root
         .join("workspaces")
         .join(wid.to_string())
         .join("files");
-    WorkspaceFs::new(root, wid)
-        .with_vfs(vfs)
-        .with_hook(knowledge_hook())
+    config.local_root = Some(root);
+    let vfs = Vfs::from_config(config).map_err(|e| StateError::InvalidData(format!("vfs: {e}")))?;
+    Ok(WorkspaceFs::new(Arc::new(vfs), wid).with_hook(knowledge_hook()))
 }
 
 #[cfg(test)]

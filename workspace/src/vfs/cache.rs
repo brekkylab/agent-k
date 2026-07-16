@@ -105,6 +105,7 @@ impl IndexCache {
                     mtime: e.mtime,
                     atime: e.atime,
                     ctime: e.ctime,
+                    created: None,
                 })
             })
             .collect();
@@ -343,6 +344,7 @@ mod tests {
             mtime: None,
             atime: None,
             ctime: None,
+            created: None,
         }
     }
 
@@ -402,6 +404,7 @@ mod tests {
                 mtime: Some(t),
                 atime: None,
                 ctime: None,
+                created: None,
             }],
         );
         // fast-path source: get() returns the stored mtime (not None/epoch).

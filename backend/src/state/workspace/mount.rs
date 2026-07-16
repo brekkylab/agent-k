@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
-use ::workspace::{MountSpec, NotionConfig, ProviderConfig, S3Config, Vfs, VfsConfig};
+use ::workspace::{LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config, Vfs, VfsConfig};
 
 const SELECT_COLUMNS: &str =
     "id, workspace_id, prefix, provider, config, created_at, updated_at";
@@ -100,6 +100,11 @@ fn normalize_prefix(prefix: &str) -> StateResult<String> {
             "mount prefix must be a single top-level segment, got {prefix:?}"
         )));
     }
+    if trimmed == LOCAL_MOUNT.trim_start_matches('/') {
+        return Err(StateError::InvalidData(format!(
+            "mount prefix {trimmed:?} is reserved for the workspace's local files"
+        )));
+    }
     Ok(format!("/{trimmed}"))
 }
 
@@ -162,19 +167,23 @@ impl WorkspacesState {
 
     /// Assemble the workspace's mounts into a live [`Vfs`], or `None` when the
     /// workspace has no mounts (so the filesystem stays purely local).
-    pub(super) async fn build_vfs(&self, workspace_id: Uuid) -> StateResult<Option<Arc<Vfs>>> {
-        build_workspace_vfs(&self.db, workspace_id).await
+    pub(super) async fn build_vfs(&self, workspace_id: Uuid) -> StateResult<Arc<Vfs>> {
+        let mut config = build_workspace_vfs(&self.db, workspace_id).await?;
+        config.local_root = Some(self.get_root(workspace_id));
+        let vfs =
+            Vfs::from_config(config).map_err(|e| StateError::InvalidData(format!("vfs: {e}")))?;
+        Ok(Arc::new(vfs))
     }
 }
 
-/// Load a workspace's mounts and assemble them into a live [`Vfs`], or `None`
-/// when there are none. Standalone (takes the pool) so both
-/// [`WorkspacesState::build_vfs`] and the session run loop (which only holds the
-/// pool) can build it.
+/// Load a workspace's provider mounts into a [`VfsConfig`], with `local_root`
+/// left unset — the caller fills it, since only it knows the on-disk file root.
+/// Standalone (takes the pool) so both [`WorkspacesState::build_vfs`] and the
+/// session run loop (which only holds the pool) can build it.
 pub(crate) async fn build_workspace_vfs(
     db: &SqlitePool,
     workspace_id: Uuid,
-) -> StateResult<Option<Arc<Vfs>>> {
+) -> StateResult<VfsConfig> {
     let rows = sqlx::query(&format!(
         "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC"
     ))
@@ -185,10 +194,8 @@ pub(crate) async fn build_workspace_vfs(
         .iter()
         .map(WorkspaceMount::from_row)
         .collect::<StateResult<Vec<_>>>()?;
-    if mounts.is_empty() {
-        return Ok(None);
-    }
-    let config = VfsConfig {
+    Ok(VfsConfig {
+        local_root: None,
         mounts: mounts
             .into_iter()
             .map(|m| MountSpec {
@@ -196,9 +203,7 @@ pub(crate) async fn build_workspace_vfs(
                 provider: m.provider,
             })
             .collect(),
-    };
-    let vfs = Vfs::from_config(config).map_err(|e| StateError::InvalidData(format!("vfs: {e}")))?;
-    Ok(Some(Arc::new(vfs)))
+    })
 }
 
 /// Map a SQLite UNIQUE violation on `(workspace_id, prefix)` to a typed error so
@@ -292,9 +297,12 @@ mod tests {
             _ => panic!("expected S3"),
         }
 
-        // build_vfs assembles the mount (no network — just client construction).
-        let vfs = state.build_vfs(wid).await.unwrap().expect("vfs");
-        assert_eq!(vfs.mount_names(), vec!["s3-prod".to_string()]);
+        // build_vfs assembles the mount (no network — just client construction),
+        // alongside the always-present local `/files` mount.
+        let vfs = state.build_vfs(wid).await.unwrap();
+        let mut names = vfs.mount_names();
+        names.sort();
+        assert_eq!(names, vec!["files".to_string(), "s3-prod".to_string()]);
 
         // get_fs builds a filesystem with the mount attached.
         assert!(state.get_fs(wid).await.is_ok());
@@ -306,10 +314,13 @@ mod tests {
             Err(StateError::UniqueViolation(_))
         ));
 
-        // Removal drops it; with no mounts, build_vfs is None.
+        // Removal drops it; with no provider mounts, the VFS still has local `/files`.
         state.remove_mount(created.id).await.unwrap();
         assert!(state.list_mounts(wid).await.unwrap().is_empty());
-        assert!(state.build_vfs(wid).await.unwrap().is_none());
+        assert_eq!(
+            state.build_vfs(wid).await.unwrap().mount_names(),
+            vec!["files".to_string()]
+        );
         assert!(matches!(
             state.remove_mount(created.id).await,
             Err(StateError::NotFound)
@@ -322,6 +333,17 @@ mod tests {
         let nested = WorkspaceMount::new(wid, "/a/b".into(), s3_provider());
         assert!(matches!(
             state.create_mount(nested).await,
+            Err(StateError::InvalidData(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn reserved_files_prefix_rejected() {
+        let (state, _tmp, wid) = fresh_state().await;
+        // `files` is reserved for the workspace's local file mount.
+        let reserved = WorkspaceMount::new(wid, "files".into(), s3_provider());
+        assert!(matches!(
+            state.create_mount(reserved).await,
             Err(StateError::InvalidData(_))
         ));
     }

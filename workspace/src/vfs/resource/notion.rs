@@ -516,6 +516,7 @@ fn dir(name: &str) -> DirEntry {
         mtime: None,
         atime: None,
         ctime: None,
+        created: None,
     }
 }
 
@@ -533,6 +534,7 @@ fn dir_t(
         mtime,
         atime: None,
         ctime,
+        created: None,
     }
 }
 
@@ -550,6 +552,7 @@ fn file(name: &str, size: u64) -> DirEntry {
         mtime: None,
         atime: None,
         ctime: None,
+        created: None,
     }
 }
 

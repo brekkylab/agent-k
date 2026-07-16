@@ -103,6 +103,7 @@ impl Resource for S3Resource {
                     mtime: None,
                     atime: None,
                     ctime: None,
+                    created: None,
                 });
             }
         }
@@ -121,6 +122,7 @@ impl Resource for S3Resource {
                     mtime: Some(obj.last_modified.into()),
                     atime: None,
                     ctime: None,
+                    created: None,
                 });
             }
         }
@@ -142,9 +144,10 @@ impl Resource for S3Resource {
                 kind: FileKind::File,
                 size: meta.size,
                 mtime: Some(meta.last_modified.into()),
-                // S3 reports only LastModified; no access/change time.
+                // S3 reports only LastModified; no access/change/birth time.
                 atime: None,
                 ctime: None,
+                created: None,
                 etag: meta.e_tag.clone(),
                 version: meta.version.clone(),
             }),

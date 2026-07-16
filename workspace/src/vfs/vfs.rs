@@ -1,11 +1,16 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::vfs::{
     accessor::{NotionConfig, S3Config},
     cache::CachedResource,
     path::VPath,
-    resource::{NotionResource, Resource, S3Resource},
+    resource::{LocalResource, NotionResource, Resource, S3Resource},
 };
+
+/// Reserved mount prefix for the workspace's local file tree. A provider mount
+/// may not use it (the backend rejects it at mount-create time).
+pub const LOCAL_MOUNT: &str = "/files";
 
 /// Per-mount provider configuration (carries credentials, host-only).
 #[derive(Clone)]
@@ -24,6 +29,10 @@ pub struct MountSpec {
 
 #[derive(Clone, Default)]
 pub struct VfsConfig {
+    /// The workspace's local file root, mounted at [`LOCAL_MOUNT`]. `None` builds
+    /// a provider-only VFS (unit tests). This is an in-memory assembly struct,
+    /// never persisted — the DB stores per-mount rows and the caller fills this.
+    pub local_root: Option<PathBuf>,
     pub mounts: Vec<MountSpec>,
 }
 
@@ -62,9 +71,19 @@ impl Vfs {
         Ok(Self { mounts })
     }
 
-    /// Instantiate resources from a [`VfsConfig`] and build the VFS.
+    /// Instantiate resources from a [`VfsConfig`] and build the VFS. The single
+    /// builder: the local file tree (when `local_root` is set) becomes the
+    /// [`LOCAL_MOUNT`] mount alongside the provider mounts.
     pub fn from_config(config: VfsConfig) -> anyhow::Result<Self> {
-        let mut mounts = Vec::with_capacity(config.mounts.len());
+        let mut mounts = Vec::with_capacity(config.mounts.len() + 1);
+        // Local disk is a mount like any other, but not wrapped in the metadata
+        // cache — it's live and cheap, unlike the remote providers below.
+        if let Some(root) = config.local_root {
+            mounts.push(Mount {
+                prefix: LOCAL_MOUNT.to_string(),
+                resource: Arc::new(LocalResource::new(root)),
+            });
+        }
         for spec in config.mounts {
             let provider: Arc<dyn Resource> = match spec.provider {
                 ProviderConfig::S3(c) => Arc::new(S3Resource::new(&c)?),
