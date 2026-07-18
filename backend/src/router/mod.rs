@@ -14,6 +14,7 @@ pub(crate) mod error;
 
 mod agent;
 mod auth;
+mod knowledge;
 mod message;
 mod mount;
 mod session;
@@ -69,6 +70,18 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         .api_route(
             "/workspaces/{wid}/mounts/{mount_id}",
             delete(mount::delete_mount),
+        )
+        .api_route(
+            "/workspaces/{wid}/knowledge/refs",
+            get(knowledge::list_refs).post(knowledge::create_ref),
+        )
+        .api_route(
+            "/workspaces/{wid}/knowledge/refs/{name}",
+            delete(knowledge::delete_ref),
+        )
+        .api_route(
+            "/workspaces/{wid}/knowledge/resync",
+            post(knowledge::resync),
         )
         .api_route(
             "/agents",
