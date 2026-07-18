@@ -25,6 +25,7 @@ pub struct FwdEntry {
 /// A stat result. `exists == false` collapses every "no such node" outcome
 /// (missing path, unroutable prefix, backend stat error) into a single answer
 /// the FUSE forwarder turns into `ENOENT`.
+#[derive(Clone, Copy, Debug)]
 pub struct FwdStat {
     pub exists: bool,
     pub is_dir: bool,

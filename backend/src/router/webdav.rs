@@ -30,15 +30,15 @@ use workspace::{
 };
 
 /// WebDAV workspace router. Mounted by [`super::get_router`] at
-/// `/workspaces/{wid}/files[/…]`; exposes
-/// `data_root/workspaces/{wid}/files` as a per-workspace filesystem.
+/// `/workspaces/{wid}/sources[/…]`; serves the **unified** workspace tree —
+/// local files under `files/`, each provider mount as a sibling — the same view
+/// the guest sees.
 ///
 /// Routes via `fallback` so axum forwards every HTTP method — including
 /// WebDAV-specific ones (`PROPFIND`, `MKCOL`, `COPY`, `MOVE`, `LOCK`, …) —
-/// straight to [`dav_server`]. Auth mirrors the WS route: JWT is read from
-/// `?token=…` because the eventual target audience (browser fetch + native
-/// WebDAV clients) cannot reliably set custom auth headers. The token's subject
-/// must own the workspace.
+/// straight to [`dav_server`]. Authenticated inline (these routes bypass the
+/// `auth_required` layer) from the `Authorization: Bearer` header; the token's
+/// subject must own the workspace.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new().fallback(handle).with_state(state)
 }
@@ -49,9 +49,16 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
         None => return (StatusCode::BAD_REQUEST, "invalid workspace id").into_response(),
     };
 
-    let token = req.uri().query().and_then(extract_token);
+    // These routes bypass the `auth_required` layer (registered after them), so
+    // authenticate inline from the `Authorization: Bearer` header.
+    let token = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|t| t.trim().to_string());
     let Some(token) = token else {
-        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+        return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
     let user = match authenticate(&state, &token).await {
         Ok(u) => u,
@@ -83,7 +90,7 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
     let dav = DavHandler::builder()
         .filesystem(Box::new(DavFs(fs)))
         .locksystem(FakeLs::new())
-        .strip_prefix(format!("/workspaces/{wid}/files"))
+        .strip_prefix(format!("/workspaces/{wid}/sources"))
         .build_handler();
 
     dav.handle(req).await.map(Body::new)
@@ -98,12 +105,6 @@ fn parse_wid(path: &str) -> Option<Uuid> {
     // non-canonical segment (uppercase, or the 32-char no-hyphen form) would
     // authenticate but then 502 on PrefixMismatch. Reject it up front as a 400.
     (wid_str == wid.to_string()).then_some(wid)
-}
-
-fn extract_token(query: &str) -> Option<String> {
-    url::form_urlencoded::parse(query.as_bytes())
-        .find(|(k, _)| k == "token")
-        .map(|(_, v)| v.into_owned())
 }
 
 /// Workspace-relative path (leading `/`) in the shape [`WorkspaceFs`] expects.
