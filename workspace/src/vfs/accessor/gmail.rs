@@ -1,12 +1,23 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
 const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GMAIL_API_BASE: &str = "https://gmail.googleapis.com/gmail/v1";
+
+/// Concurrent 100-message batch requests. Kept low because too many overshoot
+/// Gmail's per-user rate limit and the resulting 429 backoff makes it slower
+/// than serial; 3 measured fastest on a real mailbox.
+const BATCH_CONCURRENCY: usize = 3;
+/// Max passes over the id set, each re-requesting only ids that didn't come back
+/// (failed chunk, or an errored sub-response inside a 200 batch). Bounded: an id
+/// trashed between `list` and `get` 404s forever and would loop otherwise.
+const MAX_BATCH_ROUNDS: usize = 3;
 
 /// Retry budget for a rate-limited/5xx request. A directory listing fans out
 /// many per-message fetches, so a burst can trip Gmail's per-user rate limit; a
@@ -293,21 +304,56 @@ impl GmailAccessor {
         self.get_json(&url).await
     }
 
-    /// Fetch many messages in a single Gmail **batch** request (`/batch/gmail/v1`,
-    /// multipart/mixed), collapsing N per-message round-trips into one. Returns
-    /// the parsed message JSON for each sub-request that succeeded (order not
-    /// guaranteed — callers key on the `id` field); chunked at Gmail's 100-per-
-    /// batch cap. This is the fan-out path a directory listing takes.
+    /// Fetch many messages via Gmail **batch** requests (`/batch/gmail/v1`,
+    /// multipart/mixed), collapsing per-message round-trips into 100-message
+    /// chunks run [`BATCH_CONCURRENCY`] at a time. Returns the parsed message JSON
+    /// keyed by `id` (order not guaranteed — callers key on `id`).
+    ///
+    /// Completeness over speed: after each parallel pass it reconciles by id and
+    /// re-requests only what didn't come back — a failed chunk *or* an errored
+    /// sub-response inside an otherwise-200 batch (which [`parse_batch_bodies`]
+    /// silently omits). Up to [`MAX_BATCH_ROUNDS`] passes; ids still unresolved
+    /// after that (e.g. trashed between `list` and `get`) are logged, not hidden.
+    /// This is the fan-out path a directory listing takes.
     pub async fn get_messages_batch(
         &self,
         ids: &[String],
         format: &str,
     ) -> anyhow::Result<Vec<Value>> {
-        let mut out = Vec::with_capacity(ids.len());
-        for chunk in ids.chunks(100) {
-            out.extend(self.batch_chunk(chunk, format).await?);
+        let mut got: HashMap<String, Value> = HashMap::with_capacity(ids.len());
+        for _ in 0..MAX_BATCH_ROUNDS {
+            let missing: Vec<String> = ids
+                .iter()
+                .filter(|id| !got.contains_key(*id))
+                .cloned()
+                .collect();
+            if missing.is_empty() {
+                break;
+            }
+            // A chunk that errors resolves to an empty Vec, so its ids simply stay
+            // missing and are retried next round rather than failing the batch.
+            let chunks: Vec<Vec<String>> =
+                missing.chunks(100).map(<[String]>::to_vec).collect();
+            let passes: Vec<Vec<Value>> = stream::iter(chunks)
+                .map(|chunk| async move { self.batch_chunk(&chunk, format).await.unwrap_or_default() })
+                .buffer_unordered(BATCH_CONCURRENCY)
+                .collect()
+                .await;
+            for v in passes.into_iter().flatten() {
+                if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                    // Key on id: order-independent and dup-safe across retries.
+                    got.insert(id.to_string(), v);
+                }
+            }
         }
-        Ok(out)
+        let unresolved = ids.len() - got.len();
+        if unresolved > 0 {
+            tracing::warn!(
+                "gmail batch: {unresolved}/{} message(s) unresolved after {MAX_BATCH_ROUNDS} rounds (likely trashed)",
+                ids.len()
+            );
+        }
+        Ok(got.into_values().collect())
     }
 
     async fn batch_chunk(&self, ids: &[String], format: &str) -> anyhow::Result<Vec<Value>> {
