@@ -151,6 +151,8 @@ impl WorkspacesState {
         .execute(&self.db)
         .await
         .map_err(map_mount_sqlx_error)?;
+        // Mounts changed → rebuild the fs on next access.
+        self.invalidate_fs(mount.workspace_id);
         Ok(mount)
     }
 
@@ -161,6 +163,7 @@ impl WorkspacesState {
             .bind(id.to_string())
             .execute(&self.db)
             .await?;
+        self.invalidate_fs(existing.workspace_id);
         Ok(existing)
     }
 
@@ -344,5 +347,31 @@ mod tests {
             state.create_mount(reserved).await,
             Err(StateError::InvalidData(_))
         ));
+    }
+
+    /// A mount create/remove must evict the cached `WorkspaceFs` so the next
+    /// `get_fs` reflects the change (a stale cache would keep listing a removed
+    /// mount). Checked via the root mount-name list (no network).
+    #[tokio::test]
+    async fn get_fs_reflects_mount_changes() {
+        let (state, _tmp, wid) = fresh_state().await;
+
+        let created = state
+            .create_mount(WorkspaceMount::new(wid, "s3-prod".into(), s3_provider()))
+            .await
+            .unwrap();
+        let fs = state.get_fs(wid).await.unwrap();
+        assert!(
+            fs.mount_names().iter().any(|n| n == "s3-prod"),
+            "mount should appear after create"
+        );
+
+        // Removing must evict the cache, or get_fs still lists it.
+        state.remove_mount(created.id).await.unwrap();
+        let fs = state.get_fs(wid).await.unwrap();
+        assert!(
+            !fs.mount_names().iter().any(|n| n == "s3-prod"),
+            "mount must be gone after remove (cache invalidated)"
+        );
     }
 }

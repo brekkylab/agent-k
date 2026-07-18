@@ -29,6 +29,10 @@ pub struct DirEntry {
     /// Birth/creation time per entry, if the backend reports one (local files);
     /// `None` for providers that don't distinguish a birth time.
     pub created: Option<std::time::SystemTime>,
+    /// Strong version tag from the listing (S3 `ETag`), if the backend reports
+    /// one. Carried so the stat fast-path can pin a read to it (`If-Match`)
+    /// instead of validating by the coarser mtime.
+    pub etag: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -66,6 +70,18 @@ pub trait Resource: Send + Sync {
         path: &MountPath,
         range: Option<Range<u64>>,
     ) -> ResourceResult<Vec<u8>>;
+
+    /// Read `range` validated against a caller-pinned snapshot (`stat` captured
+    /// once when the read began), so every chunk of one read stays consistent
+    /// without a per-chunk stat. Default: ignore the pin and read normally.
+    async fn read_bytes_pinned(
+        &self,
+        path: &MountPath,
+        range: Option<Range<u64>>,
+        _stat: &FileStat,
+    ) -> ResourceResult<Vec<u8>> {
+        self.read_bytes(path, range).await
+    }
 
     async fn write_bytes(&self, path: &MountPath, data: Vec<u8>) -> ResourceResult<()>;
 
