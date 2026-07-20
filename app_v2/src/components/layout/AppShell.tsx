@@ -5,13 +5,253 @@
 // action, a Workspace nav link (with a subtle divider below it), a Recents
 // session list, and the LanguageToggle in the footer.
 
-import type { ReactNode } from 'react';
+import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { listSessions } from '@/api/sessions';
+import { listSessions, updateSessionTitle, deleteSession, SESSION_TITLE_MAX_LEN } from '@/api/sessions';
+import type { SessionResponse } from '@/api/types';
 import { LanguageToggle } from '@/components/LanguageToggle';
+import { SessionTitle } from '@/components/SessionTitle';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Icon } from '@/components/Icon';
+
+// Duration of the row's delete exit animation; keep in sync with the
+// `.cw-session-row.is-removing` transition in globals.css.
+const REMOVE_ANIM_MS = 220;
+
+/** One Recents row: opens the session on click, with a hover ⋯ menu that
+ *  swaps the title into an inline rename input (same save/cancel rules as the
+ *  chat header). */
+function SessionRow({
+  session,
+  isActive,
+  onOpen,
+}: {
+  session: SessionResponse;
+  isActive: boolean;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation('common');
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const cancelEditRef = useRef(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const menuRef = useRef<HTMLSpanElement>(null);
+  const removeTimerRef = useRef<number | null>(null);
+
+  // Cancel the pending post-animation removal if the row unmounts first (e.g. a
+  // concurrent ['sessions'] refetch drops it), so the timer can't fire a stale
+  // cache write afterwards.
+  useEffect(() => {
+    return () => {
+      if (removeTimerRef.current !== null) window.clearTimeout(removeTimerRef.current);
+    };
+  }, []);
+
+  // Close the ⋯ menu on any click outside it (standard dropdown dismissal).
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [menuOpen]);
+
+  function patchTitle(next: string | null) {
+    qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
+      list?.map((s) => (s.id === session.id ? { ...s, title: next } : s)),
+    );
+  }
+
+  function startEdit() {
+    setMenuOpen(false);
+    cancelEditRef.current = false;
+    setDraft(session.title ?? '');
+    setEditing(true);
+  }
+
+  async function commitEdit() {
+    setEditing(false);
+    if (cancelEditRef.current) {
+      cancelEditRef.current = false;
+      return;
+    }
+    const next = draft.trim();
+    if (next === '' || next === session.title) return;
+    const prev = session.title;
+    patchTitle(next); // optimistic; the server echoes a title event too
+    try {
+      await updateSessionTitle(session.id, next);
+    } catch {
+      patchTitle(prev); // revert on failure
+    }
+  }
+
+  function openDelete() {
+    setMenuOpen(false);
+    setDeleting(true);
+  }
+
+  async function confirmDelete() {
+    setDeletePending(true);
+    try {
+      await deleteSession(session.id);
+    } catch {
+      setDeletePending(false); // keep the dialog open so the user can retry
+      return;
+    }
+    // Server delete succeeded: close the dialog, play the fade + height-collapse
+    // exit, then drop the row from the cache (which unmounts it).
+    setDeleting(false);
+    setDeletePending(false);
+    setRemoving(true);
+    // If the open session was the one deleted, leave its (now-404) route.
+    if (isActive) void navigate({ to: '/' });
+    // Drop the row from the cache once the exit animation has played. The
+    // server delete already succeeded and this local filter reflects it, so no
+    // refetch is needed. Tracked in a ref so an early unmount can cancel it.
+    removeTimerRef.current = window.setTimeout(() => {
+      qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
+        list?.filter((s) => s.id !== session.id),
+      );
+    }, REMOVE_ANIM_MS);
+  }
+
+  if (editing) {
+    return (
+      <div className={`cw-session-row${isActive ? ' is-active' : ''}`}>
+        <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
+        <input
+          className="cw-session-rename-input"
+          value={draft}
+          autoFocus
+          maxLength={SESSION_TITLE_MAX_LEN}
+          aria-label={t('nav.rename', 'Rename session')}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={(e) => e.currentTarget.select()}
+          onClick={(e) => e.stopPropagation()}
+          onBlur={() => void commitEdit()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.currentTarget.blur(); // routes through onBlur → commit
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              cancelEditRef.current = true;
+              e.currentTarget.blur();
+            }
+          }}
+        />
+        {draft.length >= SESSION_TITLE_MAX_LEN - 15 && (
+          <span className="cw-title-count">
+            {draft.length}/{SESSION_TITLE_MAX_LEN}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div
+        className={`cw-session-row${isActive ? ' is-active' : ''}${menuOpen ? ' is-menu-open' : ''}${removing ? ' is-removing' : ''}`}
+        role="button"
+        tabIndex={0}
+        onClick={onOpen}
+        onKeyDown={(e) => {
+          // Only the row itself opens on Enter/Space. Keydowns bubbling up from
+          // the nested ⋯ button or menu items (which stopPropagation only on
+          // click) must not also navigate, or activating the menu by keyboard
+          // would open the session too.
+          if (e.target !== e.currentTarget) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
+        title={session.title ?? undefined}
+      >
+        <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
+        <SessionTitle
+          title={session.title}
+          createdAt={session.created_at}
+          className="cw-session-title"
+          skeletonClassName="cw-title-skeleton--row"
+          fallback={session.id.slice(0, 8)}
+        />
+        <span className="cw-session-menu-wrap" ref={menuRef}>
+          <button
+            type="button"
+            className="cw-session-menu-btn"
+            aria-label={t('nav.more', 'More')}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((v) => !v);
+            }}
+          >
+            <Icon name="more" size={14} />
+          </button>
+          {menuOpen && (
+              <div className="cw-session-menu" role="menu">
+                {/* Rename only after the title lands (not during generation). */}
+                {session.title != null && (
+                  <button
+                    type="button"
+                    className="cw-session-menu-item"
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEdit();
+                    }}
+                  >
+                    <Icon name="writing" size={13} />
+                    <span>{t('nav.rename', 'Rename')}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="cw-session-menu-item cw-session-menu-item--danger"
+                  role="menuitem"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openDelete();
+                  }}
+                >
+                  <Icon name="trash" size={13} />
+                  <span>{t('nav.delete', 'Delete')}</span>
+                </button>
+              </div>
+          )}
+        </span>
+      </div>
+      {deleting && (
+        <ConfirmDialog
+          title={t('session_delete.title', 'Delete session')}
+          body={t(
+            'session_delete.body',
+            'This session and its messages will be permanently deleted. This cannot be undone.',
+          )}
+          confirmLabel={t('session_delete.confirm', 'Delete')}
+          destructive
+          pending={deletePending}
+          onConfirm={() => void confirmDelete()}
+          onClose={() => setDeleting(false)}
+        />
+      )}
+    </>
+  );
+}
 
 function SessionNavList() {
   const { t } = useTranslation('common');
@@ -29,29 +269,14 @@ function SessionNavList() {
 
   return (
     <div className="cw-sessions-list">
-      {sessions.map((s) => {
-        const isActive = s.id === activeSessionId;
-        const title = s.title ?? s.id.slice(0, 8);
-        return (
-          <div
-            key={s.id}
-            className={`cw-session-row${isActive ? ' is-active' : ''}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => navigate({ to: '/sessions/$sessionId', params: { sessionId: s.id } })}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                void navigate({ to: '/sessions/$sessionId', params: { sessionId: s.id } });
-              }
-            }}
-            title={title}
-          >
-            <span className="cw-pocket"><Icon name="message-square" size={12} /></span>
-            <span className="cw-session-title">{title}</span>
-          </div>
-        );
-      })}
+      {sessions.map((s) => (
+        <SessionRow
+          key={s.id}
+          session={s}
+          isActive={s.id === activeSessionId}
+          onOpen={() => navigate({ to: '/sessions/$sessionId', params: { sessionId: s.id } })}
+        />
+      ))}
     </div>
   );
 }

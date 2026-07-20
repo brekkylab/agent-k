@@ -15,6 +15,8 @@ export interface TranscriptEntry {
   kind: 'user' | 'assistant';
   text: string;
   toolCalls: ToolCallEntry[];
+  /** RFC3339 timestamp of the underlying message; '' for optimistic entries. */
+  createdAt: string;
 }
 
 function extractText(contents: AiloyPart[] | undefined): string {
@@ -82,7 +84,7 @@ export function buildTranscript(items: MessageItem[]): TranscriptEntry[] {
       result: toolResults.get(tc.id),
     }));
 
-    entries.push({ kind, text, toolCalls });
+    entries.push({ kind, text, toolCalls, createdAt: it.created_at });
   }
 
   return entries;

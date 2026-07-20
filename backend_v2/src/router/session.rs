@@ -17,8 +17,13 @@ use uuid::Uuid;
 
 use crate::{
     auth::AuthUser,
+    event::{TitleEvent, message_channel},
     state::{AppState, Session},
 };
+
+/// Upper bound on a manually-set title. Matches the auto-title limit (60) so
+/// both surfaces agree.
+const MAX_TITLE_LEN: usize = 60;
 
 use super::{
     error::{ApiError, err},
@@ -261,6 +266,45 @@ pub(super) async fn get_session(
 ) -> Result<Json<SessionResponse>, ApiError> {
     let session = require_owned_session(&state, &auth, id).await?;
     Ok(Json(SessionResponse::from(session)))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateSessionRequest {
+    /// New title. Trimmed; an empty (or whitespace-only) value is rejected so
+    /// the title is never cleared by a rename.
+    pub title: String,
+}
+
+/// `PATCH /sessions/{id}` — rename a session. Persists the trimmed, length-
+/// clamped title and republishes it on the session channel as a
+/// [`TitleEvent`], so every attached SSE client (the header, the sidebar)
+/// updates live — the same path the auto-titler uses.
+pub(super) async fn update_session(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateSessionRequest>,
+) -> Result<Json<SessionResponse>, ApiError> {
+    require_owned_session(&state, &auth, id).await?;
+
+    let trimmed = payload.title.trim();
+    if trimmed.is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "title must not be empty"));
+    }
+    let title: String = trimmed.chars().take(MAX_TITLE_LEN).collect();
+
+    state.sessions.set_title(id, &title).await?;
+
+    // Fan the new title out to attached clients, mirroring the auto-titler.
+    if let Ok(payload) = serde_json::to_string(&TitleEvent {
+        title: title.clone(),
+    }) {
+        state.events.publish(&message_channel(id), payload);
+    }
+
+    let updated = require_owned_session(&state, &auth, id).await?;
+    Ok(Json(SessionResponse::from(updated)))
 }
 
 pub(super) async fn delete_session(

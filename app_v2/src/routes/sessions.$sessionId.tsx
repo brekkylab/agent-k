@@ -1,11 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createFileRoute } from '@tanstack/react-router';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMessageStream } from '@/hooks/useMessageStream';
 import { buildTranscript, type TranscriptEntry } from '@/lib/transcript';
 import { sendMessage } from '@/api/messages';
+import { listSessions, updateSessionTitle, SESSION_TITLE_MAX_LEN } from '@/api/sessions';
+import type { SessionResponse } from '@/api/types';
 import { ApiError } from '@/api/client';
 import { MessageList } from '@/components/chat/MessageList';
 import { Composer } from '@/components/chat/Composer';
+import { SessionTitle } from '@/components/SessionTitle';
+import { Icon } from '@/components/Icon';
 import { takePendingMessage } from '@/stores/pendingMessage';
 
 export const Route = createFileRoute('/sessions/$sessionId')({
@@ -14,8 +20,66 @@ export const Route = createFileRoute('/sessions/$sessionId')({
 
 function SessionPage() {
   const { sessionId } = Route.useParams();
-  const { messages, running, runError, connected } = useMessageStream(sessionId);
+  const { t } = useTranslation('session');
+  const { messages, running, runError } = useMessageStream(sessionId);
   const [sendError, setSendError] = useState<string | null>(null);
+  const qc = useQueryClient();
+
+  // Session title, read from the shared ['sessions'] cache (populated by the
+  // sidebar and live-patched by useMessageStream when the auto-title arrives).
+  const { data: sessions } = useQuery({
+    queryKey: ['sessions'],
+    queryFn: listSessions,
+    staleTime: 30_000,
+  });
+  const session = sessions?.find((s) => s.id === sessionId);
+  const title = session?.title ?? null;
+
+  // Reflect the session title in the browser tab; restore the base on leave.
+  useEffect(() => {
+    document.title = title ? `${title} · Cowork` : 'Cowork';
+    return () => {
+      document.title = 'Cowork';
+    };
+  }, [title]);
+
+  // Inline title rename. Editing routes save/cancel through the input's blur
+  // so Enter and click-away commit exactly once; Escape flags a cancel first.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const cancelEditRef = useRef(false);
+
+  function startEdit() {
+    if (title == null) return; // can't rename a title that hasn't generated yet
+    cancelEditRef.current = false;
+    setDraft(title);
+    setEditing(true);
+  }
+
+  function patchTitle(next: string | null) {
+    qc.setQueryData<SessionResponse[]>(['sessions'], (list) =>
+      list?.map((s) => (s.id === sessionId ? { ...s, title: next } : s)),
+    );
+  }
+
+  async function commitEdit() {
+    setEditing(false);
+    if (cancelEditRef.current) {
+      cancelEditRef.current = false;
+      return;
+    }
+    const next = draft.trim();
+    // Empty is rejected (never clears the title); no-op if unchanged.
+    if (next === '' || next === title) return;
+
+    const prev = title;
+    patchTitle(next); // optimistic; the server echoes a title event too
+    try {
+      await updateSessionTitle(sessionId, next);
+    } catch {
+      patchTitle(prev); // revert on failure
+    }
+  }
 
   // Optimistically-rendered user message: shown the instant it is sent, before
   // the server echoes it back over SSE (which only happens after the run's
@@ -59,6 +123,9 @@ function SessionPage() {
     setOptimistic(text);
     try {
       await sendMessage(sessionId, text);
+      // The server bumps the session's updated_at on run; refresh the list so
+      // Recents reorders this session to the top.
+      void qc.invalidateQueries({ queryKey: ['sessions'] });
       return true;
     } catch (err) {
       setOptimistic(null);
@@ -75,20 +142,67 @@ function SessionPage() {
   // (guards the one-render window between the message arriving and the effect).
   const showOptimistic = optimistic !== null && userMsgCount <= baselineUsers.current;
   const entries: TranscriptEntry[] = showOptimistic
-    ? [...transcript, { kind: 'user', text: optimistic, toolCalls: [] }]
+    ? [...transcript, { kind: 'user', text: optimistic, toolCalls: [], createdAt: new Date().toISOString() }]
     : transcript;
 
   return (
     <div className="cw-chat-surface">
       <div className="cw-chat-head">
-        <div className="cw-chat-status">
-          {connected ? (
-            <span className="cw-status-dot cw-status-dot--connected" title="Connected" />
-          ) : (
-            <span className="cw-status-dot cw-status-dot--disconnected" title="Connecting…" />
-          )}
-          {running && <span className="cw-status-running">AI is responding…</span>}
-        </div>
+        {editing ? (
+          <>
+            <input
+              className="cw-chat-title-input"
+              value={draft}
+              autoFocus
+              maxLength={SESSION_TITLE_MAX_LEN}
+              aria-label={t('ui.title_input_aria')}
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={() => void commitEdit()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.currentTarget.blur(); // routes through onBlur → commit
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  cancelEditRef.current = true;
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+            {draft.length >= SESSION_TITLE_MAX_LEN - 15 && (
+              <span className="cw-title-count">
+                {draft.length}/{SESSION_TITLE_MAX_LEN}
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            {/* Key by sessionId so switching sessions remounts the title: the
+                router reuses this component across param changes, and without a
+                fresh mount an already-titled session would inherit the previous
+                session's null→value transition and appear to "type" itself. */}
+            <SessionTitle
+              key={sessionId}
+              title={title}
+              createdAt={session?.created_at}
+              className="cw-chat-title"
+              skeletonClassName="cw-title-skeleton--head"
+              fallback={sessionId.slice(0, 8)}
+            />
+            {title != null && (
+              <button
+                type="button"
+                className="cw-title-edit"
+                onClick={startEdit}
+                aria-label={t('ui.rename')}
+                title={t('ui.rename')}
+              >
+                <Icon name="writing" size={13} />
+              </button>
+            )}
+          </>
+        )}
       </div>
 
       {runError && (

@@ -34,6 +34,8 @@ use super::{error::{ApiError, err}, workspace::require_owned_session};
 pub struct MessageResponse {
     pub seq: i64,
     pub message: Message,
+    /// RFC3339 timestamp of when the message was persisted.
+    pub created_at: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -80,7 +82,11 @@ pub(super) async fn list_messages(
     Ok(Json(MessageListResponse {
         items: messages
             .into_iter()
-            .map(|(seq, message)| MessageResponse { seq, message })
+            .map(|(seq, message, created_at)| MessageResponse {
+                seq,
+                message,
+                created_at,
+            })
             .collect(),
     }))
 }
@@ -142,8 +148,8 @@ pub(super) async fn stream_messages(
                     return;
                 }
             };
-            for (seq, message) in rows {
-                let payload = match serde_json::to_string(&MessageEvent { seq, message }) {
+            for (seq, message, created_at) in rows {
+                let payload = match serde_json::to_string(&MessageEvent { seq, message, created_at }) {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::error!(session = %sid, "ws catch-up serialize error: {e}");
@@ -193,6 +199,10 @@ pub(super) async fn stream_messages(
 ///   event: message   data: {"seq":N,"message":{...}}          (MessageEvent)
 ///   event: run       data: {"run":"started"|"finished"|"idle"} or
 ///                          {"run":"error","message":"..."}     (RunEvent)
+///   event: title     data: {"title":"..."}                     (TitleEvent)
+///
+/// The `title` frame fires once, when an untitled session's auto-generated
+/// title is first persisted (concurrent with the run that triggered it).
 ///
 /// A run-status snapshot (`started`/`idle`) is emitted after EVERY DB
 /// catch-up (initial attach and post-Lagged reconciliation), so re-attaching
@@ -225,8 +235,8 @@ pub(super) async fn stream_messages_sse(
                     return;
                 }
             };
-            for (seq, message) in rows {
-                let data = match serde_json::to_string(&MessageEvent { seq, message }) {
+            for (seq, message, created_at) in rows {
+                let data = match serde_json::to_string(&MessageEvent { seq, message, created_at }) {
                     Ok(d) => d,
                     Err(e) => {
                         tracing::error!(session = %sid, "sse catch-up serialize error: {e}");
@@ -262,9 +272,13 @@ pub(super) async fn stream_messages_sse(
                                 last_seq = seq;
                             }
                             None => {
-                                // Seq-less payloads are run lifecycle events.
+                                // Seq-less payloads are lifecycle events, tagged
+                                // by their discriminant field: `run` for run
+                                // status, `title` for an auto-generated title.
                                 if value.as_ref().is_some_and(|v| v.get("run").is_some()) {
                                     yield Ok(Event::default().event("run").data(payload));
+                                } else if value.as_ref().is_some_and(|v| v.get("title").is_some()) {
+                                    yield Ok(Event::default().event("title").data(payload));
                                 }
                             }
                         }
@@ -412,5 +426,83 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── PATCH /sessions/{id} (rename) ──────────────────────────────────────
+
+    async fn read_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn patch_title_req(sid: Uuid, token: &str, body: &str) -> Request<Body> {
+        Request::builder()
+            .method("PATCH")
+            .uri(format!("/sessions/{sid}"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn patch_session_trims_and_returns_new_title() {
+        let state = make_state().await;
+        let (user, token) = create_user_and_token(&state).await;
+        let sid = create_session(&state, &user).await;
+        let app = get_router(state);
+        let resp = app
+            .oneshot(patch_title_req(sid, &token, r#"{"title":"  My Renamed Session  "}"#))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = read_json(resp).await;
+        assert_eq!(body["title"], "My Renamed Session");
+    }
+
+    #[tokio::test]
+    async fn patch_session_rejects_blank_title() {
+        let state = make_state().await;
+        let (user, token) = create_user_and_token(&state).await;
+        let sid = create_session(&state, &user).await;
+        let app = get_router(state);
+        let resp = app
+            .oneshot(patch_title_req(sid, &token, r#"{"title":"   "}"#))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn patch_session_clamps_to_max_len() {
+        let state = make_state().await;
+        let (user, token) = create_user_and_token(&state).await;
+        let sid = create_session(&state, &user).await;
+        let app = get_router(state);
+        let long = "a".repeat(100);
+        let resp = app
+            .oneshot(patch_title_req(sid, &token, &format!(r#"{{"title":"{long}"}}"#)))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = read_json(resp).await;
+        assert_eq!(body["title"].as_str().unwrap().chars().count(), 60);
+    }
+
+    #[tokio::test]
+    async fn patch_session_without_auth_is_401() {
+        let state = make_state().await;
+        let sid = Uuid::new_v4(); // 401 fires before the session is looked up
+        let app = get_router(state);
+        let req = Request::builder()
+            .method("PATCH")
+            .uri(format!("/sessions/{sid}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"title":"x"}"#))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

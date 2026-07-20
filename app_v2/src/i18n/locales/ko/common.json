@@ -33,7 +33,15 @@
     "new_chat": "새 대화",
     "recents": "최근",
     "recents_empty": "최근 대화가 없어요",
-    "workspace": "워크스페이스"
+    "workspace": "워크스페이스",
+    "more": "더보기",
+    "rename": "이름 변경",
+    "delete": "삭제"
+  },
+  "session_delete": {
+    "title": "세션 삭제",
+    "body": "이 세션과 대화 기록이 영구히 삭제됩니다. 되돌릴 수 없어요.",
+    "confirm": "삭제"
   },
   "intent": {
     "general": { "label": "일반", "note": "자유롭게 시작" },

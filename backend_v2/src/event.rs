@@ -72,6 +72,8 @@ pub fn message_channel(session_id: Uuid) -> String {
 pub struct MessageEvent {
     pub seq: i64,
     pub message: Message,
+    /// RFC3339 timestamp of when the message was persisted.
+    pub created_at: String,
 }
 
 /// Run lifecycle payload on the `message/{session_id}` channel. Tagged by the
@@ -90,9 +92,28 @@ pub enum RunEvent {
     Idle,
 }
 
+/// Title-update payload on the `message/{session_id}` channel. Published once
+/// when a session's auto-generated title is first set (see
+/// [`crate::state::SessionsState::run`]). Like [`RunEvent`] it carries no
+/// `seq`; the SSE handler routes it to the `title` event by the presence of
+/// the `title` field, so seq-filtering clients ignore it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TitleEvent {
+    pub title: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_event_json() {
+        let json = serde_json::to_string(&TitleEvent {
+            title: "Hello".into(),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"title":"Hello"}"#);
+    }
 
     #[test]
     fn run_event_started_json() {

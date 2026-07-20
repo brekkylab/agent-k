@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '@/api/client';
 import { streamSessionMessages } from '@/api/messages';
-import type { MessageItem } from '@/api/types';
+import type { MessageItem, SessionResponse } from '@/api/types';
 
 export interface MessageStreamState {
   messages: MessageItem[];
@@ -15,6 +16,7 @@ export function useMessageStream(sessionId: string): MessageStreamState {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const qc = useQueryClient();
 
   const lastSeqRef = useRef<number | undefined>(undefined);
   const abortRef = useRef<AbortController | null>(null);
@@ -64,8 +66,7 @@ export function useMessageStream(sessionId: string): MessageStreamState {
               next.sort((a, b) => a.seq - b.seq);
               return next;
             });
-          } else {
-            // ev.kind === 'run'
+          } else if (ev.kind === 'run') {
             const payload = ev.payload;
             if ('run' in payload) {
               if (payload.run === 'started') {
@@ -78,6 +79,13 @@ export function useMessageStream(sessionId: string): MessageStreamState {
                 setRunError((payload as { run: 'error'; message: string }).message);
               }
             }
+          } else {
+            // ev.kind === 'title' — an auto-generated title arrived. Patch the
+            // cached session list in place so the sidebar (and anything else
+            // reading ['sessions']) reflects it live, without a refetch.
+            qc.setQueryData<SessionResponse[]>(['sessions'], (prev) =>
+              prev?.map((s) => (s.id === sessionId ? { ...s, title: ev.title } : s)),
+            );
           }
         }
         // Stream ended normally — reconnect with capped backoff so a server
@@ -116,7 +124,7 @@ export function useMessageStream(sessionId: string): MessageStreamState {
       abortRef.current?.abort();
       abortRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, qc]);
 
   return { messages, running, runError, connected };
 }

@@ -161,7 +161,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   transition: background 120ms, color 120ms, transform 120ms;
 }
 .cw-nav-row:hover, .cw-session-row:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
-.cw-nav-row:active, .cw-session-row:active { transform: translateY(1px); }
+.cw-nav-row:active { transform: translateY(1px); }
+/* Press animation for the row, but not when the press is on the ⋯ button or its
+   menu (whose active state otherwise propagates up to the row). */
+.cw-session-row:active:not(:has(.cw-session-menu-wrap:active)) { transform: translateY(1px); }
 .cw-nav-row.is-active { background: var(--cw-bg-muted); color: var(--cw-fg-1); font-weight: 600; }
 .cw-nav-row span, .cw-session-row span:not(.cw-pocket):not(.cw-session-menu-wrap) {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -170,6 +173,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .cw-session-row {
   min-height: 28px; padding: 5px 8px; font-size: 12.5px;
   color: var(--cw-fg-3); cursor: pointer;
+  /* Baseline for the delete collapse to animate from (rows are single-line). */
+  max-height: 40px;
+}
+/* Delete exit: fade out while the row collapses so the rows below slide up. */
+.cw-session-row.is-removing {
+  opacity: 0; max-height: 0; min-height: 0;
+  padding-top: 0; padding-bottom: 0;
+  overflow: hidden; pointer-events: none;
+  transition: opacity 0.15s ease, max-height 0.22s ease,
+    min-height 0.22s ease, padding 0.22s ease;
 }
 .cw-session-row .cw-session-title { flex: 1; min-width: 0; }
 .cw-session-row.is-active {
@@ -186,6 +199,46 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .cw-session-row:hover .cw-session-row-delete,
 .cw-session-row:focus-within .cw-session-row-delete { opacity: 1; }
 .cw-session-row-delete:hover { background: var(--cw-destructive-soft); color: var(--cw-destructive); }
+
+/* ── Session row ⋯ menu (rename) ─────────────────────────────────────────── */
+/* Lift the whole row while its menu is open, so the dropdown paints above the
+   following rows instead of behind them (which would let clicks fall through
+   to the next row's ⋯). */
+.cw-session-row.is-menu-open { position: relative; z-index: 20; }
+.cw-session-menu-wrap { position: relative; flex-shrink: 0; display: inline-flex; }
+.cw-session-menu-btn {
+  opacity: 0; flex-shrink: 0;
+  width: 22px; height: 22px; border: 0; border-radius: var(--cw-radius-sm);
+  background: transparent; color: var(--cw-fg-4);
+  display: inline-grid; place-items: center; cursor: pointer;
+  transition: opacity 120ms, background 120ms, color 120ms;
+}
+.cw-session-row:hover .cw-session-menu-btn,
+.cw-session-row:focus-within .cw-session-menu-btn,
+.cw-session-menu-btn[aria-expanded="true"] { opacity: 1; }
+.cw-session-menu-btn:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+.cw-session-menu {
+  position: absolute; top: calc(100% + 2px); right: 0; z-index: 201;
+  min-width: 132px; padding: 4px;
+  background: var(--cw-bg-elevated); border: 1px solid var(--cw-border);
+  border-radius: var(--cw-radius-md); box-shadow: var(--cw-shadow-lg);
+}
+.cw-session-menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 8px; border: 0; background: transparent; cursor: pointer;
+  border-radius: var(--cw-radius-sm); color: var(--cw-fg-2);
+  font-size: 12.5px; text-align: left;
+}
+.cw-session-menu-item:hover { background: var(--cw-bg-muted); color: var(--cw-fg-1); }
+.cw-session-menu-item--danger { color: var(--cw-destructive); }
+.cw-session-menu-item--danger:hover { background: var(--cw-destructive-soft); color: var(--cw-destructive); }
+/* Inline rename input inside a session row. */
+.cw-session-rename-input {
+  flex: 1; min-width: 0; font: inherit; font-size: 12.5px;
+  color: var(--cw-fg-1); background: var(--cw-bg-elevated);
+  border: 1px solid var(--cw-border-strong, var(--cw-border-hover));
+  border-radius: var(--cw-radius-sm); padding: 2px 6px; outline: none;
+}
 
 /* ── Icon pocket (nav / session leading glyph) ──────────────────────────── */
 .cw-pocket {
@@ -309,7 +362,73 @@ select.cw-input { appearance: auto; }
   border-bottom: 1px solid var(--cw-border);
   display: flex; align-items: center; gap: 10px; flex-shrink: 0;
 }
+.cw-chat-title {
+  font-size: var(--cw-text-sm); font-weight: 600; color: var(--cw-fg-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+/* Pencil affordance — hidden until the header is hovered or the button is
+   keyboard-focused, so it doesn't clutter the header at rest. */
+.cw-title-edit {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--cw-fg-3); cursor: pointer;
+  padding: 3px; border-radius: var(--cw-radius-sm, 4px); flex-shrink: 0;
+  opacity: 0; transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.cw-chat-head:hover .cw-title-edit,
+.cw-title-edit:focus-visible { opacity: 1; }
+.cw-title-edit:hover { color: var(--cw-fg-1); background: var(--cw-bg-subtle); }
+/* Inline rename input, styled to sit in place of the title text. */
+.cw-chat-title-input {
+  font: inherit; font-size: var(--cw-text-sm); font-weight: 600; color: var(--cw-fg-1);
+  flex: 1; min-width: 0; max-width: 460px;
+  padding: 3px 8px; border-radius: var(--cw-radius-md, 6px);
+  background: var(--cw-bg-subtle); border: 1px solid var(--cw-border);
+  outline: none;
+}
+.cw-chat-title-input:focus { border-color: var(--cw-border-strong, var(--cw-border-hover)); }
+/* Character counter, shown only as the title nears the length limit. */
+.cw-title-count {
+  flex-shrink: 0; font-size: var(--cw-text-xs); color: var(--cw-fg-3);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+/* Shimmer skeleton shown in a title slot while the auto-title is being
+   generated (see SessionTitle) — the real text is typed in when it arrives. */
+.cw-title-skeleton {
+  display: inline-block; height: 1.05em; min-width: 80px;
+  border-radius: var(--cw-radius-md, 6px);
+  background: linear-gradient(
+    100deg,
+    var(--cw-bg-subtle) 30%,
+    var(--cw-bg-muted) 50%,
+    var(--cw-bg-subtle) 70%
+  );
+  background-size: 200% 100%;
+  animation: cw-title-shimmer 1.3s ease-in-out infinite;
+  vertical-align: middle;
+}
+.cw-title-skeleton--head { width: 180px; max-width: 45%; }
+.cw-title-skeleton--row { width: 70%; height: 0.95em; }
+/* Blinking caret trailing the text during the typewriter reveal. */
+.cw-title-caret {
+  display: inline-block; width: 2px; height: 1em; margin-left: 1px;
+  background: currentColor; vertical-align: text-bottom;
+  animation: cw-caret-blink 0.9s step-end infinite;
+}
+@keyframes cw-title-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@keyframes cw-caret-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .cw-title-skeleton { animation: none; }
+  .cw-title-caret { animation: none; }
+}
 .cw-chat-status { display: flex; align-items: center; gap: 8px; font-size: var(--cw-text-xs); color: var(--cw-fg-3); }
+/* "AI is responding…" typing indicator, rendered below the last message while
+   a run is in flight (see MessageList). Disappears with the run. */
+.cw-typing { display: flex; align-items: center; gap: 8px; font-size: var(--cw-text-xs); color: var(--cw-fg-3); }
+.cw-typing .cw-status-dot { animation: cw-typing-pulse 1.2s ease-in-out infinite; }
+@keyframes cw-typing-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .cw-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .cw-status-dot--connected { background: var(--cw-ok); }
 .cw-status-dot--disconnected { background: var(--cw-warn); }
@@ -330,9 +449,21 @@ select.cw-input { appearance: auto; }
 .cw-message { display: flex; align-items: flex-start; gap: 10px; width: 100%; margin-bottom: 22px; }
 .cw-message.is-self { flex-direction: row-reverse; }
 .cw-message-body {
+  position: relative;
   min-width: 0; max-width: min(560px, calc(100% - 44px));
   display: flex; flex-direction: column; gap: 4px;
 }
+/* Timestamp under a message, revealed on hover. Absolutely placed into the
+   inter-message margin so it never shifts the layout. */
+.cw-message-time {
+  position: absolute; top: calc(100% + 2px);
+  font-size: var(--cw-text-xs); color: var(--cw-fg-3);
+  white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity 0.12s ease;
+}
+.cw-message.is-ai .cw-message-time { left: 2px; }
+.cw-message.is-self .cw-message-time { right: 2px; }
+.cw-message:hover .cw-message-time { opacity: 1; }
 .cw-message.is-self .cw-message-body { align-items: flex-end; }
 .cw-message-bubble {
   padding: 9px 13px; border-radius: 12px;

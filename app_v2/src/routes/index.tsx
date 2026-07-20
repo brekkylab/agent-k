@@ -34,6 +34,16 @@ export function HomePage() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Tab title on the home / "new chat" surface (e.g. after deleting the open
+  // session, which navigates here). Localized, re-set on language change.
+  useEffect(() => {
+    const label = t('nav.new_chat', { ns: 'common', defaultValue: 'New Chat' });
+    document.title = `${label} · Cowork`;
+    return () => {
+      document.title = 'Cowork';
+    };
+  }, [t]);
+
   // StrictMode-safe read-and-clear: useState initializer must NOT call
   // takePendingAttachment() because StrictMode double-invokes initializers in
   // dev, consuming the value on the discarded first call so the chip never

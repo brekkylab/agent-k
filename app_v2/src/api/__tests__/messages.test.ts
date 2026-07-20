@@ -58,7 +58,7 @@ describe('streamSessionMessages', () => {
   }
 
   it('maps message frames correctly', async () => {
-    const item: MessageItem = { seq: 1, message: { role: 'user', contents: [{ type: 'text', text: 'hi' }] } };
+    const item: MessageItem = { seq: 1, message: { role: 'user', contents: [{ type: 'text', text: 'hi' }] }, created_at: '2026-01-01T00:00:00Z' };
     vi.mocked(streamSse).mockReturnValue(makeStream([
       { event: 'message', data: JSON.stringify(item) },
     ]));
@@ -87,6 +87,21 @@ describe('streamSessionMessages', () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]).toEqual({ kind: 'run', payload });
+  });
+
+  it('maps title frames correctly', async () => {
+    vi.mocked(streamSse).mockReturnValue(makeStream([
+      { event: 'title', data: JSON.stringify({ title: 'My Chat' }) },
+    ]));
+
+    const ctrl = new AbortController();
+    const results = [];
+    for await (const ev of streamSessionMessages('s1', undefined, ctrl.signal)) {
+      results.push(ev);
+    }
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({ kind: 'title', title: 'My Chat' });
   });
 
   it('ignores unknown event names', async () => {

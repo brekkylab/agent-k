@@ -94,7 +94,9 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         )
         .api_route(
             "/sessions/{id}",
-            get(session::get_session).delete(session::delete_session),
+            get(session::get_session)
+                .patch(session::update_session)
+                .delete(session::delete_session),
         )
         .api_route(
             "/sessions/{id}/messages",

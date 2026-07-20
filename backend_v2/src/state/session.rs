@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{StateError, StateResult, parse_ts, parse_uuid};
-use crate::event::{EventQueue, MessageEvent, RunEvent, message_channel};
+use crate::event::{EventQueue, MessageEvent, RunEvent, TitleEvent, message_channel};
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -92,6 +92,12 @@ impl Session {
     }
 }
 
+/// Concatenate the text parts of a user turn for title generation. Non-text
+/// parts (images, tool calls) are skipped.
+fn first_user_text(parts: &[Part]) -> String {
+    parts.iter().filter_map(|p| p.as_text()).collect()
+}
+
 pub struct SessionsState {
     db: SqlitePool,
 
@@ -123,11 +129,13 @@ impl SessionsState {
         self.data_root.join("sessions").join(id.to_string())
     }
 
-    /// Every session in `workspace_id`, oldest first.
+    /// Every session in `workspace_id`, most-recently-active first (for the
+    /// Recents list). `updated_at` is bumped on each run (see [`Self::run`]),
+    /// so a session rises to the top when the user messages it.
     pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Session>> {
         let rows = sqlx::query(
             "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
-             FROM sessions WHERE workspace_id = ? ORDER BY created_at ASC",
+             FROM sessions WHERE workspace_id = ? ORDER BY updated_at DESC",
         )
         .bind(workspace_id.to_string())
         .fetch_all(&self.db)
@@ -212,6 +220,97 @@ impl SessionsState {
         Ok(())
     }
 
+    /// Set a session's title. Backs the manual rename endpoint; the auto-titler
+    /// writes its own UPDATE inline (see [`Self::maybe_generate_title`]).
+    ///
+    /// Deliberately does NOT touch `updated_at`: a rename must not reorder the
+    /// Recents list, which sorts by last activity (see [`Self::list_by_workspace`]).
+    pub async fn set_title(&self, id: Uuid, title: &str) -> StateResult<()> {
+        let affected = sqlx::query("UPDATE sessions SET title = ? WHERE id = ?")
+            .bind(title)
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await?
+            .rows_affected();
+        if affected == 0 {
+            return Err(StateError::NotFound);
+        }
+        Ok(())
+    }
+
+    /// Whether `id` exists and has no title yet — the gate for auto-titling.
+    async fn needs_title(&self, id: Uuid) -> StateResult<bool> {
+        let row = sqlx::query("SELECT title FROM sessions WHERE id = ?")
+            .bind(id.to_string())
+            .fetch_optional(&self.db)
+            .await?;
+        Ok(matches!(row, Some(r) if r.get::<Option<String>, _>("title").is_none()))
+    }
+
+    /// If `id` still has no title, spawn a best-effort background task that
+    /// summarises `first_text` into one, persists it, and publishes a
+    /// [`TitleEvent`] on the session channel. Runs concurrently with the agent
+    /// run and never blocks or fails it: on any error the title is simply left
+    /// unset and can be regenerated on the next turn.
+    async fn maybe_generate_title(&self, id: Uuid, first_text: String) {
+        if first_text.trim().is_empty() {
+            return;
+        }
+        match self.needs_title(id).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!(session = %id, "title precheck failed: {e}");
+                return;
+            }
+        }
+
+        let db = self.db.clone();
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            let title = crate::services::session_title::generate_session_title(&first_text).await;
+            // A markdown-only first message (e.g. "###") sanitizes to "" and the
+            // fallback is empty too. Persisting "" would leave a non-null but
+            // blank title — an empty title bar with no shimmer/fallback. Skip
+            // the write so the title stays NULL and can be regenerated later.
+            if title.trim().is_empty() {
+                return;
+            }
+            // Gate on `title IS NULL`: the inline `needs_title` precheck ran
+            // before the (slow) LLM call, so a manual rename (`set_title`) may
+            // have landed since. Writing conditionally means we only ever fill
+            // an untitled session and never clobber a user's rename.
+            //
+            // Like `set_title`, does not touch updated_at — titling shouldn't
+            // reorder Recents.
+            let affected = match sqlx::query(
+                "UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL",
+            )
+            .bind(&title)
+            .bind(id.to_string())
+            .execute(&db)
+            .await
+            {
+                Ok(r) => r.rows_affected(),
+                Err(e) => {
+                    tracing::warn!(session = %id, "failed to persist session title: {e}");
+                    return;
+                }
+            };
+            // A rename beat us to it — leave their title in place and don't
+            // publish, or we'd broadcast a title the DB no longer holds.
+            if affected == 0 {
+                return;
+            }
+            match serde_json::to_string(&TitleEvent { title }) {
+                Ok(payload) => {
+                    events.publish(&message_channel(id), payload);
+                }
+                Err(e) => tracing::error!(session = %id, "title event serialize failed: {e}"),
+            }
+        });
+    }
+
     pub async fn remove(&self, id: Uuid) -> StateResult<Session> {
         let existing = self.get(id).await?.ok_or(StateError::NotFound)?;
         // Signal any in-flight run to stop before we tear down the row. The
@@ -270,21 +369,22 @@ impl SessionsState {
 
     /// Return all messages for `session_id`, ordered by `seq` ascending. Backs
     /// the `GET /sessions/{id}/messages` endpoint; the WS catch-up path uses
-    /// [`SessionsState::list_messages_since`] instead.
-    pub async fn list_messages(&self, session_id: Uuid) -> StateResult<Vec<(i64, Message)>> {
+    /// [`SessionsState::list_messages_since`] instead. Each tuple is
+    /// `(seq, message, created_at)` where `created_at` is an RFC3339 string.
+    pub async fn list_messages(&self, session_id: Uuid) -> StateResult<Vec<(i64, Message, String)>> {
         self.list_messages_since(session_id, -1).await
     }
 
     /// Return messages for `session_id` with `seq > since`, ordered ascending.
     /// The WS handler uses this for catch-up before switching to the live
-    /// event subscription.
+    /// event subscription. Tuples are `(seq, message, created_at)`.
     pub async fn list_messages_since(
         &self,
         session_id: Uuid,
         since: i64,
-    ) -> StateResult<Vec<(i64, Message)>> {
+    ) -> StateResult<Vec<(i64, Message, String)>> {
         let rows = sqlx::query(
-            "SELECT seq, content FROM messages \
+            "SELECT seq, content, created_at FROM messages \
              WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
         )
         .bind(session_id.to_string())
@@ -292,11 +392,12 @@ impl SessionsState {
         .fetch_all(&self.db)
         .await?;
         rows.into_iter()
-            .map(|r| -> StateResult<(i64, Message)> {
+            .map(|r| -> StateResult<(i64, Message, String)> {
                 let seq: i64 = r.get("seq");
                 let content: String = r.get("content");
+                let created_at: String = r.get("created_at");
                 let message: Message = serde_json::from_str(&content)?;
-                Ok((seq, message))
+                Ok((seq, message, created_at))
             })
             .collect()
     }
@@ -323,6 +424,20 @@ impl SessionsState {
         let data_root = self.data_root.clone();
         let events = self.events.clone();
         let runs = self.runs.clone();
+
+        // Bump last-activity so the Recents list surfaces this session first.
+        // Best-effort: a failure here must never block starting the run.
+        let _ = sqlx::query("UPDATE sessions SET updated_at = ? WHERE id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(id.to_string())
+            .execute(&self.db)
+            .await;
+
+        // Auto-title an untitled session from this user turn, concurrent with
+        // the run. `query` is moved into the run task below, so extract the
+        // text first. Best-effort: `maybe_generate_title` only does a quick
+        // "needs a title?" check inline, then spawns the LLM call.
+        self.maybe_generate_title(id, first_user_text(&query)).await;
 
         // Publishing before spawn guarantees a subscriber attached before the
         // POST 202 returns observes `started` before the user-message event.
@@ -421,6 +536,7 @@ impl SessionsState {
                     let mut agent = Agent::try_with_state(spec, state)?;
 
                     let user_msg = Message::new(Role::User).with_contents(query);
+                    let created_at = Utc::now().to_rfc3339();
                     sqlx::query(
                         "INSERT INTO messages (session_id, seq, content, created_at) \
                          VALUES (?, ?, ?, ?)",
@@ -428,7 +544,7 @@ impl SessionsState {
                     .bind(&session_key)
                     .bind(next_seq)
                     .bind(serde_json::to_string(&user_msg)?)
-                    .bind(Utc::now().to_rfc3339())
+                    .bind(&created_at)
                     .execute(&db)
                     .await?;
                     events.publish(
@@ -436,6 +552,7 @@ impl SessionsState {
                         serde_json::to_string(&MessageEvent {
                             seq: next_seq,
                             message: user_msg.clone(),
+                            created_at,
                         })?,
                     );
                     next_seq += 1;
@@ -448,6 +565,7 @@ impl SessionsState {
                             next = stream.next() => {
                                 let Some(output) = next else { break };
                                 let output = output?;
+                                let created_at = Utc::now().to_rfc3339();
                                 sqlx::query(
                                     "INSERT INTO messages (session_id, seq, content, created_at) \
                                      VALUES (?, ?, ?, ?)",
@@ -455,7 +573,7 @@ impl SessionsState {
                                 .bind(&session_key)
                                 .bind(next_seq)
                                 .bind(serde_json::to_string(&output.message)?)
-                                .bind(Utc::now().to_rfc3339())
+                                .bind(&created_at)
                                 .execute(&db)
                                 .await?;
                                 events.publish(
@@ -463,6 +581,7 @@ impl SessionsState {
                                     serde_json::to_string(&MessageEvent {
                                         seq: next_seq,
                                         message: output.message,
+                                        created_at,
                                     })?,
                                 );
                                 next_seq += 1;
@@ -539,5 +658,13 @@ mod tests {
         let state = SessionsState::new(pool, std::env::temp_dir(), EventQueue::new());
         let unknown_id = Uuid::new_v4();
         assert!(!state.is_running(unknown_id).await);
+    }
+
+    #[tokio::test]
+    async fn set_title_missing_session_is_not_found() {
+        let pool = fresh_db().await;
+        let state = SessionsState::new(pool, std::env::temp_dir(), EventQueue::new());
+        let result = state.set_title(Uuid::new_v4(), "x").await;
+        assert!(matches!(result, Err(StateError::NotFound)));
     }
 }

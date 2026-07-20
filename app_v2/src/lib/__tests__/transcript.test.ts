@@ -3,7 +3,7 @@ import { buildTranscript } from '@/lib/transcript';
 import type { MessageItem } from '@/api/types';
 
 function makeItem(seq: number, role: string, overrides: Partial<MessageItem['message']> = {}): MessageItem {
-  return { seq, message: { role, ...overrides } };
+  return { seq, message: { role, ...overrides }, created_at: '2026-01-01T00:00:00Z' };
 }
 
 describe('buildTranscript', () => {
