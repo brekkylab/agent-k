@@ -56,9 +56,6 @@ pub struct SessionListResponse {
 /// not yet a configurable concept in v2.
 const SESSION_AGENT_NAME: &str = "agent-k";
 
-const DEFAULT_MODEL_COWORKER: &str = "anthropic/claude-sonnet-4-5";
-const DEFAULT_MODEL_DEEP_RESEARCH: &str = "anthropic/claude-sonnet-4-5";
-
 /// Selects which agent-k preset builds the [`AgentSpec`] when creating a
 /// session. Variants correspond 1:1 to the `get_*_agent_spec` family in
 /// [`agent_k::agents`]; [`build_spec`] is the dispatch.
@@ -70,19 +67,24 @@ pub enum AgentType {
     DeepResearch,
 }
 
-fn build_spec(agent_type: AgentType, model: Option<&str>) -> AgentSpec {
-    match agent_type {
-        AgentType::Coworker => {
-            get_coworker_agent_spec(
-                SESSION_AGENT_NAME,
-                model.unwrap_or(DEFAULT_MODEL_COWORKER),
-                true,
-            )
+impl AgentType {
+    /// The matching catalog surface, whose recommendation chain drives model
+    /// resolution in [`build_spec`].
+    fn catalog(self) -> crate::model::AgentType {
+        match self {
+            AgentType::Coworker => crate::model::AgentType::Coworker,
+            AgentType::DeepResearch => crate::model::AgentType::DeepResearch,
         }
-        AgentType::DeepResearch => get_deep_research_agent_spec(
-            SESSION_AGENT_NAME,
-            model.unwrap_or(DEFAULT_MODEL_DEEP_RESEARCH),
-        ),
+    }
+}
+
+/// An absent or unavailable `model` falls back to the agent-type's catalog
+/// chain (first configured provider) rather than a fixed default.
+fn build_spec(agent_type: AgentType, model: Option<&str>) -> AgentSpec {
+    let model = crate::model::resolve_model(Some(agent_type.catalog().as_str()), model);
+    match agent_type {
+        AgentType::Coworker => get_coworker_agent_spec(SESSION_AGENT_NAME, &model, true),
+        AgentType::DeepResearch => get_deep_research_agent_spec(SESSION_AGENT_NAME, &model),
     }
 }
 

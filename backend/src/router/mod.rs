@@ -15,6 +15,7 @@ pub(crate) mod error;
 mod agent;
 mod auth;
 mod message;
+mod models;
 mod session;
 mod user;
 mod webdav;
@@ -45,6 +46,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         )
         .route_layer(axum::middleware::from_fn(admin_required))
         .api_route("/me", get(user::get_me).patch(user::update_me))
+        .api_route("/models", get(models::list_models))
         .api_route(
             "/me/workspace",
             get(workspace::get_my_workspace).patch(workspace::update_my_workspace),

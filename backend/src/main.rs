@@ -1,5 +1,6 @@
 mod auth;
 mod event;
+mod model;
 mod router;
 mod state;
 
