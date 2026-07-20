@@ -1045,7 +1045,7 @@ fn slice(data: Vec<u8>, range: Option<std::ops::Range<u64>>) -> Vec<u8> {
 }
 
 const GMAIL_PROMPT: &str = "\
-Gmail (read + send/reply/forward, trash on delete). Layout:
+Gmail (read + trash on delete). Layout:
   <label>/<yyyy>/<mm>/<subject>__<message-id>.gmail.json   # the email (JSON)
   <label>/<yyyy>/<mm>/<subject>__<message-id>/<filename>   # attachments (only if any)
 
@@ -1062,13 +1062,7 @@ Gmail (read + send/reply/forward, trash on delete). Layout:
   The sibling dir (same name without .gmail.json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
 
-  rm <…>.gmail.json    moves the message to Trash (only .gmail.json is removable).
-
-  Write via control-path JSON (echo '{…}' > .cmd/<op>):
-    .cmd/send        {\"to\":\"a@b.com\",\"subject\":\"Hi\",\"body\":\"…\"}
-    .cmd/reply       {\"message_id\":\"<id>\",\"body\":\"…\"}
-    .cmd/reply-all   {\"message_id\":\"<id>\",\"body\":\"…\"}
-    .cmd/forward     {\"message_id\":\"<id>\",\"to\":\"a@b.com\"}";
+  rm <…>.gmail.json    moves the message to Trash (only .gmail.json is removable).";
 
 #[cfg(test)]
 mod tests {
