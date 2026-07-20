@@ -23,11 +23,12 @@ const MAX_BATCH_ROUNDS: usize = 3;
 /// many per-message fetches, so a burst can trip Gmail's per-user rate limit; a
 /// bounded retry keeps a transient 429/5xx from failing the whole read.
 const MAX_RETRIES: u32 = 5;
-/// Cap on a single retry wait. Google's exponential-backoff guidance suggests a
-/// `maximum_backoff` of 32–64s, but this call sits behind a FUSE op the agent
-/// blocks on, so we cap far lower — a heavily throttled read still resolves in
-/// bounded time rather than hanging the guest for a minute.
-const MAX_BACKOFF: Duration = Duration::from_secs(8);
+/// Cap on a single retry wait. Google's guidance suggests a `maximum_backoff` of
+/// 32–64s, but this call sits behind a FUSE op the agent blocks on, so we cap
+/// lower. 16s (with `MAX_RETRIES`=5, ~31s worst-case total) rides out the
+/// ~25–30s throttle stalls seen while indexing a large mailbox, without hanging
+/// the guest for a minute.
+const MAX_BACKOFF: Duration = Duration::from_secs(16);
 /// Jitter ceiling (Google's algorithm: `+ random_number_milliseconds ≤ 1000ms`),
 /// recomputed per retry to de-synchronise clients that would otherwise retry in
 /// lockstep.
@@ -237,10 +238,15 @@ impl GmailAccessor {
             .unwrap_or_default())
     }
 
-    /// Every message id under a label, paginating through all pages (500/page,
-    /// `nextPageToken`) with no cap — the caller wants a complete listing, so a
-    /// large label costs several pages.
-    pub async fn list_all_message_ids(&self, label_id: &str) -> anyhow::Result<Vec<String>> {
+    /// Message ids under a label, paginating (500/page, `nextPageToken`) up to
+    /// `limit` — a safety ceiling that stops a pathologically large label from
+    /// costing thousands of pages and an unbounded index build. `messages.list`
+    /// is newest-first, so hitting the cap keeps the newest `limit` ids.
+    pub async fn list_all_message_ids(
+        &self,
+        label_id: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<String>> {
         let mut ids = Vec::new();
         let mut page_token: Option<String> = None;
         loop {
@@ -268,6 +274,14 @@ impl GmailAccessor {
                     arr.iter()
                         .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from)),
                 );
+            }
+            // Safety ceiling: newest-first, so truncating keeps the newest `limit`
+            // ids and stops us paginating (and later fetching internalDate for) a
+            // pathologically large label.
+            if ids.len() >= limit {
+                ids.truncate(limit);
+                tracing::warn!("gmail label {label_id}: reached index cap {limit}; older messages not indexed");
+                break;
             }
             match v.get("nextPageToken").and_then(|t| t.as_str()) {
                 Some(t) => page_token = Some(t.to_string()),

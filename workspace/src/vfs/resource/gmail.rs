@@ -24,6 +24,12 @@ const FETCH_CONCURRENCY: usize = 6;
 /// TTL for a label's date→ids index. The index is a full label scan, so it's
 /// cached (like a directory listing) and shared by every `ls` under the label.
 const INDEX_TTL: Duration = Duration::from_secs(600);
+/// Safety ceiling on how many messages a label's index covers. The scan costs
+/// one `messages.get` per message under Gmail's per-user rate limit (~5k index
+/// ≈ 1–2 min; reading all their bodies is ~2x more), so an unbounded scan of a
+/// pathologically large label (millions) would hang and burn quota. Beyond this
+/// the newest N are indexed; older ones are omitted.
+const MAX_INDEX_MESSAGES: usize = 5_000;
 /// Over-estimate reported by `stat` for an `.gmail.json` whose processed length
 /// isn't known without fetching. The guest kernel clamps reads at the reported
 /// size even under direct_io, so this must exceed any real email JSON; reads
@@ -191,7 +197,10 @@ impl GmailResource {
         let Some(label_id) = self.label_id(label).await? else {
             anyhow::bail!("no such label: {label}");
         };
-        let ids = self.accessor.list_all_message_ids(&label_id).await?;
+        let ids = self
+            .accessor
+            .list_all_message_ids(&label_id, MAX_INDEX_MESSAGES)
+            .await?;
         let mut idx: DateIndex = BTreeMap::new();
         for v in &self.fetch_many(&ids, "minimal").await {
             if let Some(id) = v.get("id").and_then(|i| i.as_str())
