@@ -56,6 +56,12 @@ pub struct GmailResource {
     /// cached ([`INDEX_TTL`]) so every `ls` under the label — and `find` — shares
     /// that scan instead of re-listing per date. Invalidated on a mutation.
     date_index: tokio::sync::Mutex<HashMap<String, (Instant, DateIndex)>>,
+    /// Global "message id → UTC date" cache. `internalDate` is immutable, so this
+    /// never goes stale; it lets a label's index build skip re-fetching the date
+    /// of a message already seen under another label (Gmail labels overlap — an
+    /// INBOX message is also in a CATEGORY_*, UNREAD, IMPORTANT, …). Small (id +
+    /// date ≈ 26 bytes/entry), bounded by the mailbox's unique message count.
+    id_date: tokio::sync::Mutex<HashMap<String, String>>,
 }
 
 impl GmailResource {
@@ -65,6 +71,7 @@ impl GmailResource {
             label_cache: tokio::sync::Mutex::new(None),
             msg_cache: tokio::sync::Mutex::new(HashMap::new()),
             date_index: tokio::sync::Mutex::new(HashMap::new()),
+            id_date: tokio::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -201,14 +208,12 @@ impl GmailResource {
             .accessor
             .list_all_message_ids(&label_id, MAX_INDEX_MESSAGES)
             .await?;
+        let id_dates = self.dates_for_ids(&ids).await;
+        // Bucket in list order (newest-first) so a date's ids are deterministic.
         let mut idx: DateIndex = BTreeMap::new();
-        for v in &self.fetch_many(&ids, "minimal").await {
-            if let Some(id) = v.get("id").and_then(|i| i.as_str())
-                && let Some(ms) = v.get("internalDate").and_then(|d| d.as_str())
-            {
-                idx.entry(epoch_ms_to_date(ms))
-                    .or_default()
-                    .push(id.to_string());
+        for id in &ids {
+            if let Some(date) = id_dates.get(id) {
+                idx.entry(date.clone()).or_default().push(id.clone());
             }
         }
         self.date_index
@@ -216,6 +221,40 @@ impl GmailResource {
             .await
             .insert(label.to_string(), (Instant::now(), idx.clone()));
         Ok(idx)
+    }
+
+    /// Resolve each id's UTC date, reusing the global [`Self::id_date`] cache so a
+    /// message already seen under another label isn't re-fetched — only ids
+    /// missing from the cache cost a `messages.get` (minimal). `internalDate` is
+    /// immutable, so cached entries never go stale.
+    async fn dates_for_ids(&self, ids: &[String]) -> HashMap<String, String> {
+        let mut out: HashMap<String, String> = HashMap::with_capacity(ids.len());
+        let mut missing: Vec<String> = Vec::new();
+        {
+            let cache = self.id_date.lock().await;
+            for id in ids {
+                match cache.get(id) {
+                    Some(date) => {
+                        out.insert(id.clone(), date.clone());
+                    }
+                    None => missing.push(id.clone()),
+                }
+            }
+        }
+        if !missing.is_empty() {
+            let fetched = self.fetch_many(&missing, "minimal").await;
+            let mut cache = self.id_date.lock().await;
+            for v in &fetched {
+                if let Some(id) = v.get("id").and_then(|i| i.as_str())
+                    && let Some(ms) = v.get("internalDate").and_then(|d| d.as_str())
+                {
+                    let date = epoch_ms_to_date(ms);
+                    cache.insert(id.to_string(), date.clone());
+                    out.insert(id.to_string(), date);
+                }
+            }
+        }
+        out
     }
 
     /// Date dirs present in a label — complete and newest-first, from the shared
@@ -404,6 +443,7 @@ impl Resource for GmailResource {
                 let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
                 self.accessor.trash(&id).await?;
                 self.msg_cache.lock().await.remove(&id);
+                self.id_date.lock().await.remove(&id);
                 // The label indexes now list a trashed message; drop them so the
                 // next `ls` rebuilds without it (and it appears under TRASH).
                 self.date_index.lock().await.clear();
