@@ -263,12 +263,18 @@ impl GmailAccessor {
                 &format!("{GMAIL_API_BASE}/users/me/messages"),
                 &params,
             )?;
-            let v = self
+            let text = self
                 .send_with_refresh(|t| self.client.get(url.clone()).bearer_auth(t))
                 .await?
                 .error_for_status()?
-                .json::<Value>()
+                .text()
                 .await?;
+            // An empty label returns 204 No Content with an empty body (e.g.
+            // CHAT/TRASH); there's nothing to parse or page.
+            if text.trim().is_empty() {
+                break;
+            }
+            let v: Value = serde_json::from_str(&text)?;
             if let Some(arr) = v.get("messages").and_then(|m| m.as_array()) {
                 ids.extend(
                     arr.iter()

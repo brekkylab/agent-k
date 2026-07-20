@@ -239,8 +239,8 @@ impl GmailResource {
 
     /// The label's date→ids index, rebuilt when absent/stale: scan every message
     /// id (paginated), batch-fetch each internalDate (minimal), bucket by UTC
-    /// date. Cached and shared by `readdir_dates`/`readdir_messages` so a listing
-    /// scans the label once (and repeat/`find` reuse it).
+    /// date. Cached and shared by every `readdir` under the label (years, months,
+    /// messages) so a listing scans the label once (and repeat/`find` reuse it).
     async fn index_for(&self, label: &str) -> anyhow::Result<DateIndex> {
         {
             let c = self.date_index.lock().await;
@@ -306,35 +306,64 @@ impl GmailResource {
         out
     }
 
-    /// Date dirs present in a label — complete and newest-first, from the shared
-    /// [`Self::index_for`] scan.
-    async fn readdir_dates(&self, label: &str) -> anyhow::Result<Vec<DirEntry>> {
-        Ok(self
-            .index_for(label)
-            .await?
+    /// Year dirs present in a label — complete and newest-first, from the shared
+    /// [`Self::index_for`] scan. Messages are bucketed `<label>/<yyyy>/<mm>/…` so
+    /// each listing stays small (a flat per-day layout was hundreds of dirs).
+    async fn readdir_years(&self, label: &str) -> anyhow::Result<Vec<DirEntry>> {
+        let index = self.index_for(label).await?;
+        // keys are `yyyy-mm-dd` sorted ascending, so equal years are adjacent.
+        let mut years: Vec<&str> = index.keys().map(|d| &d[..4]).collect();
+        years.dedup();
+        Ok(years.into_iter().rev().map(|y| dir_entry(y.to_string())).collect())
+    }
+
+    /// Month dirs (`mm`) present under `<label>/<yyyy>`, newest-first.
+    async fn readdir_months(&self, label: &str, year: &str) -> anyhow::Result<Vec<DirEntry>> {
+        if !is_valid_year(year) {
+            anyhow::bail!("invalid year dir: {year}");
+        }
+        let index = self.index_for(label).await?;
+        let prefix = format!("{year}-");
+        let mut months: Vec<&str> = index
             .keys()
+            .filter(|d| d.starts_with(&prefix))
+            .map(|d| &d[5..7])
+            .collect();
+        months.dedup();
+        Ok(months
+            .into_iter()
             .rev()
-            .cloned()
-            .map(dir_entry)
+            .map(|m| dir_entry(m.to_string()))
             .collect())
     }
 
-    /// Messages (and per-message attachment dirs) within `<label>/<date>` —
+    /// Messages (and per-message attachment dirs) within `<label>/<yyyy>/<mm>` —
     /// complete, served from the shared label index (no search, no cap).
-    async fn readdir_messages(&self, label: &str, date: &str) -> anyhow::Result<Vec<DirEntry>> {
-        if !is_valid_date_dir(date) {
-            anyhow::bail!("invalid date dir: {date}");
+    async fn readdir_messages(
+        &self,
+        label: &str,
+        year: &str,
+        month: &str,
+    ) -> anyhow::Result<Vec<DirEntry>> {
+        if !is_valid_year(year) || !is_valid_month(month) {
+            anyhow::bail!("invalid month dir: {year}/{month}");
         }
         let index = self.index_for(label).await?;
-        let ids = index.get(date).cloned().unwrap_or_default();
+        let prefix = format!("{year}-{month}-");
+        let ids: Vec<String> = index
+            .iter()
+            .filter(|(d, _)| d.starts_with(&prefix))
+            .flat_map(|(_, ids)| ids.iter().cloned())
+            .collect();
         // Read-ahead: on a detected sequential scan (grep), warm the cache with
-        // the rest of the label in a few big batches so the remaining dates are
-        // served from cache instead of one tiny per-date fetch each. A single
-        // browse (one date) never triggers this — see [`Self::note_scan`].
+        // the whole label in a few big batches so the remaining months are served
+        // from cache instead of one tiny per-month fetch each (`ensure_full`
+        // skips ids already cached). A single browse never triggers this — see
+        // [`Self::note_scan`].
         if self.note_scan(label).await {
-            let ahead = readahead_ids(&index, date);
-            if !ahead.is_empty() {
-                self.ensure_full(&ahead).await;
+            let all: Vec<String> = index.values().flatten().cloned().collect();
+            if !all.is_empty() {
+                self.ensure_full(&all).await;
             }
         }
         let raws = self.ensure_full(&ids).await;
@@ -393,14 +422,14 @@ impl Resource for GmailResource {
     ) -> VfsResult<Vec<u8>> {
         let seg = segments(path);
         let data = match seg.as_slice() {
-            // <label>/<date>/<file>.gmail.json -> processed email JSON
-            [_label, _date, file] if file.ends_with(GMAIL_SUFFIX) => {
+            // <label>/<yyyy>/<mm>/<file>.gmail.json -> processed email JSON
+            [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
                 let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
                 let raw = self.message_full(&id).await?;
                 serde_json::to_vec(&process_message(&raw))?
             }
-            // <label>/<date>/<subject>__<id>/<filename> -> attachment bytes
-            [_label, _date, dir, fname] => {
+            // <label>/<yyyy>/<mm>/<subject>__<id>/<filename> -> attachment bytes
+            [_label, _year, _month, dir, fname] => {
                 let id = id_from_name(dir);
                 let raw = self.message_full(&id).await?;
                 let att = attachments(&raw)
@@ -426,13 +455,14 @@ impl Resource for GmailResource {
         let seg = segments(path);
         match seg.as_slice() {
             [] => self.readdir_labels().await.map_err(VfsError::from),
-            [label] => self.readdir_dates(label).await.map_err(VfsError::from),
-            [label, date] => self
-                .readdir_messages(label, date)
+            [label] => self.readdir_years(label).await.map_err(VfsError::from),
+            [label, year] => self.readdir_months(label, year).await.map_err(VfsError::from),
+            [label, year, month] => self
+                .readdir_messages(label, year, month)
                 .await
                 .map_err(VfsError::from),
-            // attachment dir: <label>/<date>/<subject>__<id>
-            [_label, _date, dir] if !dir.ends_with(GMAIL_SUFFIX) => self
+            // attachment dir: <label>/<yyyy>/<mm>/<subject>__<id>
+            [_label, _year, _month, dir] if !dir.ends_with(GMAIL_SUFFIX) => self
                 .readdir_attachments(&id_from_name(dir))
                 .await
                 .map_err(VfsError::from),
@@ -452,9 +482,17 @@ impl Resource for GmailResource {
                     Err(VfsError::NotFound)
                 }
             }
-            // a date dir: a well-formed yyyy-mm-dd is a (possibly empty) dir
-            [_label, date] => {
-                if is_valid_date_dir(date) {
+            // a year dir: a well-formed yyyy is a (possibly empty) dir
+            [_label, year] => {
+                if is_valid_year(year) {
+                    Ok(dir_stat())
+                } else {
+                    Err(VfsError::NotFound)
+                }
+            }
+            // a month dir: a well-formed mm is a (possibly empty) dir
+            [_label, _year, month] => {
+                if is_valid_month(month) {
                     Ok(dir_stat())
                 } else {
                     Err(VfsError::NotFound)
@@ -462,7 +500,7 @@ impl Resource for GmailResource {
             }
             // a message file (sentinel size — don't fetch just to size it) or
             // an attachment dir
-            [_label, _date, name] => {
+            [_label, _year, _month, name] => {
                 if name.ends_with(GMAIL_SUFFIX) {
                     Ok(FileStat {
                         kind: FileKind::File,
@@ -474,7 +512,7 @@ impl Resource for GmailResource {
                 }
             }
             // an attachment file: exact size from the message's part metadata
-            [_label, _date, dir, fname] => {
+            [_label, _year, _month, dir, fname] => {
                 let raw = self.message_full(&id_from_name(dir)).await?;
                 let att = attachments(&raw)
                     .into_iter()
@@ -494,7 +532,7 @@ impl Resource for GmailResource {
     async fn unlink(&self, path: &VPath) -> VfsResult<()> {
         let seg = segments(path);
         match seg.as_slice() {
-            [_label, _date, file] if file.ends_with(GMAIL_SUFFIX) => {
+            [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
                 let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
                 self.accessor.trash(&id).await?;
                 self.msg_cache.lock().await.remove(&id);
@@ -637,22 +675,6 @@ fn id_from_name(name: &str) -> String {
         .to_string()
 }
 
-/// Message ids the sequential scan is about to reach: every id in the dates after
-/// `date` in newest-first (readdir) order. Bounded by the label index, which is
-/// already capped at [`MAX_INDEX_MESSAGES`].
-fn readahead_ids(index: &DateIndex, date: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut passed = false;
-    // Newest-first = keys().rev(); collect ids from the dates strictly after `date`.
-    for (d, ids) in index.iter().rev() {
-        if passed {
-            out.extend(ids.iter().cloned());
-        } else if d == date {
-            passed = true;
-        }
-    }
-    out
-}
 
 fn msg_filename(subject: &str, id: &str) -> String {
     format!("{}__{id}{GMAIL_SUFFIX}", sanitize(subject))
@@ -952,22 +974,15 @@ fn epoch_ms_to_date(ms: &str) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Whether `name` is a well-formed `yyyy-mm-dd` date-dir segment. Listings are
-/// served from the label index (not a date search), so this only validates the
-/// path shape — a valid-but-empty date is a legitimately empty directory.
-fn is_valid_date_dir(name: &str) -> bool {
-    let parts: Vec<&str> = name.split('-').collect();
-    if parts.len() != 3 || parts[0].len() != 4 || parts[1].len() != 2 || parts[2].len() != 2 {
-        return false;
-    }
-    let (Ok(_y), Ok(m), Ok(d)) = (
-        parts[0].parse::<i64>(),
-        parts[1].parse::<u32>(),
-        parts[2].parse::<u32>(),
-    ) else {
-        return false;
-    };
-    (1..=12).contains(&m) && (1..=31).contains(&d)
+/// Whether `name` is a well-formed `yyyy` / `mm` path segment. Listings come from
+/// the label index (not a date search), so these only validate the path shape —
+/// a valid-but-empty year/month is a legitimately empty directory.
+fn is_valid_year(name: &str) -> bool {
+    name.len() == 4 && name.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn is_valid_month(name: &str) -> bool {
+    name.len() == 2 && matches!(name.parse::<u32>(), Ok(m) if (1..=12).contains(&m))
 }
 
 /// Days since 1970-01-01 -> (year, month, day). Howard Hinnant's algorithm.
@@ -1031,13 +1046,13 @@ fn slice(data: Vec<u8>, range: Option<std::ops::Range<u64>>) -> Vec<u8> {
 
 const GMAIL_PROMPT: &str = "\
 Gmail (read + send/reply/forward, trash on delete). Layout:
-  <label>/<yyyy-mm-dd>/<subject>__<message-id>.gmail.json   # the email (JSON)
-  <label>/<yyyy-mm-dd>/<subject>__<message-id>/<filename>   # attachments (only if any)
+  <label>/<yyyy>/<mm>/<subject>__<message-id>.gmail.json   # the email (JSON)
+  <label>/<yyyy>/<mm>/<subject>__<message-id>/<filename>   # attachments (only if any)
 
   <label>       INBOX, SENT, DRAFT, IMPORTANT, STARRED, TRASH, SPAM, or a user label
-  <yyyy-mm-dd>  received date; `ls <label>/2026-05-03/` narrows the Gmail query
-                server-side (after:/before:) — far cheaper than scanning the label
-  <subject>     sanitized subject (don't construct it; ls the date dir)
+  <yyyy>/<mm>   received year then month; `ls <label>` lists years, then months,
+                then that month's messages (kept small per level)
+  <subject>     sanitized subject (don't construct it; ls the month dir)
   <message-id>  Gmail message id (the field after the last `__`)
 
   cat <…>.gmail.json (keep the suffix) returns:
@@ -1102,16 +1117,19 @@ mod tests {
     }
 
     #[test]
-    fn date_dir_validation() {
-        assert!(is_valid_date_dir("2026-05-03"));
-        assert!(is_valid_date_dir("2026-01-31"));
-        assert!(is_valid_date_dir("2026-12-31"));
-        // invalid shapes
-        assert!(!is_valid_date_dir("2026-5-3")); // unpadded
-        assert!(!is_valid_date_dir("not-a-date"));
-        assert!(!is_valid_date_dir("2026-13-01")); // month out of range
-        assert!(!is_valid_date_dir("2026-00-10")); // month 0
-        assert!(!is_valid_date_dir("2026-07")); // wrong arity
+    fn year_and_month_validation() {
+        assert!(is_valid_year("2026"));
+        assert!(is_valid_year("1970"));
+        assert!(!is_valid_year("26")); // wrong length
+        assert!(!is_valid_year("202x")); // non-digit
+        assert!(!is_valid_year("2026-05")); // not a bare year
+
+        assert!(is_valid_month("01"));
+        assert!(is_valid_month("12"));
+        assert!(!is_valid_month("5")); // unpadded
+        assert!(!is_valid_month("13")); // out of range
+        assert!(!is_valid_month("00")); // month 0
+        assert!(!is_valid_month("xx")); // non-digit
     }
 
     #[test]
