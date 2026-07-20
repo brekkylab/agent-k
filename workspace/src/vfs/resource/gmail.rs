@@ -24,6 +24,13 @@ const FETCH_CONCURRENCY: usize = 6;
 /// TTL for a label's date→ids index. The index is a full label scan, so it's
 /// cached (like a directory listing) and shared by every `ls` under the label.
 const INDEX_TTL: Duration = Duration::from_secs(600);
+/// Two message-listings of the same label within this window read as a
+/// sequential (grep-style) scan rather than a one-off browse.
+const SEQ_WINDOW: Duration = Duration::from_secs(10);
+/// Consecutive same-label listings needed before we treat it as a scan and
+/// prefetch the rest. 2 = the second date dir grep opens; a single targeted
+/// browse (one date) never reaches it, so browse pays no read-ahead.
+const SEQ_THRESHOLD: u32 = 2;
 /// Safety ceiling on how many messages a label's index covers. The scan costs
 /// one `messages.get` per message under Gmail's per-user rate limit (~5k index
 /// ≈ 1–2 min; reading all their bodies is ~2x more), so an unbounded scan of a
@@ -62,6 +69,10 @@ pub struct GmailResource {
     /// INBOX message is also in a CATEGORY_*, UNREAD, IMPORTANT, …). Small (id +
     /// date ≈ 26 bytes/entry), bounded by the mailbox's unique message count.
     id_date: tokio::sync::Mutex<HashMap<String, String>>,
+    /// Detects a sequential (grep-style) label scan to enable read-ahead only
+    /// then — `(label, last access, consecutive count, already-prefetched)`. A
+    /// targeted browse (single date) stays at count 1 and never prefetches.
+    seq_scan: tokio::sync::Mutex<Option<(String, Instant, u32, bool)>>,
 }
 
 impl GmailResource {
@@ -72,6 +83,7 @@ impl GmailResource {
             msg_cache: tokio::sync::Mutex::new(HashMap::new()),
             date_index: tokio::sync::Mutex::new(HashMap::new()),
             id_date: tokio::sync::Mutex::new(HashMap::new()),
+            seq_scan: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -177,6 +189,43 @@ impl GmailResource {
         raws
     }
 
+    /// Full messages for `ids`, serving from `msg_cache` where fresh and fetching
+    /// only the misses (in batches). Lets a read-ahead prefetch pay off: dates a
+    /// grep already prefetched are served from cache instead of re-fetched.
+    async fn ensure_full(&self, ids: &[String]) -> Vec<Value> {
+        let mut out = Vec::with_capacity(ids.len());
+        let mut missing = Vec::new();
+        {
+            let cache = self.msg_cache.lock().await;
+            for id in ids {
+                match cache.get(id) {
+                    Some((at, v)) if at.elapsed() < MSG_TTL => out.push(v.clone()),
+                    _ => missing.push(id.clone()),
+                }
+            }
+        }
+        if !missing.is_empty() {
+            out.extend(self.fetch_full_many(&missing).await);
+        }
+        out
+    }
+
+    /// Record a message-listing of `label` and report whether this looks like a
+    /// sequential (grep-style) scan we should read ahead for — true once the same
+    /// label is listed [`SEQ_THRESHOLD`] times within [`SEQ_WINDOW`], and only on
+    /// the first such hit (so we prefetch the rest once, not every date).
+    async fn note_scan(&self, label: &str) -> bool {
+        let now = Instant::now();
+        let mut g = self.seq_scan.lock().await;
+        let (run, prefetched) = match g.as_ref() {
+            Some((l, at, n, pf)) if l == label && at.elapsed() < SEQ_WINDOW => (n + 1, *pf),
+            _ => (1, false),
+        };
+        let fire = run >= SEQ_THRESHOLD && !prefetched;
+        *g = Some((label.to_string(), now, run, prefetched || fire));
+        fire
+    }
+
     // ---- readdir levels ---------------------------------------------------
 
     async fn readdir_labels(&self) -> anyhow::Result<Vec<DirEntry>> {
@@ -276,13 +325,19 @@ impl GmailResource {
         if !is_valid_date_dir(date) {
             anyhow::bail!("invalid date dir: {date}");
         }
-        let ids = self
-            .index_for(label)
-            .await?
-            .get(date)
-            .cloned()
-            .unwrap_or_default();
-        let raws = self.fetch_full_many(&ids).await;
+        let index = self.index_for(label).await?;
+        let ids = index.get(date).cloned().unwrap_or_default();
+        // Read-ahead: on a detected sequential scan (grep), warm the cache with
+        // the rest of the label in a few big batches so the remaining dates are
+        // served from cache instead of one tiny per-date fetch each. A single
+        // browse (one date) never triggers this — see [`Self::note_scan`].
+        if self.note_scan(label).await {
+            let ahead = readahead_ids(&index, date);
+            if !ahead.is_empty() {
+                self.ensure_full(&ahead).await;
+            }
+        }
+        let raws = self.ensure_full(&ids).await;
         let mut out = Vec::new();
         for raw in &raws {
             let id = raw.get("id").and_then(|i| i.as_str()).unwrap_or("");
@@ -580,6 +635,23 @@ fn id_from_name(name: &str) -> String {
         .map(|(_, id)| id)
         .unwrap_or(name)
         .to_string()
+}
+
+/// Message ids the sequential scan is about to reach: every id in the dates after
+/// `date` in newest-first (readdir) order. Bounded by the label index, which is
+/// already capped at [`MAX_INDEX_MESSAGES`].
+fn readahead_ids(index: &DateIndex, date: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut passed = false;
+    // Newest-first = keys().rev(); collect ids from the dates strictly after `date`.
+    for (d, ids) in index.iter().rev() {
+        if passed {
+            out.extend(ids.iter().cloned());
+        } else if d == date {
+            passed = true;
+        }
+    }
+    out
 }
 
 fn msg_filename(subject: &str, id: &str) -> String {
