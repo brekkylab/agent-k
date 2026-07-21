@@ -966,6 +966,30 @@ fn parse_address_list(raw: &str) -> Value {
     Value::Array(raw.split(',').map(|a| parse_address(a.trim())).collect())
 }
 
+/// Sanitize an attachment's filename into a single path segment. The name is
+/// sender-controlled (an arbitrary MIME `filename`), so `/`, `\`, and control
+/// chars collapse to `_`, and a name that is empty, `.`, or `..` after that
+/// falls back to a placeholder — otherwise it would leak past its attachment
+/// dir as extra path segments (guest dirents, metadata-cache keys are built by
+/// string concatenation). Dotfiles and other ordinary names pass through.
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    match cleaned.as_str() {
+        "" | "." | ".." => "attachment".to_string(),
+        _ => cleaned,
+    }
+}
+
 fn attachments(raw: &Value) -> Vec<Attach> {
     let mut out = Vec::new();
     let mut push_part = |part: &Value| {
@@ -977,7 +1001,7 @@ fn attachments(raw: &Value) -> Vec<Attach> {
             .unwrap_or("");
         if !filename.is_empty() && !aid.is_empty() {
             out.push(Attach {
-                filename: filename.to_string(),
+                filename: sanitize_filename(filename),
                 attachment_id: aid.to_string(),
                 size: body
                     .and_then(|b| b.get("size"))
@@ -1309,6 +1333,37 @@ mod tests {
                 "README",        // no extension
                 "README (2)",
             ]
+        );
+    }
+
+    #[test]
+    fn attachment_filenames_are_confined_to_one_segment() {
+        // ordinary names (incl. dotfiles, spaces, unicode) pass through
+        assert_eq!(sanitize_filename("report.pdf"), "report.pdf");
+        assert_eq!(sanitize_filename("my file (1).png"), "my file (1).png");
+        assert_eq!(sanitize_filename(".env"), ".env");
+        assert_eq!(sanitize_filename("보고서.pdf"), "보고서.pdf");
+        // path separators collapse so the name can't escape its dir
+        assert_eq!(sanitize_filename("../../etc/passwd"), ".._.._etc_passwd");
+        assert_eq!(sanitize_filename("a/b.png"), "a_b.png");
+        assert_eq!(sanitize_filename("a\\b.png"), "a_b.png");
+        // control chars can't reach a dirent
+        assert_eq!(sanitize_filename("bad\nname"), "bad_name");
+        // degenerate names fall back to a placeholder
+        assert_eq!(sanitize_filename(""), "attachment");
+        assert_eq!(sanitize_filename("   "), "attachment");
+        assert_eq!(sanitize_filename("."), "attachment");
+        assert_eq!(sanitize_filename(".."), "attachment");
+        // sanitized collisions are then disambiguated as usual
+        let att = |f: &str| Attach {
+            filename: sanitize_filename(f),
+            attachment_id: String::new(),
+            size: 0,
+            mime_type: String::new(),
+        };
+        assert_eq!(
+            unique_attachment_names(&[att("a/b.png"), att("a_b.png")]),
+            vec!["a_b.png", "a_b (2).png"]
         );
     }
 
