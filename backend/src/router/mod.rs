@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use aide::axum::{
     ApiRouter,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 
 use crate::{
@@ -14,8 +14,10 @@ pub(crate) mod error;
 
 mod agent;
 mod auth;
+mod knowledge;
 mod message;
 mod models;
+mod mount;
 mod session;
 mod user;
 mod webdav;
@@ -64,6 +66,26 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             // .delete(workspace::delete_workspace)
         )
         .api_route(
+            "/workspaces/{wid}/mounts",
+            get(mount::list_mounts).post(mount::create_mount),
+        )
+        .api_route(
+            "/workspaces/{wid}/mounts/{mount_id}",
+            delete(mount::delete_mount),
+        )
+        .api_route(
+            "/workspaces/{wid}/knowledge/refs",
+            get(knowledge::list_refs).post(knowledge::create_ref),
+        )
+        .api_route(
+            "/workspaces/{wid}/knowledge/refs/{name}",
+            delete(knowledge::delete_ref),
+        )
+        .api_route(
+            "/workspaces/{wid}/knowledge/resync",
+            post(knowledge::resync),
+        )
+        .api_route(
             "/agents",
             get(agent::list_agents).post(agent::create_agent),
         )
@@ -96,12 +118,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/sessions/{id}/messages/ws",
             axum::routing::get(message::stream_messages),
         )
-        // Two routes: matchit's `{*rest}` wildcard requires one-or-more
-        // segments, so the bare collection path (`/…/files`) needs its
-        // own entry — without it, `PROPFIND` on the workspace root 404s.
-        .route_service("/workspaces/{wid}/files", webdav::router(state.clone()))
+        // WebDAV serves the unified workspace tree (local under `files/`, each
+        // provider mount as a sibling) at `/sources`. Two routes: matchit's
+        // `{*rest}` wildcard needs one-or-more segments, so the bare collection
+        // root (`/…/sources`) needs its own entry — without it, a root
+        // `PROPFIND` 404s.
+        .route_service("/workspaces/{wid}/sources", webdav::router(state.clone()))
         .route_service(
-            "/workspaces/{wid}/files/{*rest}",
+            "/workspaces/{wid}/sources/{*rest}",
             webdav::router(state.clone()),
         )
         .with_state(state)

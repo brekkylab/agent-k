@@ -1,7 +1,7 @@
 use std::future::ready;
 use std::io::SeekFrom;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Router,
@@ -23,21 +23,22 @@ use futures_util::StreamExt;
 use uuid::Uuid;
 
 use crate::auth::authenticate;
-use crate::state::{
-    AppState, DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError,
-    OpenOptions as WsOpenOptions, ReadDirMeta as WsReadDirMeta, WorkspaceFs,
+use crate::state::AppState;
+use workspace::{
+    DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError, OpenOptions as WsOpenOptions,
+    Stat, WorkspaceFs,
 };
 
 /// WebDAV workspace router. Mounted by [`super::get_router`] at
-/// `/workspaces/{wid}/files[/…]`; exposes
-/// `data_root/workspaces/{wid}/files` as a per-workspace filesystem.
+/// `/workspaces/{wid}/sources[/…]`; serves the **unified** workspace tree —
+/// local files under `files/`, each provider mount as a sibling — the same view
+/// the guest sees.
 ///
 /// Routes via `fallback` so axum forwards every HTTP method — including
 /// WebDAV-specific ones (`PROPFIND`, `MKCOL`, `COPY`, `MOVE`, `LOCK`, …) —
-/// straight to [`dav_server`]. Auth mirrors the WS route: JWT is read from
-/// `?token=…` because the eventual target audience (browser fetch + native
-/// WebDAV clients) cannot reliably set custom auth headers. The token's subject
-/// must own the workspace.
+/// straight to [`dav_server`]. Authenticated inline (these routes bypass the
+/// `auth_required` layer) from the `Authorization: Bearer` header; the token's
+/// subject must own the workspace.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new().fallback(handle).with_state(state)
 }
@@ -48,9 +49,16 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
         None => return (StatusCode::BAD_REQUEST, "invalid workspace id").into_response(),
     };
 
-    let token = req.uri().query().and_then(extract_token);
+    // These routes bypass the `auth_required` layer (registered after them), so
+    // authenticate inline from the `Authorization: Bearer` header.
+    let token = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|t| t.trim().to_string());
     let Some(token) = token else {
-        return (StatusCode::UNAUTHORIZED, "missing token").into_response();
+        return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
     let user = match authenticate(&state, &token).await {
         Ok(u) => u,
@@ -69,11 +77,20 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
     }
 
     // The filesystem (and its side-processing) lives in `state.workspaces`;
-    // here we only wrap it in the WebDAV protocol (see [`DavFs`]).
+    // here we only wrap it in the WebDAV protocol (see [`DavFs`]). Building it
+    // loads the workspace's external-provider mounts, which can fail (bad
+    // stored config); surface that as a 500 rather than panicking.
+    let fs = match state.workspaces.get_fs(wid).await {
+        Ok(fs) => fs,
+        Err(e) => {
+            tracing::error!("failed to build workspace filesystem: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+        }
+    };
     let dav = DavHandler::builder()
-        .filesystem(Box::new(DavFs(state.workspaces.get_fs(wid))))
+        .filesystem(Box::new(DavFs(fs)))
         .locksystem(FakeLs::new())
-        .strip_prefix(format!("/workspaces/{wid}/files"))
+        .strip_prefix(format!("/workspaces/{wid}/sources"))
         .build_handler();
 
     dav.handle(req).await.map(Body::new)
@@ -88,12 +105,6 @@ fn parse_wid(path: &str) -> Option<Uuid> {
     // non-canonical segment (uppercase, or the 32-char no-hyphen form) would
     // authenticate but then 502 on PrefixMismatch. Reject it up front as a 400.
     (wid_str == wid.to_string()).then_some(wid)
-}
-
-fn extract_token(query: &str) -> Option<String> {
-    url::form_urlencoded::parse(query.as_bytes())
-        .find(|(k, _)| k == "token")
-        .map(|(_, v)| v.into_owned())
 }
 
 /// Workspace-relative path (leading `/`) in the shape [`WorkspaceFs`] expects.
@@ -111,12 +122,6 @@ fn to_dav_err(e: WsFsError) -> FsError {
         WsFsError::NotFound => FsError::NotFound,
         WsFsError::Forbidden => FsError::Forbidden,
     }
-}
-
-/// Map an `io::Error` from a `std::fs::Metadata` accessor onto a [`FsError`],
-/// routing through the workspace's own classification.
-fn io_to_dav_err(e: std::io::Error) -> FsError {
-    to_dav_err(WsFsError::from(e))
 }
 
 /// Adapts a [`WorkspaceFs`] onto `dav_server`'s [`DavFileSystem`]. Pure
@@ -154,17 +159,14 @@ impl DavFileSystem for DavFs {
     fn read_dir<'a>(
         &'a self,
         path: &'a DavPath,
-        meta: ReadDirMeta,
+        _meta: ReadDirMeta,
     ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>> {
         Box::pin(async move {
-            let meta = match meta {
-                ReadDirMeta::Data => WsReadDirMeta::Data,
-                ReadDirMeta::DataSymlink => WsReadDirMeta::DataSymlink,
-                ReadDirMeta::None => WsReadDirMeta::None,
-            };
+            // `_meta` (symlink-follow hint) is moot: the workspace resolves
+            // symlinks to their target and never reports the symlink kind.
             let stream = self
                 .0
-                .read_dir(&rel_path_string(path), meta)
+                .read_dir(&rel_path_string(path))
                 .await
                 .map_err(to_dav_err)?;
             let mapped = stream.map(|res| {
@@ -281,19 +283,22 @@ impl DavFile for DavFileAdapter {
     }
 }
 
-/// Adapts a [`std::fs::Metadata`] onto [`DavMetaData`]. The WebDAV-specific
-/// projections (`status_changed`, `executable`) live here rather than in the
-/// protocol-agnostic filesystem layer.
+/// Adapts a workspace [`Stat`] onto [`DavMetaData`]. The `Stat` already carries
+/// the WebDAV-specific projections (`status_changed`, `executable`), computed at
+/// capture time in the filesystem layer; a `None` there (e.g. an external
+/// provider that doesn't report the field) surfaces as `NotImplemented`.
 #[derive(Debug, Clone)]
-struct DavMetaAdapter(std::fs::Metadata);
+struct DavMetaAdapter(Stat);
 
 impl DavMetaData for DavMetaAdapter {
     fn len(&self) -> u64 {
-        self.0.len()
+        self.0.len
     }
 
     fn modified(&self) -> FsResult<SystemTime> {
-        self.0.modified().map_err(io_to_dav_err)
+        // WebDAV wants a Last-Modified; fall back to the epoch when the source
+        // (e.g. an external object without a timestamp) doesn't report one.
+        Ok(self.0.modified.unwrap_or(UNIX_EPOCH))
     }
 
     fn is_dir(&self) -> bool {
@@ -309,36 +314,19 @@ impl DavMetaData for DavMetaAdapter {
     }
 
     fn accessed(&self) -> FsResult<SystemTime> {
-        self.0.accessed().map_err(io_to_dav_err)
+        self.0.accessed.ok_or(FsError::NotImplemented)
     }
 
     fn created(&self) -> FsResult<SystemTime> {
-        self.0.created().map_err(io_to_dav_err)
+        self.0.created.ok_or(FsError::NotImplemented)
     }
 
-    #[cfg(unix)]
     fn status_changed(&self) -> FsResult<SystemTime> {
-        use std::os::unix::fs::MetadataExt;
-        Ok(UNIX_EPOCH + Duration::new(self.0.ctime() as u64, 0))
+        self.0.status_changed.ok_or(FsError::NotImplemented)
     }
 
-    #[cfg(not(unix))]
-    fn status_changed(&self) -> FsResult<SystemTime> {
-        Err(FsError::NotImplemented)
-    }
-
-    #[cfg(unix)]
     fn executable(&self) -> FsResult<bool> {
-        use std::os::unix::fs::PermissionsExt;
-        if self.0.is_file() {
-            return Ok((self.0.permissions().mode() & 0o100) > 0);
-        }
-        Err(FsError::NotImplemented)
-    }
-
-    #[cfg(not(unix))]
-    fn executable(&self) -> FsResult<bool> {
-        Err(FsError::NotImplemented)
+        self.0.executable.ok_or(FsError::NotImplemented)
     }
 }
 

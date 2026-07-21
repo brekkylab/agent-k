@@ -2,6 +2,7 @@ mod auth;
 mod event;
 mod model;
 mod router;
+mod sandbox_fs;
 mod state;
 
 use std::{path::PathBuf, sync::Arc};
@@ -66,6 +67,32 @@ async fn main() -> std::io::Result<()> {
     );
 
     bootstrap_admin_if_needed(&app_state.users, &app_state.workspaces).await;
+
+    // Optional periodic knowledge resync: picks up provider-side changes to
+    // referenced external targets, which produce no local write event. Disabled
+    // unless AGENT_K_INDEX_INTERVAL_SECS is set > 0.
+    if let Some(secs) = std::env::var("AGENT_K_INDEX_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+    {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
+            loop {
+                ticker.tick().await;
+                match state.workspaces.all_ids().await {
+                    Ok(ids) => {
+                        for wid in ids {
+                            state.workspaces.resyncer().spawn_resync(wid);
+                        }
+                    }
+                    Err(e) => tracing::warn!("periodic resync: listing workspaces failed: {e}"),
+                }
+            }
+        });
+        tracing::info!("periodic knowledge resync enabled: every {secs}s");
+    }
 
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 

@@ -1,14 +1,18 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
+use ::workspace::{FsConfig, FsEvent, FsHook, WorkspaceFs};
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
 
+use super::knowledge::Resyncer;
 use super::{StateError, StateResult, User, parse_ts, parse_uuid};
 
-mod fs;
+mod mount;
 
-pub use fs::*;
+pub use mount::*;
 
 /// A workspace: both a database row and a directory tree on disk.
 ///
@@ -70,11 +74,63 @@ impl Workspace {
 pub struct WorkspacesState {
     db: SqlitePool,
     data_root: PathBuf,
+    /// Per-workspace assembled [`WorkspaceFs`], cached so provider clients and
+    /// their metadata `CachedResource` survive across requests instead of being
+    /// rebuilt each [`Self::get_fs`]. Cloning shares the mounts' `Arc<Resource>`,
+    /// so cache hits reuse the same caches. Evicted on mount change or removal.
+    fs_cache: Mutex<HashMap<Uuid, WorkspaceFs>>,
+    /// Knowledge resync engine, shared into every [`WorkspaceFs`] this hands out
+    /// (so `/files/knowledge` writes trigger a resync) and reused by the router
+    /// and periodic sweep.
+    resyncer: Resyncer,
 }
 
 impl WorkspacesState {
     pub fn new(db: SqlitePool, data_root: PathBuf) -> Self {
-        Self { db, data_root }
+        let resyncer = Resyncer::new(db.clone(), data_root.clone());
+        Self {
+            db,
+            data_root,
+            fs_cache: Mutex::new(HashMap::new()),
+            resyncer,
+        }
+    }
+
+    /// The workspace's assembled [`WorkspaceFs`], built once and cached (see
+    /// [`Self::fs_cache`]). The returned handle shares the cached mounts.
+    async fn fs_for(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
+        if let Some(fs) = self.fs_cache.lock().unwrap().get(&wid).cloned() {
+            return Ok(fs);
+        }
+        // Build outside the lock; a concurrent miss builds twice, first wins.
+        let built = self.build_fs(wid).await?;
+        Ok(self
+            .fs_cache
+            .lock()
+            .unwrap()
+            .entry(wid)
+            .or_insert(built)
+            .clone())
+    }
+
+    /// Evict `wid`'s cached [`WorkspaceFs`] so the next [`Self::get_fs`] rebuilds it.
+    pub(super) fn invalidate_fs(&self, wid: Uuid) {
+        self.fs_cache.lock().unwrap().remove(&wid);
+    }
+
+    /// The workspace knowledge resyncer.
+    pub fn resyncer(&self) -> &Resyncer {
+        &self.resyncer
+    }
+
+    /// Ids of every workspace, for the periodic resync sweep.
+    pub async fn all_ids(&self) -> StateResult<Vec<Uuid>> {
+        let rows = sqlx::query("SELECT id FROM workspaces")
+            .fetch_all(&self.db)
+            .await?;
+        rows.iter()
+            .map(|r| parse_uuid(r.get::<String, _>("id"), "workspaces.id"))
+            .collect()
     }
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Workspace>> {
@@ -127,6 +183,7 @@ impl WorkspacesState {
     /// are handled by the database's foreign keys.
     pub async fn remove(&self, id: Uuid) -> StateResult<Workspace> {
         let existing = self.get(id).await?.ok_or(StateError::NotFound)?;
+        self.invalidate_fs(id);
         self.remove_files(id).await?;
         sqlx::query("DELETE FROM workspaces WHERE id = ?")
             .bind(id.to_string())
@@ -139,6 +196,8 @@ impl WorkspacesState {
     /// database. Idempotent. Deleting files before the rows means a filesystem
     /// failure aborts before anything is removed from the database.
     pub async fn remove_files(&self, id: Uuid) -> StateResult<()> {
+        // Evict the cached knowledge Store before unlinking its on-disk index.
+        self.resyncer.forget(id).await;
         let dir = self.workspace_dir(id);
         if tokio::fs::try_exists(&dir).await? {
             tokio::fs::remove_dir_all(&dir).await?;
@@ -172,9 +231,13 @@ impl WorkspacesState {
         Ok(())
     }
 
-    /// A filesystem handle scoped to workspace `wid`'s file root.
-    pub fn get_fs(&self, wid: Uuid) -> WorkspaceFs {
-        WorkspaceFs::new(self.get_root(wid), wid)
+    /// A filesystem handle scoped to workspace `wid`'s file root, with the
+    /// workspace's external-provider mounts attached (paths under a mount prefix
+    /// route to the provider; everything else stays local).
+    pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
+        // Cached assembly (local `/files` + providers); the hook is per-call.
+        let fs = self.fs_for(wid).await?;
+        Ok(fs.with_hook(knowledge_hook(wid, Some(self.resyncer.clone()))))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root
@@ -188,7 +251,62 @@ impl WorkspacesState {
     fn workspace_dir(&self, wid: Uuid) -> PathBuf {
         self.data_root.join("workspaces").join(wid.to_string())
     }
+}
 
+/// The change hook attached to every [`WorkspaceFs`] this backend builds: it
+/// runs the `knowledge/` side-processing (today just logging; ingestion/indexing
+/// lands later) and ignores everything else.
+struct KnowledgeHook {
+    /// The workspace this hook is bound to — the crate is workspace-agnostic, so
+    /// the backend carries the DB identity here rather than in `WorkspaceFs`.
+    wid: Uuid,
+    /// Resync trigger. `None` for the guest-serving handle (the session run loop
+    /// builds it without one), so guest writes don't auto-resync.
+    resyncer: Option<Resyncer>,
+}
+
+impl FsHook for KnowledgeHook {
+    fn on_change(&self, event: FsEvent<'_>) {
+        let touched = match event {
+            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => {
+                super::knowledge::is_under_knowledge(p)
+            }
+        };
+        if touched {
+            if let Some(r) = &self.resyncer {
+                r.spawn_resync(self.wid);
+            }
+        }
+    }
+}
+
+fn knowledge_hook(wid: Uuid, resyncer: Option<Resyncer>) -> Option<Arc<dyn FsHook>> {
+    Some(Arc::new(KnowledgeHook { wid, resyncer }))
+}
+
+/// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`
+/// attached. The filesystem-layer counterpart of
+/// [`build_workspace_vfs`](mount::build_workspace_vfs): where that assembles the
+/// provider mounts, this wraps them together with the local file root into the
+/// unified tree. Standalone (takes `data_root` + a prebuilt `vfs`) so the
+/// session run loop — which holds only the pool + data root — can mount the
+/// unified workspace into a sandbox guest without a [`WorkspacesState`].
+///
+/// The `workspaces/{wid}/files` layout mirrors
+/// [`WorkspacesState::get_root`]; keep the two in step.
+pub(crate) fn workspace_fs(
+    data_root: &std::path::Path,
+    wid: Uuid,
+    mut config: FsConfig,
+) -> StateResult<WorkspaceFs> {
+    let root = data_root
+        .join("workspaces")
+        .join(wid.to_string())
+        .join("files");
+    config.local_root = Some(root);
+    let fs = WorkspaceFs::from_config(config)
+        .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
+    Ok(fs.with_hook(knowledge_hook(wid, None)))
 }
 
 #[cfg(test)]
@@ -262,7 +380,11 @@ mod tests {
         let removed = state.remove(id).await.unwrap();
         assert_eq!(removed.id, id);
         assert!(state.get(id).await.unwrap().is_none());
-        assert!(!tokio::fs::try_exists(state.workspace_dir(id)).await.unwrap());
+        assert!(
+            !tokio::fs::try_exists(state.workspace_dir(id))
+                .await
+                .unwrap()
+        );
         assert!(matches!(state.remove(id).await, Err(StateError::NotFound)));
     }
 
@@ -276,17 +398,35 @@ mod tests {
 
         let uid = owner.id;
         // A default workspace (id == uid) and a non-default one, both owned by uid.
-        state.upsert(Workspace::with_id(uid, uid, "W".into())).await.unwrap();
+        state
+            .upsert(Workspace::with_id(uid, uid, "W".into()))
+            .await
+            .unwrap();
         let other = Uuid::new_v4();
-        state.upsert(Workspace::with_id(other, uid, "W2".into())).await.unwrap();
+        state
+            .upsert(Workspace::with_id(other, uid, "W2".into()))
+            .await
+            .unwrap();
 
         // The owner reaches both — including the non-default (id != uid).
         assert!(state.get_for_user(uid, uid).await.unwrap().is_some());
         assert!(state.get_for_user(uid, other).await.unwrap().is_some());
         // A different user gets None even though the workspace exists — no leak.
-        assert!(state.get_for_user(Uuid::new_v4(), other).await.unwrap().is_none());
+        assert!(
+            state
+                .get_for_user(Uuid::new_v4(), other)
+                .await
+                .unwrap()
+                .is_none()
+        );
         // A workspace that doesn't exist → None.
-        assert!(state.get_for_user(uid, Uuid::new_v4()).await.unwrap().is_none());
+        assert!(
+            state
+                .get_for_user(uid, Uuid::new_v4())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -305,11 +445,19 @@ mod tests {
         assert_eq!(ws.title, "tester's workspace");
 
         // The file root lives under workspaces/{uid}/files.
-        assert!(tokio::fs::try_exists(state.get_root(user_id)).await.unwrap());
+        assert!(
+            tokio::fs::try_exists(state.get_root(user_id))
+                .await
+                .unwrap()
+        );
 
         // Removal drops the on-disk directory.
         state.remove(user_id).await.unwrap();
-        assert!(!tokio::fs::try_exists(state.workspace_dir(user_id)).await.unwrap());
+        assert!(
+            !tokio::fs::try_exists(state.workspace_dir(user_id))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

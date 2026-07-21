@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
 use ailoy::agent::AgentSpec;
+use ailoy::runenv::{SandboxBuilder, SandboxNetwork};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -110,6 +111,11 @@ pub struct CreateSessionRequest {
     /// per-type default in [`build_spec`].
     #[serde(default)]
     pub model: Option<String>,
+    /// Run the session in a sandbox VM. Required for the agent to read the
+    /// workspace's external mounts (Notion/S3) as files via the in-guest FUSE
+    /// forwarder. Defaults to `false`.
+    #[serde(default)]
+    pub runenv: Option<bool>,
 }
 
 pub(super) async fn list_sessions(
@@ -163,7 +169,30 @@ pub(super) async fn create_session(
     if let Some(t) = payload.title {
         session = session.with_title(t);
     }
-    state.sessions.insert(session.clone(), None).await?;
+    // Build a sandbox (runenv) when requested. The agent then runs in a VM and
+    // reads the workspace — local files plus the external mounts — as one FUSE
+    // tree at /mnt/workspace (see `SessionsState::run`). Coworker image + host
+    // egress so the in-guest forwarder can reach the host forward server.
+    // `insert` stops + archives it; each run restores it (with host egress).
+    let runenv = if payload.runenv.unwrap_or(false) {
+        let sandbox = SandboxBuilder::new()
+            .image("brekkylab/agent-k-libreoffice:latest")
+            .cpus(8)
+            .memory_mib(1024)
+            .network(SandboxNetwork::Public)
+            .build()
+            .await
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("sandbox build failed: {e:#}"),
+                )
+            })?;
+        Some(sandbox)
+    } else {
+        None
+    };
+    state.sessions.insert(session.clone(), runenv).await?;
     Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
 }
 

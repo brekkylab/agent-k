@@ -4,6 +4,7 @@ members = [
     "./agent-k",
     "./backend",
     "./docling-sys",
+    "./workspace",
 ]
 exclude = [
     "./backend-v1",
@@ -11,4 +12,4 @@ exclude = [
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "ssh://git@github.com/brekkylab/ailoy.git", rev = "3034538ee8bfc35f7019080f76aa3ecfe96846ee", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "e3f909153c3d3f9b9d58af456fd9a47a3ca32894", features = ["sandbox"] }
