@@ -59,11 +59,16 @@ const SESSION_AGENT_NAME: &str = "agent-k";
 /// Selects which agent-k preset builds the [`AgentSpec`] when creating a
 /// session. Variants correspond 1:1 to the `get_*_agent_spec` family in
 /// [`agent_k::agents`]; [`build_spec`] is the dispatch.
+///
+/// Wire values are kebab-case, matching the surface names `GET /models`
+/// advertises ([`crate::model::AgentType`]); `deep_research` stays accepted
+/// as a legacy alias.
 // TODO: add `Speedwagon` variant once the knowledge-base store wiring is ready.
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum AgentType {
     Coworker,
+    #[serde(alias = "deep_research")]
     DeepResearch,
 }
 
@@ -179,4 +184,31 @@ pub(super) async fn delete_session(
     require_owned_session(&state, &auth, id).await?;
     state.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(s: &str) -> Result<AgentType, serde_json::Error> {
+        serde_json::from_str(&format!("\"{s}\""))
+    }
+
+    #[test]
+    fn agent_type_accepts_catalog_wire_values() {
+        // Every surface name `GET /models` advertises must post back into a
+        // session unchanged.
+        for catalog in crate::model::AgentType::ALL {
+            let parsed = parse(catalog.as_str())
+                .unwrap_or_else(|e| panic!("{} must parse: {e}", catalog.as_str()));
+            assert_eq!(parsed.catalog(), catalog);
+        }
+    }
+
+    #[test]
+    fn agent_type_accepts_legacy_snake_case_alias() {
+        assert!(matches!(parse("deep_research"), Ok(AgentType::DeepResearch)));
+        assert!(parse("deep research").is_err());
+        assert!(parse("speedwagon").is_err());
+    }
 }
