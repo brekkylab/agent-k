@@ -464,7 +464,7 @@ impl GmailAccessor {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            anyhow::bail!("gmail batch {status}: {}", &text[..text.len().min(300)]);
+            anyhow::bail!("gmail batch {status}: {}", truncate_chars(&text, 300));
         }
         Ok(parse_batch_bodies(&text))
     }
@@ -518,6 +518,16 @@ impl GmailAccessor {
     }
 }
 
+/// First `max` bytes of `s`, cut back to a char boundary — a plain byte slice
+/// would panic when the cut lands mid-UTF-8 (error bodies can carry non-ASCII).
+fn truncate_chars(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Decode Gmail's base64url payload data, tolerating missing padding.
 fn decode_b64url(s: &str) -> Vec<u8> {
     let trimmed = s.trim_end_matches('=');
@@ -560,6 +570,15 @@ mod tests {
         );
         // Nested braces inside a JSON string ("a{b}c") must not break parsing.
         assert_eq!(msgs[0]["payload"]["headers"][0]["value"], "a{b}c");
+    }
+
+    #[test]
+    fn truncate_chars_respects_utf8_boundaries() {
+        assert_eq!(truncate_chars("hello", 300), "hello");
+        assert_eq!(truncate_chars("hello", 3), "hel");
+        // '한' is 3 bytes: a cut at byte 4 lands mid-char and must back up.
+        assert_eq!(truncate_chars("한글메시지", 4), "한");
+        assert_eq!(truncate_chars("한글메시지", 0), "");
     }
 
     #[test]
