@@ -514,10 +514,13 @@ impl GmailResource {
     /// Attachment files within a message's attachment dir.
     async fn readdir_attachments(&self, msg_id: &str) -> anyhow::Result<Vec<DirEntry>> {
         let raw = self.message_full(msg_id).await?;
-        Ok(attachments(&raw)
+        let atts = attachments(&raw);
+        let names = unique_attachment_names(&atts);
+        Ok(atts
             .into_iter()
-            .map(|a| DirEntry {
-                name: a.filename,
+            .zip(names)
+            .map(|(a, name)| DirEntry {
+                name,
                 kind: FileKind::File,
                 size: a.size,
                 mtime: None,
@@ -550,12 +553,14 @@ impl Resource for GmailResource {
             [_label, _year, _month, dir, fname] => {
                 let id = id_from_name(dir);
                 let raw = self.message_full(&id).await?;
-                let att = attachments(&raw)
-                    .into_iter()
-                    .find(|a| &a.filename == fname)
+                let atts = attachments(&raw);
+                let names = unique_attachment_names(&atts);
+                let idx = names
+                    .iter()
+                    .position(|n| n == fname)
                     .ok_or(ResourceError::NotFound)?;
                 let bytes = self
-                    .attachment_bytes(&id, &att.attachment_id, &att.filename)
+                    .attachment_bytes(&id, &atts[idx].attachment_id, &names[idx])
                     .await?;
                 return Ok(slice_ref(&bytes, range));
             }
@@ -636,13 +641,15 @@ impl Resource for GmailResource {
             // an attachment file: exact size from the message's part metadata
             [_label, _year, _month, dir, fname] => {
                 let raw = self.message_full(&id_from_name(dir)).await?;
-                let att = attachments(&raw)
-                    .into_iter()
-                    .find(|a| &a.filename == fname)
+                let atts = attachments(&raw);
+                let names = unique_attachment_names(&atts);
+                let idx = names
+                    .iter()
+                    .position(|n| n == fname)
                     .ok_or(ResourceError::NotFound)?;
                 Ok(FileStat {
                     kind: FileKind::File,
-                    size: att.size,
+                    size: atts[idx].size,
                     ..Default::default()
                 })
             }
@@ -1001,16 +1008,52 @@ fn attachments(raw: &Value) -> Vec<Attach> {
     out
 }
 
+/// Disambiguate attachment display names within one message. Gmail lets two
+/// parts share a `filename` (e.g. two inline `image.png`); left as-is they'd be
+/// two identical dir entries and the second would be unreachable (`readdir`
+/// lists a name twice, `stat`/`read` match only the first). Keep the first
+/// occurrence verbatim and suffix later collisions with ` (n)` before the
+/// extension. The part order Gmail returns is stable across `messages.get`, so
+/// `readdir`, `stat`, `read`, and the `.gmail.json` listing all derive the same
+/// unique name for a given part — and the `att_cache` key
+/// (`(message id, name)`) becomes per-attachment too.
+fn unique_attachment_names(atts: &[Attach]) -> Vec<String> {
+    let mut used = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(atts.len());
+    for a in atts {
+        let mut name = a.filename.clone();
+        let mut n = 1;
+        while !used.insert(name.clone()) {
+            n += 1;
+            name = suffix_before_ext(&a.filename, n);
+        }
+        out.push(name);
+    }
+    out
+}
+
+/// Insert ` (n)` before a filename's extension: `image.png` -> `image (2).png`.
+/// A leading dot (dotfile) isn't treated as an extension separator.
+fn suffix_before_ext(name: &str, n: usize) -> String {
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => format!("{} ({n}){}", &name[..dot], &name[dot..]),
+        _ => format!("{name} ({n})"),
+    }
+}
+
 /// Build the processed email JSON (the `.gmail.json` content).
 fn process_message(raw: &Value) -> Value {
     let payload = raw.get("payload").cloned().unwrap_or(Value::Null);
     let body_text = decode_body(&payload);
-    let atts: Vec<Value> = attachments(raw)
-        .into_iter()
-        .map(|a| {
+    let atts_raw = attachments(raw);
+    let names = unique_attachment_names(&atts_raw);
+    let atts: Vec<Value> = atts_raw
+        .iter()
+        .zip(&names)
+        .map(|(a, name)| {
             json!({
                 "id": a.attachment_id,
-                "filename": a.filename,
+                "filename": name,
                 "mime_type": a.mime_type,
                 "size": a.size,
             })
@@ -1238,6 +1281,35 @@ mod tests {
         // Out-of-bounds range clamps instead of panicking.
         assert_eq!(slice_ref(&data, Some(3..99)), vec![4, 5]);
         assert!(slice_ref(&data, Some(9..12)).is_empty());
+    }
+
+    #[test]
+    fn unique_attachment_names_disambiguates_duplicates() {
+        let att = |f: &str| Attach {
+            filename: f.to_string(),
+            attachment_id: String::new(),
+            size: 0,
+            mime_type: String::new(),
+        };
+        let atts = [
+            att("image.png"),
+            att("doc.pdf"),
+            att("image.png"),
+            att("image.png"),
+            att("README"),
+            att("README"),
+        ];
+        assert_eq!(
+            unique_attachment_names(&atts),
+            vec![
+                "image.png",     // first occurrence kept verbatim
+                "doc.pdf",
+                "image (2).png", // suffix before the extension
+                "image (3).png",
+                "README",        // no extension
+                "README (2)",
+            ]
+        );
     }
 
     #[test]
