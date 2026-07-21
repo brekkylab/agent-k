@@ -198,6 +198,9 @@ pub struct File {
     resource: Arc<dyn Resource>,
     path: MountPath,
     offset: u64,
+    /// Provider stat captured when the file opened; pins the version so every
+    /// chunk of one read comes from a single snapshot (no per-chunk stat).
+    stat: FileStat,
     /// Whether this handle was opened for writing (gates `write_*`/`flush`).
     write: bool,
     /// Accumulated write buffer, flushed as the whole object.
@@ -247,7 +250,7 @@ impl File {
         let end = self.offset.saturating_add(count as u64);
         let data = self
             .resource
-            .read_bytes(&self.path, Some(self.offset..end))
+            .read_bytes_pinned(&self.path, Some(self.offset..end), &self.stat)
             .await
             .map_err(FsError::from)?;
         self.offset = self.offset.saturating_add(data.len() as u64);
@@ -258,16 +261,8 @@ impl File {
         let new = match pos {
             SeekFrom::Start(n) => n,
             SeekFrom::Current(d) => (self.offset as i64 + d).max(0) as u64,
-            // Seeking from the end needs the object size; one stat serves it.
-            SeekFrom::End(d) => {
-                let size = self
-                    .resource
-                    .stat(&self.path)
-                    .await
-                    .map_err(FsError::from)?
-                    .size;
-                (size as i64 + d).max(0) as u64
-            }
+            // Size is pinned at open, so seeking from the end needs no stat.
+            SeekFrom::End(d) => (self.stat.size as i64 + d).max(0) as u64,
         };
         self.offset = new;
         Ok(new)
@@ -443,6 +438,9 @@ impl WorkspaceFs {
         // create_new guard) and the read-open directory/existence check.
         let stat = resource.stat(&vpath).await;
         let existed = stat.is_ok();
+        // Pin the open-time snapshot so every chunk of a read validates against
+        // one version (no per-chunk stat); default for a not-yet-created file.
+        let pinned = stat.as_ref().ok().cloned().unwrap_or_default();
         if options.create_new && existed {
             return Err(FsError::Exists);
         }
@@ -474,6 +472,7 @@ impl WorkspaceFs {
             resource,
             path: vpath,
             offset: 0,
+            stat: pinned,
             write: is_write,
             wbuf,
             observer,
@@ -788,6 +787,7 @@ mod tests {
                     atime: None,
                     ctime: None,
                     created: None,
+                    etag: None,
                 }])
             } else {
                 Err(ResourceError::NotFound)

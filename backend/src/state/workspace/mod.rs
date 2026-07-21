@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ::workspace::{FsConfig, FsEvent, FsHook, WorkspaceFs};
 use chrono::{DateTime, Utc};
@@ -72,11 +73,42 @@ impl Workspace {
 pub struct WorkspacesState {
     db: SqlitePool,
     data_root: PathBuf,
+    /// Per-workspace assembled [`WorkspaceFs`], cached so provider clients and
+    /// their metadata `CachedResource` survive across requests instead of being
+    /// rebuilt each [`Self::get_fs`]. Cloning shares the mounts' `Arc<Resource>`,
+    /// so cache hits reuse the same caches. Evicted on mount change or removal.
+    fs_cache: Mutex<HashMap<Uuid, WorkspaceFs>>,
 }
 
 impl WorkspacesState {
     pub fn new(db: SqlitePool, data_root: PathBuf) -> Self {
-        Self { db, data_root }
+        Self {
+            db,
+            data_root,
+            fs_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The workspace's assembled [`WorkspaceFs`], built once and cached (see
+    /// [`Self::fs_cache`]). The returned handle shares the cached mounts.
+    async fn fs_for(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
+        if let Some(fs) = self.fs_cache.lock().unwrap().get(&wid).cloned() {
+            return Ok(fs);
+        }
+        // Build outside the lock; a concurrent miss builds twice, first wins.
+        let built = self.build_fs(wid).await?;
+        Ok(self
+            .fs_cache
+            .lock()
+            .unwrap()
+            .entry(wid)
+            .or_insert(built)
+            .clone())
+    }
+
+    /// Evict `wid`'s cached [`WorkspaceFs`] so the next [`Self::get_fs`] rebuilds it.
+    pub(super) fn invalidate_fs(&self, wid: Uuid) {
+        self.fs_cache.lock().unwrap().remove(&wid);
     }
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Workspace>> {
@@ -129,6 +161,7 @@ impl WorkspacesState {
     /// are handled by the database's foreign keys.
     pub async fn remove(&self, id: Uuid) -> StateResult<Workspace> {
         let existing = self.get(id).await?.ok_or(StateError::NotFound)?;
+        self.invalidate_fs(id);
         self.remove_files(id).await?;
         sqlx::query("DELETE FROM workspaces WHERE id = ?")
             .bind(id.to_string())
@@ -178,8 +211,8 @@ impl WorkspacesState {
     /// workspace's external-provider mounts attached (paths under a mount prefix
     /// route to the provider; everything else stays local).
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
-        // `build_fs` assembles the full mount table (local `/files` + providers).
-        let fs = self.build_fs(wid).await?;
+        // Cached assembly (local `/files` + providers); the hook is per-call.
+        let fs = self.fs_for(wid).await?;
         Ok(fs.with_hook(knowledge_hook(wid)))
     }
 

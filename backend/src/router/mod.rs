@@ -103,12 +103,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/sessions/{id}/messages/ws",
             axum::routing::get(message::stream_messages),
         )
-        // Two routes: matchit's `{*rest}` wildcard requires one-or-more
-        // segments, so the bare collection path (`/…/files`) needs its
-        // own entry — without it, `PROPFIND` on the workspace root 404s.
-        .route_service("/workspaces/{wid}/files", webdav::router(state.clone()))
+        // WebDAV serves the unified workspace tree (local under `files/`, each
+        // provider mount as a sibling) at `/sources`. Two routes: matchit's
+        // `{*rest}` wildcard needs one-or-more segments, so the bare collection
+        // root (`/…/sources`) needs its own entry — without it, a root
+        // `PROPFIND` 404s.
+        .route_service("/workspaces/{wid}/sources", webdav::router(state.clone()))
         .route_service(
-            "/workspaces/{wid}/files/{*rest}",
+            "/workspaces/{wid}/sources/{*rest}",
             webdav::router(state.clone()),
         )
         .with_state(state)

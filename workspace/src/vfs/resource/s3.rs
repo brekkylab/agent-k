@@ -81,6 +81,40 @@ impl Resource for S3Resource {
         }
     }
 
+    async fn read_bytes_pinned(
+        &self,
+        path: &MountPath,
+        range: Option<Range<u64>>,
+        stat: &FileStat,
+    ) -> ResourceResult<Vec<u8>> {
+        // Pin the read to the snapshot's ETag: if the object changed since the
+        // read opened, S3 returns 412 rather than newer bytes, so a multi-chunk
+        // read can't stitch two versions together.
+        let os_path = self.os_path(path)?;
+        let opts = GetOptions {
+            range: range.clone().map(GetRange::Bounded),
+            if_match: stat.etag.clone(),
+            ..Default::default()
+        };
+        match self.accessor.store.get_opts(&os_path, opts).await {
+            Ok(res) => Ok(res.bytes().await?.to_vec()),
+            Err(OsError::Precondition { .. }) => Err(ResourceError::Backend(anyhow::anyhow!(
+                "object changed during read (if-match precondition failed)"
+            ))),
+            Err(e) => {
+                // Same clean-EOF handling as `read_bytes`: a range at/after EOF
+                // yields 416, which we treat as an empty (EOF) read.
+                if let Some(r) = &range
+                    && let Ok(meta) = self.accessor.store.head(&os_path).await
+                    && r.start >= meta.size
+                {
+                    return Ok(Vec::new());
+                }
+                Err(e.into())
+            }
+        }
+    }
+
     async fn write_bytes(&self, path: &MountPath, data: Vec<u8>) -> ResourceResult<()> {
         self.accessor
             .store
@@ -110,6 +144,7 @@ impl Resource for S3Resource {
                     atime: None,
                     ctime: None,
                     created: None,
+                    etag: None,
                 });
             }
         }
@@ -129,6 +164,9 @@ impl Resource for S3Resource {
                     atime: None,
                     ctime: None,
                     created: None,
+                    // Carry the listing ETag so a read opened off the cached
+                    // stat can pin itself to it (`If-Match`).
+                    etag: obj.e_tag.clone(),
                 });
             }
         }
