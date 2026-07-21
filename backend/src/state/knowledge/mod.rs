@@ -12,13 +12,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_k::knowledge_base::{FileType, PdfEngine, SharedStore, Store};
 use dashmap::DashMap;
 use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, OnceCell, RwLock};
 use uuid::Uuid;
 
 use ::workspace::{FsError, FsResult, OpenOptions, WorkspaceFs};
@@ -27,9 +29,9 @@ use super::workspace::{build_workspace_vfs, workspace_fs};
 
 /// Unified-tree directory holding the index references. Local files live under
 /// the `/files` mount, so knowledge refs are `/files/knowledge/*.ref`.
-pub const KNOWLEDGE_DIR: &str = "/files/knowledge";
+pub const KNOWLEDGE_ROOT: &str = "/files/knowledge";
 
-/// Suffix marking a reference file under [`KNOWLEDGE_DIR`].
+/// Suffix marking a reference file under [`KNOWLEDGE_ROOT`].
 pub const REF_SUFFIX: &str = ".ref";
 
 /// Resident-byte budget per ingest batch: bytes are dropped between batches so
@@ -74,16 +76,39 @@ struct TargetState {
     outcome: Outcome,
 }
 
+/// All per-workspace index state in one struct, so `Resyncer` holds a single
+/// `DashMap<Uuid, Arc<WsIndex>>` — one lookup per workspace and a single-entry
+/// teardown. `store` opens lazily; `lock` serializes reconciles (and teardown);
+/// `refmaps` is the per-target memo; `rev`/`done` are the coalescing gate (a
+/// trigger bumps `rev`, a task reconciles only while `rev != done`, and `done`
+/// advances — to the pre-scan `rev` — on success).
+#[derive(Default)]
+struct WsIndex {
+    store: OnceCell<SharedStore>,
+    lock: Mutex<()>,
+    refmaps: StdMutex<HashMap<String, TargetState>>,
+    rev: AtomicU64,
+    done: AtomicU64,
+}
+
+impl WsIndex {
+    /// The [`Store`] at `root`, opened (and cached) on first use.
+    async fn store(&self, root: PathBuf) -> anyhow::Result<SharedStore> {
+        self.store
+            .get_or_try_init(|| async { anyhow::Ok(Arc::new(RwLock::new(Store::new(root)?))) })
+            .await
+            .map(|s| s.clone())
+    }
+}
+
 /// Indexes a workspace's referenced knowledge into its [`Store`]. Cheap to clone,
 /// so one handle serves the fs write-trigger hook, the router, and the loop.
 #[derive(Clone)]
 pub struct Resyncer {
     db: SqlitePool,
     data_root: PathBuf,
-    stores: Arc<DashMap<Uuid, SharedStore>>,
-    locks: Arc<DashMap<Uuid, Arc<Mutex<()>>>>,
-    /// Per-workspace, per-target state (path → state); in-memory only.
-    refmaps: Arc<DashMap<Uuid, HashMap<String, TargetState>>>,
+    /// One [`WsIndex`] per workspace (store + lock + memo + coalescing gate).
+    indexes: Arc<DashMap<Uuid, Arc<WsIndex>>>,
 }
 
 impl Resyncer {
@@ -91,10 +116,12 @@ impl Resyncer {
         Self {
             db,
             data_root,
-            stores: Arc::new(DashMap::new()),
-            locks: Arc::new(DashMap::new()),
-            refmaps: Arc::new(DashMap::new()),
+            indexes: Arc::new(DashMap::new()),
         }
+    }
+
+    fn ws_for(&self, wid: Uuid) -> Arc<WsIndex> {
+        self.indexes.entry(wid).or_default().clone()
     }
 
     fn store_root(&self, wid: Uuid) -> PathBuf {
@@ -104,54 +131,30 @@ impl Resyncer {
             .join("knowledge-index")
     }
 
-    fn store_for(&self, wid: Uuid) -> anyhow::Result<SharedStore> {
-        use dashmap::mapref::entry::Entry;
-        match self.stores.entry(wid) {
-            Entry::Occupied(o) => Ok(o.get().clone()),
-            Entry::Vacant(v) => {
-                let store = Store::new(self.store_root(wid))?;
-                let shared = Arc::new(RwLock::new(store));
-                v.insert(shared.clone());
-                Ok(shared)
-            }
-        }
-    }
-
-    fn lock_for(&self, wid: Uuid) -> Arc<Mutex<()>> {
-        self.locks
-            .entry(wid)
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    }
-
-    /// Drop the cached [`Store`], lock, and per-target memo for a torn-down
-    /// workspace. Takes the per-workspace lock first so it can't interleave with
-    /// an in-flight reconcile whose tail would resurrect the memo.
+    /// Drop a torn-down workspace's index state (store, memo, gate), releasing its
+    /// mmapped tantivy index. Takes the per-workspace lock first so it can't
+    /// interleave with an in-flight reconcile.
     pub async fn forget(&self, wid: Uuid) {
-        let lock = self.lock_for(wid);
-        let _guard = lock.lock().await;
-        self.stores.remove(&wid);
-        self.locks.remove(&wid);
-        self.refmaps.remove(&wid);
+        let ws = self.ws_for(wid);
+        let _guard = ws.lock.lock().await;
+        self.indexes.remove(&wid);
     }
 
-    /// Spawn a background resync, logging any failure.
+    /// Request a resync for `wid`. Bumps the revision gate and spawns a task; the
+    /// [`coalesce`] gate ensures a mutation storm collapses to ~one reconcile
+    /// (plus one if a trigger lands mid-run) rather than one per trigger.
     pub fn spawn_resync(&self, wid: Uuid) {
+        let ws = self.ws_for(wid);
+        ws.rev.fetch_add(1, Ordering::SeqCst);
         let this = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = this.reconcile(wid).await {
-                tracing::warn!(%wid, "knowledge resync failed: {e:#}");
-            }
-        });
+        tokio::spawn(async move { coalesce(wid, &ws, || this.reconcile(wid, &ws)).await });
     }
 
-    /// Reconcile `wid`'s [`Store`] with its `/files/knowledge` references. Ingest
+    /// Reconcile `wid`'s [`Store`] with its `/files/knowledge` references: ingest
     /// referenced targets in byte-bounded batches, then purge documents whose ref
-    /// is gone. Serialized per workspace.
-    pub async fn reconcile(&self, wid: Uuid) -> anyhow::Result<()> {
-        let lock = self.lock_for(wid);
-        let _guard = lock.lock().await;
-
+    /// is gone. Not self-serializing — callers run it under `ws.lock` via
+    /// [`coalesce`] (or [`forget`](Self::forget)).
+    async fn reconcile(&self, wid: Uuid, ws: &WsIndex) -> anyhow::Result<()> {
         let config = build_workspace_vfs(&self.db, wid).await?;
         let fs = workspace_fs(&self.data_root, wid, config)?;
 
@@ -161,10 +164,10 @@ impl Resyncer {
             return Ok(());
         }
 
-        let store = self.store_for(wid)?;
+        let store = ws.store(self.store_root(wid)).await?;
         let mut store = store.write().await;
 
-        let prev = self.refmaps.get(&wid).map(|m| m.clone()).unwrap_or_default();
+        let prev = ws.refmaps.lock().unwrap().clone();
 
         // Read each target (remembering its content-hash id, or that it failed)
         // and ingest readable bytes in byte-bounded batches.
@@ -196,7 +199,7 @@ impl Resyncer {
         }
 
         let (next, protected) = build_keepset(&prev, &reads, &succeeded);
-        self.refmaps.insert(wid, next);
+        *ws.refmaps.lock().unwrap() = next;
 
         // Purge only docs whose ref is gone — never docs that merely failed to
         // read/ingest this cycle (protected via the memo above).
@@ -214,6 +217,29 @@ impl Resyncer {
         }
         store.compact()?;
         Ok(())
+    }
+}
+
+/// Coalescing gate: reconcile only if a trigger arrived since the last successful
+/// pass (`rev != done`), advancing `done` to the pre-scan `rev` on success so a
+/// burst's remaining tasks collapse. A failed pass leaves `done` behind, so the
+/// burst's other tasks retry (self-heal). Serialized per workspace by `lock`.
+async fn coalesce<F, Fut>(wid: Uuid, ws: &WsIndex, reconcile: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
+    if ws.rev.load(Ordering::SeqCst) == ws.done.load(Ordering::SeqCst) {
+        return; // fast path — latest already reconciled; skip the lock
+    }
+    let _guard = ws.lock.lock().await;
+    let cur = ws.rev.load(Ordering::SeqCst);
+    if cur == ws.done.load(Ordering::SeqCst) {
+        return; // an earlier task already reconciled this revision
+    }
+    match reconcile().await {
+        Ok(()) => ws.done.store(cur, Ordering::SeqCst),
+        Err(e) => tracing::warn!(%wid, "knowledge resync failed: {e:#}"),
     }
 }
 
@@ -308,18 +334,18 @@ async fn collect_targets(
     max_file_bytes: u64,
 ) -> anyhow::Result<Vec<(String, FileType)>> {
     let mut out = Vec::new();
-    let mut stream = match fs.read_dir(KNOWLEDGE_DIR).await {
+    let mut stream = match fs.read_dir(KNOWLEDGE_ROOT).await {
         Ok(s) => s,
         Err(FsError::NotFound) => return Ok(out),
-        Err(e) => anyhow::bail!("read {KNOWLEDGE_DIR}: {e:?}"),
+        Err(e) => anyhow::bail!("read {KNOWLEDGE_ROOT}: {e:?}"),
     };
     while let Some(entry) = stream.next().await {
-        let entry = entry.map_err(|e| anyhow::anyhow!("read {KNOWLEDGE_DIR}: {e:?}"))?;
+        let entry = entry.map_err(|e| anyhow::anyhow!("read {KNOWLEDGE_ROOT}: {e:?}"))?;
         let name = String::from_utf8_lossy(&entry.name()).into_owned();
         if !name.ends_with(REF_SUFFIX) {
             continue;
         }
-        let ref_path = format!("{KNOWLEDGE_DIR}/{name}");
+        let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
         let bytes = match read_all(fs, &ref_path).await {
             Ok(b) => b,
             Err(e) => {
@@ -416,8 +442,9 @@ fn is_safe_target(path: &str) -> bool {
     any
 }
 
-/// True when `path` is `/files/knowledge` or lives under it.
-fn is_under_knowledge(path: &str) -> bool {
+/// True when `path` is `/files/knowledge` or lives under it. Shared with the
+/// backend's `/knowledge` change hook so the predicate lives in one place.
+pub(super) fn is_under_knowledge(path: &str) -> bool {
     let p = path.trim_start_matches('/');
     p == "files/knowledge" || p.starts_with("files/knowledge/")
 }
@@ -431,7 +458,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        KnowledgeRef, Outcome, TargetState, build_keepset, collect_targets, is_safe_target,
+        KnowledgeRef, Outcome, TargetState, WsIndex, build_keepset, coalesce, collect_targets,
+        is_safe_target,
     };
 
     fn indexed(id: Uuid) -> TargetState {
@@ -505,6 +533,48 @@ mod tests {
             paths,
             vec!["/files/docs/a.md".to_string(), "/files/docs/sub/b.md".to_string()]
         );
+    }
+
+    /// A burst of triggers (rev bumped N times) drained by N tasks runs the
+    /// reconcile once — the rest see `rev == done` and return cheaply.
+    #[tokio::test]
+    async fn coalesce_collapses_burst() {
+        use std::sync::atomic::{AtomicUsize, Ordering as O};
+        let ws = WsIndex::default();
+        let calls = AtomicUsize::new(0);
+        for _ in 0..3 {
+            ws.rev.fetch_add(1, O::SeqCst);
+        }
+        for _ in 0..3 {
+            coalesce(Uuid::nil(), &ws, || async {
+                calls.fetch_add(1, O::SeqCst);
+                Ok(())
+            })
+            .await;
+        }
+        assert_eq!(calls.load(O::SeqCst), 1);
+    }
+
+    /// A failed pass doesn't advance `done`, so the burst's next task retries.
+    #[tokio::test]
+    async fn coalesce_retries_after_failure() {
+        use std::sync::atomic::{AtomicUsize, Ordering as O};
+        let ws = WsIndex::default();
+        let calls = AtomicUsize::new(0);
+        for _ in 0..2 {
+            ws.rev.fetch_add(1, O::SeqCst);
+        }
+        coalesce(Uuid::nil(), &ws, || async {
+            calls.fetch_add(1, O::SeqCst);
+            anyhow::bail!("boom")
+        })
+        .await;
+        coalesce(Uuid::nil(), &ws, || async {
+            calls.fetch_add(1, O::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(calls.load(O::SeqCst), 2);
     }
 
     #[test]

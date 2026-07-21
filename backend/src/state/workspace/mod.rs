@@ -253,14 +253,6 @@ impl WorkspacesState {
     }
 }
 
-/// True when a workspace-relative path lives under `knowledge/`. Classification
-/// is the backend's policy, not the `workspace` crate's.
-fn is_knowledge(rel: &str) -> bool {
-    // Local files live under the `/files` mount, so knowledge files are
-    // `files/knowledge/…` in the unified namespace.
-    rel.trim_start_matches('/').starts_with("files/knowledge/")
-}
-
 /// The change hook attached to every [`WorkspaceFs`] this backend builds: it
 /// runs the `knowledge/` side-processing (today just logging; ingestion/indexing
 /// lands later) and ignores everything else.
@@ -276,7 +268,9 @@ struct KnowledgeHook {
 impl FsHook for KnowledgeHook {
     fn on_change(&self, event: FsEvent<'_>) {
         let touched = match event {
-            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => is_knowledge(p),
+            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => {
+                super::knowledge::is_under_knowledge(p)
+            }
         };
         if touched {
             if let Some(r) = &self.resyncer {

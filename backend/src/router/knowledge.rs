@@ -23,7 +23,7 @@ use uuid::Uuid;
 use ::workspace::{FsError as WsFsError, OpenOptions, WorkspaceFs};
 
 use crate::auth::AuthUser;
-use crate::state::{AppState, KNOWLEDGE_DIR, KnowledgeRef, REF_SUFFIX};
+use crate::state::{AppState, KNOWLEDGE_ROOT, KnowledgeRef, REF_SUFFIX};
 
 use super::{error::ApiError, error::err, workspace::require_owned_workspace};
 
@@ -75,13 +75,13 @@ pub(super) async fn create_ref(
         Err(_) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
     }
 
-    match fs.create_dir(KNOWLEDGE_DIR).await {
+    match fs.create_dir(KNOWLEDGE_ROOT).await {
         Ok(()) | Err(WsFsError::Exists) => {}
         Err(_) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
     }
 
     let name = ref_name_for(&target);
-    let ref_path = format!("{KNOWLEDGE_DIR}/{name}");
+    let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
     let body = KnowledgeRef {
         path: target.clone(),
     }
@@ -113,7 +113,7 @@ pub(super) async fn list_refs(
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
 
     let mut items = Vec::new();
-    match fs.read_dir(KNOWLEDGE_DIR).await {
+    match fs.read_dir(KNOWLEDGE_ROOT).await {
         Ok(mut stream) => {
             while let Some(entry) = stream.next().await {
                 let Ok(entry) = entry else { continue };
@@ -121,7 +121,7 @@ pub(super) async fn list_refs(
                 if !name.ends_with(REF_SUFFIX) {
                     continue;
                 }
-                let ref_path = format!("{KNOWLEDGE_DIR}/{name}");
+                let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
                 let Ok(bytes) = read_all(&fs, &ref_path).await else {
                     continue;
                 };
@@ -154,7 +154,7 @@ pub(super) async fn delete_ref(
         .get_fs(wid)
         .await
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
-    match fs.remove_file(&format!("{KNOWLEDGE_DIR}/{name}")).await {
+    match fs.remove_file(&format!("{KNOWLEDGE_ROOT}/{name}")).await {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(WsFsError::NotFound) => Err(err(StatusCode::NOT_FOUND, "reference not found")),
         Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
