@@ -452,20 +452,221 @@ pub(super) fn is_under_knowledge(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::ops::Range;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use ::workspace::{FsConfig, WorkspaceFs};
+    use ::workspace::{
+        FileKind, FileStat, FsConfig, LocalResource, Mount, MountPath, Resource, ResourceDirEntry,
+        ResourceError, ResourceResult, WorkspaceFs,
+    };
+    use async_trait::async_trait;
     use uuid::Uuid;
 
     use super::{
-        KnowledgeRef, Outcome, TargetState, WsIndex, build_keepset, coalesce, collect_targets,
-        is_safe_target,
+        KnowledgeRef, Outcome, Resyncer, TargetState, WsIndex, build_keepset, coalesce,
+        collect_targets, is_safe_target, read_all,
     };
 
     fn indexed(id: Uuid) -> TargetState {
         TargetState {
             last_indexed_id: Some(id),
             outcome: Outcome::Indexed,
+        }
+    }
+
+    // --- build_keepset (pure) --------------------------------------------
+
+    /// A still-referenced target that fails to read keeps its document (protected
+    /// via its prior id) instead of being purged on a transient blip.
+    #[test]
+    fn transient_read_failure_protects_prior_doc() {
+        let id = Uuid::from_u128(1);
+        let mut prev = HashMap::new();
+        prev.insert("/files/a.md".to_string(), indexed(id));
+        let reads = vec![("/files/a.md".to_string(), None)];
+        let (next, protected) = build_keepset(&prev, &reads, &HashSet::new());
+        assert!(protected.contains(&id));
+        assert_eq!(next["/files/a.md"].last_indexed_id, Some(id));
+        assert_eq!(next["/files/a.md"].outcome, Outcome::ReadFailed);
+    }
+
+    /// A removed ref is absent from the scan, so its id isn't protected → purged.
+    #[test]
+    fn removed_ref_is_purged() {
+        let id = Uuid::from_u128(1);
+        let mut prev = HashMap::new();
+        prev.insert("/files/a.md".to_string(), indexed(id));
+        let (next, protected) = build_keepset(&prev, &[], &HashSet::new());
+        assert!(!protected.contains(&id));
+        assert!(next.is_empty());
+    }
+
+    /// A never-indexed target that fails to read has no doc to protect.
+    #[test]
+    fn unreadable_never_indexed_protects_nothing() {
+        let reads = vec![("/files/a.md".to_string(), None)];
+        let (next, protected) = build_keepset(&HashMap::new(), &reads, &HashSet::new());
+        assert!(protected.is_empty());
+        assert_eq!(next["/files/a.md"].last_indexed_id, None);
+    }
+
+    /// A broken (unreadable, never-indexed) ref can't shield unrelated docs.
+    #[test]
+    fn broken_ref_does_not_block_unrelated_purge() {
+        let removed_doc = Uuid::from_u128(9);
+        let reads = vec![("/mnt/broken.pdf".to_string(), None)];
+        let (_, protected) = build_keepset(&HashMap::new(), &reads, &HashSet::new());
+        assert!(protected.is_empty());
+        assert!(!protected.contains(&removed_doc));
+    }
+
+    /// Read OK but ingest failed (new id not confirmed): keep the prior doc.
+    #[test]
+    fn ingest_failure_keeps_prior_doc() {
+        let old = Uuid::from_u128(1);
+        let new = Uuid::from_u128(2);
+        let mut prev = HashMap::new();
+        prev.insert("/files/a.md".to_string(), indexed(old));
+        let reads = vec![("/files/a.md".to_string(), Some(new))];
+        let (next, protected) = build_keepset(&prev, &reads, &HashSet::new());
+        assert!(protected.contains(&old));
+        assert_eq!(next["/files/a.md"].last_indexed_id, Some(old));
+        assert_eq!(next["/files/a.md"].outcome, Outcome::IngestFailed);
+    }
+
+    /// The memo carries a target's last indexed id across cycles: it survives
+    /// repeated read blips and re-indexes on recovery (output fed back as `prev`).
+    #[test]
+    fn refmaps_carries_id_across_cycles() {
+        let p = "/files/a.md".to_string();
+        let x = Uuid::from_u128(1);
+        let hit: HashSet<Uuid> = [x].into_iter().collect();
+
+        let (m1, prot) = build_keepset(&HashMap::new(), &[(p.clone(), Some(x))], &hit);
+        assert!(prot.contains(&x));
+        assert_eq!(m1[&p].last_indexed_id, Some(x));
+
+        let (m2, prot) = build_keepset(&m1, &[(p.clone(), None)], &HashSet::new());
+        assert!(prot.contains(&x));
+        let (m3, prot) = build_keepset(&m2, &[(p.clone(), None)], &HashSet::new());
+        assert!(prot.contains(&x));
+
+        let (m4, prot) = build_keepset(&m3, &[(p.clone(), Some(x))], &hit);
+        assert!(prot.contains(&x));
+        assert_eq!(m4[&p].outcome, Outcome::Indexed);
+    }
+
+    /// Read OK, content changed, ingest confirmed: protect the new id; the old
+    /// content's doc is unreferenced → purgeable.
+    #[test]
+    fn content_change_swaps_protected_id() {
+        let old = Uuid::from_u128(1);
+        let new = Uuid::from_u128(2);
+        let mut prev = HashMap::new();
+        prev.insert("/files/a.md".to_string(), indexed(old));
+        let reads = vec![("/files/a.md".to_string(), Some(new))];
+        let succeeded: HashSet<Uuid> = [new].into_iter().collect();
+        let (next, protected) = build_keepset(&prev, &reads, &succeeded);
+        assert!(protected.contains(&new));
+        assert!(!protected.contains(&old));
+        assert_eq!(next["/files/a.md"].last_indexed_id, Some(new));
+        assert_eq!(next["/files/a.md"].outcome, Outcome::Indexed);
+    }
+
+    /// One keep-set over a mixed batch: each target's fate is independent.
+    #[test]
+    fn mixed_batch_protects_each_target_independently() {
+        let ok_id = Uuid::from_u128(1);
+        let blip_prior = Uuid::from_u128(2);
+        let removed_id = Uuid::from_u128(3);
+        let unconfirmed = Uuid::from_u128(4);
+
+        let mut prev = HashMap::new();
+        prev.insert("/files/ok.md".to_string(), indexed(ok_id));
+        prev.insert("/files/blip.md".to_string(), indexed(blip_prior));
+        prev.insert("/files/removed.md".to_string(), indexed(removed_id));
+
+        let reads = vec![
+            ("/files/ok.md".to_string(), Some(ok_id)),
+            ("/files/blip.md".to_string(), None),
+            ("/files/new.md".to_string(), Some(unconfirmed)),
+        ];
+        let succeeded: HashSet<Uuid> = [ok_id].into_iter().collect();
+
+        let (next, protected) = build_keepset(&prev, &reads, &succeeded);
+
+        assert_eq!(protected, [ok_id, blip_prior].into_iter().collect());
+        assert!(!protected.contains(&removed_id));
+        assert!(!protected.contains(&unconfirmed));
+        assert_eq!(next["/files/ok.md"].outcome, Outcome::Indexed);
+        assert_eq!(next["/files/blip.md"].outcome, Outcome::ReadFailed);
+        assert_eq!(next["/files/new.md"].outcome, Outcome::IngestFailed);
+        assert_eq!(next["/files/new.md"].last_indexed_id, None);
+        assert!(!next.contains_key("/files/removed.md"));
+    }
+
+    // --- enumeration -----------------------------------------------------
+
+    /// A read-only provider with one markdown file at its root, `/doc.md`.
+    struct MockResource {
+        content: Vec<u8>,
+    }
+
+    #[async_trait]
+    impl Resource for MockResource {
+        async fn read_bytes(
+            &self,
+            path: &MountPath,
+            range: Option<Range<u64>>,
+        ) -> ResourceResult<Vec<u8>> {
+            if path.as_str() != "/doc.md" {
+                return Err(ResourceError::NotFound);
+            }
+            Ok(match range {
+                Some(r) => {
+                    let s = (r.start as usize).min(self.content.len());
+                    let e = (r.end as usize).min(self.content.len());
+                    self.content[s..e].to_vec()
+                }
+                None => self.content.clone(),
+            })
+        }
+        async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+            Err(ResourceError::Unsupported)
+        }
+        async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<ResourceDirEntry>> {
+            if path.is_root() {
+                Ok(vec![ResourceDirEntry {
+                    name: "doc.md".into(),
+                    kind: FileKind::File,
+                    size: self.content.len() as u64,
+                    mtime: None,
+                    atime: None,
+                    ctime: None,
+                    created: None,
+                    etag: None,
+                }])
+            } else {
+                Err(ResourceError::NotFound)
+            }
+        }
+        async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
+            if path.is_root() {
+                Ok(FileStat {
+                    kind: FileKind::Dir,
+                    ..Default::default()
+                })
+            } else if path.as_str() == "/doc.md" {
+                Ok(FileStat {
+                    kind: FileKind::File,
+                    size: self.content.len() as u64,
+                    ..Default::default()
+                })
+            } else {
+                Err(ResourceError::NotFound)
+            }
         }
     }
 
@@ -483,98 +684,135 @@ mod tests {
         write(root, &format!("knowledge/{name}"), &body).await;
     }
 
-    /// A still-referenced target that fails to read keeps its document (protected
-    /// via its prior id) rather than being purged on a transient blip.
-    #[test]
-    fn transient_read_failure_protects_prior_doc() {
-        let id = Uuid::from_u128(1);
-        let mut prev = HashMap::new();
-        prev.insert("/files/a.md".to_string(), indexed(id));
-        let reads = vec![("/files/a.md".to_string(), None)];
-        let (_next, protected) = build_keepset(&prev, &reads, &HashSet::new());
-        assert!(protected.contains(&id));
+    /// A local `/files` mount over `root` plus a `/mock` provider mount.
+    fn fs_with_mock(root: &Path, mock: MockResource) -> WorkspaceFs {
+        WorkspaceFs::from_mounts(vec![
+            Mount {
+                prefix: "/files".into(),
+                resource: Arc::new(LocalResource::new(root.to_path_buf())),
+            },
+            Mount {
+                prefix: "/mock".into(),
+                resource: Arc::new(mock),
+            },
+        ])
+        .unwrap()
     }
 
-    /// A removed ref (absent from this cycle's reads) is not protected → purged.
-    #[test]
-    fn removed_ref_not_protected() {
-        let id = Uuid::from_u128(2);
-        let mut prev = HashMap::new();
-        prev.insert("/files/gone.md".to_string(), indexed(id));
-        let (_next, protected) = build_keepset(&prev, &[], &HashSet::new());
-        assert!(!protected.contains(&id));
-    }
-
-    #[tokio::test]
-    async fn collects_file_and_dir_targets() {
-        let tmp = tempfile::tempdir().unwrap();
-        let files = tmp.path();
-        write(files, "docs/a.md", b"AAA").await;
-        write(files, "docs/sub/b.md", b"BBB").await;
-        write(files, "docs/sub/ignore.bin", b"nope").await;
-        write_ref(files, "a.ref", "/files/docs/a.md").await;
-        write_ref(files, "dir.ref", "/files/docs/sub").await;
-        write_ref(files, "missing.ref", "/files/docs/gone.md").await;
-        write_ref(files, "self.ref", "/files/knowledge/a.ref").await;
-
-        let fs = WorkspaceFs::from_config(FsConfig {
-            local_root: Some(files.to_path_buf()),
+    /// A local-only `/files` mount over `root`.
+    fn local_fs(root: &Path) -> WorkspaceFs {
+        WorkspaceFs::from_config(FsConfig {
+            local_root: Some(root.to_path_buf()),
             mounts: vec![],
         })
-        .unwrap();
-        let mut paths: Vec<String> = collect_targets(&fs, u64::MAX)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(p, _)| p)
-            .collect();
+        .unwrap()
+    }
+
+    /// Enumeration gathers local files, a directory's descendants, and a mounted
+    /// object — skipping non-`.ref`, self-references, missing targets, and
+    /// non-indexable extensions — and the paths resolve to real bytes.
+    #[tokio::test]
+    async fn collects_local_dir_and_mount_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        write(root, "docs/a.md", b"AAA").await;
+        write(root, "docs/sub/b.md", b"BBB").await;
+        write(root, "docs/sub/ignore.bin", b"nope").await;
+
+        write_ref(root, "a.ref", "/files/docs/a.md").await;
+        write_ref(root, "dir.ref", "/files/docs/sub").await;
+        write_ref(root, "mount.ref", "/mock/doc.md").await;
+        write_ref(root, "missing.ref", "/files/docs/gone.md").await;
+        write_ref(root, "self.ref", "/files/knowledge/a.ref").await;
+        write(root, "knowledge/note.txt", b"not a ref").await;
+
+        let fs = fs_with_mock(
+            root,
+            MockResource {
+                content: b"MOUNTED".to_vec(),
+            },
+        );
+
+        let targets = collect_targets(&fs, u64::MAX).await.unwrap();
+        let mut paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         paths.sort();
         assert_eq!(
             paths,
-            vec!["/files/docs/a.md".to_string(), "/files/docs/sub/b.md".to_string()]
+            vec![
+                "/files/docs/a.md".to_string(),
+                "/files/docs/sub/b.md".to_string(),
+                "/mock/doc.md".to_string(),
+            ]
+        );
+
+        let mut bodies = Vec::new();
+        for (p, _) in &targets {
+            bodies.push(read_all(&fs, p).await.unwrap());
+        }
+        bodies.sort();
+        assert_eq!(
+            bodies,
+            vec![b"AAA".to_vec(), b"BBB".to_vec(), b"MOUNTED".to_vec()]
         );
     }
 
-    /// A burst of triggers (rev bumped N times) drained by N tasks runs the
-    /// reconcile once — the rest see `rev == done` and return cheaply.
+    /// A directory ref and an explicit file ref covering the same path enumerate
+    /// it once.
     #[tokio::test]
-    async fn coalesce_collapses_burst() {
-        use std::sync::atomic::{AtomicUsize, Ordering as O};
-        let ws = WsIndex::default();
-        let calls = AtomicUsize::new(0);
-        for _ in 0..3 {
-            ws.rev.fetch_add(1, O::SeqCst);
-        }
-        for _ in 0..3 {
-            coalesce(Uuid::nil(), &ws, || async {
-                calls.fetch_add(1, O::SeqCst);
-                Ok(())
-            })
-            .await;
-        }
-        assert_eq!(calls.load(O::SeqCst), 1);
+    async fn dedups_overlapping_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "docs/a.md", b"A").await;
+        write_ref(root, "dir.ref", "/files/docs").await;
+        write_ref(root, "file.ref", "/files/docs/a.md").await;
+        let fs = local_fs(root);
+
+        let targets = collect_targets(&fs, u64::MAX).await.unwrap();
+        let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
+        assert_eq!(paths, vec!["/files/docs/a.md".to_string()]);
     }
 
-    /// A failed pass doesn't advance `done`, so the burst's next task retries.
+    /// A target larger than the per-file cap is skipped, smaller ones kept.
     #[tokio::test]
-    async fn coalesce_retries_after_failure() {
-        use std::sync::atomic::{AtomicUsize, Ordering as O};
-        let ws = WsIndex::default();
-        let calls = AtomicUsize::new(0);
-        for _ in 0..2 {
-            ws.rev.fetch_add(1, O::SeqCst);
-        }
-        coalesce(Uuid::nil(), &ws, || async {
-            calls.fetch_add(1, O::SeqCst);
-            anyhow::bail!("boom")
-        })
-        .await;
-        coalesce(Uuid::nil(), &ws, || async {
-            calls.fetch_add(1, O::SeqCst);
-            Ok(())
-        })
-        .await;
-        assert_eq!(calls.load(O::SeqCst), 2);
+    async fn oversized_target_is_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write(root, "docs/small.md", b"tiny").await;
+        write(root, "docs/big.md", &vec![b'x'; 100]).await;
+        write_ref(root, "small.ref", "/files/docs/small.md").await;
+        write_ref(root, "big.ref", "/files/docs/big.md").await;
+        let fs = local_fs(root);
+
+        let targets = collect_targets(&fs, 10).await.unwrap();
+        let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
+        assert_eq!(paths, vec!["/files/docs/small.md".to_string()]);
+    }
+
+    /// A planted reference whose target escapes the root (`..`) or is relative is
+    /// skipped, not resolved.
+    #[tokio::test]
+    async fn skips_unsafe_ref_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_ref(root, "esc.ref", "/../outside.md").await;
+        write_ref(root, "rel.ref", "docs/x.md").await;
+        write(root, "docs/ok.md", b"OK").await;
+        write_ref(root, "ok.ref", "/files/docs/ok.md").await;
+        let fs = local_fs(root);
+
+        let targets = collect_targets(&fs, u64::MAX).await.unwrap();
+        let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
+        assert_eq!(paths, vec!["/files/docs/ok.md".to_string()]);
+    }
+
+    /// A missing `/files/knowledge` directory yields no targets rather than erroring.
+    #[tokio::test]
+    async fn absent_knowledge_dir_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fs = local_fs(tmp.path());
+        let targets = collect_targets(&fs, u64::MAX).await.unwrap();
+        assert!(targets.is_empty());
     }
 
     #[test]
@@ -583,5 +821,140 @@ mod tests {
         assert!(!is_safe_target("a.md"));
         assert!(!is_safe_target("/a/../b"));
         assert!(!is_safe_target("/"));
+    }
+
+    // --- coalescing gate -------------------------------------------------
+
+    /// A burst of triggers runs one reconcile; a later trigger runs one more.
+    #[tokio::test]
+    async fn coalesces_burst_to_one_reconcile() {
+        let ws = WsIndex::default();
+        let wid = Uuid::new_v4();
+        let calls = AtomicUsize::new(0);
+        for _ in 0..5 {
+            ws.rev.fetch_add(1, Ordering::SeqCst);
+        }
+        for _ in 0..5 {
+            coalesce(wid, &ws, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                anyhow::Ok(())
+            })
+            .await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        ws.rev.fetch_add(1, Ordering::SeqCst);
+        coalesce(wid, &ws, || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::Ok(())
+        })
+        .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// On Err, `done` stays behind `rev`, so the burst's remaining tasks retry.
+    #[tokio::test]
+    async fn err_does_not_advance_done_so_burst_retries() {
+        let ws = WsIndex::default();
+        let wid = Uuid::new_v4();
+        ws.rev.fetch_add(1, Ordering::SeqCst);
+        coalesce(wid, &ws, || async { anyhow::bail!("transient") }).await;
+
+        let calls = AtomicUsize::new(0);
+        coalesce(wid, &ws, || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::Ok(())
+        })
+        .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A trigger during a reconcile leaves `done` behind `rev`, so exactly one
+    /// follow-up runs (guards "never re-read `rev` at the end").
+    #[tokio::test]
+    async fn trigger_during_reconcile_runs_one_more() {
+        let ws = WsIndex::default();
+        let wid = Uuid::new_v4();
+        let calls = AtomicUsize::new(0);
+
+        ws.rev.fetch_add(1, Ordering::SeqCst);
+        coalesce(wid, &ws, || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            ws.rev.fetch_add(1, Ordering::SeqCst);
+            anyhow::Ok(())
+        })
+        .await;
+        assert_eq!(ws.done.load(Ordering::SeqCst), 1);
+
+        for _ in 0..3 {
+            coalesce(wid, &ws, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                anyhow::Ok(())
+            })
+            .await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// Concurrent triggers coalesce to exactly one reconcile under real contention.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_triggers_coalesce_to_one() {
+        use tokio::sync::oneshot;
+
+        let ws = Arc::new(WsIndex::default());
+        let wid = Uuid::new_v4();
+        let calls = Arc::new(AtomicUsize::new(0));
+        ws.rev.fetch_add(1, Ordering::SeqCst);
+        ws.rev.fetch_add(1, Ordering::SeqCst);
+
+        let (in_tx, in_rx) = oneshot::channel();
+        let (rel_tx, rel_rx) = oneshot::channel();
+
+        let a = tokio::spawn({
+            let (ws, calls) = (ws.clone(), calls.clone());
+            async move {
+                coalesce(wid, &ws, move || async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    in_tx.send(()).unwrap();
+                    rel_rx.await.unwrap();
+                    anyhow::Ok(())
+                })
+                .await;
+            }
+        });
+        in_rx.await.unwrap();
+
+        let b = tokio::spawn({
+            let (ws, calls) = (ws.clone(), calls.clone());
+            async move {
+                coalesce(wid, &ws, || async {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    anyhow::Ok(())
+                })
+                .await;
+            }
+        });
+
+        rel_tx.send(()).unwrap();
+        a.await.unwrap();
+        b.await.unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(ws.done.load(Ordering::SeqCst), 2);
+    }
+
+    /// `forget` drops a deleted workspace's index state.
+    #[tokio::test]
+    async fn forget_evicts_workspace_state() {
+        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let r = Resyncer::new(pool, tmp.path().to_path_buf());
+        let wid = Uuid::new_v4();
+
+        r.ws_for(wid);
+        assert!(r.indexes.contains_key(&wid));
+
+        r.forget(wid).await;
+        assert!(!r.indexes.contains_key(&wid));
     }
 }
