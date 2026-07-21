@@ -26,7 +26,7 @@ use crate::auth::authenticate;
 use crate::state::AppState;
 use workspace::{
     DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError, OpenOptions as WsOpenOptions,
-    ReadDirMeta as WsReadDirMeta, Stat, WorkspaceFs,
+    Stat, WorkspaceFs,
 };
 
 /// WebDAV workspace router. Mounted by [`super::get_router`] at
@@ -158,17 +158,14 @@ impl DavFileSystem for DavFs {
     fn read_dir<'a>(
         &'a self,
         path: &'a DavPath,
-        meta: ReadDirMeta,
+        _meta: ReadDirMeta,
     ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>> {
         Box::pin(async move {
-            let meta = match meta {
-                ReadDirMeta::Data => WsReadDirMeta::Data,
-                ReadDirMeta::DataSymlink => WsReadDirMeta::DataSymlink,
-                ReadDirMeta::None => WsReadDirMeta::None,
-            };
+            // `_meta` (symlink-follow hint) is moot: the workspace resolves
+            // symlinks to their target and never reports the symlink kind.
             let stream = self
                 .0
-                .read_dir(&rel_path_string(path), meta)
+                .read_dir(&rel_path_string(path))
                 .await
                 .map_err(to_dav_err)?;
             let mapped = stream.map(|res| {

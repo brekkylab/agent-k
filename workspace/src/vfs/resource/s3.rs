@@ -9,8 +9,8 @@ use object_store::{
 
 use crate::vfs::{
     accessor::{S3Accessor, S3Config},
-    error::{VfsError, VfsResult},
-    path::VPath,
+    error::{ResourceError, ResourceResult},
+    path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
@@ -35,23 +35,29 @@ impl S3Resource {
     // by stat/read/write — a different object. `parse` preserves those bytes, and
     // still rejects `.`/`..` segments, so the mount can't address keys outside
     // `key_prefix`. An unparseable key can't name an object → NotFound.
-    fn os_path(&self, path: &VPath) -> VfsResult<OsPath> {
-        OsPath::parse(self.accessor.key(path)).map_err(|_| VfsError::NotFound)
+    fn os_path(&self, path: &MountPath) -> ResourceResult<OsPath> {
+        OsPath::parse(self.accessor.key(path)).map_err(|_| ResourceError::NotFound)
     }
 
-    fn list_prefix(&self, path: &VPath) -> VfsResult<Option<OsPath>> {
+    fn list_prefix(&self, path: &MountPath) -> ResourceResult<Option<OsPath>> {
         let key = self.accessor.key(path);
         if key.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(OsPath::parse(key).map_err(|_| VfsError::NotFound)?))
+            Ok(Some(
+                OsPath::parse(key).map_err(|_| ResourceError::NotFound)?,
+            ))
         }
     }
 }
 
 #[async_trait]
 impl Resource for S3Resource {
-    async fn read_bytes(&self, path: &VPath, range: Option<Range<u64>>) -> VfsResult<Vec<u8>> {
+    async fn read_bytes(
+        &self,
+        path: &MountPath,
+        range: Option<Range<u64>>,
+    ) -> ResourceResult<Vec<u8>> {
         let os_path = self.os_path(path)?;
         let opts = GetOptions {
             range: range.clone().map(GetRange::Bounded),
@@ -75,7 +81,7 @@ impl Resource for S3Resource {
         }
     }
 
-    async fn write_bytes(&self, path: &VPath, data: Vec<u8>) -> VfsResult<()> {
+    async fn write_bytes(&self, path: &MountPath, data: Vec<u8>) -> ResourceResult<()> {
         self.accessor
             .store
             .put(&self.os_path(path)?, PutPayload::from(data))
@@ -83,7 +89,7 @@ impl Resource for S3Resource {
         Ok(())
     }
 
-    async fn readdir(&self, path: &VPath) -> VfsResult<Vec<DirEntry>> {
+    async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<DirEntry>> {
         let listing = self.list_prefix(path)?;
         let res = self
             .accessor
@@ -103,6 +109,7 @@ impl Resource for S3Resource {
                     mtime: None,
                     atime: None,
                     ctime: None,
+                    created: None,
                 });
             }
         }
@@ -121,6 +128,7 @@ impl Resource for S3Resource {
                     mtime: Some(obj.last_modified.into()),
                     atime: None,
                     ctime: None,
+                    created: None,
                 });
             }
         }
@@ -130,7 +138,7 @@ impl Resource for S3Resource {
         Ok(out)
     }
 
-    async fn stat(&self, path: &VPath) -> VfsResult<FileStat> {
+    async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
         if path.is_root() {
             return Ok(FileStat {
                 kind: FileKind::Dir,
@@ -142,9 +150,10 @@ impl Resource for S3Resource {
                 kind: FileKind::File,
                 size: meta.size,
                 mtime: Some(meta.last_modified.into()),
-                // S3 reports only LastModified; no access/change time.
+                // S3 reports only LastModified; no access/change/birth time.
                 atime: None,
                 ctime: None,
+                created: None,
                 etag: meta.e_tag.clone(),
                 version: meta.version.clone(),
             }),
@@ -155,7 +164,7 @@ impl Resource for S3Resource {
                     .list_with_delimiter(self.list_prefix(path)?.as_ref())
                     .await?;
                 if res.common_prefixes.is_empty() && res.objects.is_empty() {
-                    return Err(VfsError::NotFound);
+                    return Err(ResourceError::NotFound);
                 }
                 Ok(FileStat {
                     kind: FileKind::Dir,
@@ -166,12 +175,12 @@ impl Resource for S3Resource {
         }
     }
 
-    async fn unlink(&self, path: &VPath) -> VfsResult<()> {
+    async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
         self.accessor.store.delete(&self.os_path(path)?).await?;
         Ok(())
     }
 
-    async fn mkdir(&self, _path: &VPath) -> VfsResult<()> {
+    async fn mkdir(&self, _path: &MountPath) -> ResourceResult<()> {
         // Object stores have no real directories: a prefix exists implicitly once
         // a key is written under it, and `object_store::Path` can't represent a
         // trailing-slash marker. So mkdir is a no-op success (the dir appears as
@@ -179,7 +188,7 @@ impl Resource for S3Resource {
         Ok(())
     }
 
-    async fn rmdir(&self, path: &VPath) -> VfsResult<()> {
+    async fn rmdir(&self, path: &MountPath) -> ResourceResult<()> {
         // Recursively delete everything under the prefix (mirrors mirage's
         // prefix batch delete).
         let prefix = self.list_prefix(path)?;
@@ -191,7 +200,7 @@ impl Resource for S3Resource {
         Ok(())
     }
 
-    async fn rename(&self, from: &VPath, to: &VPath) -> VfsResult<()> {
+    async fn rename(&self, from: &MountPath, to: &MountPath) -> ResourceResult<()> {
         // S3 has no native rename: copy then delete the source (mirrors mirage).
         let (from, to) = (self.os_path(from)?, self.os_path(to)?);
         self.accessor.store.copy(&from, &to).await?;
@@ -225,7 +234,7 @@ mod tests {
     fn special_char_key_round_trips() {
         let r = resource();
         for name in ["50%off.txt", "a#b.txt", "note~1", "q?x", "a[b]"] {
-            let vp = VPath::new(&format!("/{name}"));
+            let vp = MountPath::new(&format!("/{name}"));
             assert_eq!(
                 r.os_path(&vp).unwrap().as_ref(),
                 r.accessor.key(&vp),
@@ -239,7 +248,10 @@ mod tests {
         let r = resource();
         for bad in ["/../up", "/a/../b", "/."] {
             assert!(
-                matches!(r.os_path(&VPath::new(bad)), Err(VfsError::NotFound)),
+                matches!(
+                    r.os_path(&MountPath::new(bad)),
+                    Err(ResourceError::NotFound)
+                ),
                 "should reject {bad:?}"
             );
         }
@@ -277,8 +289,8 @@ mod tests {
         // Unique key under a dedicated test prefix so a stray failure can't
         // clobber real data.
         let name = format!("agentk-livetest-{}.txt", uuid::Uuid::new_v4());
-        let dir = VPath::new("/agentk-livetest");
-        let vp = VPath::new(format!("/agentk-livetest/{name}"));
+        let dir = MountPath::new("/agentk-livetest");
+        let vp = MountPath::new(format!("/agentk-livetest/{name}"));
         let body = b"hello s3 live".to_vec();
 
         r.write_bytes(&vp, body.clone()).await.expect("write");
@@ -301,6 +313,6 @@ mod tests {
         );
 
         r.unlink(&vp).await.expect("unlink");
-        assert!(matches!(r.stat(&vp).await, Err(VfsError::NotFound)));
+        assert!(matches!(r.stat(&vp).await, Err(ResourceError::NotFound)));
     }
 }

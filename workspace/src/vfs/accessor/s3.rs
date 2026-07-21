@@ -6,7 +6,7 @@ use object_store::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::vfs::path::VPath;
+use crate::vfs::path::MountPath;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct S3Config {
@@ -64,7 +64,7 @@ impl S3Accessor {
     }
 
     /// Map a mount-relative path to a full S3 object key (applying key_prefix).
-    pub fn key(&self, path: &VPath) -> String {
+    pub fn key(&self, path: &MountPath) -> String {
         let rel = path.as_str().trim_start_matches('/');
         match (self.key_prefix.is_empty(), rel.is_empty()) {
             (true, _) => rel.to_string(),
@@ -93,14 +93,14 @@ mod tests {
     #[test]
     fn key_no_prefix() {
         let a = acc(None);
-        assert_eq!(a.key(&VPath::root()), "");
-        assert_eq!(a.key(&VPath::new("/data/x.csv")), "data/x.csv");
+        assert_eq!(a.key(&MountPath::root()), "");
+        assert_eq!(a.key(&MountPath::new("/data/x.csv")), "data/x.csv");
     }
 
     #[test]
     fn key_with_prefix() {
         let a = acc(Some("sub/inner"));
-        assert_eq!(a.key(&VPath::root()), "sub/inner");
-        assert_eq!(a.key(&VPath::new("/x.csv")), "sub/inner/x.csv");
+        assert_eq!(a.key(&MountPath::root()), "sub/inner");
+        assert_eq!(a.key(&MountPath::new("/x.csv")), "sub/inner/x.csv");
     }
 }

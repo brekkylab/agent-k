@@ -1,8 +1,8 @@
 //! Standalone workspace filesystem.
 //!
-//! A provider VFS (S3 / Notion) plus the unified [`WorkspaceFs`], which presents
+//! A provider VFS (S3 / Notion / Gmail) plus the unified [`WorkspaceFs`], which presents
 //! a workspace's local files and its provider mounts as one tree, and a host-side
-//! forward server ([`VfsForward`]) for serving that tree to an in-guest FUSE
+//! forward server ([`ForwardServer`]) for serving that tree to an in-guest FUSE
 //! forwarder.
 //!
 //! Framework-free: no database, HTTP framework, or sandbox VM. The backend wraps
@@ -14,12 +14,12 @@ mod hook;
 mod vfs;
 
 pub use fs::{
-    DirEntry, DirStream, File, FsError, FsResult, NodeKind, OpenOptions, ReadDirMeta, Stat,
-    WorkspaceFs,
+    DirEntry, DirStream, File, FsError, FsResult, NodeKind, OpenOptions, Stat, WorkspaceFs,
 };
 pub use hook::{FsEvent, FsHook};
 pub use vfs::{
-    DirEntry as VfsDirEntry, FileKind, FileStat, ForwardFs, FwdEntry, FwdStat, GmailConfig, Mount,
-    MountSpec, NotionConfig, NotionResource, ProviderConfig, Resource, S3Config, S3Resource, VPath,
-    Vfs, VfsConfig, VfsError, VfsForward, VfsResult,
+    DirEntry as ResourceDirEntry, FileKind, FileStat, ForwardFs, ForwardServer, FsConfig, FwdEntry,
+    FwdStat, GmailConfig, GmailResource, LOCAL_MOUNT, LocalResource, Mount, MountPath, MountSpec,
+    NotionConfig, NotionResource, ProviderConfig, Resource, ResourceError, ResourceResult, S3Config,
+    S3Resource,
 };

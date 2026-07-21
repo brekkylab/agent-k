@@ -1,4 +1,4 @@
-//! Virtual filesystem over external providers (S3, Notion).
+//! Virtual filesystem over external providers (S3, Notion, Gmail).
 //!
 //! Vendored from ailoy's `feat/vfs-provider-mounts` branch (commit 61c4c43),
 //! reduced to the **frontend-agnostic core**: the FUSE / sandbox frontends,
@@ -6,9 +6,8 @@
 //! agent-k wraps this core in its WebDAV workspace layer (see
 //! [`crate::state`] / [`crate::router::webdav`]) instead of a FUSE mount.
 //!
-//! A single [`Vfs`] holds the provider [`Resource`]s and routes virtual paths
-//! to them by longest-prefix match; it is the single source of truth for
-//! provider access.
+//! [`WorkspaceFs`](crate::WorkspaceFs) holds the mounts (each bound to a
+//! [`Resource`]) and routes virtual paths to them by longest-prefix match.
 
 // This module is vendored, largely intact, from ailoy's VFS core and exposes a
 // fuller provider API (writes, domain commands, extra metadata) than agent-k's
@@ -24,12 +23,15 @@ pub mod path;
 pub mod resource;
 pub mod sandbox;
 
-#[allow(clippy::module_inception)]
-mod vfs;
+mod mount;
 
 pub use accessor::{GmailConfig, NotionConfig, S3Config};
-pub use error::{VfsError, VfsResult};
-pub use path::VPath;
-pub use resource::{DirEntry, FileKind, FileStat, NotionResource, Resource, S3Resource};
-pub use sandbox::{ForwardFs, FwdEntry, FwdStat, VfsForward};
-pub use vfs::{Mount, MountSpec, ProviderConfig, Vfs, VfsConfig};
+pub use error::{ResourceError, ResourceResult};
+pub(crate) use mount::build_mounts;
+pub use mount::{FsConfig, LOCAL_MOUNT, Mount, MountSpec, ProviderConfig};
+pub use path::MountPath;
+pub use resource::{
+    DirEntry, FileKind, FileStat, GmailResource, LocalResource, NotionResource, Resource,
+    S3Resource,
+};
+pub use sandbox::{ForwardFs, ForwardServer, FwdEntry, FwdStat};

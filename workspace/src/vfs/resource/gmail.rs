@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use crate::vfs::{
     accessor::{GmailAccessor, GmailConfig, encode_b64url},
-    error::{VfsError, VfsResult},
-    path::VPath,
+    error::{ResourceError, ResourceResult},
+    path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
@@ -387,6 +387,7 @@ impl GmailResource {
                 mtime: None,
                 atime: None,
                 ctime: None,
+                created: None,
             });
             if !attachments(raw).is_empty() {
                 out.push(dir_entry(attach_dir_name(&subject, id)));
@@ -408,6 +409,7 @@ impl GmailResource {
                 mtime: None,
                 atime: None,
                 ctime: None,
+                created: None,
             })
             .collect())
     }
@@ -417,9 +419,9 @@ impl GmailResource {
 impl Resource for GmailResource {
     async fn read_bytes(
         &self,
-        path: &VPath,
+        path: &MountPath,
         range: Option<std::ops::Range<u64>>,
-    ) -> VfsResult<Vec<u8>> {
+    ) -> ResourceResult<Vec<u8>> {
         let seg = segments(path);
         let data = match seg.as_slice() {
             // <label>/<yyyy>/<mm>/<file>.gmail.json -> processed email JSON
@@ -435,42 +437,42 @@ impl Resource for GmailResource {
                 let att = attachments(&raw)
                     .into_iter()
                     .find(|a| &a.filename == fname)
-                    .ok_or(VfsError::NotFound)?;
+                    .ok_or(ResourceError::NotFound)?;
                 self.accessor
                     .get_attachment(&id, &att.attachment_id)
                     .await?
             }
-            _ => return Err(VfsError::NotFound),
+            _ => return Err(ResourceError::NotFound),
         };
         Ok(slice(data, range))
     }
 
-    async fn write_bytes(&self, _path: &VPath, _data: Vec<u8>) -> VfsResult<()> {
+    async fn write_bytes(&self, _path: &MountPath, _data: Vec<u8>) -> ResourceResult<()> {
         // Gmail is read-only for file writes; send/reply/forward go through the
         // `.cmd/` control path (see [`Self::command`]).
-        Err(VfsError::Unsupported)
+        Err(ResourceError::Unsupported)
     }
 
-    async fn readdir(&self, path: &VPath) -> VfsResult<Vec<DirEntry>> {
+    async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<DirEntry>> {
         let seg = segments(path);
         match seg.as_slice() {
-            [] => self.readdir_labels().await.map_err(VfsError::from),
-            [label] => self.readdir_years(label).await.map_err(VfsError::from),
-            [label, year] => self.readdir_months(label, year).await.map_err(VfsError::from),
+            [] => self.readdir_labels().await.map_err(ResourceError::from),
+            [label] => self.readdir_years(label).await.map_err(ResourceError::from),
+            [label, year] => self.readdir_months(label, year).await.map_err(ResourceError::from),
             [label, year, month] => self
                 .readdir_messages(label, year, month)
                 .await
-                .map_err(VfsError::from),
+                .map_err(ResourceError::from),
             // attachment dir: <label>/<yyyy>/<mm>/<subject>__<id>
             [_label, _year, _month, dir] if !dir.ends_with(GMAIL_SUFFIX) => self
                 .readdir_attachments(&id_from_name(dir))
                 .await
-                .map_err(VfsError::from),
-            _ => Err(VfsError::NotFound),
+                .map_err(ResourceError::from),
+            _ => Err(ResourceError::NotFound),
         }
     }
 
-    async fn stat(&self, path: &VPath) -> VfsResult<FileStat> {
+    async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
         let seg = segments(path);
         match seg.as_slice() {
             [] => Ok(dir_stat()),
@@ -479,7 +481,7 @@ impl Resource for GmailResource {
                 if self.label_id(label).await?.is_some() {
                     Ok(dir_stat())
                 } else {
-                    Err(VfsError::NotFound)
+                    Err(ResourceError::NotFound)
                 }
             }
             // a year dir: a well-formed yyyy is a (possibly empty) dir
@@ -487,7 +489,7 @@ impl Resource for GmailResource {
                 if is_valid_year(year) {
                     Ok(dir_stat())
                 } else {
-                    Err(VfsError::NotFound)
+                    Err(ResourceError::NotFound)
                 }
             }
             // a month dir: a well-formed mm is a (possibly empty) dir
@@ -495,7 +497,7 @@ impl Resource for GmailResource {
                 if is_valid_month(month) {
                     Ok(dir_stat())
                 } else {
-                    Err(VfsError::NotFound)
+                    Err(ResourceError::NotFound)
                 }
             }
             // a message file (sentinel size — don't fetch just to size it) or
@@ -517,19 +519,19 @@ impl Resource for GmailResource {
                 let att = attachments(&raw)
                     .into_iter()
                     .find(|a| &a.filename == fname)
-                    .ok_or(VfsError::NotFound)?;
+                    .ok_or(ResourceError::NotFound)?;
                 Ok(FileStat {
                     kind: FileKind::File,
                     size: att.size,
                     ..Default::default()
                 })
             }
-            _ => Err(VfsError::NotFound),
+            _ => Err(ResourceError::NotFound),
         }
     }
 
     /// `rm <…>.gmail.json` moves the message to Trash.
-    async fn unlink(&self, path: &VPath) -> VfsResult<()> {
+    async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
         let seg = segments(path);
         match seg.as_slice() {
             [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
@@ -542,18 +544,18 @@ impl Resource for GmailResource {
                 self.date_index.lock().await.clear();
                 Ok(())
             }
-            _ => Err(VfsError::Unsupported),
+            _ => Err(ResourceError::Unsupported),
         }
     }
 
-    async fn command(&self, name: &str, body: &[u8]) -> VfsResult<Vec<u8>> {
+    async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
         let v: Value = serde_json::from_slice(body)
-            .map_err(|e| VfsError::Backend(anyhow::anyhow!("gmail {name}: invalid JSON: {e}")))?;
+            .map_err(|e| ResourceError::Backend(anyhow::anyhow!("gmail {name}: invalid JSON: {e}")))?;
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
         let result = match name {
             "send" => {
                 let to = s("to")
-                    .ok_or_else(|| VfsError::Backend(anyhow::anyhow!("send: missing to")))?;
+                    .ok_or_else(|| ResourceError::Backend(anyhow::anyhow!("send: missing to")))?;
                 let subject = s("subject").unwrap_or_default();
                 let body = s("body").unwrap_or_default();
                 let raw = encode_b64url(&build_mime(&to, None, &subject, &body, &[]));
@@ -561,7 +563,7 @@ impl Resource for GmailResource {
             }
             "reply" | "reply-all" => {
                 let mid = s("message_id").ok_or_else(|| {
-                    VfsError::Backend(anyhow::anyhow!("{name}: missing message_id"))
+                    ResourceError::Backend(anyhow::anyhow!("{name}: missing message_id"))
                 })?;
                 let body = s("body").unwrap_or_default();
                 let orig = self.message_full(&mid).await?;
@@ -602,10 +604,10 @@ impl Resource for GmailResource {
             }
             "forward" => {
                 let mid = s("message_id").ok_or_else(|| {
-                    VfsError::Backend(anyhow::anyhow!("forward: missing message_id"))
+                    ResourceError::Backend(anyhow::anyhow!("forward: missing message_id"))
                 })?;
                 let to = s("to")
-                    .ok_or_else(|| VfsError::Backend(anyhow::anyhow!("forward: missing to")))?;
+                    .ok_or_else(|| ResourceError::Backend(anyhow::anyhow!("forward: missing to")))?;
                 let raw_msg = self.message_full(&mid).await?;
                 let p = process_message(&raw_msg);
                 let mut subject = p
@@ -631,7 +633,7 @@ impl Resource for GmailResource {
                 self.accessor.send_raw(&raw, None).await?
             }
             other => {
-                return Err(VfsError::Backend(anyhow::anyhow!(
+                return Err(ResourceError::Backend(anyhow::anyhow!(
                     "unknown gmail command: {other}"
                 )));
             }
@@ -657,7 +659,7 @@ impl Resource for GmailResource {
 // ---- path helpers ---------------------------------------------------------
 
 /// Mount-relative path segments (`/INBOX/2026-05-03/x.gmail.json` -> 3).
-fn segments(path: &VPath) -> Vec<String> {
+fn segments(path: &MountPath) -> Vec<String> {
     path.as_str()
         .trim_matches('/')
         .split('/')
@@ -1023,6 +1025,7 @@ fn dir_entry(name: String) -> DirEntry {
         mtime: None,
         atime: None,
         ctime: None,
+        created: None,
     }
 }
 

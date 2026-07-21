@@ -364,7 +364,7 @@ impl SessionsState {
                         let mut sandbox = r.lock().await;
                         let console = sandbox.start().await?;
                         let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(
-                            crate::state::workspace_fs(&data_root, workspace_id, vfs.clone()),
+                            crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
                         );
                         Some(
                             crate::sandbox_fs::mount_vfs_in_guest(

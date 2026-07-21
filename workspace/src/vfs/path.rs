@@ -1,23 +1,23 @@
 /// A mount-relative virtual path, always absolute within its mount
 /// (leading `/`, no trailing `/` except for the root `/`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VPath(String);
+pub struct MountPath(String);
 
-impl VPath {
+impl MountPath {
     pub fn new(s: impl AsRef<str>) -> Self {
         let s = s.as_ref();
         let trimmed = s.trim_end_matches('/');
         if trimmed.is_empty() {
-            VPath("/".to_string())
+            MountPath("/".to_string())
         } else if let Some(stripped) = trimmed.strip_prefix('/') {
-            VPath(format!("/{stripped}"))
+            MountPath(format!("/{stripped}"))
         } else {
-            VPath(format!("/{trimmed}"))
+            MountPath(format!("/{trimmed}"))
         }
     }
 
     pub fn root() -> Self {
-        VPath("/".to_string())
+        MountPath("/".to_string())
     }
 
     pub fn as_str(&self) -> &str {

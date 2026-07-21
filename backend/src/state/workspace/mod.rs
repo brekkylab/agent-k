@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ::workspace::{FsEvent, FsHook, Vfs, WorkspaceFs};
+use ::workspace::{FsConfig, FsEvent, FsHook, WorkspaceFs};
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
@@ -178,10 +178,9 @@ impl WorkspacesState {
     /// workspace's external-provider mounts attached (paths under a mount prefix
     /// route to the provider; everything else stays local).
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
-        let vfs = self.build_vfs(wid).await?;
-        Ok(WorkspaceFs::new(self.get_root(wid), wid)
-            .with_vfs(vfs)
-            .with_hook(knowledge_hook()))
+        // `build_fs` assembles the full mount table (local `/files` + providers).
+        let fs = self.build_fs(wid).await?;
+        Ok(fs.with_hook(knowledge_hook(wid)))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root
@@ -200,16 +199,23 @@ impl WorkspacesState {
 /// True when a workspace-relative path lives under `knowledge/`. Classification
 /// is the backend's policy, not the `workspace` crate's.
 fn is_knowledge(rel: &str) -> bool {
-    rel.trim_start_matches('/').starts_with("knowledge/")
+    // Local files live under the `/files` mount, so knowledge files are
+    // `files/knowledge/…` in the unified namespace.
+    rel.trim_start_matches('/').starts_with("files/knowledge/")
 }
 
 /// The change hook attached to every [`WorkspaceFs`] this backend builds: it
 /// runs the `knowledge/` side-processing (today just logging; ingestion/indexing
 /// lands later) and ignores everything else.
-struct KnowledgeHook;
+struct KnowledgeHook {
+    /// The workspace this hook is bound to — the crate is workspace-agnostic, so
+    /// the backend carries the DB identity here rather than in `WorkspaceFs`.
+    wid: Uuid,
+}
 
 impl FsHook for KnowledgeHook {
-    fn on_change(&self, wid: Uuid, event: FsEvent<'_>) {
+    fn on_change(&self, event: FsEvent<'_>) {
+        let wid = self.wid;
         match event {
             FsEvent::Created(p) if is_knowledge(p) => {
                 tracing::info!("insert_knowledge (workspace={wid}, path={p})");
@@ -225,8 +231,8 @@ impl FsHook for KnowledgeHook {
     }
 }
 
-fn knowledge_hook() -> Option<Arc<dyn FsHook>> {
-    Some(Arc::new(KnowledgeHook))
+fn knowledge_hook(wid: Uuid) -> Option<Arc<dyn FsHook>> {
+    Some(Arc::new(KnowledgeHook { wid }))
 }
 
 /// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`
@@ -242,15 +248,16 @@ fn knowledge_hook() -> Option<Arc<dyn FsHook>> {
 pub(crate) fn workspace_fs(
     data_root: &std::path::Path,
     wid: Uuid,
-    vfs: Option<Arc<Vfs>>,
-) -> WorkspaceFs {
+    mut config: FsConfig,
+) -> StateResult<WorkspaceFs> {
     let root = data_root
         .join("workspaces")
         .join(wid.to_string())
         .join("files");
-    WorkspaceFs::new(root, wid)
-        .with_vfs(vfs)
-        .with_hook(knowledge_hook())
+    config.local_root = Some(root);
+    let fs = WorkspaceFs::from_config(config)
+        .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
+    Ok(fs.with_hook(knowledge_hook(wid)))
 }
 
 #[cfg(test)]
@@ -324,7 +331,11 @@ mod tests {
         let removed = state.remove(id).await.unwrap();
         assert_eq!(removed.id, id);
         assert!(state.get(id).await.unwrap().is_none());
-        assert!(!tokio::fs::try_exists(state.workspace_dir(id)).await.unwrap());
+        assert!(
+            !tokio::fs::try_exists(state.workspace_dir(id))
+                .await
+                .unwrap()
+        );
         assert!(matches!(state.remove(id).await, Err(StateError::NotFound)));
     }
 
@@ -338,17 +349,35 @@ mod tests {
 
         let uid = owner.id;
         // A default workspace (id == uid) and a non-default one, both owned by uid.
-        state.upsert(Workspace::with_id(uid, uid, "W".into())).await.unwrap();
+        state
+            .upsert(Workspace::with_id(uid, uid, "W".into()))
+            .await
+            .unwrap();
         let other = Uuid::new_v4();
-        state.upsert(Workspace::with_id(other, uid, "W2".into())).await.unwrap();
+        state
+            .upsert(Workspace::with_id(other, uid, "W2".into()))
+            .await
+            .unwrap();
 
         // The owner reaches both — including the non-default (id != uid).
         assert!(state.get_for_user(uid, uid).await.unwrap().is_some());
         assert!(state.get_for_user(uid, other).await.unwrap().is_some());
         // A different user gets None even though the workspace exists — no leak.
-        assert!(state.get_for_user(Uuid::new_v4(), other).await.unwrap().is_none());
+        assert!(
+            state
+                .get_for_user(Uuid::new_v4(), other)
+                .await
+                .unwrap()
+                .is_none()
+        );
         // A workspace that doesn't exist → None.
-        assert!(state.get_for_user(uid, Uuid::new_v4()).await.unwrap().is_none());
+        assert!(
+            state
+                .get_for_user(uid, Uuid::new_v4())
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -367,11 +396,19 @@ mod tests {
         assert_eq!(ws.title, "tester's workspace");
 
         // The file root lives under workspaces/{uid}/files.
-        assert!(tokio::fs::try_exists(state.get_root(user_id)).await.unwrap());
+        assert!(
+            tokio::fs::try_exists(state.get_root(user_id))
+                .await
+                .unwrap()
+        );
 
         // Removal drops the on-disk directory.
         state.remove(user_id).await.unwrap();
-        assert!(!tokio::fs::try_exists(state.workspace_dir(user_id)).await.unwrap());
+        assert!(
+            !tokio::fs::try_exists(state.workspace_dir(user_id))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ailoy::runenv::Console;
 
-use workspace::{ForwardFs, VfsForward};
+use workspace::{ForwardFs, ForwardServer};
 
 /// Guest path the forwarder binary is written to.
 const GUEST_FWD_BIN: &str = "/opt/ailoy/vfs-fwd";
@@ -28,19 +28,19 @@ pub fn forwarder_available() -> bool {
 
 /// Spawn a host forward server for `fs`, inject + start the in-guest FUSE
 /// forwarder in `console`'s sandbox, and mount the filesystem at `mount_root`
-/// inside the guest. Returns the live [`VfsForward`] — keep it alive as long as
+/// inside the guest. Returns the live [`ForwardServer`] — keep it alive as long as
 /// the mount is needed; dropping it tears the host server down. Blocks until the
 /// mount appears in the guest's `/proc/mounts`.
 ///
-/// `fs` is any [`ForwardFs`]: a provider-only [`Vfs`](workspace::Vfs) or the
-/// unified `WorkspaceFs`. The guest reaches the host forward server via
+/// `fs` is any [`ForwardFs`] — in practice the unified `WorkspaceFs` (local
+/// files + provider mounts). The guest reaches the host forward server via
 /// `host.microsandbox.internal:<port>`, so the sandbox must have been built with
 /// host egress allowed (`SandboxBuilder::allow_host_egress(true)`).
 pub async fn mount_vfs_in_guest(
     console: &impl Console,
     fs: Arc<dyn ForwardFs>,
     mount_root: &str,
-) -> anyhow::Result<VfsForward> {
+) -> anyhow::Result<ForwardServer> {
     if !forwarder_available() {
         anyhow::bail!(
             "in-guest VFS forwarder was not built into this binary \
@@ -48,7 +48,7 @@ pub async fn mount_vfs_in_guest(
         );
     }
 
-    let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current())?;
+    let fwd = ForwardServer::spawn(fs, &tokio::runtime::Handle::current())?;
     console
         .write(Path::new(GUEST_FWD_BIN), FORWARDER_ELF)
         .await?;
@@ -100,7 +100,7 @@ mod e2e {
 
     use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder, SandboxNetwork};
 
-    use ::workspace::{MountSpec, NotionConfig, ProviderConfig, Vfs, VfsConfig, VfsForward};
+    use ::workspace::{ForwardServer, FsConfig, MountSpec, NotionConfig, ProviderConfig};
 
     // Multi-thread runtime so the host forward server's accept loop is driven on
     // its own worker while the test awaits long-running guest execs.
@@ -121,9 +121,11 @@ mod e2e {
 
         // A forward server over an empty workspace is enough — we only probe reachability.
         let data_root = tempfile::tempdir().expect("tempdir");
-        let fs: Arc<dyn ::workspace::ForwardFs> =
-            Arc::new(crate::state::workspace_fs(data_root.path(), uuid::Uuid::new_v4(), None));
-        let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn");
+        let fs: Arc<dyn ::workspace::ForwardFs> = Arc::new(
+            crate::state::workspace_fs(data_root.path(), uuid::Uuid::new_v4(), FsConfig::default())
+                .expect("workspace fs"),
+        );
+        let fwd = ForwardServer::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn");
         let port = fwd.port();
         println!("host forward server on port {port}");
 
@@ -141,8 +143,14 @@ mod e2e {
 
         // .replace() (not format!) so awk's `{ }` don't collide with format args.
         let script = PROBE_SCRIPT.replace("__PORT__", &port.to_string());
-        let r = console.exec_shell(script, Some(60)).await.expect("exec probe");
-        println!("--- guest network probe (exit {}) ---\n{}", r.exit_code, r.stdout);
+        let r = console
+            .exec_shell(script, Some(60))
+            .await
+            .expect("exec probe");
+        println!(
+            "--- guest network probe (exit {}) ---\n{}",
+            r.exit_code, r.stdout
+        );
         if !r.stderr.trim().is_empty() {
             println!("stderr:\n{}", r.stderr);
         }
@@ -187,9 +195,11 @@ done
         }
         // A forward server over an empty workspace is enough — we only probe reachability.
         let data_root = tempfile::tempdir().expect("tempdir");
-        let fs: Arc<dyn ::workspace::ForwardFs> =
-            Arc::new(crate::state::workspace_fs(data_root.path(), uuid::Uuid::new_v4(), None));
-        let fwd = VfsForward::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn");
+        let fs: Arc<dyn ::workspace::ForwardFs> = Arc::new(
+            crate::state::workspace_fs(data_root.path(), uuid::Uuid::new_v4(), FsConfig::default())
+                .expect("workspace fs"),
+        );
+        let fwd = ForwardServer::spawn(fs, &tokio::runtime::Handle::current()).expect("spawn");
         let port = fwd.port();
 
         // Build WITH host egress, start once, stop, archive, drop.
@@ -213,9 +223,10 @@ done
 
         // Restore WITH host egress re-applied (the archive doesn't carry the
         // policy), start, and probe host reachability from the guest.
-        let mut restored = ailoy::runenv::Sandbox::try_from_archive_with_network(&archive, SandboxNetwork::Public)
-            .await
-            .expect("restore from archive");
+        let mut restored =
+            ailoy::runenv::Sandbox::try_from_archive_with_network(&archive, SandboxNetwork::Public)
+                .await
+                .expect("restore from archive");
         let console = restored.start().await.expect("start (restored)");
         let script = format!(
             "if command -v bash >/dev/null 2>&1 && timeout 3 bash -c 'exec 3<>/dev/tcp/host.microsandbox.internal/{port}' >/dev/null 2>&1; then echo REACHABLE; else echo UNREACHABLE; fi"
@@ -269,27 +280,25 @@ done
         std::fs::create_dir_all(&files).unwrap();
         std::fs::write(files.join("notes.txt"), b"unified-local-marker").unwrap();
 
-        let vfs = Arc::new(
-            Vfs::from_config(VfsConfig {
-                mounts: vec![MountSpec {
-                    prefix: "/notion".into(),
-                    provider: ProviderConfig::Notion(NotionConfig { api_key }),
-                }],
-            })
-            .expect("build vfs"),
-        );
-        // Pick a real page dir to target (host-side lookup on the raw Vfs).
-        let (res, vp) = vfs.route("/notion/pages").expect("route /notion/pages");
-        let entries = res.readdir(&vp).await.expect("readdir pages");
+        let config = FsConfig {
+            local_root: None,
+            mounts: vec![MountSpec {
+                prefix: "/notion".into(),
+                provider: ProviderConfig::Notion(NotionConfig { api_key }),
+            }],
+        };
+        let ws_fs =
+            crate::state::workspace_fs(data_root.path(), wid, config).expect("workspace fs");
+        // Pick a real page dir to target (host-side lookup via the unified fs).
+        let entries = ::workspace::ForwardFs::readdir(&ws_fs, "/notion/pages")
+            .await
+            .expect("readdir pages");
         let page = entries
             .first()
             .expect("no Notion pages shared with this integration")
             .name
             .clone();
         println!("target page dir: {page}");
-
-        let ws_fs =
-            crate::state::workspace_fs(data_root.path(), wid, Some(vfs.clone()));
         let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(ws_fs);
 
         let mut sandbox = SandboxBuilder::new()
@@ -312,14 +321,23 @@ done
             .exec_shell("ls -la /mnt/workspace 2>&1".to_string(), Some(30))
             .await
             .expect("ls");
-        println!("--- guest: ls /mnt/workspace (exit {}) ---\n{}", ls.exit_code, ls.stdout);
+        println!(
+            "--- guest: ls /mnt/workspace (exit {}) ---\n{}",
+            ls.exit_code, ls.stdout
+        );
 
         // Local workspace file (under files/), read from inside the guest via FUSE.
         let local = console
-            .exec_shell("cat /mnt/workspace/files/notes.txt 2>&1".to_string(), Some(30))
+            .exec_shell(
+                "cat /mnt/workspace/files/notes.txt 2>&1".to_string(),
+                Some(30),
+            )
             .await
             .expect("cat local");
-        println!("--- guest: cat files/notes.txt (exit {}) ---\n{}", local.exit_code, local.stdout);
+        println!(
+            "--- guest: cat files/notes.txt (exit {}) ---\n{}",
+            local.exit_code, local.stdout
+        );
 
         // Notion page, under the same mount.
         let notion = console
@@ -337,16 +355,23 @@ done
 
         let _ = sandbox.stop().await;
 
-        assert_eq!(local.exit_code, 0, "guest failed to read local file: {}", local.stderr);
+        assert_eq!(
+            local.exit_code, 0,
+            "guest failed to read local file: {}",
+            local.stderr
+        );
         assert!(
             local.stdout.contains("unified-local-marker"),
             "guest did not read the local workspace file through the unified mount"
         );
-        assert_eq!(notion.exit_code, 0, "guest failed to read notion page: {}", notion.stderr);
+        assert_eq!(
+            notion.exit_code, 0,
+            "guest failed to read notion page: {}",
+            notion.stderr
+        );
         assert!(
             notion.stdout.contains("\"page_id\""),
             "guest did not read a Notion page.json through the unified mount"
         );
     }
-
 }

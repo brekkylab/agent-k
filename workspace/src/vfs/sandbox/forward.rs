@@ -14,10 +14,9 @@ use crate::vfs::sandbox::ForwardFs;
 /// requests must carry the session token in the `x-vfs-token` header. Aborts on
 /// drop.
 ///
-/// The served filesystem is any [`ForwardFs`]: a provider-only
-/// [`Vfs`](crate::vfs::Vfs) or the unified `WorkspaceFs` (local files + provider
-/// mounts). The server itself is filesystem-agnostic — it just adapts the HTTP
-/// routes onto the trait.
+/// The served filesystem is any [`ForwardFs`] — in practice the unified
+/// `WorkspaceFs` (local files + provider mounts). The server itself is
+/// filesystem-agnostic — it just adapts the HTTP routes onto the trait.
 ///
 /// Routes: `GET /readdir|/stat|/read?path=…[&offset=&size=]`, `PUT /write?path=…`,
 /// `DELETE /unlink?path=…`, `POST /mkdir?path=…`, `DELETE /rmdir?path=…`,
@@ -26,20 +25,20 @@ use crate::vfs::sandbox::ForwardFs;
 /// Vendored from ailoy's `src/vfs/sandbox/forward.rs` (61c4c43). Changes: the
 /// per-run token is a `uuid` v4 (agent-k already depends on `uuid`) instead of
 /// `getrandom` + `hex`; and the server is generic over [`ForwardFs`] rather than
-/// bound to `Vfs`, so it can also serve the unified workspace tree.
-pub struct VfsForward {
+/// bound to one filesystem type, so it can also serve the unified workspace tree.
+pub struct ForwardServer {
     addr: SocketAddr,
     token: String,
     task: JoinHandle<()>,
 }
 
-impl Drop for VfsForward {
+impl Drop for ForwardServer {
     fn drop(&mut self) {
         self.task.abort();
     }
 }
 
-impl VfsForward {
+impl ForwardServer {
     pub fn spawn(fs: Arc<dyn ForwardFs>, rt: &Handle) -> anyhow::Result<Self> {
         let listener = std::net::TcpListener::bind(("0.0.0.0", 0))?;
         listener.set_nonblocking(true)?;
