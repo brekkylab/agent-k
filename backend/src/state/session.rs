@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
     message::{Message, Part, Role},
-    runenv::{Machine as _, Sandbox},
+    runenv::{Machine as _, Sandbox, SandboxNetwork},
 };
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt as _;
@@ -319,13 +319,20 @@ impl SessionsState {
 
             let result: anyhow::Result<()> = async {
                 // Setup — spec, history, sandbox.
-                let row = sqlx::query("SELECT spec, runenv FROM sessions WHERE id = ?")
-                    .bind(&session_key)
-                    .fetch_optional(&db)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("session {id} not found"))?;
+                let row =
+                    sqlx::query("SELECT workspace_id, spec, runenv FROM sessions WHERE id = ?")
+                        .bind(&session_key)
+                        .fetch_optional(&db)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("session {id} not found"))?;
+                let workspace_id =
+                    parse_uuid(row.get::<String, _>("workspace_id"), "sessions.workspace_id")?;
                 let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
                 let has_runenv: bool = row.get("runenv");
+
+                // The workspace's external-provider mounts, if any. Mounted into
+                // the guest below so the agent reads them as files.
+                let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
 
                 let runenv = if has_runenv {
                     if !tokio::fs::try_exists(&archive_path).await? {
@@ -334,11 +341,41 @@ impl SessionsState {
                             archive_path.display()
                         );
                     }
-                    Some(Arc::new(Mutex::new(
-                        Sandbox::try_from_archive(&archive_path).await?,
-                    )))
+                    // A runenv always runs an in-guest FUSE forwarder (the
+                    // unified workspace mount, below), which reaches the host
+                    // forward server via host.microsandbox.internal and so needs
+                    // guest->host egress. The archive doesn't carry the network
+                    // policy, so re-apply it on restore.
+                    let sandbox =
+                        Sandbox::try_from_archive_with_network(&archive_path, SandboxNetwork::Public).await?;
+                    Some(Arc::new(Mutex::new(sandbox)))
                 } else {
                     None
+                };
+
+                // Mount the unified workspace tree into the guest before the
+                // agent runs — local files under `files/` plus the provider
+                // mounts as siblings, the browser-WebDAV view served over FUSE
+                // at /mnt/workspace. The forward server is held for the whole
+                // run; dropping it (at the end of this scope) tears the mount
+                // down.
+                let _vfs_forward = match &runenv {
+                    Some(r) => {
+                        let mut sandbox = r.lock().await;
+                        let console = sandbox.start().await?;
+                        let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(
+                            crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
+                        );
+                        Some(
+                            crate::sandbox_fs::mount_vfs_in_guest(
+                                console,
+                                unified,
+                                "/mnt/workspace",
+                            )
+                            .await?,
+                        )
+                    }
+                    None => None,
                 };
 
                 let rows = sqlx::query(
