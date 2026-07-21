@@ -530,24 +530,6 @@ impl Resource for GmailResource {
         }
     }
 
-    /// `rm <…>.gmail.json` moves the message to Trash.
-    async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
-        let seg = segments(path);
-        match seg.as_slice() {
-            [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
-                let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
-                self.accessor.trash(&id).await?;
-                self.msg_cache.lock().await.remove(&id);
-                self.id_date.lock().await.remove(&id);
-                // The label indexes now list a trashed message; drop them so the
-                // next `ls` rebuilds without it (and it appears under TRASH).
-                self.date_index.lock().await.clear();
-                Ok(())
-            }
-            _ => Err(ResourceError::Unsupported),
-        }
-    }
-
     async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
         let v: Value = serde_json::from_slice(body)
             .map_err(|e| ResourceError::Backend(anyhow::anyhow!("gmail {name}: invalid JSON: {e}")))?;
@@ -1048,7 +1030,7 @@ fn slice(data: Vec<u8>, range: Option<std::ops::Range<u64>>) -> Vec<u8> {
 }
 
 const GMAIL_PROMPT: &str = "\
-Gmail (read + trash on delete). Layout:
+Gmail (read-only). Layout:
   <label>/<yyyy>/<mm>/<subject>__<message-id>.gmail.json   # the email (JSON)
   <label>/<yyyy>/<mm>/<subject>__<message-id>/<filename>   # attachments (only if any)
 
@@ -1063,9 +1045,7 @@ Gmail (read + trash on delete). Layout:
      \"subject\",\"date\",\"body_text\",\"snippet\",\"labels\":[…],
      \"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
   The sibling dir (same name without .gmail.json) holds attachment bytes; cat a
-  file inside to download it. ENOENT there means the message has no attachments.
-
-  rm <…>.gmail.json    moves the message to Trash (only .gmail.json is removable).";
+  file inside to download it. ENOENT there means the message has no attachments.";
 
 #[cfg(test)]
 mod tests {

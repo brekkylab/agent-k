@@ -52,13 +52,11 @@ pub enum ProviderSpec {
     },
     /// Gmail via Google OAuth.
     ///
-    /// Scope: request `https://www.googleapis.com/auth/gmail.modify` at consent.
-    /// It covers everything this provider does or would do — read (list/get/full/
-    /// attachments/labels), trash, and even send if that's wired later — and only
-    /// omits permanent delete (`messages.delete`), which we don't use (we trash).
-    /// NOT `gmail.metadata` (forbids `q=`/`format=full`); `mail.google.com` is
-    /// over-broad. Consent must use `access_type=offline` + `prompt=consent` so
-    /// Google actually returns a refresh token.
+    /// Scope: request `https://www.googleapis.com/auth/gmail.readonly` at consent
+    /// — the mount is read-only (list/get/full/attachments/labels), so this is
+    /// least-privilege. NOT `gmail.metadata` (forbids `q=`/`format=full`).
+    /// Consent must use `access_type=offline` + `prompt=consent` so Google
+    /// actually returns a refresh token.
     ///
     /// The frontend runs the OAuth consent and sends only the authorization
     /// `code` (+ the `redirect_uri` used at consent). The backend exchanges it

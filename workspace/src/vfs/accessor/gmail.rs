@@ -154,8 +154,8 @@ pub struct GmailConfig {
 }
 
 /// Holds Google OAuth credentials (one refresh token) and a cached access
-/// token. A Gmail mount needs a token whose scope covers Gmail (e.g.
-/// `https://www.googleapis.com/auth/gmail.modify`).
+/// token. A Gmail mount is read-only, so the token needs
+/// `https://www.googleapis.com/auth/gmail.readonly`.
 pub struct GmailAccessor {
     client: reqwest::Client,
     config: GmailConfig,
