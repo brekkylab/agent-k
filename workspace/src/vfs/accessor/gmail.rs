@@ -229,6 +229,26 @@ impl GmailAccessor {
         &self,
         build: impl Fn(&str) -> reqwest::RequestBuilder,
     ) -> anyhow::Result<reqwest::Response> {
+        self.send_with_refresh_inner(build, true).await
+    }
+
+    /// [`Self::send_with_refresh`] minus the 5xx retry, for non-idempotent
+    /// calls (`messages.send`): a 5xx can arrive after Gmail has already
+    /// accepted the send, so a blind retry risks duplicating the email. A 429
+    /// still retries (a rate-limited request is rejected before it executes),
+    /// as does the 401 refresh-once (a failed-auth request never executed).
+    async fn send_nonidempotent(
+        &self,
+        build: impl Fn(&str) -> reqwest::RequestBuilder,
+    ) -> anyhow::Result<reqwest::Response> {
+        self.send_with_refresh_inner(build, false).await
+    }
+
+    async fn send_with_refresh_inner(
+        &self,
+        build: impl Fn(&str) -> reqwest::RequestBuilder,
+        retry_5xx: bool,
+    ) -> anyhow::Result<reqwest::Response> {
         let mut token = self.token().await?;
         let mut refreshed = false;
         let mut retries = 0u32;
@@ -241,8 +261,8 @@ impl GmailAccessor {
                 refreshed = true;
                 continue;
             }
-            let retryable =
-                status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+            let retryable = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || (retry_5xx && status.is_server_error());
             if retryable && retries < MAX_RETRIES {
                 // An explicit Retry-After wins (capped so the agent isn't blocked
                 // too long); otherwise exponential backoff with jitter.
@@ -477,6 +497,9 @@ impl GmailAccessor {
     }
 
     /// Send a raw (base64url) RFC-2822 message, optionally within a thread.
+    /// Non-idempotent — `messages.send` may have queued the mail even when the
+    /// response is a 5xx — so this rides [`Self::send_nonidempotent`], never
+    /// the 5xx-retrying path (a blind retry could duplicate the email).
     pub async fn send_raw(&self, raw_b64: &str, thread_id: Option<&str>) -> anyhow::Result<Value> {
         let mut body = serde_json::json!({ "raw": raw_b64 });
         if let Some(tid) = thread_id {
@@ -484,7 +507,7 @@ impl GmailAccessor {
         }
         let url = format!("{GMAIL_API_BASE}/users/me/messages/send");
         let resp = self
-            .send_with_refresh(|t| self.client.post(&url).bearer_auth(t).json(&body))
+            .send_nonidempotent(|t| self.client.post(&url).bearer_auth(t).json(&body))
             .await?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
