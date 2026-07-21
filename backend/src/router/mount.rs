@@ -58,6 +58,10 @@ pub enum ProviderSpec {
     /// Consent must use `access_type=offline` + `prompt=consent` so Google
     /// actually returns a refresh token.
     ///
+    /// The provider keeps dormant write paths (trash-on-rm, send/reply/forward
+    /// commands) that today just 403 under this scope; switching consent to
+    /// `gmail.modify` later activates them without further code changes.
+    ///
     /// The frontend runs the OAuth consent and sends only the authorization
     /// `code` (+ the `redirect_uri` used at consent). The backend exchanges it
     /// server-side with the app's config-held client credentials

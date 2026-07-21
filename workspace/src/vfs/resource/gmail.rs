@@ -170,6 +170,11 @@ impl MsgCache {
             self.map.remove(&victim);
         }
     }
+
+    /// Drop one id (a mutation — trash — made its cached body stale).
+    fn remove(&mut self, id: &str) {
+        self.map.remove(id);
+    }
 }
 
 impl GmailResource {
@@ -657,6 +662,33 @@ impl Resource for GmailResource {
         }
     }
 
+    /// `rm <…>.gmail.json` moves the message to Trash. Dormant today: the
+    /// mount is provisioned read-only (`gmail.readonly` — see the backend
+    /// mount router), so Gmail rejects the trash call with 403. Kept so `rm`
+    /// works unchanged once a write scope (`gmail.modify`) is granted at
+    /// consent.
+    async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
+        let seg = segments(path);
+        match seg.as_slice() {
+            [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
+                let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
+                self.accessor.trash(&id).await?;
+                self.msg_cache.lock().await.remove(&id);
+                self.id_date.lock().await.remove(&id);
+                // The label indexes now list a trashed message; drop them so the
+                // next `ls` rebuilds without it (and it appears under TRASH).
+                self.date_index.lock().await.clear();
+                Ok(())
+            }
+            _ => Err(ResourceError::Unsupported),
+        }
+    }
+
+    /// Domain write commands (`send` / `reply` / `reply-all` / `forward`),
+    /// designed to hang off the (not yet wired) `.cmd/` control path. Dormant
+    /// today for the same reason as [`Self::unlink`] — the read-only
+    /// `gmail.readonly` provisioning 403s them — but kept for the planned
+    /// write-scoped flow rather than removed.
     async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
         let v: Value = serde_json::from_slice(body).map_err(|e| {
             ResourceError::Backend(anyhow::anyhow!("gmail {name}: invalid JSON: {e}"))
