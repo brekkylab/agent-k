@@ -19,6 +19,10 @@ const LABEL_TTL: Duration = Duration::from_secs(60);
 /// Raw-message cache TTL — dedups the per-message fetches that readdir, stat,
 /// read, and unlink all need for the same id.
 const MSG_TTL: Duration = Duration::from_secs(30);
+/// Max entries in `msg_cache`. Each is a full message JSON, so an unbounded
+/// cache would grow without limit during a large scan (`grep`); past this,
+/// entries are evicted oldest-first (which is also expired-first).
+const MSG_CACHE_MAX: usize = 2048;
 /// Concurrency for the per-message fetches a directory listing fans out.
 const FETCH_CONCURRENCY: usize = 6;
 /// TTL for a label's date→ids index. The index is a full label scan, so it's
@@ -43,7 +47,6 @@ const MAX_INDEX_MESSAGES: usize = 5_000;
 /// return the real bytes then empty at EOF. Attachments report their exact size
 /// (known from the part).
 const MSG_SENTINEL_SIZE: u64 = 16 * 1024 * 1024;
-
 const GMAIL_SUFFIX: &str = ".gmail.json";
 
 /// Attachment-bytes cache TTL. The attachments endpoint has no ranged fetch,
@@ -69,8 +72,8 @@ pub struct GmailResource {
     accessor: GmailAccessor,
     /// `(display_name, label_id)` for every label, cached briefly.
     label_cache: tokio::sync::Mutex<Option<(Instant, LabelList)>>,
-    /// Full raw message JSON by id, cached briefly.
-    msg_cache: tokio::sync::Mutex<HashMap<String, (Instant, Value)>>,
+    /// Full raw message JSON by id, cached briefly and bounded ([`MsgCache`]).
+    msg_cache: tokio::sync::Mutex<MsgCache>,
     /// Per-label "date → message ids" index, built by one full label scan and
     /// cached ([`INDEX_TTL`]) so every `ls` under the label — and `find` — shares
     /// that scan instead of re-listing per date. Invalidated on a mutation.
@@ -116,7 +119,10 @@ impl AttCache {
     /// Insert, then bring the cache back under [`ATT_CACHE_BUDGET`]: drop
     /// expired entries first, then the oldest, never the one just inserted.
     fn put(&mut self, key: AttKey, bytes: std::sync::Arc<Vec<u8>>) {
-        if let Some((_, old)) = self.map.insert(key.clone(), (Instant::now(), bytes.clone())) {
+        if let Some((_, old)) = self
+            .map
+            .insert(key.clone(), (Instant::now(), bytes.clone()))
+        {
             self.total -= old.len() as u64;
         }
         self.total += bytes.len() as u64;
@@ -135,12 +141,43 @@ impl AttCache {
     }
 }
 
+/// Full-message-JSON cache, bounded to [`MSG_CACHE_MAX`] entries (evict
+/// oldest-first) so a large scan can't grow it without limit. `get` honors
+/// [`MSG_TTL`]; entries are immutable message bodies, so the TTL only bounds
+/// staleness after a mutation elsewhere.
+#[derive(Default)]
+struct MsgCache {
+    map: HashMap<String, (Instant, Value)>,
+}
+
+impl MsgCache {
+    fn get(&self, id: &str) -> Option<Value> {
+        self.map
+            .get(id)
+            .filter(|(at, _)| at.elapsed() < MSG_TTL)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn put(&mut self, id: String, v: Value) {
+        self.map.insert(id, (Instant::now(), v));
+        while self.map.len() > MSG_CACHE_MAX {
+            let victim = self
+                .map
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone());
+            let Some(victim) = victim else { break };
+            self.map.remove(&victim);
+        }
+    }
+}
+
 impl GmailResource {
     pub fn new(config: &GmailConfig) -> anyhow::Result<Self> {
         Ok(Self {
             accessor: GmailAccessor::new(config)?,
             label_cache: tokio::sync::Mutex::new(None),
-            msg_cache: tokio::sync::Mutex::new(HashMap::new()),
+            msg_cache: tokio::sync::Mutex::new(MsgCache::default()),
             date_index: tokio::sync::Mutex::new(HashMap::new()),
             id_date: tokio::sync::Mutex::new(HashMap::new()),
             seq_scan: tokio::sync::Mutex::new(None),
@@ -194,19 +231,11 @@ impl GmailResource {
     // ---- message fetch (cached) ------------------------------------------
 
     async fn message_full(&self, id: &str) -> anyhow::Result<Value> {
-        {
-            let c = self.msg_cache.lock().await;
-            if let Some((at, v)) = c.get(id)
-                && at.elapsed() < MSG_TTL
-            {
-                return Ok(v.clone());
-            }
+        if let Some(v) = self.msg_cache.lock().await.get(id) {
+            return Ok(v);
         }
         let v = self.accessor.get_message_full(id).await?;
-        self.msg_cache
-            .lock()
-            .await
-            .insert(id.to_string(), (Instant::now(), v.clone()));
+        self.msg_cache.lock().await.put(id.to_string(), v.clone());
         Ok(v)
     }
 
@@ -263,7 +292,7 @@ impl GmailResource {
         let mut cache = self.msg_cache.lock().await;
         for v in &raws {
             if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                cache.insert(id.to_string(), (Instant::now(), v.clone()));
+                cache.put(id.to_string(), v.clone());
             }
         }
         raws
@@ -279,8 +308,8 @@ impl GmailResource {
             let cache = self.msg_cache.lock().await;
             for id in ids {
                 match cache.get(id) {
-                    Some((at, v)) if at.elapsed() < MSG_TTL => out.push(v.clone()),
-                    _ => missing.push(id.clone()),
+                    Some(v) => out.push(v),
+                    None => missing.push(id.clone()),
                 }
             }
         }
@@ -394,7 +423,11 @@ impl GmailResource {
         // keys are `yyyy-mm-dd` sorted ascending, so equal years are adjacent.
         let mut years: Vec<&str> = index.keys().map(|d| &d[..4]).collect();
         years.dedup();
-        Ok(years.into_iter().rev().map(|y| dir_entry(y.to_string())).collect())
+        Ok(years
+            .into_iter()
+            .rev()
+            .map(|y| dir_entry(y.to_string()))
+            .collect())
     }
 
     /// Month dirs (`mm`) present under `<label>/<yyyy>`, newest-first.
@@ -542,7 +575,10 @@ impl Resource for GmailResource {
         match seg.as_slice() {
             [] => self.readdir_labels().await.map_err(ResourceError::from),
             [label] => self.readdir_years(label).await.map_err(ResourceError::from),
-            [label, year] => self.readdir_months(label, year).await.map_err(ResourceError::from),
+            [label, year] => self
+                .readdir_months(label, year)
+                .await
+                .map_err(ResourceError::from),
             [label, year, month] => self
                 .readdir_messages(label, year, month)
                 .await
@@ -615,8 +651,9 @@ impl Resource for GmailResource {
     }
 
     async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
-        let v: Value = serde_json::from_slice(body)
-            .map_err(|e| ResourceError::Backend(anyhow::anyhow!("gmail {name}: invalid JSON: {e}")))?;
+        let v: Value = serde_json::from_slice(body).map_err(|e| {
+            ResourceError::Backend(anyhow::anyhow!("gmail {name}: invalid JSON: {e}"))
+        })?;
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
         let result = match name {
             "send" => {
@@ -672,8 +709,9 @@ impl Resource for GmailResource {
                 let mid = s("message_id").ok_or_else(|| {
                     ResourceError::Backend(anyhow::anyhow!("forward: missing message_id"))
                 })?;
-                let to = s("to")
-                    .ok_or_else(|| ResourceError::Backend(anyhow::anyhow!("forward: missing to")))?;
+                let to = s("to").ok_or_else(|| {
+                    ResourceError::Backend(anyhow::anyhow!("forward: missing to"))
+                })?;
                 let raw_msg = self.message_full(&mid).await?;
                 let p = process_message(&raw_msg);
                 let mut subject = p
@@ -742,7 +780,6 @@ fn id_from_name(name: &str) -> String {
         .unwrap_or(name)
         .to_string()
 }
-
 
 fn msg_filename(subject: &str, id: &str) -> String {
     format!("{}__{id}{GMAIL_SUFFIX}", sanitize(subject))
@@ -1186,7 +1223,10 @@ mod tests {
         // A single over-budget entry is kept (never evict the just-inserted).
         let mut solo = AttCache::default();
         let k = ("m".to_string(), "x".to_string());
-        solo.put(k.clone(), std::sync::Arc::new(vec![0; (ATT_CACHE_BUDGET + 1) as usize]));
+        solo.put(
+            k.clone(),
+            std::sync::Arc::new(vec![0; (ATT_CACHE_BUDGET + 1) as usize]),
+        );
         assert!(solo.get(&k).is_some());
     }
 
