@@ -46,6 +46,18 @@ const MSG_SENTINEL_SIZE: u64 = 16 * 1024 * 1024;
 
 const GMAIL_SUFFIX: &str = ".gmail.json";
 
+/// Attachment-bytes cache TTL. The attachments endpoint has no ranged fetch,
+/// so without this every FUSE chunk read of one file re-downloads the whole
+/// attachment (~200 full downloads to `cat` a 25 MB file). 30s absorbs the
+/// chunk sequence of a single read plus near-term re-reads (grep then cat);
+/// the bytes are immutable, so a longer TTL would also be correct — the cap
+/// only bounds memory.
+const ATT_TTL: Duration = Duration::from_secs(30);
+/// Total-bytes budget for cached attachments. Unlike message JSON (small),
+/// attachments run to ~25 MB each, so the cache evicts (expired first, then
+/// oldest) to stay under this.
+const ATT_CACHE_BUDGET: u64 = 128 * 1024 * 1024;
+
 /// `(display_name, label_id)` pairs for every Gmail label.
 type LabelList = Vec<(String, String)>;
 
@@ -73,6 +85,54 @@ pub struct GmailResource {
     /// then — `(label, last access, consecutive count, already-prefetched)`. A
     /// targeted browse (single date) stays at count 1 and never prefetches.
     seq_scan: tokio::sync::Mutex<Option<(String, Instant, u32, bool)>>,
+    /// Whole-attachment bytes, briefly cached ([`ATT_TTL`], [`ATT_CACHE_BUDGET`])
+    /// so the chunked reads of one file don't each re-download it. Keyed by
+    /// `(message id, filename)` — *not* the attachment id, which Gmail does not
+    /// keep stable across `messages.get` calls; the message is immutable, so
+    /// filename → content is.
+    att_cache: tokio::sync::Mutex<AttCache>,
+}
+
+/// Attachment-cache key: `(message id, filename)`.
+type AttKey = (String, String);
+/// Cached attachment bytes plus their fetch time.
+type AttEntry = (Instant, std::sync::Arc<Vec<u8>>);
+
+/// See [`GmailResource::att_cache`].
+#[derive(Default)]
+struct AttCache {
+    map: HashMap<AttKey, AttEntry>,
+    total: u64,
+}
+
+impl AttCache {
+    fn get(&self, key: &AttKey) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.map
+            .get(key)
+            .filter(|(at, _)| at.elapsed() < ATT_TTL)
+            .map(|(_, v)| v.clone())
+    }
+
+    /// Insert, then bring the cache back under [`ATT_CACHE_BUDGET`]: drop
+    /// expired entries first, then the oldest, never the one just inserted.
+    fn put(&mut self, key: AttKey, bytes: std::sync::Arc<Vec<u8>>) {
+        if let Some((_, old)) = self.map.insert(key.clone(), (Instant::now(), bytes.clone())) {
+            self.total -= old.len() as u64;
+        }
+        self.total += bytes.len() as u64;
+        while self.total > ATT_CACHE_BUDGET && self.map.len() > 1 {
+            let victim = self
+                .map
+                .iter()
+                .filter(|(k, _)| **k != key)
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone());
+            let Some(victim) = victim else { break };
+            if let Some((_, v)) = self.map.remove(&victim) {
+                self.total -= v.len() as u64;
+            }
+        }
+    }
 }
 
 impl GmailResource {
@@ -84,6 +144,7 @@ impl GmailResource {
             date_index: tokio::sync::Mutex::new(HashMap::new()),
             id_date: tokio::sync::Mutex::new(HashMap::new()),
             seq_scan: tokio::sync::Mutex::new(None),
+            att_cache: tokio::sync::Mutex::new(AttCache::default()),
         })
     }
 
@@ -147,6 +208,25 @@ impl GmailResource {
             .await
             .insert(id.to_string(), (Instant::now(), v.clone()));
         Ok(v)
+    }
+
+    /// Whole bytes of one attachment, served from [`Self::att_cache`] while
+    /// fresh — the ranged reads a guest `cat`/`grep` issues each re-enter here,
+    /// and the API only serves whole attachments, so without the cache every
+    /// chunk would re-download the file.
+    async fn attachment_bytes(
+        &self,
+        msg_id: &str,
+        attachment_id: &str,
+        filename: &str,
+    ) -> anyhow::Result<std::sync::Arc<Vec<u8>>> {
+        let key = (msg_id.to_string(), filename.to_string());
+        if let Some(bytes) = self.att_cache.lock().await.get(&key) {
+            return Ok(bytes);
+        }
+        let bytes = std::sync::Arc::new(self.accessor.get_attachment(msg_id, attachment_id).await?);
+        self.att_cache.lock().await.put(key, bytes.clone());
+        Ok(bytes)
     }
 
     /// Fetch messages by id in one batch request (`format` = "full"/"minimal"),
@@ -431,6 +511,7 @@ impl Resource for GmailResource {
                 serde_json::to_vec(&process_message(&raw))?
             }
             // <label>/<yyyy>/<mm>/<subject>__<id>/<filename> -> attachment bytes
+            // (cached whole; only the requested range is copied out)
             [_label, _year, _month, dir, fname] => {
                 let id = id_from_name(dir);
                 let raw = self.message_full(&id).await?;
@@ -438,9 +519,10 @@ impl Resource for GmailResource {
                     .into_iter()
                     .find(|a| &a.filename == fname)
                     .ok_or(ResourceError::NotFound)?;
-                self.accessor
-                    .get_attachment(&id, &att.attachment_id)
-                    .await?
+                let bytes = self
+                    .attachment_bytes(&id, &att.attachment_id, &att.filename)
+                    .await?;
+                return Ok(slice_ref(&bytes, range));
             }
             _ => return Err(ResourceError::NotFound),
         };
@@ -1029,6 +1111,19 @@ fn slice(data: Vec<u8>, range: Option<std::ops::Range<u64>>) -> Vec<u8> {
     }
 }
 
+/// [`slice`] over borrowed bytes (cached attachments stay in the cache; only
+/// the requested window is copied out).
+fn slice_ref(data: &[u8], range: Option<std::ops::Range<u64>>) -> Vec<u8> {
+    match range {
+        Some(r) => {
+            let start = (r.start as usize).min(data.len());
+            let end = (r.end as usize).min(data.len());
+            data[start..end].to_vec()
+        }
+        None => data.to_vec(),
+    }
+}
+
 const GMAIL_PROMPT: &str = "\
 Gmail (read-only). Layout:
   <label>/<yyyy>/<mm>/<subject>__<message-id>.gmail.json   # the email (JSON)
@@ -1052,6 +1147,55 @@ mod tests {
     use base64::Engine as _;
 
     use super::*;
+
+    #[test]
+    fn att_cache_serves_fresh_and_expires_stale() {
+        let key = ("m1".to_string(), "a.pdf".to_string());
+        let mut c = AttCache::default();
+        c.put(key.clone(), std::sync::Arc::new(vec![1, 2, 3]));
+        assert_eq!(c.get(&key).unwrap().as_slice(), &[1, 2, 3]);
+        // Backdate the entry past the TTL: no longer served.
+        if let Some(stale) = Instant::now().checked_sub(ATT_TTL + Duration::from_secs(1)) {
+            c.map.get_mut(&key).unwrap().0 = stale;
+            assert!(c.get(&key).is_none());
+        }
+        // Re-putting the same key replaces (total stays consistent).
+        c.put(key.clone(), std::sync::Arc::new(vec![9; 5]));
+        assert_eq!(c.total, 5);
+    }
+
+    #[test]
+    fn att_cache_evicts_oldest_over_budget_but_not_newest() {
+        let mut c = AttCache::default();
+        let big = (ATT_CACHE_BUDGET / 2 + 1) as usize;
+        let k1 = ("m1".to_string(), "a".to_string());
+        let k2 = ("m2".to_string(), "b".to_string());
+        c.put(k1.clone(), std::sync::Arc::new(vec![0; big]));
+        // Make k1 strictly older so eviction order is deterministic.
+        if let Some(older) = Instant::now().checked_sub(Duration::from_secs(1)) {
+            c.map.get_mut(&k1).unwrap().0 = older;
+        }
+        // Two halves exceed the budget: the older k1 is evicted, k2 survives.
+        c.put(k2.clone(), std::sync::Arc::new(vec![0; big]));
+        assert!(c.get(&k1).is_none());
+        assert!(c.get(&k2).is_some());
+        assert_eq!(c.total, big as u64);
+        // A single over-budget entry is kept (never evict the just-inserted).
+        let mut solo = AttCache::default();
+        let k = ("m".to_string(), "x".to_string());
+        solo.put(k.clone(), std::sync::Arc::new(vec![0; (ATT_CACHE_BUDGET + 1) as usize]));
+        assert!(solo.get(&k).is_some());
+    }
+
+    #[test]
+    fn slice_ref_windows_and_clamps() {
+        let data = [1u8, 2, 3, 4, 5];
+        assert_eq!(slice_ref(&data, None), vec![1, 2, 3, 4, 5]);
+        assert_eq!(slice_ref(&data, Some(1..3)), vec![2, 3]);
+        // Out-of-bounds range clamps instead of panicking.
+        assert_eq!(slice_ref(&data, Some(3..99)), vec![4, 5]);
+        assert!(slice_ref(&data, Some(9..12)).is_empty());
+    }
 
     #[test]
     fn sanitize_subject_rules() {
