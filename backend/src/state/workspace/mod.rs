@@ -1,11 +1,13 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ::workspace::{FsConfig, FsEvent, FsHook, WorkspaceFs};
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
 
+use super::knowledge::Resyncer;
 use super::{StateError, StateResult, User, parse_ts, parse_uuid};
 
 mod mount;
@@ -72,11 +74,63 @@ impl Workspace {
 pub struct WorkspacesState {
     db: SqlitePool,
     data_root: PathBuf,
+    /// Per-workspace assembled [`WorkspaceFs`], cached so provider clients and
+    /// their metadata `CachedResource` survive across requests instead of being
+    /// rebuilt each [`Self::get_fs`]. Cloning shares the mounts' `Arc<Resource>`,
+    /// so cache hits reuse the same caches. Evicted on mount change or removal.
+    fs_cache: Mutex<HashMap<Uuid, WorkspaceFs>>,
+    /// Knowledge resync engine, shared into every [`WorkspaceFs`] this hands out
+    /// (so `/files/knowledge` writes trigger a resync) and reused by the router
+    /// and periodic sweep.
+    resyncer: Resyncer,
 }
 
 impl WorkspacesState {
     pub fn new(db: SqlitePool, data_root: PathBuf) -> Self {
-        Self { db, data_root }
+        let resyncer = Resyncer::new(db.clone(), data_root.clone());
+        Self {
+            db,
+            data_root,
+            fs_cache: Mutex::new(HashMap::new()),
+            resyncer,
+        }
+    }
+
+    /// The workspace's assembled [`WorkspaceFs`], built once and cached (see
+    /// [`Self::fs_cache`]). The returned handle shares the cached mounts.
+    async fn fs_for(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
+        if let Some(fs) = self.fs_cache.lock().unwrap().get(&wid).cloned() {
+            return Ok(fs);
+        }
+        // Build outside the lock; a concurrent miss builds twice, first wins.
+        let built = self.build_fs(wid).await?;
+        Ok(self
+            .fs_cache
+            .lock()
+            .unwrap()
+            .entry(wid)
+            .or_insert(built)
+            .clone())
+    }
+
+    /// Evict `wid`'s cached [`WorkspaceFs`] so the next [`Self::get_fs`] rebuilds it.
+    pub(super) fn invalidate_fs(&self, wid: Uuid) {
+        self.fs_cache.lock().unwrap().remove(&wid);
+    }
+
+    /// The workspace knowledge resyncer.
+    pub fn resyncer(&self) -> &Resyncer {
+        &self.resyncer
+    }
+
+    /// Ids of every workspace, for the periodic resync sweep.
+    pub async fn all_ids(&self) -> StateResult<Vec<Uuid>> {
+        let rows = sqlx::query("SELECT id FROM workspaces")
+            .fetch_all(&self.db)
+            .await?;
+        rows.iter()
+            .map(|r| parse_uuid(r.get::<String, _>("id"), "workspaces.id"))
+            .collect()
     }
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Workspace>> {
@@ -129,6 +183,7 @@ impl WorkspacesState {
     /// are handled by the database's foreign keys.
     pub async fn remove(&self, id: Uuid) -> StateResult<Workspace> {
         let existing = self.get(id).await?.ok_or(StateError::NotFound)?;
+        self.invalidate_fs(id);
         self.remove_files(id).await?;
         sqlx::query("DELETE FROM workspaces WHERE id = ?")
             .bind(id.to_string())
@@ -141,6 +196,8 @@ impl WorkspacesState {
     /// database. Idempotent. Deleting files before the rows means a filesystem
     /// failure aborts before anything is removed from the database.
     pub async fn remove_files(&self, id: Uuid) -> StateResult<()> {
+        // Evict the cached knowledge Store before unlinking its on-disk index.
+        self.resyncer.forget(id).await;
         let dir = self.workspace_dir(id);
         if tokio::fs::try_exists(&dir).await? {
             tokio::fs::remove_dir_all(&dir).await?;
@@ -178,9 +235,9 @@ impl WorkspacesState {
     /// workspace's external-provider mounts attached (paths under a mount prefix
     /// route to the provider; everything else stays local).
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
-        // `build_fs` assembles the full mount table (local `/files` + providers).
-        let fs = self.build_fs(wid).await?;
-        Ok(fs.with_hook(knowledge_hook(wid)))
+        // Cached assembly (local `/files` + providers); the hook is per-call.
+        let fs = self.fs_for(wid).await?;
+        Ok(fs.with_hook(knowledge_hook(wid, Some(self.resyncer.clone()))))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root
@@ -196,14 +253,6 @@ impl WorkspacesState {
     }
 }
 
-/// True when a workspace-relative path lives under `knowledge/`. Classification
-/// is the backend's policy, not the `workspace` crate's.
-fn is_knowledge(rel: &str) -> bool {
-    // Local files live under the `/files` mount, so knowledge files are
-    // `files/knowledge/…` in the unified namespace.
-    rel.trim_start_matches('/').starts_with("files/knowledge/")
-}
-
 /// The change hook attached to every [`WorkspaceFs`] this backend builds: it
 /// runs the `knowledge/` side-processing (today just logging; ingestion/indexing
 /// lands later) and ignores everything else.
@@ -211,28 +260,28 @@ struct KnowledgeHook {
     /// The workspace this hook is bound to — the crate is workspace-agnostic, so
     /// the backend carries the DB identity here rather than in `WorkspaceFs`.
     wid: Uuid,
+    /// Resync trigger. `None` for the guest-serving handle (the session run loop
+    /// builds it without one), so guest writes don't auto-resync.
+    resyncer: Option<Resyncer>,
 }
 
 impl FsHook for KnowledgeHook {
     fn on_change(&self, event: FsEvent<'_>) {
-        let wid = self.wid;
-        match event {
-            FsEvent::Created(p) if is_knowledge(p) => {
-                tracing::info!("insert_knowledge (workspace={wid}, path={p})");
+        let touched = match event {
+            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => {
+                super::knowledge::is_under_knowledge(p)
             }
-            FsEvent::Modified(p) if is_knowledge(p) => {
-                tracing::info!("update_knowledge (workspace={wid}, path={p})");
+        };
+        if touched {
+            if let Some(r) = &self.resyncer {
+                r.spawn_resync(self.wid);
             }
-            FsEvent::Removed(p) if is_knowledge(p) => {
-                tracing::info!("remove_knowledge (workspace={wid}, path={p})");
-            }
-            _ => {}
         }
     }
 }
 
-fn knowledge_hook(wid: Uuid) -> Option<Arc<dyn FsHook>> {
-    Some(Arc::new(KnowledgeHook { wid }))
+fn knowledge_hook(wid: Uuid, resyncer: Option<Resyncer>) -> Option<Arc<dyn FsHook>> {
+    Some(Arc::new(KnowledgeHook { wid, resyncer }))
 }
 
 /// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`
@@ -257,7 +306,7 @@ pub(crate) fn workspace_fs(
     config.local_root = Some(root);
     let fs = WorkspaceFs::from_config(config)
         .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
-    Ok(fs.with_hook(knowledge_hook(wid)))
+    Ok(fs.with_hook(knowledge_hook(wid, None)))
 }
 
 #[cfg(test)]

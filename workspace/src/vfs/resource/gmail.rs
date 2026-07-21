@@ -468,6 +468,7 @@ impl GmailResource {
                 atime: None,
                 ctime: None,
                 created: None,
+                etag: None,
             });
             if !attachments(raw).is_empty() {
                 out.push(dir_entry(attach_dir_name(&subject, id)));
@@ -490,6 +491,7 @@ impl GmailResource {
                 atime: None,
                 ctime: None,
                 created: None,
+                etag: None,
             })
             .collect())
     }
@@ -1090,6 +1092,7 @@ fn dir_entry(name: String) -> DirEntry {
         atime: None,
         ctime: None,
         created: None,
+        etag: None,
     }
 }
 

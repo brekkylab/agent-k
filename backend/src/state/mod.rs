@@ -8,11 +8,13 @@ use uuid::Uuid;
 use crate::{auth::JwtConfig, event::EventQueue};
 
 mod agent;
+mod knowledge;
 mod session;
 mod user;
 mod workspace;
 
 pub use agent::*;
+pub use knowledge::*;
 pub use session::*;
 pub use user::*;
 pub use workspace::*;

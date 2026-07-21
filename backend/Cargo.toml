@@ -46,6 +46,7 @@ uuid = { version = "1.18.1", features = ["serde", "v4"] }
 workspace = { path = "../workspace" }
 
 [dev-dependencies]
+async-trait = "0.1"
 http-body-util = "0.1"
 tempfile = "3.23.0"
 tower = { version = "0.5", features = ["util"] }

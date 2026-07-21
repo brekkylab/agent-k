@@ -151,6 +151,7 @@ impl Resource for LocalResource {
                         atime: s.atime,
                         ctime: s.ctime,
                         created: s.created,
+                        etag: None,
                     }
                 }
                 Err(_) => DirEntry {
@@ -161,6 +162,7 @@ impl Resource for LocalResource {
                     atime: None,
                     ctime: None,
                     created: None,
+                    etag: None,
                 },
             };
             out.push(entry);
