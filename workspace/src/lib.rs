@@ -20,6 +20,6 @@ pub use hook::{FsEvent, FsHook};
 pub use vfs::{
     DirEntry as ResourceDirEntry, FileKind, FileStat, ForwardFs, ForwardServer, FsConfig, FwdEntry,
     FwdStat, GmailConfig, GmailResource, LOCAL_MOUNT, LocalResource, Mount, MountPath, MountSpec,
-    NotionConfig, NotionResource, ProviderConfig, Resource, ResourceError, ResourceResult, S3Config,
-    S3Resource,
+    NotionConfig, NotionResource, ProviderConfig, Resource, ResourceError, ResourceResult,
+    S3Config, S3Resource, exchange_gmail_code,
 };

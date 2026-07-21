@@ -25,7 +25,7 @@ pub mod sandbox;
 
 mod mount;
 
-pub use accessor::{GmailConfig, NotionConfig, S3Config};
+pub use accessor::{GmailConfig, NotionConfig, S3Config, exchange_gmail_code};
 pub use error::{ResourceError, ResourceResult};
 pub(crate) use mount::build_mounts;
 pub use mount::{FsConfig, LOCAL_MOUNT, Mount, MountSpec, ProviderConfig};

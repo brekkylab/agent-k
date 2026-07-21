@@ -108,6 +108,44 @@ fn parse_batch_bodies(text: &str) -> Vec<Value> {
     out
 }
 
+/// Exchange an OAuth authorization `code` for a refresh token (confidential
+/// client, server-side). Run at mount-create so the browser never handles the
+/// client secret. Google only returns a refresh token when the consent used
+/// `access_type=offline` + `prompt=consent`.
+pub async fn exchange_gmail_code(
+    client_id: &str,
+    client_secret: &str,
+    code: &str,
+    redirect_uri: &str,
+) -> anyhow::Result<String> {
+    let resp = reqwest::Client::new()
+        .post(OAUTH_TOKEN_URL)
+        .form(&[
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+            ("grant_type", "authorization_code"),
+        ])
+        .send()
+        .await?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("google code exchange {status}: {body}");
+    }
+    let v: Value = serde_json::from_str(&body)?;
+    v.get("refresh_token")
+        .and_then(|t| t.as_str())
+        .map(String::from)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "token response had no refresh_token (consent must use \
+                 access_type=offline + prompt=consent)"
+            )
+        })
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GmailConfig {
     pub client_id: String,

@@ -24,7 +24,7 @@ use ::workspace::{GmailConfig, NotionConfig, ProviderConfig, S3Config};
 
 use crate::{
     auth::AuthUser,
-    state::{AppState, WorkspaceMount},
+    state::{AppState, GoogleOAuth, WorkspaceMount},
 };
 
 use super::{error::ApiError, error::err, workspace::require_owned_workspace};
@@ -50,18 +50,34 @@ pub enum ProviderSpec {
     Notion {
         api_key: String,
     },
-    /// Google OAuth credentials whose scope covers Gmail (e.g.
-    /// `https://www.googleapis.com/auth/gmail.modify`).
+    /// Gmail via Google OAuth.
+    ///
+    /// Scope: request `https://www.googleapis.com/auth/gmail.modify` at consent.
+    /// It covers everything this provider does or would do — read (list/get/full/
+    /// attachments/labels), trash, and even send if that's wired later — and only
+    /// omits permanent delete (`messages.delete`), which we don't use (we trash).
+    /// NOT `gmail.metadata` (forbids `q=`/`format=full`); `mail.google.com` is
+    /// over-broad. Consent must use `access_type=offline` + `prompt=consent` so
+    /// Google actually returns a refresh token.
+    ///
+    /// The frontend runs the OAuth consent and sends only the authorization
+    /// `code` (+ the `redirect_uri` used at consent). The backend exchanges it
+    /// server-side with the app's config-held client credentials
+    /// ([`GoogleOAuth`]) into a refresh token, so the browser never handles the
+    /// client secret.
     Gmail {
-        client_id: String,
-        client_secret: String,
-        refresh_token: String,
+        code: String,
+        redirect_uri: String,
     },
 }
 
-impl From<ProviderSpec> for ProviderConfig {
-    fn from(spec: ProviderSpec) -> Self {
-        match spec {
+impl ProviderSpec {
+    /// Resolve into a live [`ProviderConfig`]. S3/Notion carry their credentials
+    /// directly; Gmail exchanges its authorization `code` for a refresh token
+    /// server-side with the app's [`GoogleOAuth`] client, so the browser never
+    /// handles the client secret.
+    async fn resolve(self, oauth: &GoogleOAuth) -> Result<ProviderConfig, ApiError> {
+        Ok(match self {
             ProviderSpec::S3 {
                 bucket,
                 region,
@@ -78,16 +94,29 @@ impl From<ProviderSpec> for ProviderConfig {
                 key_prefix,
             }),
             ProviderSpec::Notion { api_key } => ProviderConfig::Notion(NotionConfig { api_key }),
-            ProviderSpec::Gmail {
-                client_id,
-                client_secret,
-                refresh_token,
-            } => ProviderConfig::Gmail(GmailConfig {
-                client_id,
-                client_secret,
-                refresh_token,
-            }),
-        }
+            ProviderSpec::Gmail { code, redirect_uri } => {
+                let (client_id, client_secret) = oauth.credentials().ok_or_else(|| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        "Gmail is not configured on this server \
+                         (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)",
+                    )
+                })?;
+                let refresh_token = ::workspace::exchange_gmail_code(
+                    client_id,
+                    client_secret,
+                    &code,
+                    &redirect_uri,
+                )
+                .await
+                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gmail oauth: {e}")))?;
+                ProviderConfig::Gmail(GmailConfig {
+                    client_id: client_id.to_string(),
+                    client_secret: client_secret.to_string(),
+                    refresh_token,
+                })
+            }
+        })
     }
 }
 
@@ -186,7 +215,8 @@ pub(super) async fn create_mount(
     Json(payload): Json<CreateMountRequest>,
 ) -> Result<(StatusCode, Json<MountResponse>), ApiError> {
     require_owned_workspace(&state, &auth, wid).await?;
-    let mount = WorkspaceMount::new(wid, payload.prefix, payload.provider.into());
+    let provider = payload.provider.resolve(&state.google_oauth).await?;
+    let mount = WorkspaceMount::new(wid, payload.prefix, provider);
     let created = state.workspaces.create_mount(mount).await?;
     Ok((StatusCode::CREATED, Json(MountResponse::from(created))))
 }
