@@ -282,6 +282,7 @@ done
 
         let config = FsConfig {
             local_root: None,
+            cache_root: None,
             mounts: vec![MountSpec {
                 prefix: "/notion".into(),
                 provider: ProviderConfig::Notion(NotionConfig { api_key }),

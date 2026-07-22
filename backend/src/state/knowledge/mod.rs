@@ -703,6 +703,7 @@ mod tests {
     fn local_fs(root: &Path) -> WorkspaceFs {
         WorkspaceFs::from_config(FsConfig {
             local_root: Some(root.to_path_buf()),
+            cache_root: None,
             mounts: vec![],
         })
         .unwrap()

@@ -251,6 +251,12 @@ impl WorkspacesState {
     fn workspace_dir(&self, wid: Uuid) -> PathBuf {
         self.data_root.join("workspaces").join(wid.to_string())
     }
+
+    /// Host-side provider cache root (`data_root/cache`) — outside every
+    /// workspace's `files/` tree, so nothing in it is ever mounted to a guest.
+    fn cache_root(&self) -> PathBuf {
+        self.data_root.join("cache")
+    }
 }
 
 /// The change hook attached to every [`WorkspaceFs`] this backend builds: it
@@ -304,6 +310,7 @@ pub(crate) fn workspace_fs(
         .join(wid.to_string())
         .join("files");
     config.local_root = Some(root);
+    config.cache_root = Some(data_root.join("cache"));
     let fs = WorkspaceFs::from_config(config)
         .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
     Ok(fs.with_hook(knowledge_hook(wid, None)))

@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::vfs::{
     accessor::{GmailAccessor, GmailConfig, encode_b64url},
+    disk_cache::{DiskCache, stable_hash},
     error::{ResourceError, ResourceResult},
     path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource},
@@ -71,6 +72,11 @@ const ATT_TTL: Duration = Duration::from_secs(30);
 /// oldest) to stay under this.
 const ATT_CACHE_BUDGET: u64 = 128 * 1024 * 1024;
 
+/// Byte budget for the on-disk message cache ([`DiskCache`]), per account.
+/// Bodies are immutable, so the cache is shared by every session mounting the
+/// same account and only eviction (oldest-first) bounds it.
+const DISK_CACHE_BUDGET: u64 = 10 * 1024 * 1024 * 1024;
+
 /// `(display_name, label_id)` pairs for every Gmail label.
 type LabelList = Vec<(String, String)>;
 
@@ -104,6 +110,11 @@ pub struct GmailResource {
     /// keep stable across `messages.get` calls; the message is immutable, so
     /// filename → content is.
     att_cache: tokio::sync::Mutex<AttCache>,
+    /// Persistent second tier under `msg_cache`/`date_index`: message bodies
+    /// and index snapshots on disk, shared across sessions of the same account
+    /// ([`DiskCache`]). `None` when no cache root was configured (tests,
+    /// library users) — everything then behaves as memory-only.
+    disk: Option<DiskCache>,
 }
 
 /// Attachment-cache key: `(message id, filename)`.
@@ -188,7 +199,18 @@ impl MsgCache {
 }
 
 impl GmailResource {
-    pub fn new(config: &GmailConfig) -> anyhow::Result<Self> {
+    /// `cache_root` is the host-side cache directory (outside every mount, so
+    /// the guest never sees it); `None` disables the disk tier. The account's
+    /// cache dir is keyed by a stable hash of the refresh token — the account
+    /// identity we hold without an extra API call — so re-mounts of the same
+    /// consent share it, and the token itself never appears in a path.
+    pub fn new(config: &GmailConfig, cache_root: Option<&std::path::Path>) -> anyhow::Result<Self> {
+        let disk = cache_root.and_then(|root| {
+            let dir = root
+                .join("gmail")
+                .join(format!("{:016x}", stable_hash(&config.refresh_token)));
+            DiskCache::open(&dir, DISK_CACHE_BUDGET)
+        });
         Ok(Self {
             accessor: GmailAccessor::new(config)?,
             label_cache: tokio::sync::Mutex::new(None),
@@ -197,6 +219,7 @@ impl GmailResource {
             id_date: tokio::sync::Mutex::new(HashMap::new()),
             seq_scan: tokio::sync::Mutex::new(None),
             att_cache: tokio::sync::Mutex::new(AttCache::default()),
+            disk,
         })
     }
 
@@ -245,12 +268,23 @@ impl GmailResource {
 
     // ---- message fetch (cached) ------------------------------------------
 
+    /// One full message, through the tiers: memory ([`MsgCache`]) → disk
+    /// ([`DiskCache`], shared across sessions) → API (which then warms both).
     async fn message_full(&self, id: &str) -> anyhow::Result<Value> {
         if let Some(v) = self.msg_cache.lock().await.get(id) {
             return Ok(v);
         }
+        if let Some(disk) = &self.disk
+            && let Some(v) = disk_get_msg(disk, id).await
+        {
+            self.msg_cache.lock().await.put(id.to_string(), v.clone());
+            return Ok(v);
+        }
         let v = self.accessor.get_message_full(id).await?;
         self.msg_cache.lock().await.put(id.to_string(), v.clone());
+        if let Some(disk) = &self.disk {
+            disk_put_msg(disk, id, &v).await;
+        }
         Ok(v)
     }
 
@@ -300,22 +334,32 @@ impl GmailResource {
             .await
     }
 
-    /// Full messages for a listing, warming `msg_cache` so a following `cat` of a
-    /// listed message reuses the body without another fetch.
+    /// Full messages for a listing, warming `msg_cache` (and the disk tier) so
+    /// a following `cat` of a listed message reuses the body without another
+    /// fetch — in this or any other session.
     async fn fetch_full_many(&self, ids: &[String]) -> Vec<Value> {
         let raws = self.fetch_many(ids, "full").await;
-        let mut cache = self.msg_cache.lock().await;
-        for v in &raws {
-            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                cache.put(id.to_string(), v.clone());
+        {
+            let mut cache = self.msg_cache.lock().await;
+            for v in &raws {
+                if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                    cache.put(id.to_string(), v.clone());
+                }
+            }
+        }
+        if let Some(disk) = &self.disk {
+            for v in &raws {
+                if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                    disk_put_msg(disk, id, v).await;
+                }
             }
         }
         raws
     }
 
-    /// Full messages for `ids`, serving from `msg_cache` where fresh and fetching
-    /// only the misses (in batches) — a repeat listing within [`MSG_TTL`] costs
-    /// no re-fetch.
+    /// Full messages for `ids`, walking the tiers per id — memory, then the
+    /// cross-session disk cache, then one batched API fetch for what's left —
+    /// so a repeat listing (this session or another) costs no re-fetch.
     async fn ensure_full(&self, ids: &[String]) -> Vec<Value> {
         let mut out = Vec::with_capacity(ids.len());
         let mut missing = Vec::new();
@@ -327,6 +371,26 @@ impl GmailResource {
                     None => missing.push(id.clone()),
                 }
             }
+        }
+        if let Some(disk) = &self.disk
+            && !missing.is_empty()
+        {
+            let mut still = Vec::new();
+            let mut hits = Vec::new();
+            for id in missing {
+                match disk_get_msg(disk, &id).await {
+                    Some(v) => hits.push((id, v)),
+                    None => still.push(id),
+                }
+            }
+            if !hits.is_empty() {
+                let mut cache = self.msg_cache.lock().await;
+                for (id, v) in hits {
+                    cache.put(id, v.clone());
+                    out.push(v);
+                }
+            }
+            missing = still;
         }
         if !missing.is_empty() {
             out.extend(self.fetch_full_many(&missing).await);
@@ -374,6 +438,20 @@ impl GmailResource {
                 return Ok(idx.clone());
             }
         }
+        // Disk tier: another session (or a previous run) may have scanned this
+        // label already. Adopt the snapshot with its *remaining* freshness so
+        // memory and disk expire together rather than TTL-chaining.
+        if let Some(disk) = &self.disk
+            && let Some((age, dates)) = disk.get_snapshot::<DateIndex>(label).await
+            && age < INDEX_TTL
+            && let Some(at) = Instant::now().checked_sub(age)
+        {
+            self.date_index
+                .lock()
+                .await
+                .insert(label.to_string(), (at, dates.clone()));
+            return Ok(dates);
+        }
         let Some(label_id) = self.label_id(label).await? else {
             anyhow::bail!("no such label: {label}");
         };
@@ -393,6 +471,9 @@ impl GmailResource {
             .lock()
             .await
             .insert(label.to_string(), (Instant::now(), idx.clone()));
+        if let Some(disk) = &self.disk {
+            disk.put_snapshot(label, &idx).await;
+        }
         Ok(idx)
     }
 
@@ -704,9 +785,14 @@ impl Resource for GmailResource {
                 self.accessor.trash(&id).await?;
                 self.msg_cache.lock().await.remove(&id);
                 self.id_date.lock().await.remove(&id);
-                // The label indexes now list a trashed message; drop them so the
-                // next `ls` rebuilds without it (and it appears under TRASH).
+                // The label indexes now list a trashed message; drop them (disk
+                // snapshots too, or the next `ls` would adopt a stale one) so
+                // the next `ls` rebuilds without it (and it shows under TRASH).
                 self.date_index.lock().await.clear();
+                if let Some(disk) = &self.disk {
+                    disk.remove_blob(&id).await;
+                    disk.clear_snapshots().await;
+                }
                 Ok(())
             }
             _ => Err(ResourceError::Unsupported),
@@ -825,6 +911,20 @@ impl Resource for GmailResource {
     /// stale parent listing (e.g. `stat INBOX/2026-05-01` after `ls INBOX`).
     fn listings_complete(&self) -> bool {
         false
+    }
+}
+
+// ---- disk-tier JSON helpers -------------------------------------------------
+
+/// A message blob from the shared [`DiskCache`], parsed back to JSON.
+async fn disk_get_msg(disk: &DiskCache, id: &str) -> Option<Value> {
+    serde_json::from_slice(&disk.get_blob(id).await?).ok()
+}
+
+/// Serialize + store one message in the shared [`DiskCache`].
+async fn disk_put_msg(disk: &DiskCache, id: &str, v: &Value) {
+    if let Ok(bytes) = serde_json::to_vec(v) {
+        disk.put_blob(id, &bytes).await;
     }
 }
 
