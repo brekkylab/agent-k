@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -17,8 +17,15 @@ use crate::vfs::{
 /// Listing TTL for the label set (cheap, changes rarely).
 const LABEL_TTL: Duration = Duration::from_secs(60);
 /// Raw-message cache TTL — dedups the per-message fetches that readdir, stat,
-/// read, and unlink all need for the same id.
-const MSG_TTL: Duration = Duration::from_secs(30);
+/// read, and unlink all need for the same id. Matches [`INDEX_TTL`]: message
+/// content is immutable (only the `labels` field can change externally, and
+/// the label index already tolerates that much staleness), so a longer TTL
+/// can't serve wrong bytes — while a short one made a scan re-fetch: grep's
+/// `cat`s of a listed month often trail the listing (which batch-warmed the
+/// cache) by more than 30s, so entries expired mid-scan and were re-fetched
+/// one by one. Mutations through the mount (trash) invalidate explicitly;
+/// memory stays bounded by [`MSG_CACHE_MAX`], not the TTL.
+const MSG_TTL: Duration = Duration::from_secs(600);
 /// Max entries in `msg_cache`. Each is a full message JSON, so an unbounded
 /// cache would grow without limit during a large scan (`grep`); past this,
 /// entries are evicted oldest-first (which is also expired-first).
@@ -29,11 +36,14 @@ const FETCH_CONCURRENCY: usize = 6;
 /// cached (like a directory listing) and shared by every `ls` under the label.
 const INDEX_TTL: Duration = Duration::from_secs(600);
 /// Two message-listings of the same label within this window read as a
-/// sequential (grep-style) scan rather than a one-off browse.
-const SEQ_WINDOW: Duration = Duration::from_secs(10);
+/// sequential (grep-style) scan rather than a one-off browse. Generous because
+/// grep reads a whole month's files *between* listings — a big month takes
+/// tens of seconds, and a tight window would reset detection on exactly the
+/// mailboxes that benefit from read-ahead.
+const SEQ_WINDOW: Duration = Duration::from_secs(60);
 /// Consecutive same-label listings needed before we treat it as a scan and
-/// prefetch the rest. 2 = the second date dir grep opens; a single targeted
-/// browse (one date) never reaches it, so browse pays no read-ahead.
+/// read ahead one month. 2 = the second month dir grep opens; a single
+/// targeted browse (one month) never reaches it, so browse pays no read-ahead.
 const SEQ_THRESHOLD: u32 = 2;
 /// Safety ceiling on how many messages a label's index covers. The scan costs
 /// one `messages.get` per message under Gmail's per-user rate limit (~5k index
@@ -85,9 +95,9 @@ pub struct GmailResource {
     /// date ≈ 26 bytes/entry), bounded by the mailbox's unique message count.
     id_date: tokio::sync::Mutex<HashMap<String, String>>,
     /// Detects a sequential (grep-style) label scan to enable read-ahead only
-    /// then — `(label, last access, consecutive count, already-prefetched)`. A
-    /// targeted browse (single date) stays at count 1 and never prefetches.
-    seq_scan: tokio::sync::Mutex<Option<(String, Instant, u32, bool)>>,
+    /// then — `(label, last access, consecutive count)`. A targeted browse
+    /// (single month) stays at count 1 and never prefetches.
+    seq_scan: tokio::sync::Mutex<Option<(String, Instant, u32)>>,
     /// Whole-attachment bytes, briefly cached ([`ATT_TTL`], [`ATT_CACHE_BUDGET`])
     /// so the chunked reads of one file don't each re-download it. Keyed by
     /// `(message id, filename)` — *not* the attachment id, which Gmail does not
@@ -304,8 +314,8 @@ impl GmailResource {
     }
 
     /// Full messages for `ids`, serving from `msg_cache` where fresh and fetching
-    /// only the misses (in batches). Lets a read-ahead prefetch pay off: dates a
-    /// grep already prefetched are served from cache instead of re-fetched.
+    /// only the misses (in batches) — a repeat listing within [`MSG_TTL`] costs
+    /// no re-fetch.
     async fn ensure_full(&self, ids: &[String]) -> Vec<Value> {
         let mut out = Vec::with_capacity(ids.len());
         let mut missing = Vec::new();
@@ -325,19 +335,19 @@ impl GmailResource {
     }
 
     /// Record a message-listing of `label` and report whether this looks like a
-    /// sequential (grep-style) scan we should read ahead for — true once the same
-    /// label is listed [`SEQ_THRESHOLD`] times within [`SEQ_WINDOW`], and only on
-    /// the first such hit (so we prefetch the rest once, not every date).
+    /// sequential (grep-style) scan we should read ahead for — true while the
+    /// same label keeps being listed within [`SEQ_WINDOW`] ([`SEQ_THRESHOLD`]th
+    /// listing onward), so every month of a scan prefetches the next one. A
+    /// single targeted browse stays at count 1 and never prefetches.
     async fn note_scan(&self, label: &str) -> bool {
         let now = Instant::now();
         let mut g = self.seq_scan.lock().await;
-        let (run, prefetched) = match g.as_ref() {
-            Some((l, at, n, pf)) if l == label && at.elapsed() < SEQ_WINDOW => (n + 1, *pf),
-            _ => (1, false),
+        let run = match g.as_ref() {
+            Some((l, at, n)) if l == label && at.elapsed() < SEQ_WINDOW => n + 1,
+            _ => 1,
         };
-        let fire = run >= SEQ_THRESHOLD && !prefetched;
-        *g = Some((label.to_string(), now, run, prefetched || fire));
-        fire
+        *g = Some((label.to_string(), now, run));
+        run >= SEQ_THRESHOLD
     }
 
     // ---- readdir levels ---------------------------------------------------
@@ -473,22 +483,28 @@ impl GmailResource {
             .filter(|(d, _)| d.starts_with(&prefix))
             .flat_map(|(_, ids)| ids.iter().cloned())
             .collect();
-        // Read-ahead: on a detected sequential scan (grep), warm the cache with
-        // the whole label in a few big batches so the remaining months are served
-        // from cache instead of one tiny per-month fetch each (`ensure_full`
-        // skips ids already cached). A single browse never triggers this — see
-        // [`Self::note_scan`].
+        // Read-ahead: on a detected sequential (grep-style) scan, piggyback the
+        // next month in traversal order (listings are newest-first, so the
+        // adjacent older one) onto this month's batch — its chunks ride the
+        // concurrency slots this month leaves idle, so each listing overlaps
+        // the fetch of the following one. Bounded to one month: it can't blow
+        // [`MSG_CACHE_MAX`] or outlive [`MSG_TTL`] before grep reads it, and
+        // `ensure_full` skips ids the previous window already cached, so steady
+        // state costs nothing extra. A single targeted browse never triggers
+        // it — see [`Self::note_scan`].
+        let mut fetch_ids = ids.clone();
         if self.note_scan(label).await {
-            let all: Vec<String> = index.values().flatten().cloned().collect();
-            if !all.is_empty() {
-                self.ensure_full(&all).await;
-            }
+            fetch_ids.extend(next_month_ids(&index, year, month));
+            fetch_ids.truncate(MSG_CACHE_MAX);
         }
-        let raws = self.ensure_full(&ids).await;
+        let raws = self.ensure_full(&fetch_ids).await;
+        // Only this month's messages are listed; the read-ahead tail stays
+        // cache-only until its own readdir.
+        let listed: HashSet<&str> = ids.iter().map(String::as_str).collect();
         let mut out = Vec::new();
         for raw in &raws {
             let id = raw.get("id").and_then(|i| i.as_str()).unwrap_or("");
-            if id.is_empty() {
+            if id.is_empty() || !listed.contains(id) {
                 continue;
             }
             let subject = header(raw, "Subject");
@@ -1189,6 +1205,30 @@ fn is_valid_month(name: &str) -> bool {
     name.len() == 2 && matches!(name.parse::<u32>(), Ok(m) if (1..=12).contains(&m))
 }
 
+/// Ids of the month directly older than `year-month` in `index` — the next dir
+/// a newest-first scan will list, so the read-ahead window. Empty when there is
+/// no older month. The month itself need not exist in the index (its ids are
+/// then simply the adjacent older month's).
+fn next_month_ids(index: &DateIndex, year: &str, month: &str) -> Vec<String> {
+    let current = format!("{year}-{month}");
+    // Keys are `yyyy-mm-dd` ascending; walk newest → oldest to the first month
+    // before the current one.
+    let next = index
+        .keys()
+        .rev()
+        .map(|d| &d[..7])
+        .find(|m| *m < current.as_str());
+    let Some(next) = next else {
+        return Vec::new();
+    };
+    let prefix = format!("{next}-");
+    index
+        .iter()
+        .filter(|(d, _)| d.starts_with(&prefix))
+        .flat_map(|(_, ids)| ids.iter().cloned())
+        .collect()
+}
+
 /// Days since 1970-01-01 -> (year, month, day). Howard Hinnant's algorithm.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
@@ -1455,6 +1495,25 @@ mod tests {
         assert!(!is_valid_month("13")); // out of range
         assert!(!is_valid_month("00")); // month 0
         assert!(!is_valid_month("xx")); // non-digit
+    }
+
+    #[test]
+    fn next_month_ids_walks_newest_to_oldest() {
+        let mut idx: DateIndex = BTreeMap::new();
+        idx.insert("2025-12-31".into(), vec!["d".into()]);
+        idx.insert("2026-03-10".into(), vec!["a".into()]);
+        idx.insert("2026-05-01".into(), vec!["b".into()]);
+        idx.insert("2026-05-20".into(), vec!["c".into()]);
+        // after 2026-05, the next older month with mail is 2026-03
+        assert_eq!(next_month_ids(&idx, "2026", "05"), vec!["a"]);
+        // after 2026-03 → 2025-12
+        assert_eq!(next_month_ids(&idx, "2026", "03"), vec!["d"]);
+        // oldest month → nothing to read ahead
+        assert!(next_month_ids(&idx, "2025", "12").is_empty());
+        // a month with no mail still finds the adjacent older one
+        assert_eq!(next_month_ids(&idx, "2026", "04"), vec!["a"]);
+        // a multi-day month returns all its ids (date order)
+        assert_eq!(next_month_ids(&idx, "2026", "07"), vec!["b", "c"]);
     }
 
     #[test]
