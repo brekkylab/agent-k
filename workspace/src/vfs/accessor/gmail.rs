@@ -10,9 +10,15 @@ use tokio::sync::Mutex;
 const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GMAIL_API_BASE: &str = "https://gmail.googleapis.com/gmail/v1";
 
-/// Concurrent 100-message batch requests. Kept low because too many overshoot
-/// Gmail's per-user rate limit and the resulting 429 backoff makes it slower
-/// than serial; 3 measured fastest on a real mailbox.
+/// Messages per batch request. Google's hard cap is 100, but 50 halves the
+/// worst-case response body (a `format=full` message can run to ~1 MB, and the
+/// whole multipart response must land within the client's 30s timeout) and
+/// keeps one chunk's quota burst (50 × 5 units) near Gmail's ~250 units/sec
+/// per-user rate instead of double it.
+const BATCH_CHUNK: usize = 50;
+/// Concurrent batch requests ([`BATCH_CHUNK`] messages each). Kept low because
+/// too many overshoot Gmail's per-user rate limit and the resulting 429
+/// backoff makes it slower than serial; 3 measured fastest on a real mailbox.
 const BATCH_CONCURRENCY: usize = 3;
 /// Max passes over the id set, each re-requesting only ids that didn't come back
 /// (failed chunk, or an errored sub-response inside a 200 batch). Bounded: an id
@@ -383,8 +389,8 @@ impl GmailAccessor {
     }
 
     /// Fetch many messages via Gmail **batch** requests (`/batch/gmail/v1`,
-    /// multipart/mixed), collapsing per-message round-trips into 100-message
-    /// chunks run [`BATCH_CONCURRENCY`] at a time. Returns the parsed message JSON
+    /// multipart/mixed), collapsing per-message round-trips into
+    /// [`BATCH_CHUNK`]-message chunks run [`BATCH_CONCURRENCY`] at a time. Returns the parsed message JSON
     /// keyed by `id` (order not guaranteed — callers key on `id`).
     ///
     /// Completeness over speed: after each parallel pass it reconciles by id and
@@ -411,7 +417,7 @@ impl GmailAccessor {
             // A chunk that errors resolves to an empty Vec, so its ids simply stay
             // missing and are retried next round rather than failing the batch.
             let chunks: Vec<Vec<String>> =
-                missing.chunks(100).map(<[String]>::to_vec).collect();
+                missing.chunks(BATCH_CHUNK).map(<[String]>::to_vec).collect();
             let passes: Vec<Vec<Value>> = stream::iter(chunks)
                 .map(|chunk| async move { self.batch_chunk(&chunk, format).await.unwrap_or_default() })
                 .buffer_unordered(BATCH_CONCURRENCY)
