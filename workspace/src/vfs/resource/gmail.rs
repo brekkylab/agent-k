@@ -514,27 +514,39 @@ impl GmailResource {
                 subject
             };
             let size = raw.get("sizeEstimate").and_then(|s| s.as_u64());
+            let mtime = msg_time(raw);
             out.push(DirEntry {
                 name: msg_filename(&subject, id),
                 kind: FileKind::File,
                 size: size.unwrap_or(0),
-                mtime: None,
+                mtime,
                 atime: None,
                 ctime: None,
                 created: None,
                 etag: None,
             });
             if !attachments(raw).is_empty() {
-                out.push(dir_entry(attach_dir_name(&subject, id)));
+                out.push(DirEntry {
+                    name: attach_dir_name(&subject, id),
+                    kind: FileKind::Dir,
+                    size: 0,
+                    mtime,
+                    atime: None,
+                    ctime: None,
+                    created: None,
+                    etag: None,
+                });
             }
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
     }
 
-    /// Attachment files within a message's attachment dir.
+    /// Attachment files within a message's attachment dir. They carry the
+    /// message's received time as mtime (an attachment is as old as its mail).
     async fn readdir_attachments(&self, msg_id: &str) -> anyhow::Result<Vec<DirEntry>> {
         let raw = self.message_full(msg_id).await?;
+        let mtime = msg_time(&raw);
         let atts = attachments(&raw);
         let names = unique_attachment_names(&atts);
         Ok(atts
@@ -544,7 +556,7 @@ impl GmailResource {
                 name,
                 kind: FileKind::File,
                 size: a.size,
-                mtime: None,
+                mtime,
                 atime: None,
                 ctime: None,
                 created: None,
@@ -671,6 +683,7 @@ impl Resource for GmailResource {
                 Ok(FileStat {
                     kind: FileKind::File,
                     size: atts[idx].size,
+                    mtime: msg_time(&raw),
                     ..Default::default()
                 })
             }
@@ -895,6 +908,17 @@ struct Attach {
     attachment_id: String,
     size: u64,
     mime_type: String,
+}
+
+/// The message's received time (`internalDate`, epoch ms) as a `SystemTime` —
+/// stamped as mtime on listings/stat so date-based agent tools (`ls -lt`,
+/// `find -newermt`) work instead of seeing the epoch.
+fn msg_time(raw: &Value) -> Option<std::time::SystemTime> {
+    let ms = raw
+        .get("internalDate")
+        .and_then(|d| d.as_str())
+        .and_then(|s| s.parse::<u64>().ok())?;
+    Some(std::time::UNIX_EPOCH + Duration::from_millis(ms))
 }
 
 fn header(raw: &Value, name: &str) -> String {
@@ -1471,6 +1495,20 @@ mod tests {
             "ID42"
         );
         assert_eq!(id_from_name(&attach_dir_name("Hi there", "ID42")), "ID42");
+    }
+
+    #[test]
+    fn msg_time_from_internal_date() {
+        use std::time::{Duration as D, UNIX_EPOCH};
+        let raw = json!({ "internalDate": "1777802400000" });
+        assert_eq!(
+            msg_time(&raw),
+            Some(UNIX_EPOCH + D::from_millis(1_777_802_400_000))
+        );
+        assert_eq!(msg_time(&json!({ "internalDate": "0" })), Some(UNIX_EPOCH));
+        // absent or malformed → None (entry falls back to no mtime)
+        assert_eq!(msg_time(&json!({})), None);
+        assert_eq!(msg_time(&json!({ "internalDate": "bogus" })), None);
     }
 
     #[test]
