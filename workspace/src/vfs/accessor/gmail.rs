@@ -311,12 +311,33 @@ impl GmailAccessor {
         label_id: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<String>> {
+        self.list_message_ids(("labelIds", label_id), limit).await
+    }
+
+    /// Message ids matching a Gmail search query (`q=` — server-side, so a
+    /// content search costs one `messages.list` instead of fetching every
+    /// body). Newest-first; capped at `limit`.
+    pub async fn search_message_ids(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<String>> {
+        self.list_message_ids(("q", query), limit).await
+    }
+
+    /// Shared `messages.list` pagination behind the label/search entry points:
+    /// one `filter` query pair, newest-first, truncated at `limit`.
+    async fn list_message_ids(
+        &self,
+        filter: (&str, &str),
+        limit: usize,
+    ) -> anyhow::Result<Vec<String>> {
         let mut ids = Vec::new();
         let mut page_token: Option<String> = None;
         loop {
             let mut params: Vec<(&str, String)> = vec![
                 ("maxResults", "500".to_string()),
-                ("labelIds", label_id.to_string()),
+                (filter.0, filter.1.to_string()),
                 // We only read message ids here; drop threadId/resultSizeEstimate.
                 ("fields", "messages/id,nextPageToken".to_string()),
             ];
@@ -350,7 +371,11 @@ impl GmailAccessor {
             // pathologically large label.
             if ids.len() >= limit {
                 ids.truncate(limit);
-                tracing::warn!("gmail label {label_id}: reached index cap {limit}; older messages not indexed");
+                tracing::warn!(
+                    "gmail list ({}={}): reached cap {limit}; older messages omitted",
+                    filter.0,
+                    filter.1
+                );
                 break;
             }
             match v.get("nextPageToken").and_then(|t| t.as_str()) {

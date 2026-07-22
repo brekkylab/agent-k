@@ -12,7 +12,7 @@ use crate::vfs::{
     disk_cache::{DiskCache, stable_hash},
     error::{ResourceError, ResourceResult},
     path::MountPath,
-    resource::{DirEntry, FileKind, FileStat, Resource},
+    resource::{DirEntry, FileKind, FileStat, Resource, SEARCH_DIR},
 };
 
 /// Listing TTL for the label set (cheap, changes rarely).
@@ -59,6 +59,11 @@ const MAX_INDEX_MESSAGES: usize = 5_000;
 /// (known from the part).
 const MSG_SENTINEL_SIZE: u64 = 16 * 1024 * 1024;
 const GMAIL_SUFFIX: &str = ".gmail.json";
+
+/// Max results a `.search/<query>` listing returns (one `messages.list` page,
+/// newest first). A query matching more than this should be narrowed, not
+/// paginated.
+const SEARCH_MAX_RESULTS: usize = 500;
 
 /// Attachment-bytes cache TTL. The attachments endpoint has no ranged fetch,
 /// so without this every FUSE chunk read of one file re-downloads the whole
@@ -582,45 +587,72 @@ impl GmailResource {
         // Only this month's messages are listed; the read-ahead tail stays
         // cache-only until its own readdir.
         let listed: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        let mut out = Vec::new();
-        for raw in &raws {
-            let id = raw.get("id").and_then(|i| i.as_str()).unwrap_or("");
-            if id.is_empty() || !listed.contains(id) {
-                continue;
-            }
-            let subject = header(raw, "Subject");
-            let subject = if subject.is_empty() {
-                "No Subject".to_string()
-            } else {
-                subject
-            };
-            let size = raw.get("sizeEstimate").and_then(|s| s.as_u64());
-            let mtime = msg_time(raw);
-            out.push(DirEntry {
-                name: msg_filename(&subject, id),
-                kind: FileKind::File,
-                size: size.unwrap_or(0),
-                mtime,
-                atime: None,
-                ctime: None,
-                created: None,
-                etag: None,
-            });
-            if !attachments(raw).is_empty() {
-                out.push(DirEntry {
-                    name: attach_dir_name(&subject, id),
-                    kind: FileKind::Dir,
-                    size: 0,
-                    mtime,
-                    atime: None,
-                    ctime: None,
-                    created: None,
-                    etag: None,
-                });
-            }
-        }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        Ok(message_entries(raws.iter().filter(|r| {
+            r.get("id")
+                .and_then(|i| i.as_str())
+                .is_some_and(|id| listed.contains(id))
+        })))
+    }
+
+    /// `ls .search/<query>` — run the query server-side and list the newest
+    /// [`SEARCH_MAX_RESULTS`] matches in the same file format as a month dir,
+    /// so `cat`/attachments work unchanged. Repeat listings are absorbed by
+    /// the metadata cache; the bodies land in the shared msg/disk caches.
+    async fn readdir_search(&self, query: &str) -> anyhow::Result<Vec<DirEntry>> {
+        let ids = self
+            .accessor
+            .search_message_ids(query, SEARCH_MAX_RESULTS)
+            .await?;
+        let raws = self.ensure_full(&ids).await;
+        Ok(message_entries(raws.iter()))
+    }
+
+    /// Processed email JSON bytes for a `<subject>__<id>.gmail.json` name —
+    /// shared by the label tree and the `.search` tree (both address by id).
+    async fn read_message_bytes(&self, file: &str) -> ResourceResult<Vec<u8>> {
+        let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
+        let raw = self.message_full(&id).await?;
+        Ok(serde_json::to_vec(&process_message(&raw))?)
+    }
+
+    /// Ranged attachment bytes for a `<subject>__<id>/<filename>` pair (cached
+    /// whole; only the requested range is copied out).
+    async fn read_attachment(
+        &self,
+        dir: &str,
+        fname: &str,
+        range: Option<std::ops::Range<u64>>,
+    ) -> ResourceResult<Vec<u8>> {
+        let id = id_from_name(dir);
+        let raw = self.message_full(&id).await?;
+        let atts = attachments(&raw);
+        let names = unique_attachment_names(&atts);
+        let idx = names
+            .iter()
+            .position(|n| n == fname)
+            .ok_or(ResourceError::NotFound)?;
+        let bytes = self
+            .attachment_bytes(&id, &atts[idx].attachment_id, &names[idx])
+            .await?;
+        Ok(slice_ref(&bytes, range))
+    }
+
+    /// Stat of one attachment file: exact size from the part metadata plus the
+    /// message's received time.
+    async fn stat_attachment(&self, dir: &str, fname: &str) -> ResourceResult<FileStat> {
+        let raw = self.message_full(&id_from_name(dir)).await?;
+        let atts = attachments(&raw);
+        let names = unique_attachment_names(&atts);
+        let idx = names
+            .iter()
+            .position(|n| n == fname)
+            .ok_or(ResourceError::NotFound)?;
+        Ok(FileStat {
+            kind: FileKind::File,
+            size: atts[idx].size,
+            mtime: msg_time(&raw),
+            ..Default::default()
+        })
     }
 
     /// Attachment files within a message's attachment dir. They carry the
@@ -655,32 +687,28 @@ impl Resource for GmailResource {
         range: Option<std::ops::Range<u64>>,
     ) -> ResourceResult<Vec<u8>> {
         let seg = segments(path);
-        let data = match seg.as_slice() {
+        match seg.as_slice() {
+            // .search/<query>/… — a search hit is the same message file as
+            // under a label (addressed by id); matched first so the arms below
+            // can't misread the query as a year/month.
+            [s, _q, file] if s.as_str() == SEARCH_DIR && file.ends_with(GMAIL_SUFFIX) => {
+                let data = self.read_message_bytes(file).await?;
+                Ok(slice(data, range))
+            }
+            [s, _q, dir, fname] if s.as_str() == SEARCH_DIR => {
+                self.read_attachment(dir, fname, range).await
+            }
             // <label>/<yyyy>/<mm>/<file>.gmail.json -> processed email JSON
             [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
-                let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
-                let raw = self.message_full(&id).await?;
-                serde_json::to_vec(&process_message(&raw))?
+                let data = self.read_message_bytes(file).await?;
+                Ok(slice(data, range))
             }
             // <label>/<yyyy>/<mm>/<subject>__<id>/<filename> -> attachment bytes
-            // (cached whole; only the requested range is copied out)
             [_label, _year, _month, dir, fname] => {
-                let id = id_from_name(dir);
-                let raw = self.message_full(&id).await?;
-                let atts = attachments(&raw);
-                let names = unique_attachment_names(&atts);
-                let idx = names
-                    .iter()
-                    .position(|n| n == fname)
-                    .ok_or(ResourceError::NotFound)?;
-                let bytes = self
-                    .attachment_bytes(&id, &atts[idx].attachment_id, &names[idx])
-                    .await?;
-                return Ok(slice_ref(&bytes, range));
+                self.read_attachment(dir, fname, range).await
             }
-            _ => return Err(ResourceError::NotFound),
-        };
-        Ok(slice(data, range))
+            _ => Err(ResourceError::NotFound),
+        }
     }
 
     async fn write_bytes(&self, _path: &MountPath, _data: Vec<u8>) -> ResourceResult<()> {
@@ -693,6 +721,12 @@ impl Resource for GmailResource {
         let seg = segments(path);
         match seg.as_slice() {
             [] => self.readdir_labels().await.map_err(ResourceError::from),
+            // Below a `.search/<query>` hit (top-level routing lives in the
+            // cache wrapper): a hit's attachment dir, resolved by id.
+            [s, _q, dir] if s.as_str() == SEARCH_DIR && !dir.ends_with(GMAIL_SUFFIX) => self
+                .readdir_attachments(&id_from_name(dir))
+                .await
+                .map_err(ResourceError::from),
             [label] => self.readdir_years(label).await.map_err(ResourceError::from),
             [label, year] => self
                 .readdir_months(label, year)
@@ -715,6 +749,22 @@ impl Resource for GmailResource {
         let seg = segments(path);
         match seg.as_slice() {
             [] => Ok(dir_stat()),
+            // Below a `.search/<query>` (root/query stat lives in the cache
+            // wrapper): the same message-file / attachment shapes as a month.
+            [s, _q, name] if s.as_str() == SEARCH_DIR => {
+                if name.ends_with(GMAIL_SUFFIX) {
+                    Ok(FileStat {
+                        kind: FileKind::File,
+                        size: MSG_SENTINEL_SIZE,
+                        ..Default::default()
+                    })
+                } else {
+                    Ok(dir_stat())
+                }
+            }
+            [s, _q, dir, fname] if s.as_str() == SEARCH_DIR => {
+                self.stat_attachment(dir, fname).await
+            }
             // a label: confirm it exists (cheap, cached) — else ENOENT
             [label] => {
                 if self.label_id(label).await?.is_some() {
@@ -753,21 +803,7 @@ impl Resource for GmailResource {
                 }
             }
             // an attachment file: exact size from the message's part metadata
-            [_label, _year, _month, dir, fname] => {
-                let raw = self.message_full(&id_from_name(dir)).await?;
-                let atts = attachments(&raw);
-                let names = unique_attachment_names(&atts);
-                let idx = names
-                    .iter()
-                    .position(|n| n == fname)
-                    .ok_or(ResourceError::NotFound)?;
-                Ok(FileStat {
-                    kind: FileKind::File,
-                    size: atts[idx].size,
-                    mtime: msg_time(&raw),
-                    ..Default::default()
-                })
-            }
+            [_label, _year, _month, dir, fname] => self.stat_attachment(dir, fname).await,
             _ => Err(ResourceError::NotFound),
         }
     }
@@ -899,6 +935,18 @@ impl Resource for GmailResource {
         Ok(serde_json::to_vec(&result)?)
     }
 
+    fn supports_search(&self) -> bool {
+        true
+    }
+
+    /// `.search/<query>` → Gmail server-side search (`messages.list?q=`),
+    /// newest [`SEARCH_MAX_RESULTS`] matches as regular message files.
+    async fn search(&self, query: &str) -> ResourceResult<Vec<DirEntry>> {
+        self.readdir_search(query)
+            .await
+            .map_err(ResourceError::from)
+    }
+
     fn prompt(&self) -> &str {
         GMAIL_PROMPT
     }
@@ -912,6 +960,51 @@ impl Resource for GmailResource {
     fn listings_complete(&self) -> bool {
         false
     }
+}
+
+/// Directory entries for full messages: the `.gmail.json` file (sizeEstimate,
+/// received-time mtime) plus, for messages with attachments, the sibling dir.
+/// Sorted by name — shared by month listings and `.search` results.
+fn message_entries<'a>(raws: impl Iterator<Item = &'a Value>) -> Vec<DirEntry> {
+    let mut out = Vec::new();
+    for raw in raws {
+        let id = raw.get("id").and_then(|i| i.as_str()).unwrap_or("");
+        if id.is_empty() {
+            continue;
+        }
+        let subject = header(raw, "Subject");
+        let subject = if subject.is_empty() {
+            "No Subject".to_string()
+        } else {
+            subject
+        };
+        let size = raw.get("sizeEstimate").and_then(|s| s.as_u64());
+        let mtime = msg_time(raw);
+        out.push(DirEntry {
+            name: msg_filename(&subject, id),
+            kind: FileKind::File,
+            size: size.unwrap_or(0),
+            mtime,
+            atime: None,
+            ctime: None,
+            created: None,
+            etag: None,
+        });
+        if !attachments(raw).is_empty() {
+            out.push(DirEntry {
+                name: attach_dir_name(&subject, id),
+                kind: FileKind::Dir,
+                size: 0,
+                mtime,
+                atime: None,
+                ctime: None,
+                created: None,
+                etag: None,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 // ---- disk-tier JSON helpers -------------------------------------------------
@@ -1431,6 +1524,7 @@ const GMAIL_PROMPT: &str = "\
 Gmail (read + trash on delete). Layout:
   <label>/<yyyy>/<mm>/<subject>__<message-id>.gmail.json   # the email (JSON)
   <label>/<yyyy>/<mm>/<subject>__<message-id>/<filename>   # attachments (only if any)
+  .search/<query>/                                         # server-side search
 
   <label>       INBOX, SENT, DRAFT, IMPORTANT, STARRED, TRASH, SPAM, or a user label
   <yyyy>/<mm>   received year then month; `ls <label>` lists years, then months,
@@ -1444,6 +1538,14 @@ Gmail (read + trash on delete). Layout:
      \"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
   The sibling dir (same name without .gmail.json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
+
+  To find mail by content/sender/date, use server-side search — NEVER grep the
+  whole mount (hundreds of times slower):
+    ls '.search/from:boss@x.com refund newer_than:3m'
+  Gmail operators work (from: to: subject: \"phrase\" newer_than: has:attachment
+  …); the query is one path segment, so it may contain spaces but not '/'.
+  Matches list newest-first as the same message files (cat works as usual).
+  grep only inside one <label>/<yyyy>/<mm> dir when you truly need a regex.
 
   rm <…>.gmail.json    moves the message to Trash (only .gmail.json is removable).";
 
@@ -1595,6 +1697,30 @@ mod tests {
             "ID42"
         );
         assert_eq!(id_from_name(&attach_dir_name("Hi there", "ID42")), "ID42");
+    }
+
+    #[test]
+    fn message_entries_lists_file_and_attachment_dir() {
+        let with_att = json!({
+            "id": "m1",
+            "internalDate": "1777802400000",
+            "sizeEstimate": 1234,
+            "payload": {
+                "headers": [{"name": "Subject", "value": "Hello"}],
+                "parts": [{"filename": "a.pdf", "body": {"attachmentId": "x", "size": 5}}]
+            }
+        });
+        let plain = json!({ "id": "m2", "payload": { "headers": [] } });
+        let entries = message_entries([&with_att, &plain].into_iter());
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Hello__m1", "Hello__m1.gmail.json", "No_Subject__m2.gmail.json"]
+        );
+        assert!(matches!(entries[0].kind, FileKind::Dir), "attachment dir");
+        assert_eq!(entries[1].size, 1234, "sizeEstimate carried");
+        assert!(entries[1].mtime.is_some(), "received time carried");
+        assert!(entries[2].mtime.is_none(), "no internalDate → no mtime");
     }
 
     #[test]
