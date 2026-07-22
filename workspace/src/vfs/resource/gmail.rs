@@ -1699,6 +1699,152 @@ mod tests {
         assert_eq!(id_from_name(&attach_dir_name("Hi there", "ID42")), "ID42");
     }
 
+    fn live_config() -> Option<GmailConfig> {
+        Some(GmailConfig {
+            client_id: std::env::var("GMAIL_CLIENT_ID").ok()?,
+            client_secret: std::env::var("GMAIL_CLIENT_SECRET").ok()?,
+            refresh_token: std::env::var("GMAIL_REFRESH_TOKEN").ok()?,
+        })
+    }
+
+    /// Live `.search` + disk-cache round-trip against a real mailbox: session 1
+    /// searches cold (API → disk), session 2 (fresh resource, same cache dir)
+    /// must serve the bodies from disk. Ignored by default; run with:
+    ///
+    ///   GMAIL_CLIENT_ID=… GMAIL_CLIENT_SECRET=… GMAIL_REFRESH_TOKEN=… \
+    ///   [GMAIL_QUERY=…] cargo test -p workspace gmail_live -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "requires GMAIL_* env + network"]
+    async fn gmail_live_search_and_disk_cache() {
+        use crate::vfs::cache::CachedResource;
+        use std::sync::Arc;
+
+        let Some(cfg) = live_config() else {
+            eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
+            return;
+        };
+        let query = std::env::var("GMAIL_QUERY").unwrap_or_else(|_| "UMC".into());
+        let cache = tempfile::tempdir().unwrap();
+        let sp = MountPath::new(format!("/.search/{query}"));
+
+        // Session 1: cold — the search list + every body comes from the API,
+        // and the bodies land on disk.
+        let r1 = CachedResource::new(Arc::new(
+            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
+        ));
+        let t0 = std::time::Instant::now();
+        let hits = r1.readdir(&sp).await.expect("cold search readdir");
+        let cold = t0.elapsed();
+        eprintln!("search {query:?}: {} entries in {cold:?}", hits.len());
+        for e in hits.iter().take(10) {
+            eprintln!("  {:>9}B {:?} {}", e.size, e.kind, e.name);
+        }
+        if let Some(f) = hits.iter().find(|e| e.name.ends_with(GMAIL_SUFFIX)) {
+            let p = MountPath::new(format!("/.search/{query}/{}", f.name));
+            let bytes = r1.read_bytes(&p, None).await.expect("read first hit");
+            let v: Value = serde_json::from_slice(&bytes).unwrap();
+            eprintln!(
+                "first hit: subject={:?} date={:?} body_text={}B",
+                v["subject"],
+                v["date"],
+                v["body_text"].as_str().unwrap_or("").len()
+            );
+        }
+        let blob_dir = cache
+            .path()
+            .join("gmail")
+            .join(format!("{:016x}", stable_hash(&cfg.refresh_token)))
+            .join("blobs");
+        let blobs = std::fs::read_dir(&blob_dir).map(|d| d.count()).unwrap_or(0);
+        eprintln!("disk blobs after session 1: {blobs}");
+        if !hits.is_empty() {
+            assert!(blobs > 0, "search bodies should have been persisted");
+        }
+
+        // Session 2: a fresh resource (empty memory caches) on the same cache
+        // dir — only the search list call goes out; bodies come from disk.
+        let r2 = CachedResource::new(Arc::new(
+            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
+        ));
+        let t1 = std::time::Instant::now();
+        let hits2 = r2.readdir(&sp).await.expect("warm search readdir");
+        let warm = t1.elapsed();
+        eprintln!(
+            "session 2: {} entries in {warm:?} (cold was {cold:?})",
+            hits2.len()
+        );
+        assert_eq!(hits2.len(), hits.len(), "same result set from warm cache");
+    }
+
+    /// Live label-tree + disk-cache round-trip (no `q=`, so it runs even on a
+    /// token whose scope set includes gmail.metadata): session 1 builds the
+    /// INBOX index and lists the newest month cold; session 2 (fresh resource,
+    /// same cache dir) must adopt the index snapshot and serve bodies from
+    /// disk. Same env vars as [`gmail_live_search_and_disk_cache`].
+    #[tokio::test]
+    #[ignore = "requires GMAIL_* env + network"]
+    async fn gmail_live_label_disk_cache() {
+        use crate::vfs::cache::CachedResource;
+        use std::sync::Arc;
+
+        let Some(cfg) = live_config() else {
+            eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
+            return;
+        };
+        let cache = tempfile::tempdir().unwrap();
+
+        // Session 1: cold — index build (full INBOX scan) + newest month's
+        // bodies from the API, all landing on disk.
+        let r1 = CachedResource::new(Arc::new(
+            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
+        ));
+        let t0 = std::time::Instant::now();
+        let years = r1.readdir(&MountPath::new("/INBOX")).await.expect("years");
+        let y = years.first().expect("some year").name.clone();
+        let months = r1
+            .readdir(&MountPath::new(format!("/INBOX/{y}")))
+            .await
+            .expect("months");
+        let m = months.first().expect("some month").name.clone();
+        let month_path = MountPath::new(format!("/INBOX/{y}/{m}"));
+        let entries = r1.readdir(&month_path).await.expect("cold month");
+        let cold = t0.elapsed();
+        eprintln!(
+            "cold: INBOX index + {y}/{m} listing ({} entries) in {cold:?}",
+            entries.len()
+        );
+        let acct = cache
+            .path()
+            .join("gmail")
+            .join(format!("{:016x}", stable_hash(&cfg.refresh_token)));
+        let blobs = std::fs::read_dir(acct.join("blobs")).map(|d| d.count()).unwrap_or(0);
+        let snaps = std::fs::read_dir(acct.join("snapshots")).map(|d| d.count()).unwrap_or(0);
+        eprintln!("disk after session 1: {blobs} blobs, {snaps} snapshot(s)");
+        assert!(snaps > 0, "index snapshot should be persisted");
+        assert!(entries.is_empty() || blobs > 0, "bodies should be persisted");
+
+        // Session 2: fresh resource, same cache dir — no full rescan (snapshot
+        // adopted), bodies from disk.
+        let r2 = CachedResource::new(Arc::new(
+            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
+        ));
+        let t1 = std::time::Instant::now();
+        let entries2 = r2.readdir(&month_path).await.expect("warm month");
+        let warm = t1.elapsed();
+        eprintln!(
+            "warm session 2: {} entries in {warm:?} (cold was {cold:?})",
+            entries2.len()
+        );
+        assert_eq!(entries2.len(), entries.len());
+        // Read one message body through the warm path too.
+        if let Some(f) = entries2.iter().find(|e| e.name.ends_with(GMAIL_SUFFIX)) {
+            let p = MountPath::new(format!("/INBOX/{y}/{m}/{}", f.name));
+            let bytes = r2.read_bytes(&p, None).await.expect("warm read");
+            let v: Value = serde_json::from_slice(&bytes).unwrap();
+            eprintln!("warm cat: subject={:?} ({}B json)", v["subject"], bytes.len());
+        }
+    }
+
     #[test]
     fn message_entries_lists_file_and_attachment_dir() {
         let with_att = json!({
