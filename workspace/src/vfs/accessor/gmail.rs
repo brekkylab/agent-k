@@ -114,6 +114,15 @@ fn parse_batch_bodies(text: &str) -> Vec<Value> {
     out
 }
 
+/// Result of the mount-create code exchange: the long-lived refresh token plus
+/// the account's email address (`users.getProfile`). The email is what
+/// identifies the *account* — shown in mount info and used as the cache key,
+/// since a refresh token changes on every re-consent while the email doesn't.
+pub struct GmailExchange {
+    pub refresh_token: String,
+    pub account_email: String,
+}
+
 /// Exchange an OAuth authorization `code` for a refresh token (confidential
 /// client, server-side). Run at mount-create so the browser never handles the
 /// client secret. Google only returns a refresh token when the consent used
@@ -123,7 +132,7 @@ pub async fn exchange_gmail_code(
     client_secret: &str,
     code: &str,
     redirect_uri: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<GmailExchange> {
     let resp = reqwest::Client::new()
         .post(OAUTH_TOKEN_URL)
         .form(&[
@@ -141,7 +150,8 @@ pub async fn exchange_gmail_code(
         anyhow::bail!("google code exchange {status}: {body}");
     }
     let v: Value = serde_json::from_str(&body)?;
-    v.get("refresh_token")
+    let refresh_token = v
+        .get("refresh_token")
         .and_then(|t| t.as_str())
         .map(String::from)
         .ok_or_else(|| {
@@ -149,7 +159,38 @@ pub async fn exchange_gmail_code(
                 "token response had no refresh_token (consent must use \
                  access_type=offline + prompt=consent)"
             )
-        })
+        })?;
+    // The exchange response carries a live access token — resolve the account
+    // email while we have it. Required: the email is the mount's identity
+    // (display + cache key), so a transient profile failure fails the create
+    // with a clear message rather than minting a half-identified mount.
+    let account_email = match v.get("access_token").and_then(|t| t.as_str()) {
+        Some(at) => fetch_profile_email(at).await,
+        None => None,
+    }
+    .ok_or_else(|| {
+        anyhow::anyhow!("code exchange succeeded but users.getProfile failed; retry the mount")
+    })?;
+    Ok(GmailExchange {
+        refresh_token,
+        account_email,
+    })
+}
+
+/// `users.getProfile` → lowercased email address, if the call succeeds.
+async fn fetch_profile_email(access_token: &str) -> Option<String> {
+    let v: Value = reqwest::Client::new()
+        .get(format!("{GMAIL_API_BASE}/users/me/profile"))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    v.get("emailAddress")
+        .and_then(|e| e.as_str())
+        .map(|s| s.trim().to_lowercase())
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -157,6 +198,11 @@ pub struct GmailConfig {
     pub client_id: String,
     pub client_secret: String,
     pub refresh_token: String,
+    /// The account's email address, resolved at mount-create
+    /// ([`exchange_gmail_code`]). Identifies the account across re-consents
+    /// (a refresh token changes each consent; the email doesn't), so it keys
+    /// the disk cache and is shown in mount info.
+    pub account_email: String,
 }
 
 /// Holds Google OAuth credentials (one refresh token) and a cached access

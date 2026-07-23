@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::vfs::{
     accessor::{GmailAccessor, GmailConfig, encode_b64url},
-    disk_cache::{DiskCache, stable_hash},
+    disk_cache::DiskCache,
     error::{ResourceError, ResourceResult},
     path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource, SEARCH_DIR},
@@ -215,15 +215,12 @@ impl MsgCache {
 impl GmailResource {
     /// `cache_root` is the host-side cache directory (outside every mount, so
     /// the guest never sees it); `None` disables the disk tier. The account's
-    /// cache dir is keyed by a stable hash of the refresh token — the account
-    /// identity we hold without an extra API call — so re-mounts of the same
-    /// consent share it, and the token itself never appears in a path.
+    /// cache dir is keyed by its email address (see [`account_cache_key`]) so
+    /// the cache survives re-consent.
     pub fn new(config: &GmailConfig, cache_root: Option<&std::path::Path>) -> anyhow::Result<Self> {
         let (disk, att_disk) = match cache_root {
             Some(root) => {
-                let acct = root
-                    .join("gmail")
-                    .join(format!("{:016x}", stable_hash(&config.refresh_token)));
+                let acct = root.join("gmail").join(account_cache_key(config));
                 (
                     DiskCache::open(&acct, DISK_CACHE_BUDGET),
                     DiskCache::open(&acct.join("atts"), ATT_DISK_BUDGET),
@@ -1046,6 +1043,26 @@ fn message_entries<'a>(raws: impl Iterator<Item = &'a Value>) -> Vec<DirEntry> {
     out
 }
 
+/// Cache directory name for an account: its email, sanitized to one path
+/// segment. The email is an identifier, not a secret, so it stays in plain
+/// text — a readable dir beats an opaque hash for ops (thunderbird-style),
+/// and it survives re-consent, which would change any token-derived key.
+fn account_cache_key(config: &GmailConfig) -> String {
+    config
+        .account_email
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 // ---- disk-tier JSON helpers -------------------------------------------------
 
 /// Blob key for one attachment in the attachment [`DiskCache`]: message id +
@@ -1750,6 +1767,7 @@ mod tests {
             client_id: std::env::var("GMAIL_CLIENT_ID").ok()?,
             client_secret: std::env::var("GMAIL_CLIENT_SECRET").ok()?,
             refresh_token: std::env::var("GMAIL_REFRESH_TOKEN").ok()?,
+            account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
         })
     }
 
@@ -1799,7 +1817,7 @@ mod tests {
         let blob_dir = cache
             .path()
             .join("gmail")
-            .join(format!("{:016x}", stable_hash(&cfg.refresh_token)))
+            .join(account_cache_key(&cfg))
             .join("blobs");
         let blobs = std::fs::read_dir(&blob_dir).map(|d| d.count()).unwrap_or(0);
         eprintln!("disk blobs after session 1: {blobs}");
@@ -1859,10 +1877,7 @@ mod tests {
             "cold: INBOX index + {y}/{m} listing ({} entries) in {cold:?}",
             entries.len()
         );
-        let acct = cache
-            .path()
-            .join("gmail")
-            .join(format!("{:016x}", stable_hash(&cfg.refresh_token)));
+        let acct = cache.path().join("gmail").join(account_cache_key(&cfg));
         let blobs = std::fs::read_dir(acct.join("blobs"))
             .map(|d| d.count())
             .unwrap_or(0);
@@ -1928,6 +1943,24 @@ mod tests {
         assert_eq!(entries[1].size, 1234, "sizeEstimate carried");
         assert!(entries[1].mtime.is_some(), "received time carried");
         assert!(entries[2].mtime.is_none(), "no internalDate → no mtime");
+    }
+
+    #[test]
+    fn account_cache_key_is_the_sanitized_email() {
+        let base = GmailConfig {
+            client_id: "id".into(),
+            client_secret: "sec".into(),
+            refresh_token: "tok-123".into(),
+            account_email: "Sello@Brekkylab.com".into(),
+        };
+        // lowercased, readable, path-safe
+        assert_eq!(account_cache_key(&base), "sello@brekkylab.com");
+        // hostile chars collapse; stays one segment
+        let odd = GmailConfig {
+            account_email: "a/b c@x.com".into(),
+            ..base.clone()
+        };
+        assert_eq!(account_cache_key(&odd), "a_b_c@x.com");
     }
 
     #[test]

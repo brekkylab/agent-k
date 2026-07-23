@@ -104,7 +104,7 @@ impl ProviderSpec {
                          (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)",
                     )
                 })?;
-                let refresh_token = ::workspace::exchange_gmail_code(
+                let exchanged = ::workspace::exchange_gmail_code(
                     client_id,
                     client_secret,
                     &code,
@@ -115,7 +115,8 @@ impl ProviderSpec {
                 ProviderConfig::Gmail(GmailConfig {
                     client_id: client_id.to_string(),
                     client_secret: client_secret.to_string(),
-                    refresh_token,
+                    refresh_token: exchanged.refresh_token,
+                    account_email: exchanged.account_email,
                 })
             }
         })
@@ -136,8 +137,9 @@ pub enum ProviderInfo {
     },
     /// Notion carries only the API token, which is a secret — nothing to show.
     Notion {},
-    /// Gmail carries only OAuth secrets — nothing non-secret to show.
-    Gmail {},
+    /// Gmail: the OAuth pieces are secret, but the account email (resolved at
+    /// mount-create) is shown so the UI can tell mounts apart.
+    Gmail { email: String },
 }
 
 impl From<&ProviderConfig> for ProviderInfo {
@@ -150,7 +152,9 @@ impl From<&ProviderConfig> for ProviderInfo {
                 key_prefix: c.key_prefix.clone(),
             },
             ProviderConfig::Notion(_) => ProviderInfo::Notion {},
-            ProviderConfig::Gmail(_) => ProviderInfo::Gmail {},
+            ProviderConfig::Gmail(c) => ProviderInfo::Gmail {
+                email: c.account_email.clone(),
+            },
         }
     }
 }
