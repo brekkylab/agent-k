@@ -107,7 +107,7 @@ struct ActiveRun {
 
     /// Exact snapshot of the in-progress assistant turn's streamed text,
     /// mirrored from the run task on every delta. Lets a client that attaches
-    /// mid-turn catch up without a hole (the WS handler sends it as one
+    /// mid-turn catch up without a hole (the SSE handler sends it as one
     /// cumulative delta). A `std` mutex — only ever held for a clone/replace.
     partial: Arc<StdMutex<String>>,
 }
@@ -241,7 +241,7 @@ impl SessionsState {
         if tokio::fs::try_exists(&dir).await? {
             tokio::fs::remove_dir_all(&dir).await?;
         }
-        // Drop the channel so any attached WS subscribers wake up with
+        // Drop the channel so any attached SSE subscribers wake up with
         // RecvError::Closed instead of waiting on a session that no longer
         // exists.
         self.events.remove_channel(&message_channel(id));
@@ -289,14 +289,14 @@ impl SessionsState {
     }
 
     /// Return all messages for `session_id`, ordered by `seq` ascending. Backs
-    /// the `GET /sessions/{id}/messages` endpoint; the WS catch-up path uses
+    /// the `GET /sessions/{id}/messages` endpoint; the SSE catch-up path uses
     /// [`SessionsState::list_messages_since`] instead.
     pub async fn list_messages(&self, session_id: Uuid) -> StateResult<Vec<(i64, Message)>> {
         self.list_messages_since(session_id, -1).await
     }
 
     /// Return messages for `session_id` with `seq > since`, ordered ascending.
-    /// The WS handler uses this for catch-up before switching to the live
+    /// The SSE handler uses this for catch-up before switching to the live
     /// event subscription.
     pub async fn list_messages_since(
         &self,

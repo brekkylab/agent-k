@@ -50,7 +50,7 @@ impl EventQueue {
 
     /// Drop a channel. Any live subscribers will see `RecvError::Closed` on
     /// their next `recv()` and unwind cleanly. Used on session deletion to
-    /// kick attached WS clients off the now-dead session.
+    /// kick attached SSE subscribers off the now-dead session.
     pub fn remove_channel(&self, channel: &str) {
         self.channels.remove(channel);
     }
@@ -60,14 +60,14 @@ impl EventQueue {
 
 /// `message/{session_id}` — fanout for everything happening in a session: the
 /// messages appended to its history, live streaming deltas, and run lifecycle
-/// transitions. Publishers (the run loop) and subscribers (the WS handler) both
+/// transitions. Publishers (the run loop) and subscribers (the SSE handler) both
 /// build the name through this helper so they stay aligned.
 pub fn message_channel(session_id: Uuid) -> String {
     format!("message/{session_id}")
 }
 
 /// Payload shape for the `message/{session_id}` channel, JSON-encoded before
-/// being handed to [`EventQueue::publish`]. The WS handler forwards these to
+/// being handed to [`EventQueue::publish`]. The SSE handler forwards these to
 /// the client verbatim; only `Message` carries a `seq` (it is the persisted,
 /// catch-up-able record — `Delta` and `Run` are ephemeral and exist solely on
 /// the live stream).
@@ -89,7 +89,7 @@ pub enum SessionEvent {
     /// that follows.
     Delta { text: String, cum_len: u64 },
 
-    /// Run lifecycle transition. `Started` is also re-sent by the WS catch-up
+    /// Run lifecycle transition. `Started` is also re-sent by the SSE catch-up
     /// when a client attaches while a run is in flight, so it reads as "a run
     /// is active", not strictly "a run just began".
     Run {
