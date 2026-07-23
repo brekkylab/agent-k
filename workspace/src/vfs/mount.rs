@@ -6,13 +6,14 @@
 //! [`Mount`]s. `WorkspaceFs` owns the resulting mounts and does the routing —
 //! there is no separate `Vfs` type.
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use crate::vfs::{
-    accessor::{GmailConfig, NotionConfig, S3Config},
+    accessor::{GdriveConfig, GmailConfig, NotionConfig, S3Config},
     cache::CachedResource,
-    resource::{GmailResource, LocalResource, NotionResource, Resource, S3Resource},
+    resource::{
+        GdriveResource, GmailResource, LocalResource, NotionResource, Resource, S3Resource,
+    },
 };
 
 /// Reserved mount prefix for the workspace's local file tree. A provider mount
@@ -25,6 +26,7 @@ pub enum ProviderConfig {
     S3(S3Config),
     Notion(NotionConfig),
     Gmail(GmailConfig),
+    Gdrive(GdriveConfig),
 }
 
 /// One mount spec: a virtual top-level prefix bound to a provider config. The
@@ -86,6 +88,16 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
                 mounts.push(Mount {
                     prefix: spec.prefix,
                     resource: Arc::new(GmailResource::new(&c, mirror_root.as_deref())?),
+                });
+                continue;
+            }
+            ProviderConfig::Gdrive(c) => {
+                // Reads render a link out of the listing metadata — no content
+                // fetch, no disk state — so the metadata cache would only
+                // duplicate this resource's own listing cache. Skip it.
+                mounts.push(Mount {
+                    prefix: spec.prefix,
+                    resource: Arc::new(GdriveResource::new(&c)?),
                 });
                 continue;
             }

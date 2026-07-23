@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use ::workspace::{GdriveConfig, GmailConfig, NotionConfig, ProviderConfig, S3Config};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -20,14 +21,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ::workspace::{GmailConfig, NotionConfig, ProviderConfig, S3Config};
-
+use super::{
+    error::{ApiError, err},
+    workspace::require_owned_workspace,
+};
 use crate::{
     auth::AuthUser,
     state::{AppState, GoogleOAuth, WorkspaceMount},
 };
-
-use super::{error::ApiError, error::err, workspace::require_owned_workspace};
 
 /// Provider configuration as supplied when creating a mount (carries secrets).
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -74,6 +75,19 @@ pub enum ProviderSpec {
         /// whole mailbox. A performance knob, safe to accept from the client.
         #[serde(default)]
         index_cap: Option<usize>,
+    },
+    /// Google Drive via Google OAuth (read-only mount).
+    ///
+    /// Scope: request `https://www.googleapis.com/auth/drive.readonly` at
+    /// consent (least-privilege for a read-only mount), with
+    /// `access_type=offline` + `prompt=consent` so Google returns a refresh
+    /// token. Like Gmail, the frontend runs the OAuth consent and sends only
+    /// the authorization `code` (+ the `redirect_uri` used at consent); the
+    /// backend exchanges it server-side with the app's [`GoogleOAuth`] client
+    /// credentials, so the browser never handles the client secret.
+    Gdrive {
+        code: String,
+        redirect_uri: String,
     },
 }
 
@@ -132,6 +146,33 @@ impl ProviderSpec {
                     base_url: oauth.base_url.clone(),
                 })
             }
+            ProviderSpec::Gdrive { code, redirect_uri } => {
+                let (client_id, client_secret) = oauth.credentials().ok_or_else(|| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        "Google Drive is not configured on this server \
+                         (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)",
+                    )
+                })?;
+                let exchanged = ::workspace::exchange_gdrive_code(
+                    client_id,
+                    client_secret,
+                    &code,
+                    &redirect_uri,
+                    oauth.base_url.as_deref(),
+                )
+                .await
+                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gdrive oauth: {e}")))?;
+                ProviderConfig::Gdrive(GdriveConfig {
+                    client_id: client_id.to_string(),
+                    client_secret: client_secret.to_string(),
+                    refresh_token: exchanged.refresh_token,
+                    account_email: exchanged.account_email,
+                    // Deployment-level override (mock/gateway), inherited from
+                    // backend config — never from the request.
+                    base_url: oauth.base_url.clone(),
+                })
+            }
         })
     }
 }
@@ -153,6 +194,9 @@ pub enum ProviderInfo {
     /// Gmail: the OAuth pieces are secret, but the account email (resolved at
     /// mount-create) is shown so the UI can tell mounts apart.
     Gmail { email: String },
+    /// Google Drive: the OAuth pieces are secret, but the account email
+    /// (resolved at mount-create) is shown so the UI can tell mounts apart.
+    Gdrive { email: String },
 }
 
 impl From<&ProviderConfig> for ProviderInfo {
@@ -166,6 +210,9 @@ impl From<&ProviderConfig> for ProviderInfo {
             },
             ProviderConfig::Notion(_) => ProviderInfo::Notion {},
             ProviderConfig::Gmail(c) => ProviderInfo::Gmail {
+                email: c.account_email.clone(),
+            },
+            ProviderConfig::Gdrive(c) => ProviderInfo::Gdrive {
                 email: c.account_email.clone(),
             },
         }

@@ -6,16 +6,16 @@
 //! [`WorkspacesState::get_fs`](super::WorkspacesState::get_fs) injects into the
 //! per-workspace filesystem so mount prefixes route to the provider.
 
+use ::workspace::{
+    FsConfig, GdriveConfig, GmailConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig,
+    S3Config, WorkspaceFs,
+};
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
 
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
-use ::workspace::{
-    FsConfig, GmailConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config,
-    WorkspaceFs,
-};
 
 const SELECT_COLUMNS: &str = "id, workspace_id, prefix, provider, config, created_at, updated_at";
 
@@ -73,6 +73,7 @@ impl WorkspaceMount {
             ProviderConfig::S3(c) => ("s3", serde_json::to_string(c)?),
             ProviderConfig::Notion(c) => ("notion", serde_json::to_string(c)?),
             ProviderConfig::Gmail(c) => ("gmail", serde_json::to_string(c)?),
+            ProviderConfig::Gdrive(c) => ("gdrive", serde_json::to_string(c)?),
         })
     }
 }
@@ -89,6 +90,9 @@ fn decode_provider(kind: &str, config_json: &str) -> StateResult<ProviderConfig>
         "gmail" => Ok(ProviderConfig::Gmail(serde_json::from_str::<GmailConfig>(
             config_json,
         )?)),
+        "gdrive" => Ok(ProviderConfig::Gdrive(
+            serde_json::from_str::<GdriveConfig>(config_json)?,
+        )),
         other => Err(StateError::InvalidData(format!(
             "workspace_mounts.provider: unknown provider {other}"
         ))),
@@ -235,8 +239,9 @@ fn map_mount_sqlx_error(e: sqlx::Error) -> StateError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ::workspace::S3Config;
+
+    use super::*;
 
     /// Fresh in-memory DB with a seeded user + workspace; returns the state and
     /// the workspace id.
@@ -384,6 +389,39 @@ mod tests {
         // Last removal: mirror dir is deleted wholesale.
         state.remove_mount(m2.id).await.unwrap();
         assert!(!acct.exists(), "mirror removed with its last mount");
+    }
+
+    /// A gdrive mount round-trips through encode/decode (credentials + the
+    /// account email preserved) and builds into the VFS.
+    #[tokio::test]
+    async fn gdrive_mount_round_trips_and_builds() {
+        let (state, _tmp, wid) = fresh_state().await;
+        let provider = ProviderConfig::Gdrive(GdriveConfig {
+            client_id: "cid".into(),
+            client_secret: "cs".into(),
+            refresh_token: "rt".into(),
+            account_email: "user@example.com".into(),
+            base_url: None,
+        });
+        state
+            .create_mount(WorkspaceMount::new(wid, "gdrive".into(), provider))
+            .await
+            .unwrap();
+
+        let listed = state.list_mounts(wid).await.unwrap();
+        match &listed[0].provider {
+            ProviderConfig::Gdrive(c) => {
+                assert_eq!(c.refresh_token, "rt");
+                assert_eq!(c.account_email, "user@example.com");
+            }
+            _ => panic!("expected Gdrive"),
+        }
+
+        // Assembles alongside `/files` (no network — client construction only).
+        let vfs = state.build_fs(wid).await.unwrap();
+        let mut names = vfs.mount_names();
+        names.sort();
+        assert_eq!(names, vec!["files".to_string(), "gdrive".to_string()]);
     }
 
     #[tokio::test]
