@@ -1624,9 +1624,14 @@ Gmail (read + trash on delete). Layout:
   To find mail by content/sender/date, use server-side search — NEVER grep the
   whole mount (hundreds of times slower):
     ls '.search/from:boss@x.com refund newer_than:3m'
-  Gmail operators work (from: to: subject: \"phrase\" newer_than: has:attachment
-  …); the query is one path segment, so it may contain spaces but not '/'.
-  Matches list newest-first as the same message files (cat works as usual).
+  The query is one path segment: spaces are fine, '/' is not — write dates
+  with hyphens. Gmail's full query syntax works:
+    from: to: cc: subject:   |  \"exact phrase\"   |  has:attachment filename:pdf
+    is:unread is:starred     |  label:X category:promotions  |  larger:5M
+    newer_than:7d older_than:1y  |  after:2024-03-01 before:2024-04-01
+    space = AND  |  OR (must be uppercase)  |  -term = NOT  |  (…) = grouping
+  Matches list newest-first (max 500) as the same message files (cat/rm work
+  as usual); narrow a too-broad query instead of paging.
   grep only inside one <label>/<yyyy>/<mm> dir when you truly need a regex.
 
   rm <…>.gmail.json    moves the message to Trash (only .gmail.json is removable).";
