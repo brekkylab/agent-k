@@ -79,8 +79,12 @@ const ATT_CACHE_BUDGET: u64 = 128 * 1024 * 1024;
 
 /// Byte budget for the on-disk message cache ([`DiskCache`]), per account.
 /// Bodies are immutable, so the cache is shared by every session mounting the
-/// same account and only eviction (oldest-first) bounds it.
-const DISK_CACHE_BUDGET: u64 = 10 * 1024 * 1024 * 1024;
+/// same account and only eviction (oldest-first) bounds it. 2 GB covers a
+/// fully-cached large mailbox several times over (~30-60 KB/message, ≤5k
+/// indexed per label), while keeping the worst-case per-account disk
+/// liability small at multi-user scale; eviction is lossless (a dropped blob
+/// just refetches).
+const DISK_CACHE_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
 /// Byte budget for the on-disk **attachment** cache, kept separate from the
 /// body cache so one 25 MB attachment can't evict hundreds of bodies.
 /// Attachments are immutable too; repeat views (frontend previews, re-reads
