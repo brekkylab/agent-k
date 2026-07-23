@@ -1080,9 +1080,15 @@ fn account_cache_key(config: &GmailConfig) -> String {
 
 /// Blob key for one attachment in the attachment [`DiskCache`]: message id +
 /// display filename (the same pair the memory cache keys on — both are stable,
-/// unlike Gmail's per-fetch attachment ids).
+/// unlike Gmail's per-fetch attachment ids). The filename rides along for
+/// readability but the hash suffix is what guarantees uniqueness: the blob
+/// store sanitizes keys into path-safe names, and two distinct filenames can
+/// collapse to the same sanitized form (`a b.pdf` / `a_b.pdf`) — without the
+/// hash they would share one blob and the second would serve the first's
+/// bytes.
 fn att_blob_key(msg_id: &str, filename: &str) -> String {
-    format!("{msg_id}__{filename}")
+    use crate::vfs::disk_cache::stable_hash;
+    format!("{msg_id}__{filename}-{:016x}", stable_hash(filename))
 }
 
 /// A message blob from the shared [`DiskCache`], parsed back to JSON.
@@ -1956,6 +1962,22 @@ mod tests {
         assert_eq!(entries[1].size, 1234, "sizeEstimate carried");
         assert!(entries[1].mtime.is_some(), "received time carried");
         assert!(entries[2].mtime.is_none(), "no internalDate → no mtime");
+    }
+
+    #[test]
+    fn att_blob_keys_distinguish_sanitize_collisions() {
+        // Distinct filenames that sanitize to the same path-safe form must not
+        // share a disk blob (the second would serve the first's bytes).
+        let a = att_blob_key("m1", "report.pdf");
+        let b = att_blob_key("m1", "report_pdf");
+        let c = att_blob_key("m1", "a b.pdf");
+        let d = att_blob_key("m1", "a_b.pdf");
+        assert_ne!(a, b);
+        assert_ne!(c, d);
+        // Deterministic: same pair → same key (cache hits unaffected).
+        assert_eq!(a, att_blob_key("m1", "report.pdf"));
+        // Different messages never share, even with equal filenames.
+        assert_ne!(a, att_blob_key("m2", "report.pdf"));
     }
 
     #[tokio::test]
