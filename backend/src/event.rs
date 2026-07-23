@@ -77,7 +77,17 @@ pub enum SessionEvent {
     /// A message persisted to the session's history at sequence `seq`. Mirrors
     /// the HTTP `GET /sessions/{id}/messages` item shape so catch-up over
     /// either transport is interchangeable on the client.
-    Message { seq: i64, message: Message },
+    Message {
+        seq: i64,
+        /// Nesting level relative to the top-level agent turn: `0` is the
+        /// conversation the user sees; `>= 1` is a sub-agent's internal
+        /// output (render it indented/collapsed under the calling turn).
+        depth: u8,
+        /// Name of the agent that produced the message, when known. `None`
+        /// for user turns and synthetic (interrupt) messages.
+        source_agent: Option<String>,
+        message: Message,
+    },
 
     /// Newly streamed top-level assistant text for the in-progress turn.
     /// Ephemeral: not persisted, no seq. `text` is the newly produced
