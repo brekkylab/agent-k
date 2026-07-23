@@ -81,6 +81,11 @@ const ATT_CACHE_BUDGET: u64 = 128 * 1024 * 1024;
 /// Bodies are immutable, so the cache is shared by every session mounting the
 /// same account and only eviction (oldest-first) bounds it.
 const DISK_CACHE_BUDGET: u64 = 10 * 1024 * 1024 * 1024;
+/// Byte budget for the on-disk **attachment** cache, kept separate from the
+/// body cache so one 25 MB attachment can't evict hundreds of bodies.
+/// Attachments are immutable too; repeat views (frontend previews, re-reads
+/// across sessions) hit disk instead of re-downloading.
+const ATT_DISK_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
 
 /// `(display_name, label_id)` pairs for every Gmail label.
 type LabelList = Vec<(String, String)>;
@@ -120,6 +125,10 @@ pub struct GmailResource {
     /// ([`DiskCache`]). `None` when no cache root was configured (tests,
     /// library users) — everything then behaves as memory-only.
     disk: Option<DiskCache>,
+    /// Persistent tier under `att_cache`: whole-attachment bytes, in their own
+    /// [`DiskCache`] (separate [`ATT_DISK_BUDGET`]) so large attachments never
+    /// compete with bodies for eviction.
+    att_disk: Option<DiskCache>,
 }
 
 /// Attachment-cache key: `(message id, filename)`.
@@ -210,12 +219,18 @@ impl GmailResource {
     /// identity we hold without an extra API call — so re-mounts of the same
     /// consent share it, and the token itself never appears in a path.
     pub fn new(config: &GmailConfig, cache_root: Option<&std::path::Path>) -> anyhow::Result<Self> {
-        let disk = cache_root.and_then(|root| {
-            let dir = root
-                .join("gmail")
-                .join(format!("{:016x}", stable_hash(&config.refresh_token)));
-            DiskCache::open(&dir, DISK_CACHE_BUDGET)
-        });
+        let (disk, att_disk) = match cache_root {
+            Some(root) => {
+                let acct = root
+                    .join("gmail")
+                    .join(format!("{:016x}", stable_hash(&config.refresh_token)));
+                (
+                    DiskCache::open(&acct, DISK_CACHE_BUDGET),
+                    DiskCache::open(&acct.join("atts"), ATT_DISK_BUDGET),
+                )
+            }
+            None => (None, None),
+        };
         Ok(Self {
             accessor: GmailAccessor::new(config)?,
             label_cache: tokio::sync::Mutex::new(None),
@@ -225,6 +240,7 @@ impl GmailResource {
             seq_scan: tokio::sync::Mutex::new(None),
             att_cache: tokio::sync::Mutex::new(AttCache::default()),
             disk,
+            att_disk,
         })
     }
 
@@ -307,8 +323,22 @@ impl GmailResource {
         if let Some(bytes) = self.att_cache.lock().await.get(&key) {
             return Ok(bytes);
         }
+        // Disk tier: attachments are immutable, so a repeat view (another
+        // session, a frontend preview days later) reuses the bytes instead of
+        // re-downloading the whole file.
+        let blob_key = att_blob_key(msg_id, filename);
+        if let Some(disk) = &self.att_disk
+            && let Some(bytes) = disk.get_blob(&blob_key).await
+        {
+            let bytes = std::sync::Arc::new(bytes);
+            self.att_cache.lock().await.put(key, bytes.clone());
+            return Ok(bytes);
+        }
         let bytes = std::sync::Arc::new(self.accessor.get_attachment(msg_id, attachment_id).await?);
         self.att_cache.lock().await.put(key, bytes.clone());
+        if let Some(disk) = &self.att_disk {
+            disk.put_blob(&blob_key, &bytes).await;
+        }
         Ok(bytes)
     }
 
@@ -704,9 +734,7 @@ impl Resource for GmailResource {
                 Ok(slice(data, range))
             }
             // <label>/<yyyy>/<mm>/<subject>__<id>/<filename> -> attachment bytes
-            [_label, _year, _month, dir, fname] => {
-                self.read_attachment(dir, fname, range).await
-            }
+            [_label, _year, _month, dir, fname] => self.read_attachment(dir, fname, range).await,
             _ => Err(ResourceError::NotFound),
         }
     }
@@ -818,6 +846,12 @@ impl Resource for GmailResource {
         match seg.as_slice() {
             [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
                 let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
+                // Enumerate attachment names before mutating (usually served
+                // from cache) so their disk blobs can be dropped with the body.
+                let att_names = match self.message_full(&id).await {
+                    Ok(raw) => unique_attachment_names(&attachments(&raw)),
+                    Err(_) => Vec::new(),
+                };
                 self.accessor.trash(&id).await?;
                 self.msg_cache.lock().await.remove(&id);
                 self.id_date.lock().await.remove(&id);
@@ -828,6 +862,11 @@ impl Resource for GmailResource {
                 if let Some(disk) = &self.disk {
                     disk.remove_blob(&id).await;
                     disk.clear_snapshots().await;
+                }
+                if let Some(att_disk) = &self.att_disk {
+                    for name in &att_names {
+                        att_disk.remove_blob(&att_blob_key(&id, name)).await;
+                    }
                 }
                 Ok(())
             }
@@ -1008,6 +1047,13 @@ fn message_entries<'a>(raws: impl Iterator<Item = &'a Value>) -> Vec<DirEntry> {
 }
 
 // ---- disk-tier JSON helpers -------------------------------------------------
+
+/// Blob key for one attachment in the attachment [`DiskCache`]: message id +
+/// display filename (the same pair the memory cache keys on — both are stable,
+/// unlike Gmail's per-fetch attachment ids).
+fn att_blob_key(msg_id: &str, filename: &str) -> String {
+    format!("{msg_id}__{filename}")
+}
 
 /// A message blob from the shared [`DiskCache`], parsed back to JSON.
 async fn disk_get_msg(disk: &DiskCache, id: &str) -> Option<Value> {
@@ -1626,11 +1672,11 @@ mod tests {
         assert_eq!(
             unique_attachment_names(&atts),
             vec![
-                "image.png",     // first occurrence kept verbatim
+                "image.png", // first occurrence kept verbatim
                 "doc.pdf",
                 "image (2).png", // suffix before the extension
                 "image (3).png",
-                "README",        // no extension
+                "README", // no extension
                 "README (2)",
             ]
         );
@@ -1817,11 +1863,18 @@ mod tests {
             .path()
             .join("gmail")
             .join(format!("{:016x}", stable_hash(&cfg.refresh_token)));
-        let blobs = std::fs::read_dir(acct.join("blobs")).map(|d| d.count()).unwrap_or(0);
-        let snaps = std::fs::read_dir(acct.join("snapshots")).map(|d| d.count()).unwrap_or(0);
+        let blobs = std::fs::read_dir(acct.join("blobs"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        let snaps = std::fs::read_dir(acct.join("snapshots"))
+            .map(|d| d.count())
+            .unwrap_or(0);
         eprintln!("disk after session 1: {blobs} blobs, {snaps} snapshot(s)");
         assert!(snaps > 0, "index snapshot should be persisted");
-        assert!(entries.is_empty() || blobs > 0, "bodies should be persisted");
+        assert!(
+            entries.is_empty() || blobs > 0,
+            "bodies should be persisted"
+        );
 
         // Session 2: fresh resource, same cache dir — no full rescan (snapshot
         // adopted), bodies from disk.
@@ -1841,7 +1894,11 @@ mod tests {
             let p = MountPath::new(format!("/INBOX/{y}/{m}/{}", f.name));
             let bytes = r2.read_bytes(&p, None).await.expect("warm read");
             let v: Value = serde_json::from_slice(&bytes).unwrap();
-            eprintln!("warm cat: subject={:?} ({}B json)", v["subject"], bytes.len());
+            eprintln!(
+                "warm cat: subject={:?} ({}B json)",
+                v["subject"],
+                bytes.len()
+            );
         }
     }
 
@@ -1861,7 +1918,11 @@ mod tests {
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(
             names,
-            vec!["Hello__m1", "Hello__m1.gmail.json", "No_Subject__m2.gmail.json"]
+            vec![
+                "Hello__m1",
+                "Hello__m1.gmail.json",
+                "No_Subject__m2.gmail.json"
+            ]
         );
         assert!(matches!(entries[0].kind, FileKind::Dir), "attachment dir");
         assert_eq!(entries[1].size, 1234, "sizeEstimate carried");
