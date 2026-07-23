@@ -133,7 +133,15 @@ pub async fn exchange_gmail_code(
     code: &str,
     redirect_uri: &str,
 ) -> anyhow::Result<GmailExchange> {
-    let resp = reqwest::Client::new()
+    // Bounded: this runs inside the create_mount HTTP handler, and a bare
+    // reqwest client has NO default timeout — a hung upstream would hang the
+    // mount creation indefinitely.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp = client
         .post(OAUTH_TOKEN_URL)
         .form(&[
             ("client_id", client_id),
@@ -179,7 +187,12 @@ pub async fn exchange_gmail_code(
 
 /// `users.getProfile` → lowercased email address, if the call succeeds.
 async fn fetch_profile_email(access_token: &str) -> Option<String> {
-    let v: Value = reqwest::Client::new()
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let v: Value = client
         .get(format!("{GMAIL_API_BASE}/users/me/profile"))
         .bearer_auth(access_token)
         .send()
