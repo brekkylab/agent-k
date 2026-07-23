@@ -1,19 +1,26 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex as StdMutex},
+};
 
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
-    message::{Message, Part, Role},
+    message::{FinishReason, Message, Part, Role},
     runenv::{Machine as _, Sandbox, SandboxNetwork},
 };
 use chrono::{DateTime, Utc};
-use futures_util::StreamExt as _;
+use futures_util::{FutureExt as _, StreamExt as _};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{StateError, StateResult, parse_ts, parse_uuid};
-use crate::event::{EventQueue, MessageEvent, message_channel};
+use crate::{
+    agent_stream::{AgentStreamItem, MessageAssembler},
+    event::{EventQueue, RunStatus, SessionEvent, message_channel},
+};
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -92,6 +99,19 @@ impl Session {
     }
 }
 
+/// Book-keeping for one in-flight run, held in [`SessionsState::runs`].
+struct ActiveRun {
+    /// Wakes the spawned task at its next safe point on
+    /// [`SessionsState::cancel`].
+    cancel: CancellationToken,
+
+    /// Exact snapshot of the in-progress assistant turn's streamed text,
+    /// mirrored from the run task on every delta. Lets a client that attaches
+    /// mid-turn catch up without a hole (the WS handler sends it as one
+    /// cumulative delta). A `std` mutex — only ever held for a clone/replace.
+    partial: Arc<StdMutex<String>>,
+}
+
 pub struct SessionsState {
     db: SqlitePool,
 
@@ -101,7 +121,7 @@ pub struct SessionsState {
     /// [`SessionsState::cancel`] can wake the spawned task; the entry's
     /// presence is also the "is this session running?" gate that rejects
     /// concurrent [`SessionsState::run`] calls.
-    runs: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
+    runs: Arc<Mutex<HashMap<Uuid, ActiveRun>>>,
 
     events: EventQueue,
 }
@@ -247,12 +267,25 @@ impl SessionsState {
     /// active. Non-blocking; the spawned task will clean up its own entry.
     pub async fn cancel(&self, id: Uuid) -> bool {
         match self.runs.lock().await.get(&id) {
-            Some(token) => {
-                token.cancel();
+            Some(run) => {
+                run.cancel.cancel();
                 true
             }
             None => false,
         }
+    }
+
+    /// The streamed-so-far text of the in-progress assistant turn, if a run is
+    /// in flight for `id`. `Some("")` means a run is active but hasn't
+    /// streamed top-level text yet; `None` means no active run. The WS
+    /// catch-up path uses this so a client attaching mid-turn starts from the
+    /// full partial answer instead of the next delta.
+    pub async fn live_partial(&self, id: Uuid) -> Option<String> {
+        self.runs
+            .lock()
+            .await
+            .get(&id)
+            .map(|run| run.partial.lock().expect("partial lock poisoned").clone())
     }
 
     /// Return all messages for `session_id`, ordered by `seq` ascending. Backs
@@ -291,19 +324,27 @@ impl SessionsState {
     /// Trigger an agent run for `id` with `query` as the user turn. Returns
     /// as soon as the run slot is reserved and the background task is
     /// spawned. Each persisted message is also published on the session's
-    /// `message/{id}` channel (no-op if no one is subscribed). Cancellation
-    /// is requested via [`SessionsState::cancel`].
+    /// `message/{id}` channel, along with ephemeral streaming deltas and run
+    /// lifecycle events (all no-ops if no one is subscribed). Cancellation is
+    /// requested via [`SessionsState::cancel`].
     ///
     /// Returns [`StateError::AlreadyRunning`] if a run is already in flight
     /// for this session.
     pub async fn run(&self, id: Uuid, query: Vec<Part>) -> StateResult<()> {
         let token = CancellationToken::new();
+        let partial = Arc::new(StdMutex::new(String::new()));
         {
             let mut runs = self.runs.lock().await;
             if runs.contains_key(&id) {
                 return Err(StateError::AlreadyRunning(id));
             }
-            runs.insert(id, token.clone());
+            runs.insert(
+                id,
+                ActiveRun {
+                    cancel: token.clone(),
+                    partial: partial.clone(),
+                },
+            );
         }
 
         let db = self.db.clone();
@@ -317,7 +358,16 @@ impl SessionsState {
             let archive_path = dir.join("sandbox.tar.zst");
             let channel = message_channel(id);
 
-            let result: anyhow::Result<()> = async {
+            // Ok(bool) is "was the run stopped?" — it picks the terminal
+            // lifecycle event published below.
+            let result: anyhow::Result<bool> = async {
+                events.publish(
+                    &channel,
+                    serde_json::to_string(&SessionEvent::Run {
+                        status: RunStatus::Started,
+                    })?,
+                );
+
                 // Setup — spec, history, sandbox.
                 let row =
                     sqlx::query("SELECT workspace_id, spec, runenv FROM sessions WHERE id = ?")
@@ -389,10 +439,12 @@ impl SessionsState {
                     .map(|r| serde_json::from_str::<Message>(&r.get::<String, _>("content")))
                     .collect::<Result<_, _>>()?;
 
-                // Drive — persist + publish each message. The sandbox archive
-                // below must run regardless of how this exits, so capture the
-                // drive's Result and propagate it after archiving.
-                let drive: anyhow::Result<()> = async {
+                // Drive — stream the model's raw deltas, publishing live text
+                // fragments as they arrive and persisting each message at its
+                // boundary. The sandbox archive below must run regardless of
+                // how this exits, so capture the drive's Result and propagate
+                // it after archiving.
+                let drive: anyhow::Result<bool> = async {
                     let mut next_seq = history.len() as i64;
                     let mut state = AgentState::new().with_history(history);
                     if let Some(ref r) = runenv {
@@ -401,55 +453,229 @@ impl SessionsState {
                     let mut agent = Agent::try_with_state(spec, state)?;
 
                     let user_msg = Message::new(Role::User).with_contents(query);
-                    sqlx::query(
-                        "INSERT INTO messages (session_id, seq, content, created_at) \
-                         VALUES (?, ?, ?, ?)",
-                    )
-                    .bind(&session_key)
-                    .bind(next_seq)
-                    .bind(serde_json::to_string(&user_msg)?)
-                    .bind(Utc::now().to_rfc3339())
-                    .execute(&db)
-                    .await?;
-                    events.publish(
-                        &channel,
-                        serde_json::to_string(&MessageEvent {
-                            seq: next_seq,
-                            message: user_msg.clone(),
-                        })?,
-                    );
+                    persist_message(&db, &events, &channel, &session_key, next_seq, user_msg.clone())
+                        .await?;
                     next_seq += 1;
 
-                    let mut stream = agent.run(user_msg);
+                    // `run_stream` yields raw `MessageDeltaOutput`s; the
+                    // assembler reassembles them into live assistant deltas +
+                    // completed messages (boundary detection and the
+                    // trailing-flush quirk live in `agent_stream`, unit-tested
+                    // there).
+                    let mut assembler = MessageAssembler::new();
+                    // Streamed text of the in-flight assistant turn. ailoy drops
+                    // its own accumulator when the stream is dropped, so if a
+                    // stop cuts a turn short before it commits a message, this
+                    // is the only copy of the partial answer. Cleared when a
+                    // top-level assistant message commits.
+                    let mut partial_text = String::new();
+                    // Tool-call ids still awaiting a Tool result, so a stop can
+                    // persist stub results — a replayed history with a tool
+                    // call but no result is rejected by most providers.
+                    let mut pending_calls: Vec<String> = Vec::new();
+                    // Whether the last committed top-level output ended the
+                    // turn (assistant + Stop) — a cancel landing at that exact
+                    // instant is a normal completion, not an interruption.
+                    let mut completed_naturally = false;
+                    let mut stopped = false;
+                    let mut run_error: Option<String> = None;
+
+                    let mut stream = agent.run_stream(user_msg);
                     loop {
-                        tokio::select! {
-                            biased;
-                            _ = token.cancelled() => break,
-                            next = stream.next() => {
-                                let Some(output) = next else { break };
-                                let output = output?;
-                                sqlx::query(
-                                    "INSERT INTO messages (session_id, seq, content, created_at) \
-                                     VALUES (?, ?, ?, ?)",
-                                )
-                                .bind(&session_key)
-                                .bind(next_seq)
-                                .bind(serde_json::to_string(&output.message)?)
-                                .bind(Utc::now().to_rfc3339())
-                                .execute(&db)
-                                .await?;
-                                events.publish(
-                                    &channel,
-                                    serde_json::to_string(&MessageEvent {
-                                        seq: next_seq,
-                                        message: output.message,
-                                    })?,
-                                );
-                                next_seq += 1;
+                        let item = if stopped {
+                            // Drain mode (entered on cancel). Take only what
+                            // ailoy has already produced, never awaiting new
+                            // output, so a turn that finished at the exact
+                            // cancel instant still commits its terminal message
+                            // instead of being mistagged as interrupted.
+                            // Nothing ready → break, dropping the stream (which
+                            // aborts the in-flight request), so stop stays
+                            // prompt.
+                            match stream.next().now_or_never() {
+                                Some(item) => item,
+                                None => break,
+                            }
+                        } else {
+                            tokio::select! {
+                                biased;
+                                _ = token.cancelled() => {
+                                    stopped = true;
+                                    continue;
+                                }
+                                item = stream.next() => item,
+                            }
+                        };
+                        // `last` marks the trailing-flush pseudo-item so the
+                        // loop exits after committing it.
+                        let (produced, last) = match item {
+                            Some(Ok(delta)) => match assembler.push(delta) {
+                                Ok(items) => (items, false),
+                                Err(e) => {
+                                    run_error = Some(e);
+                                    break;
+                                }
+                            },
+                            Some(Err(e)) => {
+                                run_error = Some(format!("{e:#}"));
+                                break;
+                            }
+                            // A stopped turn's pending partial is handled by
+                            // the interrupt path below, not flushed here.
+                            None if stopped => break,
+                            None => match assembler.finish() {
+                                // Defensive trailing flush: ailoy's contract
+                                // (every message ends with a finish_reason
+                                // delta) makes this a no-op for conforming
+                                // streams — a message here means an upstream
+                                // producer broke the contract. Still commit it
+                                // (losing a completed answer is worse) but warn
+                                // so the violation is visible.
+                                Ok(Some(output)) => {
+                                    tracing::warn!(
+                                        session = %id,
+                                        "stream ended mid-message (contract violation upstream); committing trailing message"
+                                    );
+                                    (vec![AgentStreamItem::Completed(Box::new(output))], true)
+                                }
+                                Ok(None) => break,
+                                Err(e) => {
+                                    tracing::warn!(session = %id, "failed to finalize trailing stream delta: {e}");
+                                    break;
+                                }
+                            },
+                        };
+                        for out in produced {
+                            match out {
+                                // Live assistant text. Published incrementally
+                                // with the running total so the client can dedup
+                                // at the catch-up↔live boundary; the shared
+                                // `partial` snapshot backs mid-turn
+                                // (re)subscribes.
+                                AgentStreamItem::Delta(fragment) => {
+                                    partial_text.push_str(&fragment);
+                                    // UTF-16 units so cum_len matches the
+                                    // client's String.length.
+                                    let cum_len = partial_text.encode_utf16().count() as u64;
+                                    *partial.lock().expect("partial lock poisoned") =
+                                        partial_text.clone();
+                                    events.publish(
+                                        &channel,
+                                        serde_json::to_string(&SessionEvent::Delta {
+                                            text: fragment,
+                                            cum_len,
+                                        })?,
+                                    );
+                                }
+                                // A message finalized at its boundary — persist
+                                // and publish it, and update the stop
+                                // book-keeping for top-level outputs.
+                                AgentStreamItem::Completed(output) => {
+                                    let output = *output;
+                                    if matches!(output.depth, None | Some(0)) {
+                                        match output.message.role {
+                                            Role::Assistant => {
+                                                partial_text.clear();
+                                                partial
+                                                    .lock()
+                                                    .expect("partial lock poisoned")
+                                                    .clear();
+                                                completed_naturally = matches!(
+                                                    output.finish_reason,
+                                                    FinishReason::Stop {}
+                                                );
+                                                for tc in output.message.tool_calls.iter().flatten()
+                                                {
+                                                    if let Some((call_id, _, _)) = tc.as_function()
+                                                    {
+                                                        pending_calls.push(call_id.to_string());
+                                                    }
+                                                }
+                                            }
+                                            Role::Tool => {
+                                                completed_naturally = false;
+                                                if let Some(call_id) = output.message.id.as_deref()
+                                                {
+                                                    pending_calls.retain(|c| c != call_id);
+                                                }
+                                            }
+                                            _ => completed_naturally = false,
+                                        }
+                                    }
+                                    persist_message(
+                                        &db,
+                                        &events,
+                                        &channel,
+                                        &session_key,
+                                        next_seq,
+                                        output.message,
+                                    )
+                                    .await?;
+                                    next_seq += 1;
+                                }
                             }
                         }
+                        if last {
+                            break;
+                        }
                     }
-                    Ok(())
+                    drop(stream);
+
+                    if let Some(err) = run_error {
+                        if stopped {
+                            // The error occurred during the grace period after a
+                            // stop request. Treat it as a clean stop rather than
+                            // a hard failure: keep the partial outputs already
+                            // committed instead of surfacing an error.
+                            tracing::warn!(
+                                session = %id,
+                                "agent error during stop grace period (treating as stop): {err}"
+                            );
+                        } else {
+                            anyhow::bail!("{err}");
+                        }
+                    }
+
+                    if stopped {
+                        if completed_naturally {
+                            // Cancel fired at the exact moment the turn
+                            // finished; report a normal completion so the
+                            // client doesn't see a spurious "stopped".
+                            stopped = false;
+                        } else {
+                            for call_id in std::mem::take(&mut pending_calls) {
+                                let stub = Message::new(Role::Tool)
+                                    .with_id(call_id)
+                                    .with_contents([Part::text(
+                                        "[Interrupted: the user stopped response generation before this tool call completed]",
+                                    )]);
+                                persist_message(&db, &events, &channel, &session_key, next_seq, stub)
+                                    .await?;
+                                next_seq += 1;
+                            }
+                            const INTERRUPT_NOTE: &str =
+                                "[Interrupted: the user manually stopped response generation here]";
+                            let note = if partial_text.is_empty() {
+                                INTERRUPT_NOTE.to_string()
+                            } else {
+                                // The interrupted turn streamed text but never
+                                // committed a message. Persist what accumulated
+                                // so the partial answer survives a refresh.
+                                format!("{partial_text}\n\n{INTERRUPT_NOTE}")
+                            };
+                            persist_message(
+                                &db,
+                                &events,
+                                &channel,
+                                &session_key,
+                                next_seq,
+                                Message::new(Role::Assistant).with_contents([Part::text(note)]),
+                            )
+                            .await?;
+                            partial.lock().expect("partial lock poisoned").clear();
+                        }
+                    }
+
+                    Ok(stopped)
                 }
                 .await;
 
@@ -473,12 +699,52 @@ impl SessionsState {
             }
             .await;
 
-            if let Err(e) = result {
-                tracing::error!(session = %id, "run failed: {e:#}");
+            let status = match &result {
+                Ok(false) => RunStatus::Done,
+                Ok(true) => RunStatus::Stopped,
+                Err(e) => {
+                    tracing::error!(session = %id, "run failed: {e:#}");
+                    RunStatus::Error {
+                        message: format!("{e:#}"),
+                    }
+                }
+            };
+            match serde_json::to_string(&SessionEvent::Run { status }) {
+                Ok(payload) => {
+                    events.publish(&channel, payload);
+                }
+                Err(e) => tracing::error!(session = %id, "failed to serialize run status: {e}"),
             }
             runs.lock().await.remove(&id);
         });
 
         Ok(())
     }
+}
+
+/// `INSERT` one message row for `session_key` at `seq` and publish it on the
+/// session's channel (a no-op when nobody is subscribed).
+async fn persist_message(
+    db: &SqlitePool,
+    events: &EventQueue,
+    channel: &str,
+    session_key: &str,
+    seq: i64,
+    message: Message,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO messages (session_id, seq, content, created_at) \
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(session_key)
+    .bind(seq)
+    .bind(serde_json::to_string(&message)?)
+    .bind(Utc::now().to_rfc3339())
+    .execute(db)
+    .await?;
+    events.publish(
+        channel,
+        serde_json::to_string(&SessionEvent::Message { seq, message })?,
+    );
+    Ok(())
 }

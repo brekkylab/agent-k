@@ -17,15 +17,19 @@ use uuid::Uuid;
 
 use crate::{
     auth::{AuthUser, authenticate},
-    event::{MessageEvent, message_channel},
+    event::{RunStatus, SessionEvent, message_channel},
     state::AppState,
 };
 
-use super::{error::{ApiError, err}, workspace::require_owned_session};
+use super::{
+    error::{ApiError, err},
+    workspace::require_owned_session,
+};
 
 /// A single persisted message together with its session-local sequence
-/// number. Mirrors the `message/{id}` channel's [`MessageEvent`] shape so HTTP
-/// catch-up and the WS stream are interchangeable on the client.
+/// number. Mirrors the `message/{id}` channel's [`SessionEvent::Message`]
+/// shape (minus the `type` tag) so HTTP catch-up and the WS stream are
+/// interchangeable on the client.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct MessageResponse {
     pub seq: i64,
@@ -100,9 +104,11 @@ pub(super) async fn stop_run(
 
 /// Subscribe-then-catch-up: subscribe to the per-session channel first so any
 /// publish concurrent with our DB catch-up is buffered into `rx`; then drain
-/// rows with `seq > last_seq` from the DB; then forward live events filtered
-/// by `seq > last_seq` (dedup against the catch-up). On `Lagged` we replay
-/// the catch-up to reconcile.
+/// rows with `seq > last_seq` from the DB, followed by the in-flight turn's
+/// partial text (as one cumulative delta) when a run is active; then forward
+/// live events — `message` events filtered by `seq > last_seq` (dedup against
+/// the catch-up), `delta`/`run` events verbatim (the client dedups deltas by
+/// `cum_len`). On `Lagged` we replay the catch-up to reconcile.
 pub(super) async fn stream_messages(
     State(state): State<Arc<AppState>>,
     Path(sid): Path<Uuid>,
@@ -132,7 +138,8 @@ pub(super) async fn stream_messages(
                 }
             };
             for (seq, message) in rows {
-                let payload = match serde_json::to_string(&MessageEvent { seq, message }) {
+                let payload = match serde_json::to_string(&SessionEvent::Message { seq, message })
+                {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::error!(session = %sid, "ws catch-up serialize error: {e}");
@@ -145,21 +152,61 @@ pub(super) async fn stream_messages(
                 last_seq = seq;
             }
 
+            // A run in flight when we attach: tell the client, then hand it
+            // the in-progress turn's streamed-so-far text as one cumulative
+            // delta so it doesn't wait for the next fragment. Live deltas
+            // buffered in `rx` meanwhile overlap this snapshot; the client's
+            // `cum_len` dedup drops them.
+            if let Some(partial) = state.sessions.live_partial(sid).await {
+                let mut events = vec![SessionEvent::Run {
+                    status: RunStatus::Started,
+                }];
+                if !partial.is_empty() {
+                    let cum_len = partial.encode_utf16().count() as u64;
+                    events.push(SessionEvent::Delta {
+                        text: partial,
+                        cum_len,
+                    });
+                }
+                for event in events {
+                    let payload = match serde_json::to_string(&event) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!(session = %sid, "ws catch-up serialize error: {e}");
+                            return;
+                        }
+                    };
+                    if socket.send(WsMessage::Text(payload.into())).await.is_err() {
+                        return;
+                    }
+                }
+            }
+
             // Live pump until lag forces another catch-up or the channel closes.
             loop {
                 match rx.recv().await {
                     Ok(payload) => {
-                        let seq = serde_json::from_str::<serde_json::Value>(&payload)
-                            .ok()
-                            .and_then(|v| v.get("seq").and_then(|s| s.as_i64()));
-                        let Some(seq) = seq else { continue };
-                        if seq <= last_seq {
-                            continue;
-                        }
-                        if socket.send(WsMessage::Text(payload.into())).await.is_err() {
+                        // Only `message` events carry a seq and need dedup
+                        // against the catch-up; everything else (`delta`,
+                        // `run`) is ephemeral and forwarded verbatim.
+                        let value: serde_json::Value = match serde_json::from_str(&payload) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        if value.get("type").and_then(|t| t.as_str()) == Some("message") {
+                            let Some(seq) = value.get("seq").and_then(|s| s.as_i64()) else {
+                                continue;
+                            };
+                            if seq <= last_seq {
+                                continue;
+                            }
+                            if socket.send(WsMessage::Text(payload.into())).await.is_err() {
+                                return;
+                            }
+                            last_seq = seq;
+                        } else if socket.send(WsMessage::Text(payload.into())).await.is_err() {
                             return;
                         }
-                        last_seq = seq;
                     }
                     Err(RecvError::Lagged(missed)) => {
                         tracing::warn!(session = %sid, missed, "ws subscriber lagged — reconciling from DB");
