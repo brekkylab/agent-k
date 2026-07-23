@@ -686,6 +686,33 @@ impl GmailResource {
         })
     }
 
+    /// Trash one message and invalidate everything that cached it: the body
+    /// (memory + disk blob), its attachment blobs, its id→date entry, and all
+    /// label indexes (memory + disk snapshots — a trashed message must vanish
+    /// from listings and reappear under TRASH on the next `ls`).
+    async fn trash_message(&self, id: &str) -> ResourceResult<()> {
+        // Enumerate attachment names before mutating (usually served from
+        // cache) so their disk blobs can be dropped with the body.
+        let att_names = match self.message_full(id).await {
+            Ok(raw) => unique_attachment_names(&attachments(&raw)),
+            Err(_) => Vec::new(),
+        };
+        self.accessor.trash(id).await?;
+        self.msg_cache.lock().await.remove(id);
+        self.id_date.lock().await.remove(id);
+        self.date_index.lock().await.clear();
+        if let Some(disk) = &self.disk {
+            disk.remove_blob(id).await;
+            disk.clear_snapshots().await;
+        }
+        if let Some(att_disk) = &self.att_disk {
+            for name in &att_names {
+                att_disk.remove_blob(&att_blob_key(id, name)).await;
+            }
+        }
+        Ok(())
+    }
+
     /// Attachment files within a message's attachment dir. They carry the
     /// message's received time as mtime (an attachment is as old as its mail).
     async fn readdir_attachments(&self, msg_id: &str) -> anyhow::Result<Vec<DirEntry>> {
@@ -837,39 +864,21 @@ impl Resource for GmailResource {
         }
     }
 
-    /// `rm <…>.gmail.json` moves the message to Trash. Dormant today: the
-    /// mount is provisioned read-only (`gmail.readonly` — see the backend
-    /// mount router), so Gmail rejects the trash call with 403. Kept so `rm`
-    /// works unchanged once a write scope (`gmail.modify`) is granted at
-    /// consent.
+    /// `rm <…>.gmail.json` moves the message to Trash — via its label path or
+    /// a `.search` hit alike: both name the same message id, and an operation
+    /// valid on one route must be valid on the other. Dormant under a
+    /// `gmail.readonly` consent (Gmail rejects the trash call with 403); a
+    /// `gmail.modify` consent activates it with no code change.
     async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
         let seg = segments(path);
         match seg.as_slice() {
+            [s, _q, file] if s.as_str() == SEARCH_DIR && file.ends_with(GMAIL_SUFFIX) => {
+                self.trash_message(&id_from_name(file.trim_end_matches(GMAIL_SUFFIX)))
+                    .await
+            }
             [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
-                let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
-                // Enumerate attachment names before mutating (usually served
-                // from cache) so their disk blobs can be dropped with the body.
-                let att_names = match self.message_full(&id).await {
-                    Ok(raw) => unique_attachment_names(&attachments(&raw)),
-                    Err(_) => Vec::new(),
-                };
-                self.accessor.trash(&id).await?;
-                self.msg_cache.lock().await.remove(&id);
-                self.id_date.lock().await.remove(&id);
-                // The label indexes now list a trashed message; drop them (disk
-                // snapshots too, or the next `ls` would adopt a stale one) so
-                // the next `ls` rebuilds without it (and it shows under TRASH).
-                self.date_index.lock().await.clear();
-                if let Some(disk) = &self.disk {
-                    disk.remove_blob(&id).await;
-                    disk.clear_snapshots().await;
-                }
-                if let Some(att_disk) = &self.att_disk {
-                    for name in &att_names {
-                        att_disk.remove_blob(&att_blob_key(&id, name)).await;
-                    }
-                }
-                Ok(())
+                self.trash_message(&id_from_name(file.trim_end_matches(GMAIL_SUFFIX)))
+                    .await
             }
             _ => Err(ResourceError::Unsupported),
         }
@@ -1947,6 +1956,39 @@ mod tests {
         assert_eq!(entries[1].size, 1234, "sizeEstimate carried");
         assert!(entries[1].mtime.is_some(), "received time carried");
         assert!(entries[2].mtime.is_none(), "no internalDate → no mtime");
+    }
+
+    #[tokio::test]
+    async fn unlink_accepts_only_message_files_no_network_needed() {
+        let r = GmailResource::new(
+            &GmailConfig {
+                client_id: "id".into(),
+                client_secret: "sec".into(),
+                refresh_token: "tok".into(),
+                account_email: "t@example.com".into(),
+            },
+            None,
+        )
+        .unwrap();
+        // Every shape that isn't a message file — at label depth or under a
+        // `.search` hit — is rejected by the path match alone, before any
+        // network I/O (dummy credentials would fail loudly otherwise).
+        for p in [
+            "/INBOX",
+            "/INBOX/2026/07",
+            "/INBOX/2026/07/subject__id",             // attachment dir
+            "/INBOX/2026/07/subject__id/file.pdf",    // attachment file
+            "/.search",
+            "/.search/query",
+            "/.search/query/subject__id/file.pdf",    // attachment under a hit
+            "/.search/x.gmail.json",                  // message file at wrong depth
+        ] {
+            let got = r.unlink(&MountPath::new(p)).await;
+            assert!(
+                matches!(got, Err(ResourceError::Unsupported)),
+                "{p} must be Unsupported, got {got:?}"
+            );
+        }
     }
 
     #[test]
