@@ -70,6 +70,10 @@ pub enum ProviderSpec {
     Gmail {
         code: String,
         redirect_uri: String,
+        /// Optional per-label index ceiling (newest-N); omitted = mirror the
+        /// whole mailbox. A performance knob, safe to accept from the client.
+        #[serde(default)]
+        index_cap: Option<usize>,
     },
 }
 
@@ -96,7 +100,11 @@ impl ProviderSpec {
                 key_prefix,
             }),
             ProviderSpec::Notion { api_key } => ProviderConfig::Notion(NotionConfig { api_key }),
-            ProviderSpec::Gmail { code, redirect_uri } => {
+            ProviderSpec::Gmail {
+                code,
+                redirect_uri,
+                index_cap,
+            } => {
                 let (client_id, client_secret) = oauth.credentials().ok_or_else(|| {
                     err(
                         StatusCode::BAD_REQUEST,
@@ -118,6 +126,7 @@ impl ProviderSpec {
                     client_secret: client_secret.to_string(),
                     refresh_token: exchanged.refresh_token,
                     account_email: exchanged.account_email,
+                    index_cap,
                     // Deployment-level override (mock/gateway), inherited from
                     // backend config — never from the request.
                     base_url: oauth.base_url.clone(),

@@ -46,12 +46,6 @@ const SEQ_WINDOW: Duration = Duration::from_secs(60);
 /// read ahead one month. 2 = the second month dir grep opens; a single
 /// targeted browse (one month) never reaches it, so browse pays no read-ahead.
 const SEQ_THRESHOLD: u32 = 2;
-/// Safety ceiling on how many messages a label's index covers. The scan costs
-/// one `messages.get` per message under Gmail's per-user rate limit (~5k index
-/// ≈ 1–2 min; reading all their bodies is ~2x more), so an unbounded scan of a
-/// pathologically large label (millions) would hang and burn quota. Beyond this
-/// the newest N are indexed; older ones are omitted.
-const MAX_INDEX_MESSAGES: usize = 5_000;
 /// Over-estimate reported by `stat` for an `.gmail.json` whose processed length
 /// isn't known without fetching. The guest kernel clamps reads at the reported
 /// size even under direct_io, so this must exceed any real email JSON; reads
@@ -124,6 +118,9 @@ pub struct GmailResource {
     /// keep stable across `messages.get` calls; the message is immutable, so
     /// filename → content is.
     att_cache: tokio::sync::Mutex<AttCache>,
+    /// Per-label index ceiling ([`GmailConfig::index_cap`], `usize::MAX` when
+    /// unset): how many of a label's newest messages the date index covers.
+    index_cap: usize,
     /// Persistent second tier under `msg_cache`/`date_index`: message bodies
     /// and index snapshots on disk, shared across sessions of the same account
     /// ([`DiskCache`]). `None` when no cache root was configured (tests,
@@ -240,6 +237,7 @@ impl GmailResource {
             id_date: tokio::sync::Mutex::new(HashMap::new()),
             seq_scan: tokio::sync::Mutex::new(None),
             att_cache: tokio::sync::Mutex::new(AttCache::default()),
+            index_cap: config.index_cap.unwrap_or(usize::MAX),
             disk,
             att_disk,
         })
@@ -493,7 +491,7 @@ impl GmailResource {
         };
         let ids = self
             .accessor
-            .list_all_message_ids(&label_id, MAX_INDEX_MESSAGES)
+            .list_all_message_ids(&label_id, self.index_cap)
             .await?;
         let id_dates = self.dates_for_ids(&ids).await;
         // Bucket in list order (newest-first) so a date's ids are deterministic.
@@ -1793,6 +1791,9 @@ mod tests {
             refresh_token: std::env::var("GMAIL_REFRESH_TOKEN").ok()?,
             account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
             base_url: std::env::var("GMAIL_BASE_URL").ok(),
+            index_cap: std::env::var("GMAIL_INDEX_CAP")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         })
     }
 
@@ -1897,7 +1898,7 @@ mod tests {
         );
         assert!(labels.iter().any(|e| e.name == "INBOX"));
 
-        // 2. year/month navigation (builds the capped label index)
+        // 2. year/month navigation (builds the label index)
         let t0 = std::time::Instant::now();
         let years = r.readdir(&MountPath::new("/INBOX")).await.expect("years");
         let y = years.first().expect("a year").name.clone();
@@ -2125,6 +2126,7 @@ mod tests {
                 refresh_token: "tok".into(),
                 account_email: "t@example.com".into(),
                 base_url: None,
+                index_cap: None,
             },
             None,
         )
@@ -2158,6 +2160,7 @@ mod tests {
             refresh_token: "tok-123".into(),
             account_email: "Sello@Brekkylab.com".into(),
             base_url: None,
+            index_cap: None,
         };
         // lowercased, readable, path-safe
         assert_eq!(account_cache_key(&base), "sello@brekkylab.com");

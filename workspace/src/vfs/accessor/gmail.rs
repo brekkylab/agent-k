@@ -233,6 +233,11 @@ pub struct GmailConfig {
     /// (a refresh token changes each consent; the email doesn't), so it keys
     /// the disk cache and is shown in mount info.
     pub account_email: String,
+    /// Per-label index ceiling: `Some(n)` indexes only the newest `n` messages
+    /// of each label (bounding scan time/quota on huge mailboxes); `None` (the
+    /// default) mirrors every message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_cap: Option<usize>,
     /// Alternative API origin (an enterprise mock or gateway): requests go to
     /// `{base_url}/gmail/v1` and `{base_url}/oauth2/token` instead of the real
     /// Google hosts. `None` = production Google. Deployment-level only — the
@@ -395,9 +400,8 @@ impl GmailAccessor {
     }
 
     /// Message ids under a label, paginating (500/page, `nextPageToken`) up to
-    /// `limit` — a safety ceiling that stops a pathologically large label from
-    /// costing thousands of pages and an unbounded index build. `messages.list`
-    /// is newest-first, so hitting the cap keeps the newest `limit` ids.
+    /// `limit` — [`GmailConfig::index_cap`] or unbounded. `messages.list` is
+    /// newest-first, so a cap keeps the newest `limit` ids.
     pub async fn list_all_message_ids(
         &self,
         label_id: &str,
