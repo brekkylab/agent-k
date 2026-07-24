@@ -10,8 +10,10 @@ use uuid::Uuid;
 use super::knowledge::Resyncer;
 use super::{StateError, StateResult, User, parse_ts, parse_uuid};
 
+mod gmail_sync;
 mod mount;
 
+pub use gmail_sync::*;
 pub use mount::*;
 
 /// A workspace: both a database row and a directory tree on disk.
@@ -83,6 +85,9 @@ pub struct WorkspacesState {
     /// (so `/files/knowledge` writes trigger a resync) and reused by the router
     /// and periodic sweep.
     resyncer: Resyncer,
+    /// Per-account single-flight driver for Gmail mirror syncs (see
+    /// [`gmail_sync`]); spawned at mount creation and on frontend request.
+    gmail_sync: GmailSyncRunner,
 }
 
 impl WorkspacesState {
@@ -93,6 +98,7 @@ impl WorkspacesState {
             data_root,
             fs_cache: Mutex::new(HashMap::new()),
             resyncer,
+            gmail_sync: GmailSyncRunner::default(),
         }
     }
 

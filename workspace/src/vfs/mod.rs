@@ -32,6 +32,7 @@ pub use mount::{FsConfig, LOCAL_MOUNT, Mount, MountSpec, ProviderConfig};
 pub use path::MountPath;
 pub use resource::{
     DirEntry, FileKind, FileStat, GmailResource, GmailSyncDelta, GmailSyncState, LocalResource,
-    NotionResource, Resource, S3Resource, mirror_tree, sync_gmail_incremental, sync_gmail_mirror,
+    NotionResource, Resource, S3Resource, account_mirror_dir, mirror_tree, sync_gmail_incremental,
+    sync_gmail_mirror,
 };
 pub use sandbox::{ForwardFs, ForwardServer, FwdEntry, FwdStat};

@@ -8,7 +8,8 @@ mod s3;
 pub use base::{DirEntry, FileKind, FileStat, Resource};
 pub use gmail::GmailResource;
 pub use gmail_sync::{
-    GmailSyncDelta, GmailSyncState, mirror_tree, sync_gmail_incremental, sync_gmail_mirror,
+    GmailSyncDelta, GmailSyncState, account_mirror_dir, mirror_tree, sync_gmail_incremental,
+    sync_gmail_mirror,
 };
 pub use local::LocalResource;
 pub use notion::NotionResource;

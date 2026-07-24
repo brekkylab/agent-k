@@ -237,7 +237,97 @@ pub(super) async fn create_mount(
     let provider = payload.provider.resolve(&state.google_oauth).await?;
     let mount = WorkspaceMount::new(wid, payload.prefix, provider);
     let created = state.workspaces.create_mount(mount).await?;
+    if let ProviderConfig::Gmail(c) = &created.provider {
+        // Kick the initial full mailbox sync in the background; the response
+        // doesn't wait for it. Later freshness is frontend-driven via
+        // `POST …/mounts/{id}/sync`; progress via `GET …/mounts/{id}/sync`.
+        state.workspaces.spawn_gmail_sync(c);
+    }
     Ok((StatusCode::CREATED, Json(MountResponse::from(created))))
+}
+
+/// Sync status of a Gmail mount's on-disk mailbox mirror.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MountSyncResponse {
+    /// A sync run is active right now.
+    pub running: bool,
+    /// This request started a new run (`POST` only; `false` when one was
+    /// already in flight — its result is equivalent, just poll `running`).
+    pub started: bool,
+    /// Messages in the mailbox at the last full listing (progress denominator).
+    pub total: usize,
+    /// Messages mirrored so far.
+    pub fetched: usize,
+    /// The initial full sync has finished (the mirror serves complete data;
+    /// later runs only fold in changes).
+    pub completed: bool,
+}
+
+/// Look up `mount_id` in `wid` and return its Gmail config, or the right error
+/// (foreign/missing mount → 404 like everywhere else; non-Gmail → 400 since
+/// only Gmail mounts have a mirror to sync).
+async fn gmail_mount_config(
+    state: &AppState,
+    wid: Uuid,
+    mount_id: Uuid,
+) -> Result<GmailConfig, ApiError> {
+    let mount = match state.workspaces.get_mount(mount_id).await? {
+        Some(m) if m.workspace_id == wid => m,
+        _ => return Err(err(StatusCode::NOT_FOUND, "mount not found")),
+    };
+    match mount.provider {
+        ProviderConfig::Gmail(c) => Ok(c),
+        _ => Err(err(
+            StatusCode::BAD_REQUEST,
+            "mount provider does not support sync",
+        )),
+    }
+}
+
+/// `GET /workspaces/{wid}/mounts/{mount_id}/sync` — sync progress of a Gmail
+/// mount's mirror (for the initial-sync progress display).
+pub(super) async fn get_mount_sync(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Path((wid, mount_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<MountSyncResponse>, ApiError> {
+    require_owned_workspace(&state, &auth, wid).await?;
+    let cfg = gmail_mount_config(&state, wid, mount_id).await?;
+    let (sync, running) = state.workspaces.gmail_sync_status(&cfg);
+    let sync = sync.unwrap_or_default();
+    Ok(Json(MountSyncResponse {
+        running,
+        started: false,
+        total: sync.total,
+        fetched: sync.fetched,
+        completed: sync.completed,
+    }))
+}
+
+/// `POST /workspaces/{wid}/mounts/{mount_id}/sync` — refresh the mount's
+/// mirror in the background: journal replay when the mirror is current, a
+/// (resumed) full sync when it isn't. Idempotent under concurrency: if a run
+/// is already active the call just reports it (`started: false`).
+pub(super) async fn trigger_mount_sync(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Path((wid, mount_id)): Path<(Uuid, Uuid)>,
+) -> Result<(StatusCode, Json<MountSyncResponse>), ApiError> {
+    require_owned_workspace(&state, &auth, wid).await?;
+    let cfg = gmail_mount_config(&state, wid, mount_id).await?;
+    let started = state.workspaces.spawn_gmail_sync(&cfg);
+    let (sync, running) = state.workspaces.gmail_sync_status(&cfg);
+    let sync = sync.unwrap_or_default();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(MountSyncResponse {
+            running,
+            started,
+            total: sync.total,
+            fetched: sync.fetched,
+            completed: sync.completed,
+        }),
+    ))
 }
 
 /// `DELETE /workspaces/{wid}/mounts/{mount_id}` — detach a mount. A mount that

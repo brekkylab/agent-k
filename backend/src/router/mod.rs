@@ -57,8 +57,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         // .api_route("/workspaces", get(workspace::list_workspaces))
         .api_route(
             "/workspaces/{id}",
-            get(workspace::get_workspace)
-                .patch(workspace::update_workspace),
+            get(workspace::get_workspace).patch(workspace::update_workspace),
             // DELETE unwired until multiple workspaces per user exist — today it
             // would only ever 403 (default) or 404 (see delete_workspace):
             // .delete(workspace::delete_workspace)
@@ -72,6 +71,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             delete(mount::delete_mount),
         )
         .api_route(
+            "/workspaces/{wid}/mounts/{mount_id}/sync",
+            get(mount::get_mount_sync).post(mount::trigger_mount_sync),
+        )
+        .api_route(
             "/workspaces/{wid}/knowledge/refs",
             get(knowledge::list_refs).post(knowledge::create_ref),
         )
@@ -83,10 +86,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/workspaces/{wid}/knowledge/resync",
             post(knowledge::resync),
         )
-        .api_route(
-            "/agents",
-            get(agent::list_agents).post(agent::create_agent),
-        )
+        .api_route("/agents", get(agent::list_agents).post(agent::create_agent))
         .api_route(
             "/agents/{id}",
             get(agent::get_agent)
