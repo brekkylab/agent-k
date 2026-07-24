@@ -230,8 +230,8 @@ pub struct GmailConfig {
     pub refresh_token: String,
     /// The account's email address, resolved at mount-create
     /// ([`exchange_gmail_code`]). Identifies the account across re-consents
-    /// (a refresh token changes each consent; the email doesn't), so it keys
-    /// the disk cache and is shown in mount info.
+    /// (a refresh token changes each consent; the email doesn't); shown in
+    /// mount info so the UI can tell mounts apart.
     pub account_email: String,
     /// Per-label index ceiling: `Some(n)` indexes only the newest `n` messages
     /// of each label (bounding scan time/quota on huge mailboxes); `None` (the

@@ -45,11 +45,6 @@ pub struct FsConfig {
     /// struct, never persisted — the DB stores per-mount rows and the caller
     /// fills this.
     pub local_root: Option<PathBuf>,
-    /// Host-side cache directory for providers with a persistent tier (Gmail
-    /// message bodies / index snapshots). Must live *outside* every mount so
-    /// the guest never sees it. `None` disables disk caching (unit tests,
-    /// library users) — providers then cache in memory only.
-    pub cache_root: Option<PathBuf>,
     pub mounts: Vec<MountSpec>,
 }
 
@@ -73,12 +68,11 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
             resource: Arc::new(LocalResource::new(root)),
         });
     }
-    let cache_root = config.cache_root;
     for spec in config.mounts {
         let provider: Arc<dyn Resource> = match spec.provider {
             ProviderConfig::S3(c) => Arc::new(S3Resource::new(&c)?),
             ProviderConfig::Notion(c) => Arc::new(NotionResource::new(&c)?),
-            ProviderConfig::Gmail(c) => Arc::new(GmailResource::new(&c, cache_root.as_deref())?),
+            ProviderConfig::Gmail(c) => Arc::new(GmailResource::new(&c)?),
         };
         // Wrap every provider in the metadata index cache so `stat` after a
         // `readdir` (e.g. `ls -la`) is served from memory.

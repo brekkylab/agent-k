@@ -346,7 +346,6 @@ impl WorkspaceFs {
     pub fn local(root: PathBuf) -> Self {
         Self::from_config(FsConfig {
             local_root: Some(root),
-            cache_root: None,
             mounts: Vec::new(),
         })
         .expect("local-only fs is always valid")

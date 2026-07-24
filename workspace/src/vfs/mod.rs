@@ -18,7 +18,6 @@
 
 pub mod accessor;
 mod cache;
-mod disk_cache;
 pub mod error;
 pub mod path;
 pub mod resource;

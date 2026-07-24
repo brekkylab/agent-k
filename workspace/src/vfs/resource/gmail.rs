@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 
 use crate::vfs::{
     accessor::{GmailAccessor, GmailConfig, encode_b64url},
-    disk_cache::DiskCache,
     error::{ResourceError, ResourceResult},
     path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource, SEARCH_DIR},
@@ -71,20 +70,6 @@ const ATT_TTL: Duration = Duration::from_secs(30);
 /// oldest) to stay under this.
 const ATT_CACHE_BUDGET: u64 = 128 * 1024 * 1024;
 
-/// Byte budget for the on-disk message cache ([`DiskCache`]), per account.
-/// Bodies are immutable, so the cache is shared by every session mounting the
-/// same account and only eviction (oldest-first) bounds it. 2 GB covers a
-/// fully-cached large mailbox several times over (~30-60 KB/message, ≤5k
-/// indexed per label), while keeping the worst-case per-account disk
-/// liability small at multi-user scale; eviction is lossless (a dropped blob
-/// just refetches).
-const DISK_CACHE_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
-/// Byte budget for the on-disk **attachment** cache, kept separate from the
-/// body cache so one 25 MB attachment can't evict hundreds of bodies.
-/// Attachments are immutable too; repeat views (frontend previews, re-reads
-/// across sessions) hit disk instead of re-downloading.
-const ATT_DISK_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
-
 /// `(display_name, label_id)` pairs for every Gmail label.
 type LabelList = Vec<(String, String)>;
 
@@ -121,15 +106,6 @@ pub struct GmailResource {
     /// Per-label index ceiling ([`GmailConfig::index_cap`], `usize::MAX` when
     /// unset): how many of a label's newest messages the date index covers.
     index_cap: usize,
-    /// Persistent second tier under `msg_cache`/`date_index`: message bodies
-    /// and index snapshots on disk, shared across sessions of the same account
-    /// ([`DiskCache`]). `None` when no cache root was configured (tests,
-    /// library users) — everything then behaves as memory-only.
-    disk: Option<DiskCache>,
-    /// Persistent tier under `att_cache`: whole-attachment bytes, in their own
-    /// [`DiskCache`] (separate [`ATT_DISK_BUDGET`]) so large attachments never
-    /// compete with bodies for eviction.
-    att_disk: Option<DiskCache>,
 }
 
 /// Attachment-cache key: `(message id, filename)`.
@@ -214,21 +190,7 @@ impl MsgCache {
 }
 
 impl GmailResource {
-    /// `cache_root` is the host-side cache directory (outside every mount, so
-    /// the guest never sees it); `None` disables the disk tier. The account's
-    /// cache dir is keyed by its email address (see [`account_cache_key`]) so
-    /// the cache survives re-consent.
-    pub fn new(config: &GmailConfig, cache_root: Option<&std::path::Path>) -> anyhow::Result<Self> {
-        let (disk, att_disk) = match cache_root {
-            Some(root) => {
-                let acct = root.join("gmail").join(account_cache_key(config));
-                (
-                    DiskCache::open(&acct, DISK_CACHE_BUDGET),
-                    DiskCache::open(&acct.join("atts"), ATT_DISK_BUDGET),
-                )
-            }
-            None => (None, None),
-        };
+    pub fn new(config: &GmailConfig) -> anyhow::Result<Self> {
         Ok(Self {
             accessor: GmailAccessor::new(config)?,
             label_cache: tokio::sync::Mutex::new(None),
@@ -238,8 +200,6 @@ impl GmailResource {
             seq_scan: tokio::sync::Mutex::new(None),
             att_cache: tokio::sync::Mutex::new(AttCache::default()),
             index_cap: config.index_cap.unwrap_or(usize::MAX),
-            disk,
-            att_disk,
         })
     }
 
@@ -288,23 +248,12 @@ impl GmailResource {
 
     // ---- message fetch (cached) ------------------------------------------
 
-    /// One full message, through the tiers: memory ([`MsgCache`]) → disk
-    /// ([`DiskCache`], shared across sessions) → API (which then warms both).
     async fn message_full(&self, id: &str) -> anyhow::Result<Value> {
         if let Some(v) = self.msg_cache.lock().await.get(id) {
             return Ok(v);
         }
-        if let Some(disk) = &self.disk
-            && let Some(v) = disk_get_msg(disk, id).await
-        {
-            self.msg_cache.lock().await.put(id.to_string(), v.clone());
-            return Ok(v);
-        }
         let v = self.accessor.get_message_full(id).await?;
         self.msg_cache.lock().await.put(id.to_string(), v.clone());
-        if let Some(disk) = &self.disk {
-            disk_put_msg(disk, id, &v).await;
-        }
         Ok(v)
     }
 
@@ -322,22 +271,8 @@ impl GmailResource {
         if let Some(bytes) = self.att_cache.lock().await.get(&key) {
             return Ok(bytes);
         }
-        // Disk tier: attachments are immutable, so a repeat view (another
-        // session, a frontend preview days later) reuses the bytes instead of
-        // re-downloading the whole file.
-        let blob_key = att_blob_key(msg_id, filename);
-        if let Some(disk) = &self.att_disk
-            && let Some(bytes) = disk.get_blob(&blob_key).await
-        {
-            let bytes = std::sync::Arc::new(bytes);
-            self.att_cache.lock().await.put(key, bytes.clone());
-            return Ok(bytes);
-        }
         let bytes = std::sync::Arc::new(self.accessor.get_attachment(msg_id, attachment_id).await?);
         self.att_cache.lock().await.put(key, bytes.clone());
-        if let Some(disk) = &self.att_disk {
-            disk.put_blob(&blob_key, &bytes).await;
-        }
         Ok(bytes)
     }
 
@@ -368,32 +303,23 @@ impl GmailResource {
             .await
     }
 
-    /// Full messages for a listing, warming `msg_cache` (and the disk tier) so
-    /// a following `cat` of a listed message reuses the body without another
-    /// fetch — in this or any other session.
+    /// Full messages for a listing, warming `msg_cache` so a following `cat`
+    /// of a listed message reuses the body without another fetch.
     async fn fetch_full_many(&self, ids: &[String]) -> Vec<Value> {
         let raws = self.fetch_many(ids, "full").await;
-        {
-            let mut cache = self.msg_cache.lock().await;
-            for v in &raws {
-                if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                    cache.put(id.to_string(), v.clone());
-                }
+        let mut cache = self.msg_cache.lock().await;
+        for v in &raws {
+            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                cache.put(id.to_string(), v.clone());
             }
         }
-        if let Some(disk) = &self.disk {
-            for v in &raws {
-                if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                    disk_put_msg(disk, id, v).await;
-                }
-            }
-        }
+        drop(cache);
         raws
     }
 
-    /// Full messages for `ids`, walking the tiers per id — memory, then the
-    /// cross-session disk cache, then one batched API fetch for what's left —
-    /// so a repeat listing (this session or another) costs no re-fetch.
+    /// Full messages for `ids`, serving from `msg_cache` where fresh and fetching
+    /// only the misses (in batches) — a repeat listing within [`MSG_TTL`] costs
+    /// no re-fetch.
     async fn ensure_full(&self, ids: &[String]) -> Vec<Value> {
         let mut out = Vec::with_capacity(ids.len());
         let mut missing = Vec::new();
@@ -405,26 +331,6 @@ impl GmailResource {
                     None => missing.push(id.clone()),
                 }
             }
-        }
-        if let Some(disk) = &self.disk
-            && !missing.is_empty()
-        {
-            let mut still = Vec::new();
-            let mut hits = Vec::new();
-            for id in missing {
-                match disk_get_msg(disk, &id).await {
-                    Some(v) => hits.push((id, v)),
-                    None => still.push(id),
-                }
-            }
-            if !hits.is_empty() {
-                let mut cache = self.msg_cache.lock().await;
-                for (id, v) in hits {
-                    cache.put(id, v.clone());
-                    out.push(v);
-                }
-            }
-            missing = still;
         }
         if !missing.is_empty() {
             out.extend(self.fetch_full_many(&missing).await);
@@ -472,20 +378,6 @@ impl GmailResource {
                 return Ok(idx.clone());
             }
         }
-        // Disk tier: another session (or a previous run) may have scanned this
-        // label already. Adopt the snapshot with its *remaining* freshness so
-        // memory and disk expire together rather than TTL-chaining.
-        if let Some(disk) = &self.disk
-            && let Some((age, dates)) = disk.get_snapshot::<DateIndex>(label).await
-            && age < INDEX_TTL
-            && let Some(at) = Instant::now().checked_sub(age)
-        {
-            self.date_index
-                .lock()
-                .await
-                .insert(label.to_string(), (at, dates.clone()));
-            return Ok(dates);
-        }
         let Some(label_id) = self.label_id(label).await? else {
             anyhow::bail!("no such label: {label}");
         };
@@ -505,9 +397,6 @@ impl GmailResource {
             .lock()
             .await
             .insert(label.to_string(), (Instant::now(), idx.clone()));
-        if let Some(disk) = &self.disk {
-            disk.put_snapshot(label, &idx).await;
-        }
         Ok(idx)
     }
 
@@ -626,7 +515,7 @@ impl GmailResource {
     /// `ls .search/<query>` — run the query server-side and list the newest
     /// [`SEARCH_MAX_RESULTS`] matches in the same file format as a month dir,
     /// so `cat`/attachments work unchanged. Repeat listings are absorbed by
-    /// the metadata cache; the bodies land in the shared msg/disk caches.
+    /// the metadata cache; the bodies land in the message cache.
     async fn readdir_search(&self, query: &str) -> anyhow::Result<Vec<DirEntry>> {
         let ids = self
             .accessor
@@ -684,30 +573,14 @@ impl GmailResource {
         })
     }
 
-    /// Trash one message and invalidate everything that cached it: the body
-    /// (memory + disk blob), its attachment blobs, its id→date entry, and all
-    /// label indexes (memory + disk snapshots — a trashed message must vanish
+    /// Trash one message and invalidate everything that cached it: the body,
+    /// its id→date entry, and all label indexes (a trashed message must vanish
     /// from listings and reappear under TRASH on the next `ls`).
     async fn trash_message(&self, id: &str) -> ResourceResult<()> {
-        // Enumerate attachment names before mutating (usually served from
-        // cache) so their disk blobs can be dropped with the body.
-        let att_names = match self.message_full(id).await {
-            Ok(raw) => unique_attachment_names(&attachments(&raw)),
-            Err(_) => Vec::new(),
-        };
         self.accessor.trash(id).await?;
         self.msg_cache.lock().await.remove(id);
         self.id_date.lock().await.remove(id);
         self.date_index.lock().await.clear();
-        if let Some(disk) = &self.disk {
-            disk.remove_blob(id).await;
-            disk.clear_snapshots().await;
-        }
-        if let Some(att_disk) = &self.att_disk {
-            for name in &att_names {
-                att_disk.remove_blob(&att_blob_key(id, name)).await;
-            }
-        }
         Ok(())
     }
 
@@ -1052,53 +925,6 @@ fn message_entries<'a>(raws: impl Iterator<Item = &'a Value>) -> Vec<DirEntry> {
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
-}
-
-/// Cache directory name for an account: its email, sanitized to one path
-/// segment. The email is an identifier, not a secret, so it stays in plain
-/// text — a readable dir beats an opaque hash for ops (thunderbird-style),
-/// and it survives re-consent, which would change any token-derived key.
-fn account_cache_key(config: &GmailConfig) -> String {
-    config
-        .account_email
-        .trim()
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-// ---- disk-tier JSON helpers -------------------------------------------------
-
-/// Blob key for one attachment in the attachment [`DiskCache`]: message id +
-/// display filename (the same pair the memory cache keys on — both are stable,
-/// unlike Gmail's per-fetch attachment ids). The filename rides along for
-/// readability but the hash suffix is what guarantees uniqueness: the blob
-/// store sanitizes keys into path-safe names, and two distinct filenames can
-/// collapse to the same sanitized form (`a b.pdf` / `a_b.pdf`) — without the
-/// hash they would share one blob and the second would serve the first's
-/// bytes.
-fn att_blob_key(msg_id: &str, filename: &str) -> String {
-    use crate::vfs::disk_cache::stable_hash;
-    format!("{msg_id}__{filename}-{:016x}", stable_hash(filename))
-}
-
-/// A message blob from the shared [`DiskCache`], parsed back to JSON.
-async fn disk_get_msg(disk: &DiskCache, id: &str) -> Option<Value> {
-    serde_json::from_slice(&disk.get_blob(id).await?).ok()
-}
-
-/// Serialize + store one message in the shared [`DiskCache`].
-async fn disk_put_msg(disk: &DiskCache, id: &str, v: &Value) {
-    if let Ok(bytes) = serde_json::to_vec(v) {
-        disk.put_blob(id, &bytes).await;
-    }
 }
 
 // ---- path helpers ---------------------------------------------------------
@@ -1797,15 +1623,13 @@ mod tests {
         })
     }
 
-    /// Live `.search` + disk-cache round-trip against a real mailbox: session 1
-    /// searches cold (API → disk), session 2 (fresh resource, same cache dir)
-    /// must serve the bodies from disk. Ignored by default; run with:
+    /// Live `.search` round-trip against a real mailbox. Ignored by default:
     ///
     ///   GMAIL_CLIENT_ID=… GMAIL_CLIENT_SECRET=… GMAIL_REFRESH_TOKEN=… \
     ///   [GMAIL_QUERY=…] cargo test -p workspace gmail_live -- --ignored --nocapture
     #[tokio::test]
     #[ignore = "requires GMAIL_* env + network"]
-    async fn gmail_live_search_and_disk_cache() {
+    async fn gmail_live_search() {
         use crate::vfs::cache::CachedResource;
         use std::sync::Arc;
 
@@ -1814,66 +1638,31 @@ mod tests {
             return;
         };
         let query = std::env::var("GMAIL_QUERY").unwrap_or_else(|_| "UMC".into());
-        let cache = tempfile::tempdir().unwrap();
+        let r = CachedResource::new(Arc::new(GmailResource::new(&cfg).unwrap()));
         let sp = MountPath::new(format!("/.search/{query}"));
-
-        // Session 1: cold — the search list + every body comes from the API,
-        // and the bodies land on disk.
-        let r1 = CachedResource::new(Arc::new(
-            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
-        ));
         let t0 = std::time::Instant::now();
-        let hits = r1.readdir(&sp).await.expect("cold search readdir");
-        let cold = t0.elapsed();
-        eprintln!("search {query:?}: {} entries in {cold:?}", hits.len());
+        let hits = r.readdir(&sp).await.expect("search readdir");
+        eprintln!("search {query:?}: {} entries in {:?}", hits.len(), t0.elapsed());
         for e in hits.iter().take(10) {
             eprintln!("  {:>9}B {:?} {}", e.size, e.kind, e.name);
         }
         if let Some(f) = hits.iter().find(|e| e.name.ends_with(GMAIL_SUFFIX)) {
             let p = MountPath::new(format!("/.search/{query}/{}", f.name));
-            let bytes = r1.read_bytes(&p, None).await.expect("read first hit");
-            let v: Value = serde_json::from_slice(&bytes).unwrap();
+            let v: Value =
+                serde_json::from_slice(&r.read_bytes(&p, None).await.expect("read hit")).unwrap();
             eprintln!(
-                "first hit: subject={:?} date={:?} body_text={}B",
+                "first hit: subject={:?} body_text={}B",
                 v["subject"],
-                v["date"],
                 v["body_text"].as_str().unwrap_or("").len()
             );
         }
-        let blob_dir = cache
-            .path()
-            .join("gmail")
-            .join(account_cache_key(&cfg))
-            .join("blobs");
-        let blobs = std::fs::read_dir(&blob_dir).map(|d| d.count()).unwrap_or(0);
-        eprintln!("disk blobs after session 1: {blobs}");
-        if !hits.is_empty() {
-            assert!(blobs > 0, "search bodies should have been persisted");
-        }
-
-        // Session 2: a fresh resource (empty memory caches) on the same cache
-        // dir — only the search list call goes out; bodies come from disk.
-        let r2 = CachedResource::new(Arc::new(
-            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
-        ));
-        let t1 = std::time::Instant::now();
-        let hits2 = r2.readdir(&sp).await.expect("warm search readdir");
-        let warm = t1.elapsed();
-        eprintln!(
-            "session 2: {} entries in {warm:?} (cold was {cold:?})",
-            hits2.len()
-        );
-        assert_eq!(hits2.len(), hits.len(), "same result set from warm cache");
     }
 
-    /// Full-stack probe against a configurable endpoint — set `GMAIL_BASE_URL`
-    /// to run it against the enterprise mock: labels → year/month navigation
-    /// (index build) → `cat` (asserts real body text; a batch endpoint that
-    /// ignores `format=full` fails here — that's the mock's contract to fix,
-    /// not ours to work around) → attachment dir + bytes → `.search` with
-    /// operators → warm relist on a fresh resource. With a base_url set (mock)
-    /// it also checks that `rm` against an endpoint lacking trash support
-    /// surfaces an error instead of pretending success.
+    /// Full-stack probe against a configurable endpoint (`GMAIL_BASE_URL` →
+    /// enterprise mock): labels → year/month navigation → `cat` (asserts real
+    /// body text) → attachment bytes → `.search` → warm relist. With a
+    /// base_url set it also checks `rm` against an endpoint lacking trash
+    /// support surfaces an error instead of pretending success.
     #[tokio::test]
     #[ignore = "requires GMAIL_* env + network"]
     async fn gmail_live_full_stack_probe() {
@@ -1884,10 +1673,7 @@ mod tests {
             eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
             return;
         };
-        let cache = tempfile::tempdir().unwrap();
-        let r = CachedResource::new(Arc::new(
-            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
-        ));
+        let r = CachedResource::new(Arc::new(GmailResource::new(&cfg).unwrap()));
 
         // 1. labels
         let labels = r.readdir(&MountPath::new("/")).await.expect("labels");
@@ -1974,12 +1760,9 @@ mod tests {
             eprintln!("search {q:?}: {} entries", hits.len());
         }
 
-        // 6. warm relist from a fresh resource (snapshot + blobs)
-        let r2 = CachedResource::new(Arc::new(
-            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
-        ));
+        // 6. warm relist (metadata-cache hit on the same resource)
         let t1 = std::time::Instant::now();
-        let again = r2.readdir(&month_path).await.expect("warm month");
+        let again = r.readdir(&month_path).await.expect("warm month");
         eprintln!(
             "warm relist: {} entries in {:?} (cold {:?})",
             again.len(),
@@ -1990,20 +1773,17 @@ mod tests {
 
         // 7. rm against an endpoint without trash support must error loudly
         if cfg.base_url.is_some() {
-            let rm = r2.unlink(&mp).await;
+            let rm = r.unlink(&mp).await;
             eprintln!("rm (endpoint lacks trash): {rm:?}");
             assert!(rm.is_err(), "rm must surface the failure, not fake success");
         }
     }
 
-    /// Live label-tree + disk-cache round-trip (no `q=`, so it runs even on a
-    /// token whose scope set includes gmail.metadata): session 1 builds the
-    /// INBOX index and lists the newest month cold; session 2 (fresh resource,
-    /// same cache dir) must adopt the index snapshot and serve bodies from
-    /// disk. Same env vars as [`gmail_live_search_and_disk_cache`].
+    /// Live label-tree navigation (no `q=`): labels → years → months → newest
+    /// month listing → `cat`. Same env vars as [`gmail_live_search`].
     #[tokio::test]
     #[ignore = "requires GMAIL_* env + network"]
-    async fn gmail_live_label_disk_cache() {
+    async fn gmail_live_label() {
         use crate::vfs::cache::CachedResource;
         use std::sync::Arc;
 
@@ -2011,65 +1791,29 @@ mod tests {
             eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
             return;
         };
-        let cache = tempfile::tempdir().unwrap();
-
-        // Session 1: cold — index build (full INBOX scan) + newest month's
-        // bodies from the API, all landing on disk.
-        let r1 = CachedResource::new(Arc::new(
-            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
-        ));
+        let r = CachedResource::new(Arc::new(GmailResource::new(&cfg).unwrap()));
         let t0 = std::time::Instant::now();
-        let years = r1.readdir(&MountPath::new("/INBOX")).await.expect("years");
+        let years = r.readdir(&MountPath::new("/INBOX")).await.expect("years");
         let y = years.first().expect("some year").name.clone();
-        let months = r1
+        let months = r
             .readdir(&MountPath::new(format!("/INBOX/{y}")))
             .await
             .expect("months");
         let m = months.first().expect("some month").name.clone();
-        let month_path = MountPath::new(format!("/INBOX/{y}/{m}"));
-        let entries = r1.readdir(&month_path).await.expect("cold month");
-        let cold = t0.elapsed();
+        let entries = r
+            .readdir(&MountPath::new(format!("/INBOX/{y}/{m}")))
+            .await
+            .expect("month listing");
         eprintln!(
-            "cold: INBOX index + {y}/{m} listing ({} entries) in {cold:?}",
-            entries.len()
+            "INBOX index + {y}/{m} listing ({} entries) in {:?}",
+            entries.len(),
+            t0.elapsed()
         );
-        let acct = cache.path().join("gmail").join(account_cache_key(&cfg));
-        let blobs = std::fs::read_dir(acct.join("blobs"))
-            .map(|d| d.count())
-            .unwrap_or(0);
-        let snaps = std::fs::read_dir(acct.join("snapshots"))
-            .map(|d| d.count())
-            .unwrap_or(0);
-        eprintln!("disk after session 1: {blobs} blobs, {snaps} snapshot(s)");
-        assert!(snaps > 0, "index snapshot should be persisted");
-        assert!(
-            entries.is_empty() || blobs > 0,
-            "bodies should be persisted"
-        );
-
-        // Session 2: fresh resource, same cache dir — no full rescan (snapshot
-        // adopted), bodies from disk.
-        let r2 = CachedResource::new(Arc::new(
-            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
-        ));
-        let t1 = std::time::Instant::now();
-        let entries2 = r2.readdir(&month_path).await.expect("warm month");
-        let warm = t1.elapsed();
-        eprintln!(
-            "warm session 2: {} entries in {warm:?} (cold was {cold:?})",
-            entries2.len()
-        );
-        assert_eq!(entries2.len(), entries.len());
-        // Read one message body through the warm path too.
-        if let Some(f) = entries2.iter().find(|e| e.name.ends_with(GMAIL_SUFFIX)) {
+        if let Some(f) = entries.iter().find(|e| e.name.ends_with(GMAIL_SUFFIX)) {
             let p = MountPath::new(format!("/INBOX/{y}/{m}/{}", f.name));
-            let bytes = r2.read_bytes(&p, None).await.expect("warm read");
+            let bytes = r.read_bytes(&p, None).await.expect("cat");
             let v: Value = serde_json::from_slice(&bytes).unwrap();
-            eprintln!(
-                "warm cat: subject={:?} ({}B json)",
-                v["subject"],
-                bytes.len()
-            );
+            eprintln!("cat: subject={:?} ({}B json)", v["subject"], bytes.len());
         }
     }
 
@@ -2101,35 +1845,16 @@ mod tests {
         assert!(entries[2].mtime.is_none(), "no internalDate → no mtime");
     }
 
-    #[test]
-    fn att_blob_keys_distinguish_sanitize_collisions() {
-        // Distinct filenames that sanitize to the same path-safe form must not
-        // share a disk blob (the second would serve the first's bytes).
-        let a = att_blob_key("m1", "report.pdf");
-        let b = att_blob_key("m1", "report_pdf");
-        let c = att_blob_key("m1", "a b.pdf");
-        let d = att_blob_key("m1", "a_b.pdf");
-        assert_ne!(a, b);
-        assert_ne!(c, d);
-        // Deterministic: same pair → same key (cache hits unaffected).
-        assert_eq!(a, att_blob_key("m1", "report.pdf"));
-        // Different messages never share, even with equal filenames.
-        assert_ne!(a, att_blob_key("m2", "report.pdf"));
-    }
-
     #[tokio::test]
     async fn unlink_accepts_only_message_files_no_network_needed() {
-        let r = GmailResource::new(
-            &GmailConfig {
+        let r = GmailResource::new(&GmailConfig {
                 client_id: "id".into(),
                 client_secret: "sec".into(),
                 refresh_token: "tok".into(),
                 account_email: "t@example.com".into(),
                 base_url: None,
                 index_cap: None,
-            },
-            None,
-        )
+            })
         .unwrap();
         // Every shape that isn't a message file — at label depth or under a
         // `.search` hit — is rejected by the path match alone, before any
@@ -2150,26 +1875,6 @@ mod tests {
                 "{p} must be Unsupported, got {got:?}"
             );
         }
-    }
-
-    #[test]
-    fn account_cache_key_is_the_sanitized_email() {
-        let base = GmailConfig {
-            client_id: "id".into(),
-            client_secret: "sec".into(),
-            refresh_token: "tok-123".into(),
-            account_email: "Sello@Brekkylab.com".into(),
-            base_url: None,
-            index_cap: None,
-        };
-        // lowercased, readable, path-safe
-        assert_eq!(account_cache_key(&base), "sello@brekkylab.com");
-        // hostile chars collapse; stays one segment
-        let odd = GmailConfig {
-            account_email: "a/b c@x.com".into(),
-            ..base.clone()
-        };
-        assert_eq!(account_cache_key(&odd), "a_b_c@x.com");
     }
 
     #[test]
