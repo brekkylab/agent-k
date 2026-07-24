@@ -15,7 +15,6 @@ name = "test_case"
 path = "src/bin/test_case.rs"
 
 [features]
-internal = ["dep:knowledge-base-examples"]
 
 [dependencies]
 ailoy = { workspace = true }
@@ -27,7 +26,6 @@ dotenvy = "0.15"
 futures = "0.3"
 html-to-markdown-rs = "3.4.0-rc.2"
 indexmap = "2"
-knowledge-base-examples = { path = "../../knowledge-base-examples", optional = true }
 log = "0.4"
 regex = "1"
 reqwest = { version = "0.13", features = ["json"] }

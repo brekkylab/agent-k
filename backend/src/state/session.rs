@@ -356,9 +356,9 @@ impl SessionsState {
                 // Mount the unified workspace tree into the guest before the
                 // agent runs — local files under `files/` plus the provider
                 // mounts as siblings, the browser-WebDAV view served over FUSE
-                // at /mnt/workspace. The forward server is held for the whole
-                // run; dropping it (at the end of this scope) tears the mount
-                // down.
+                // at /mnt/workspace. The raw-FUSE tunnel host engine is held for
+                // the whole run; dropping it (at the end of this scope) tears the
+                // mount down.
                 let _vfs_forward = match &runenv {
                     Some(r) => {
                         let mut sandbox = r.lock().await;
@@ -367,10 +367,11 @@ impl SessionsState {
                             crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
                         );
                         Some(
-                            crate::sandbox_fs::mount_vfs_in_guest(
+                            crate::sandbox_tunnel::mount_vfs_tunnel_in_guest(
                                 console,
                                 unified,
                                 "/mnt/workspace",
+                                tokio::runtime::Handle::current(),
                             )
                             .await?,
                         )

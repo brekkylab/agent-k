@@ -33,4 +33,4 @@ pub use path::MountPath;
 pub use resource::{
     DirEntry, FileKind, FileStat, LocalResource, NotionResource, Resource, S3Resource,
 };
-pub use sandbox::{ForwardFs, ForwardServer, FwdEntry, FwdStat};
+pub use sandbox::{ForwardFs, FwdEntry, FwdStat, TunnelServer};
