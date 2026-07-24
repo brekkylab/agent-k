@@ -128,9 +128,8 @@ fn parse_batch_bodies(text: &str) -> Vec<Value> {
 }
 
 /// Result of the mount-create code exchange: the long-lived refresh token plus
-/// the account's email address (`users.getProfile`). The email is what
-/// identifies the *account* — shown in mount info and used as the cache key,
-/// since a refresh token changes on every re-consent while the email doesn't.
+/// the account's email address (`users.getProfile`) — the mount's stable
+/// identity (a refresh token changes on every re-consent; the email doesn't).
 pub struct GmailExchange {
     pub refresh_token: String,
     pub account_email: String,
@@ -410,16 +409,6 @@ impl GmailAccessor {
         self.list_message_ids(("labelIds", label_id), limit).await
     }
 
-    /// Message ids matching a Gmail search query (`q=` — server-side, so a
-    /// content search costs one `messages.list` instead of fetching every
-    /// body). Newest-first; capped at `limit`.
-    pub async fn search_message_ids(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<String>> {
-        self.list_message_ids(("q", query), limit).await
-    }
 
     /// Shared `messages.list` pagination behind the label/search entry points:
     /// one `filter` query pair, newest-first, truncated at `limit`.

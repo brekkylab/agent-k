@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use crate::vfs::{
     error::{ResourceError, ResourceResult},
     path::MountPath,
-    resource::{DirEntry, FileKind, FileStat, Resource, SEARCH_DIR},
+    resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
 /// Directory-listing TTL. Listings have no cheap version to revalidate against
@@ -465,22 +465,6 @@ impl Resource for CachedResource {
         if let Some(entries) = self.cache.list_dir_entries(path.as_str()) {
             return Ok(entries);
         }
-        // Virtual `.search/` routing (only on providers with server-side
-        // search): the root lists empty — a query dir materializes by being
-        // asked for — and `.search/<query>` runs the provider's search. Results
-        // are cached like any listing; deeper paths fall through to the
-        // provider, which resolves them by id.
-        if self.inner.supports_search()
-            && let Some(query) = search_query(path.as_str())
-        {
-            let entries = if query.is_empty() {
-                Vec::new()
-            } else {
-                self.inner.search(query).await?
-            };
-            self.cache.set_dir(path.as_str(), &entries);
-            return Ok(entries);
-        }
         // Incremental discovery for incomplete-listing providers (gmail): if we
         // just resolved a child its parent's (capped) listing didn't include,
         // drop the parent listing so the next readdir re-runs and folds it in
@@ -516,14 +500,6 @@ impl Resource for CachedResource {
 
     async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
         let key = path.as_str();
-        // The virtual `.search` root and any `.search/<query>` are dirs by
-        // definition (when the provider searches at all) — nothing to probe.
-        if self.inner.supports_search() && search_query(key).is_some() {
-            return Ok(FileStat {
-                kind: FileKind::Dir,
-                ..Default::default()
-            });
-        }
         match self.cache.get(key) {
             Some(e) if e.is_dir => {
                 return Ok(FileStat {
@@ -646,30 +622,12 @@ impl Resource for CachedResource {
         self.inner.prompt()
     }
 
-    fn supports_search(&self) -> bool {
-        self.inner.supports_search()
-    }
-
-    async fn search(&self, query: &str) -> ResourceResult<Vec<DirEntry>> {
-        self.inner.search(query).await
-    }
 
     fn listings_complete(&self) -> bool {
         self.inner.listings_complete()
     }
 }
 
-/// `Some(query)` when `path` is the virtual search root (`""`) or a
-/// `.search/<query>` dir; `None` for anything deeper — those belong to the
-/// provider (it resolves search hits by id).
-fn search_query(path: &str) -> Option<&str> {
-    let rest = path.strip_prefix('/')?;
-    match rest.split_once('/') {
-        None if rest == SEARCH_DIR => Some(""),
-        Some((first, q)) if first == SEARCH_DIR && !q.is_empty() && !q.contains('/') => Some(q),
-        _ => None,
-    }
-}
 
 /// Parent directory of an absolute mount-relative path: `/a/b` -> `/a`,
 /// `/a` -> `/`, `/` -> `/`.
@@ -911,99 +869,6 @@ mod tests {
         assert!(c.total <= 10, "within budget");
     }
 
-    // `.search` routing: on a provider with server-side search the virtual
-    // root/query dirs exist and a query listing calls Resource::search (and is
-    // cached); without support, nothing is synthesized.
-    #[tokio::test]
-    async fn search_dir_routes_to_provider_search() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        struct Searchy {
-            calls: AtomicUsize,
-        }
-        #[async_trait]
-        impl Resource for Searchy {
-            async fn read_bytes(
-                &self,
-                _p: &MountPath,
-                _r: Option<Range<u64>>,
-            ) -> ResourceResult<Vec<u8>> {
-                Err(ResourceError::NotFound)
-            }
-            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
-                Err(ResourceError::Unsupported)
-            }
-            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
-                Err(ResourceError::NotFound)
-            }
-            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
-                Err(ResourceError::NotFound)
-            }
-            fn supports_search(&self) -> bool {
-                true
-            }
-            async fn search(&self, q: &str) -> ResourceResult<Vec<DirEntry>> {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                Ok(vec![de(&format!("hit-{q}.json"), FileKind::File, 3)])
-            }
-        }
-        let inner = Arc::new(Searchy {
-            calls: AtomicUsize::new(0),
-        });
-        let cached = CachedResource::new(inner.clone());
-        // The virtual root: a dir, listing empty.
-        let root = MountPath::new("/.search");
-        assert!(matches!(
-            cached.stat(&root).await.unwrap().kind,
-            FileKind::Dir
-        ));
-        assert!(cached.readdir(&root).await.unwrap().is_empty());
-        // A query dir: stat'able, and its listing routes to search().
-        let q = MountPath::new("/.search/foo bar");
-        assert!(matches!(cached.stat(&q).await.unwrap().kind, FileKind::Dir));
-        let hits = cached.readdir(&q).await.unwrap();
-        assert_eq!(hits[0].name, "hit-foo bar.json");
-        // Cached: a repeat listing and a child stat cost no further search.
-        cached.readdir(&q).await.unwrap();
-        let st = cached
-            .stat(&MountPath::new("/.search/foo bar/hit-foo bar.json"))
-            .await
-            .unwrap();
-        assert_eq!(st.size, 3);
-        assert_eq!(inner.calls.load(Ordering::SeqCst), 1, "one search only");
-    }
-
-    #[tokio::test]
-    async fn search_dir_absent_without_provider_support() {
-        struct NoSearch;
-        #[async_trait]
-        impl Resource for NoSearch {
-            async fn read_bytes(
-                &self,
-                _p: &MountPath,
-                _r: Option<Range<u64>>,
-            ) -> ResourceResult<Vec<u8>> {
-                Err(ResourceError::NotFound)
-            }
-            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
-                Err(ResourceError::Unsupported)
-            }
-            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
-                Err(ResourceError::NotFound)
-            }
-            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
-                Err(ResourceError::NotFound)
-            }
-        }
-        let cached = CachedResource::new(Arc::new(NoSearch));
-        // No synthesized dir: the provider's own answer (NotFound) stands.
-        assert!(cached.stat(&MountPath::new("/.search")).await.is_err());
-        assert!(
-            cached
-                .readdir(&MountPath::new("/.search/query"))
-                .await
-                .is_err()
-        );
-    }
 
     // On an incomplete-listing provider (gmail), an unlink must drop EVERY
     // cached listing — the object may be listed under paths unrelated to the

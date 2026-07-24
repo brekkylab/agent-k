@@ -11,7 +11,7 @@ use crate::vfs::{
     accessor::{GmailAccessor, GmailConfig, encode_b64url},
     error::{ResourceError, ResourceResult},
     path::MountPath,
-    resource::{DirEntry, FileKind, FileStat, Resource, SEARCH_DIR},
+    resource::{DirEntry, FileKind, FileStat, Resource},
 };
 
 /// Listing TTL for the label set (cheap, changes rarely).
@@ -53,10 +53,6 @@ const SEQ_THRESHOLD: u32 = 2;
 const MSG_SENTINEL_SIZE: u64 = 16 * 1024 * 1024;
 const GMAIL_SUFFIX: &str = ".gmail.json";
 
-/// Max results a `.search/<query>` listing returns (one `messages.list` page,
-/// newest first). A query matching more than this should be narrowed, not
-/// paginated.
-const SEARCH_MAX_RESULTS: usize = 500;
 
 /// Attachment-bytes cache TTL. The attachments endpoint has no ranged fetch,
 /// so without this every FUSE chunk read of one file re-downloads the whole
@@ -512,21 +508,9 @@ impl GmailResource {
         })))
     }
 
-    /// `ls .search/<query>` — run the query server-side and list the newest
-    /// [`SEARCH_MAX_RESULTS`] matches in the same file format as a month dir,
-    /// so `cat`/attachments work unchanged. Repeat listings are absorbed by
-    /// the metadata cache; the bodies land in the message cache.
-    async fn readdir_search(&self, query: &str) -> anyhow::Result<Vec<DirEntry>> {
-        let ids = self
-            .accessor
-            .search_message_ids(query, SEARCH_MAX_RESULTS)
-            .await?;
-        let raws = self.ensure_full(&ids).await;
-        Ok(message_entries(raws.iter()))
-    }
 
     /// Processed email JSON bytes for a `<subject>__<id>.gmail.json` name —
-    /// shared by the label tree and the `.search` tree (both address by id).
+    /// addressed by the id embedded in the name.
     async fn read_message_bytes(&self, file: &str) -> ResourceResult<Vec<u8>> {
         let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
         let raw = self.message_full(&id).await?;
@@ -617,16 +601,6 @@ impl Resource for GmailResource {
     ) -> ResourceResult<Vec<u8>> {
         let seg = segments(path);
         match seg.as_slice() {
-            // .search/<query>/… — a search hit is the same message file as
-            // under a label (addressed by id); matched first so the arms below
-            // can't misread the query as a year/month.
-            [s, _q, file] if s.as_str() == SEARCH_DIR && file.ends_with(GMAIL_SUFFIX) => {
-                let data = self.read_message_bytes(file).await?;
-                Ok(slice(data, range))
-            }
-            [s, _q, dir, fname] if s.as_str() == SEARCH_DIR => {
-                self.read_attachment(dir, fname, range).await
-            }
             // <label>/<yyyy>/<mm>/<file>.gmail.json -> processed email JSON
             [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
                 let data = self.read_message_bytes(file).await?;
@@ -648,12 +622,6 @@ impl Resource for GmailResource {
         let seg = segments(path);
         match seg.as_slice() {
             [] => self.readdir_labels().await.map_err(ResourceError::from),
-            // Below a `.search/<query>` hit (top-level routing lives in the
-            // cache wrapper): a hit's attachment dir, resolved by id.
-            [s, _q, dir] if s.as_str() == SEARCH_DIR && !dir.ends_with(GMAIL_SUFFIX) => self
-                .readdir_attachments(&id_from_name(dir))
-                .await
-                .map_err(ResourceError::from),
             [label] => self.readdir_years(label).await.map_err(ResourceError::from),
             [label, year] => self
                 .readdir_months(label, year)
@@ -676,22 +644,6 @@ impl Resource for GmailResource {
         let seg = segments(path);
         match seg.as_slice() {
             [] => Ok(dir_stat()),
-            // Below a `.search/<query>` (root/query stat lives in the cache
-            // wrapper): the same message-file / attachment shapes as a month.
-            [s, _q, name] if s.as_str() == SEARCH_DIR => {
-                if name.ends_with(GMAIL_SUFFIX) {
-                    Ok(FileStat {
-                        kind: FileKind::File,
-                        size: MSG_SENTINEL_SIZE,
-                        ..Default::default()
-                    })
-                } else {
-                    Ok(dir_stat())
-                }
-            }
-            [s, _q, dir, fname] if s.as_str() == SEARCH_DIR => {
-                self.stat_attachment(dir, fname).await
-            }
             // a label: confirm it exists (cheap, cached) — else ENOENT
             [label] => {
                 if self.label_id(label).await?.is_some() {
@@ -735,18 +687,12 @@ impl Resource for GmailResource {
         }
     }
 
-    /// `rm <…>.gmail.json` moves the message to Trash — via its label path or
-    /// a `.search` hit alike: both name the same message id, and an operation
-    /// valid on one route must be valid on the other. Dormant under a
+    /// `rm <…>.gmail.json` moves the message to Trash. Dormant under a
     /// `gmail.readonly` consent (Gmail rejects the trash call with 403); a
     /// `gmail.modify` consent activates it with no code change.
     async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
         let seg = segments(path);
         match seg.as_slice() {
-            [s, _q, file] if s.as_str() == SEARCH_DIR && file.ends_with(GMAIL_SUFFIX) => {
-                self.trash_message(&id_from_name(file.trim_end_matches(GMAIL_SUFFIX)))
-                    .await
-            }
             [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
                 self.trash_message(&id_from_name(file.trim_end_matches(GMAIL_SUFFIX)))
                     .await
@@ -855,17 +801,6 @@ impl Resource for GmailResource {
         Ok(serde_json::to_vec(&result)?)
     }
 
-    fn supports_search(&self) -> bool {
-        true
-    }
-
-    /// `.search/<query>` → Gmail server-side search (`messages.list?q=`),
-    /// newest [`SEARCH_MAX_RESULTS`] matches as regular message files.
-    async fn search(&self, query: &str) -> ResourceResult<Vec<DirEntry>> {
-        self.readdir_search(query)
-            .await
-            .map_err(ResourceError::from)
-    }
 
     fn prompt(&self) -> &str {
         GMAIL_PROMPT
@@ -884,7 +819,7 @@ impl Resource for GmailResource {
 
 /// Directory entries for full messages: the `.gmail.json` file (sizeEstimate,
 /// received-time mtime) plus, for messages with attachments, the sibling dir.
-/// Sorted by name — shared by month listings and `.search` results.
+/// Sorted by name.
 fn message_entries<'a>(raws: impl Iterator<Item = &'a Value>) -> Vec<DirEntry> {
     let mut out = Vec::new();
     for raw in raws {
@@ -1430,7 +1365,6 @@ const GMAIL_PROMPT: &str = "\
 Gmail (read + trash on delete). Layout:
   <label>/<yyyy>/<mm>/<subject>__<message-id>.gmail.json   # the email (JSON)
   <label>/<yyyy>/<mm>/<subject>__<message-id>/<filename>   # attachments (only if any)
-  .search/<query>/                                         # server-side search
 
   <label>       INBOX, SENT, DRAFT, IMPORTANT, STARRED, TRASH, SPAM, or a user label
   <yyyy>/<mm>   received year then month; `ls <label>` lists years, then months,
@@ -1445,18 +1379,6 @@ Gmail (read + trash on delete). Layout:
   The sibling dir (same name without .gmail.json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
 
-  To find mail by content/sender/date, use server-side search — NEVER grep the
-  whole mount (hundreds of times slower):
-    ls '.search/from:boss@x.com refund newer_than:3m'
-  The query is one path segment: spaces are fine, '/' is not — write dates
-  with hyphens. Gmail's full query syntax works:
-    from: to: cc: subject:   |  \"exact phrase\"   |  has:attachment filename:pdf
-    is:unread is:starred     |  label:X category:promotions  |  larger:5M
-    newer_than:7d older_than:1y  |  after:2024-03-01 before:2024-04-01
-    space = AND  |  OR (must be uppercase)  |  -term = NOT  |  (…) = grouping
-  Matches list newest-first (max 500) as the same message files (cat/rm work
-  as usual); narrow a too-broad query instead of paging.
-  grep only inside one <label>/<yyyy>/<mm> dir when you truly need a regex.
 
   rm <…>.gmail.json    moves the message to Trash (only .gmail.json is removable).";
 
@@ -1623,44 +1545,10 @@ mod tests {
         })
     }
 
-    /// Live `.search` round-trip against a real mailbox. Ignored by default:
-    ///
-    ///   GMAIL_CLIENT_ID=… GMAIL_CLIENT_SECRET=… GMAIL_REFRESH_TOKEN=… \
-    ///   [GMAIL_QUERY=…] cargo test -p workspace gmail_live -- --ignored --nocapture
-    #[tokio::test]
-    #[ignore = "requires GMAIL_* env + network"]
-    async fn gmail_live_search() {
-        use crate::vfs::cache::CachedResource;
-        use std::sync::Arc;
-
-        let Some(cfg) = live_config() else {
-            eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
-            return;
-        };
-        let query = std::env::var("GMAIL_QUERY").unwrap_or_else(|_| "UMC".into());
-        let r = CachedResource::new(Arc::new(GmailResource::new(&cfg).unwrap()));
-        let sp = MountPath::new(format!("/.search/{query}"));
-        let t0 = std::time::Instant::now();
-        let hits = r.readdir(&sp).await.expect("search readdir");
-        eprintln!("search {query:?}: {} entries in {:?}", hits.len(), t0.elapsed());
-        for e in hits.iter().take(10) {
-            eprintln!("  {:>9}B {:?} {}", e.size, e.kind, e.name);
-        }
-        if let Some(f) = hits.iter().find(|e| e.name.ends_with(GMAIL_SUFFIX)) {
-            let p = MountPath::new(format!("/.search/{query}/{}", f.name));
-            let v: Value =
-                serde_json::from_slice(&r.read_bytes(&p, None).await.expect("read hit")).unwrap();
-            eprintln!(
-                "first hit: subject={:?} body_text={}B",
-                v["subject"],
-                v["body_text"].as_str().unwrap_or("").len()
-            );
-        }
-    }
 
     /// Full-stack probe against a configurable endpoint (`GMAIL_BASE_URL` →
     /// enterprise mock): labels → year/month navigation → `cat` (asserts real
-    /// body text) → attachment bytes → `.search` → warm relist. With a
+    /// body text) → attachment bytes → warm relist. With a
     /// base_url set it also checks `rm` against an endpoint lacking trash
     /// support surfaces an error instead of pretending success.
     #[tokio::test]
@@ -1751,14 +1639,6 @@ mod tests {
             eprintln!("(no attachment dir in {y}/{m})");
         }
 
-        // 5. .search with operators
-        for q in ["has:attachment invoice", "subject:invoice newer_than:5y"] {
-            let hits = r
-                .readdir(&MountPath::new(format!("/.search/{q}")))
-                .await
-                .expect("search listing");
-            eprintln!("search {q:?}: {} entries", hits.len());
-        }
 
         // 6. warm relist (metadata-cache hit on the same resource)
         let t1 = std::time::Instant::now();
@@ -1780,7 +1660,7 @@ mod tests {
     }
 
     /// Live label-tree navigation (no `q=`): labels → years → months → newest
-    /// month listing → `cat`. Same env vars as [`gmail_live_search`].
+    /// month listing → `cat`. Same env vars as [`gmail_live_full_stack_probe`].
     #[tokio::test]
     #[ignore = "requires GMAIL_* env + network"]
     async fn gmail_live_label() {
@@ -1856,18 +1736,14 @@ mod tests {
                 index_cap: None,
             })
         .unwrap();
-        // Every shape that isn't a message file — at label depth or under a
-        // `.search` hit — is rejected by the path match alone, before any
-        // network I/O (dummy credentials would fail loudly otherwise).
+        // Every shape that isn't a message file is rejected by the path match
+        // alone, before any network I/O (dummy credentials would fail loudly
+        // otherwise).
         for p in [
             "/INBOX",
             "/INBOX/2026/07",
             "/INBOX/2026/07/subject__id",             // attachment dir
             "/INBOX/2026/07/subject__id/file.pdf",    // attachment file
-            "/.search",
-            "/.search/query",
-            "/.search/query/subject__id/file.pdf",    // attachment under a hit
-            "/.search/x.gmail.json",                  // message file at wrong depth
         ] {
             let got = r.unlink(&MountPath::new(p)).await;
             assert!(

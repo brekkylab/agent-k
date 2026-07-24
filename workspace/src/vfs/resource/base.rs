@@ -5,10 +5,6 @@ use async_trait::async_trait;
 use crate::vfs::error::{ResourceError, ResourceResult};
 use crate::vfs::path::MountPath;
 
-/// Virtual top-level dir exposing a provider's server-side search — see
-/// [`Resource::search`]. Exists only on mounts whose `supports_search()` is
-/// true; elsewhere the path resolves like any other (usually not found).
-pub(crate) const SEARCH_DIR: &str = ".search";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FileKind {
@@ -129,26 +125,7 @@ pub trait Resource: Send + Sync {
         ""
     }
 
-    /// Whether this provider implements [`Resource::search`]. Gates the
-    /// virtual `.search/` tree: on mounts without server-side search the path
-    /// simply doesn't exist (their prompts don't mention it), so the agent is
-    /// never taught a convention that would fail there. Default: `false`.
-    fn supports_search(&self) -> bool {
-        false
-    }
 
-    /// Server-side search — the entries of a virtual `.search/<query>/`
-    /// listing. The query is passed verbatim in the provider's native syntax
-    /// (each mount's prompt documents its own); one path segment, so it can
-    /// contain spaces but never `/`. Returned entries must resolve *below*
-    /// `.search/<query>/` through the provider's own readdir/stat/read (i.e.
-    /// address results by id, not by tree position). The top-level `.search`
-    /// routing lives in the metadata-cache wrapper; providers only implement
-    /// this and their sub-paths. Default: unsupported.
-    async fn search(&self, query: &str) -> ResourceResult<Vec<DirEntry>> {
-        let _ = query;
-        Err(ResourceError::Unsupported)
-    }
 
     /// Whether `readdir` returns a *complete* listing of a directory. When true,
     /// a fresh parent listing that lacks a name proves that name doesn't exist,
