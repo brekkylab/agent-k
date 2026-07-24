@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod event;
+pub mod model;
 pub mod router;
 pub mod sandbox_tunnel;
 pub mod state;
