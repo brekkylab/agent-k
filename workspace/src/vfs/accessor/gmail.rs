@@ -398,6 +398,13 @@ impl GmailAccessor {
             .unwrap_or_default())
     }
 
+    /// Every message id in the account (newest-first, spam/trash included so
+    /// their label trees mirror too), up to `limit`.
+    pub async fn list_account_message_ids(&self, limit: usize) -> anyhow::Result<Vec<String>> {
+        self.list_message_ids(("includeSpamTrash", "true"), limit)
+            .await
+    }
+
     /// Message ids under a label, paginating (500/page, `nextPageToken`) up to
     /// `limit` — [`GmailConfig::index_cap`] or unbounded. `messages.list` is
     /// newest-first, so a cap keeps the newest `limit` ids.

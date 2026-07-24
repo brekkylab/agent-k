@@ -883,11 +883,11 @@ fn id_from_name(name: &str) -> String {
         .to_string()
 }
 
-fn msg_filename(subject: &str, id: &str) -> String {
+pub(super) fn msg_filename(subject: &str, id: &str) -> String {
     format!("{}__{id}{GMAIL_SUFFIX}", sanitize(subject))
 }
 
-fn attach_dir_name(subject: &str, id: &str) -> String {
+pub(super) fn attach_dir_name(subject: &str, id: &str) -> String {
     format!("{}__{id}", sanitize(subject))
 }
 
@@ -937,17 +937,17 @@ fn sanitize(text: &str) -> String {
 
 // ---- message processing ---------------------------------------------------
 
-struct Attach {
-    filename: String,
-    attachment_id: String,
-    size: u64,
-    mime_type: String,
+pub(super) struct Attach {
+    pub(super) filename: String,
+    pub(super) attachment_id: String,
+    pub(super) size: u64,
+    pub(super) mime_type: String,
 }
 
 /// The message's received time (`internalDate`, epoch ms) as a `SystemTime` —
 /// stamped as mtime on listings/stat so date-based agent tools (`ls -lt`,
 /// `find -newermt`) work instead of seeing the epoch.
-fn msg_time(raw: &Value) -> Option<std::time::SystemTime> {
+pub(super) fn msg_time(raw: &Value) -> Option<std::time::SystemTime> {
     let ms = raw
         .get("internalDate")
         .and_then(|d| d.as_str())
@@ -1096,7 +1096,7 @@ fn sanitize_filename(name: &str) -> String {
     }
 }
 
-fn attachments(raw: &Value) -> Vec<Attach> {
+pub(super) fn attachments(raw: &Value) -> Vec<Attach> {
     let mut out = Vec::new();
     let mut push_part = |part: &Value| {
         let filename = part.get("filename").and_then(|f| f.as_str()).unwrap_or("");
@@ -1147,7 +1147,7 @@ fn attachments(raw: &Value) -> Vec<Attach> {
 /// `readdir`, `stat`, `read`, and the `.gmail.json` listing all derive the same
 /// unique name for a given part — and the `att_cache` key
 /// (`(message id, name)`) becomes per-attachment too.
-fn unique_attachment_names(atts: &[Attach]) -> Vec<String> {
+pub(super) fn unique_attachment_names(atts: &[Attach]) -> Vec<String> {
     let mut used = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(atts.len());
     for a in atts {
@@ -1172,7 +1172,7 @@ fn suffix_before_ext(name: &str, n: usize) -> String {
 }
 
 /// Build the processed email JSON (the `.gmail.json` content).
-fn process_message(raw: &Value) -> Value {
+pub(super) fn process_message(raw: &Value) -> Value {
     let payload = raw.get("payload").cloned().unwrap_or(Value::Null);
     let body_text = decode_body(&payload);
     let atts_raw = attachments(raw);
@@ -1245,7 +1245,7 @@ fn encode_header(value: &str) -> String {
 // ---- date helpers (dependency-free civil calendar) ------------------------
 
 /// Gmail `internalDate` (epoch ms, string) -> `YYYY-MM-DD` in UTC.
-fn epoch_ms_to_date(ms: &str) -> String {
+pub(super) fn epoch_ms_to_date(ms: &str) -> String {
     let ms: i64 = ms.parse().unwrap_or(0);
     let days = (ms / 1000).div_euclid(86400);
     let (y, m, d) = civil_from_days(days);
