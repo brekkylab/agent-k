@@ -416,7 +416,6 @@ impl GmailAccessor {
         self.list_message_ids(("labelIds", label_id), limit).await
     }
 
-
     /// Shared `messages.list` pagination behind the label/search entry points:
     /// one `filter` query pair, newest-first, truncated at `limit`.
     async fn list_message_ids(
@@ -476,6 +475,57 @@ impl GmailAccessor {
             }
         }
         Ok(ids)
+    }
+
+    /// One page of the mailbox change journal (`history.list`, 2 quota units)
+    /// since `start_history_id`. Records carry `messagesAdded` /
+    /// `messagesDeleted` / `labelsAdded` / `labelsRemoved`; the page's
+    /// top-level `historyId` is the fresh cursor. `Ok(None)` means Gmail no
+    /// longer retains history that far back (HTTP 404) — the caller must fall
+    /// back to a full sync.
+    pub async fn list_history(
+        &self,
+        start_history_id: &str,
+        page_token: Option<&str>,
+    ) -> anyhow::Result<Option<Value>> {
+        let mut params: Vec<(&str, String)> = vec![
+            ("startHistoryId", start_history_id.to_string()),
+            ("maxResults", "500".to_string()),
+        ];
+        if let Some(t) = page_token {
+            params.push(("pageToken", t.to_string()));
+        }
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/users/me/history", self.api_base),
+            &params,
+        )?;
+        let resp = self
+            .send_with_refresh(|t| self.client.get(url.clone()).bearer_auth(t))
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let text = resp.error_for_status()?.text().await?;
+        // "No changes" can come back as an empty body; normalize to an empty
+        // object so callers see a page with no `history` array.
+        if text.trim().is_empty() {
+            return Ok(Some(Value::Object(Default::default())));
+        }
+        Ok(Some(serde_json::from_str(&text)?))
+    }
+
+    /// The `historyId` one message carries — used as the partial-sync cursor:
+    /// a full sync stores the newest message's value, `history.list` replays
+    /// everything after it.
+    pub async fn get_message_history_id(&self, id: &str) -> anyhow::Result<Option<String>> {
+        let url = format!(
+            "{}/users/me/messages/{id}?format=minimal&fields=id,historyId",
+            self.api_base
+        );
+        let v = self.get_json(&url).await?;
+        Ok(v.get("historyId")
+            .and_then(|h| h.as_str())
+            .map(String::from))
     }
 
     /// The message-resource query for `format`. `minimal` is only ever used to

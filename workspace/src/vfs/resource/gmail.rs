@@ -14,7 +14,7 @@ use crate::vfs::{
 
 use super::gmail_sync::{account_mirror_dir, mirror_tree};
 
-const GMAIL_SUFFIX: &str = ".gmail.json";
+pub(super) const GMAIL_SUFFIX: &str = ".gmail.json";
 
 /// The Gmail mount: a read-gate over the account's **on-disk mailbox mirror**
 /// (built by [`super::gmail_sync::sync_gmail_mirror`]). Reads are plain local
@@ -40,9 +40,11 @@ impl GmailResource {
     /// passes `<data_root>/mirror`); the account's subdir is derived from its
     /// email. `None` disables serving (empty mailbox) — the sync worker is a
     /// separate concern and may still be filling the mirror.
-    pub fn new(config: &GmailConfig, mirror_root: Option<&std::path::Path>) -> anyhow::Result<Self> {
-        let tree = mirror_root
-            .map(|r| mirror_tree(&account_mirror_dir(r, &config.account_email)));
+    pub fn new(
+        config: &GmailConfig,
+        mirror_root: Option<&std::path::Path>,
+    ) -> anyhow::Result<Self> {
+        let tree = mirror_root.map(|r| mirror_tree(&account_mirror_dir(r, &config.account_email)));
         if let Some(t) = &tree {
             // Pre-sync, the tree may not exist yet; an empty dir serves an
             // empty (but valid) mailbox instead of erroring.
@@ -71,7 +73,10 @@ impl GmailResource {
                     let display = if lb.get("type").and_then(|t| t.as_str()) == Some("system") {
                         id.to_string()
                     } else {
-                        lb.get("name").and_then(|n| n.as_str()).unwrap_or(id).to_string()
+                        lb.get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or(id)
+                            .to_string()
                     };
                     Some((id.to_string(), display))
                 })
@@ -332,7 +337,7 @@ fn segments(path: &MountPath) -> Vec<String> {
 
 /// The message id encoded in a `<subject>__<id>` name (last `__`-separated
 /// field; sanitized subjects use single underscores, the separator is `__`).
-fn id_from_name(name: &str) -> String {
+pub(super) fn id_from_name(name: &str) -> String {
     name.rsplit_once("__")
         .map(|(_, id)| id)
         .unwrap_or(name)
@@ -818,7 +823,11 @@ mod tests {
             .readdir(&MountPath::new(format!("/{label}/{y}")))
             .await
             .expect("months");
-        let m = months.iter().map(|e| e.name.clone()).max().expect("a month");
+        let m = months
+            .iter()
+            .map(|e| e.name.clone())
+            .max()
+            .expect("a month");
         let entries = r
             .readdir(&MountPath::new(format!("/{label}/{y}/{m}")))
             .await
@@ -844,6 +853,28 @@ mod tests {
             v["body_text"].as_str().unwrap_or("").len()
         );
         assert!(v.get("id").is_some(), "processed JSON shape");
+
+        // Partial sync: the full sync above seeded a history cursor, so an
+        // incremental run replays the (typically empty) journal instead of
+        // degrading to a full resync.
+        use crate::vfs::resource::{GmailSyncState, sync_gmail_incremental};
+        let seeded = GmailSyncState::load(&acct).expect("state");
+        assert!(seeded.history_id.is_some(), "full sync seeds the cursor");
+        let t1 = std::time::Instant::now();
+        let delta = sync_gmail_incremental(&cfg, &acct)
+            .await
+            .expect("incremental");
+        eprintln!(
+            "incremental: +{} -{} ~{} in {:?} (full_resync={})",
+            delta.added,
+            delta.deleted,
+            delta.relabeled,
+            t1.elapsed(),
+            delta.full_resync
+        );
+        assert!(!delta.full_resync, "cursor was honored");
+        let after = GmailSyncState::load(&acct).expect("state");
+        assert!(after.history_id.is_some() && after.completed);
     }
 
     #[test]
@@ -951,7 +982,6 @@ mod tests {
         })
     }
 
-
     /// Full-stack probe against a configurable endpoint (`GMAIL_BASE_URL` →
     /// enterprise mock): labels → year/month navigation → `cat` (asserts real
     /// body text) → attachment bytes → warm relist. With a
@@ -977,8 +1007,8 @@ mod tests {
         for p in [
             "/INBOX",
             "/INBOX/2026/07",
-            "/INBOX/2026/07/subject__id",             // attachment dir
-            "/INBOX/2026/07/subject__id/file.pdf",    // attachment file
+            "/INBOX/2026/07/subject__id",          // attachment dir
+            "/INBOX/2026/07/subject__id/file.pdf", // attachment file
         ] {
             let got = r.unlink(&MountPath::new(p)).await;
             assert!(
