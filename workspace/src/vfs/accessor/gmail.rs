@@ -545,11 +545,18 @@ impl GmailAccessor {
                     .buffer_unordered(BATCH_CONCURRENCY)
                     .collect()
                     .await;
+            let before = got.len();
             for v in passes.into_iter().flatten() {
                 if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
                     // Key on id: order-independent and dup-safe across retries.
                     got.insert(id.to_string(), v);
                 }
+            }
+            // No progress → the remaining ids will not resolve by repeating
+            // the same request (permanently 404'd, e.g. trashed between `list`
+            // and `get`); stop instead of burning the remaining rounds.
+            if got.len() == before {
+                break;
             }
         }
         let unresolved = ids.len() - got.len();

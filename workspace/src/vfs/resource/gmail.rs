@@ -1865,6 +1865,136 @@ mod tests {
         assert_eq!(hits2.len(), hits.len(), "same result set from warm cache");
     }
 
+    /// Full-stack probe against a configurable endpoint — set `GMAIL_BASE_URL`
+    /// to run it against the enterprise mock: labels → year/month navigation
+    /// (index build) → `cat` (asserts real body text; a batch endpoint that
+    /// ignores `format=full` fails here — that's the mock's contract to fix,
+    /// not ours to work around) → attachment dir + bytes → `.search` with
+    /// operators → warm relist on a fresh resource. With a base_url set (mock)
+    /// it also checks that `rm` against an endpoint lacking trash support
+    /// surfaces an error instead of pretending success.
+    #[tokio::test]
+    #[ignore = "requires GMAIL_* env + network"]
+    async fn gmail_live_full_stack_probe() {
+        use crate::vfs::cache::CachedResource;
+        use std::sync::Arc;
+
+        let Some(cfg) = live_config() else {
+            eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
+            return;
+        };
+        let cache = tempfile::tempdir().unwrap();
+        let r = CachedResource::new(Arc::new(
+            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
+        ));
+
+        // 1. labels
+        let labels = r.readdir(&MountPath::new("/")).await.expect("labels");
+        eprintln!(
+            "labels ({}): {:?}",
+            labels.len(),
+            labels.iter().map(|e| &e.name).take(12).collect::<Vec<_>>()
+        );
+        assert!(labels.iter().any(|e| e.name == "INBOX"));
+
+        // 2. year/month navigation (builds the capped label index)
+        let t0 = std::time::Instant::now();
+        let years = r.readdir(&MountPath::new("/INBOX")).await.expect("years");
+        let y = years.first().expect("a year").name.clone();
+        let months = r
+            .readdir(&MountPath::new(format!("/INBOX/{y}")))
+            .await
+            .expect("months");
+        let m = months.first().expect("a month").name.clone();
+        let month_path = MountPath::new(format!("/INBOX/{y}/{m}"));
+        let entries = r.readdir(&month_path).await.expect("month listing");
+        eprintln!(
+            "INBOX index + {y}/{m}: {} entries in {:?}",
+            entries.len(),
+            t0.elapsed()
+        );
+        assert!(!entries.is_empty(), "newest month lists messages");
+        assert!(
+            entries.iter().any(|e| e.mtime.is_some()),
+            "received-time mtimes stamped"
+        );
+
+        // 3. cat — the body must be real text even when the batch endpoint
+        //    ignored format=full (per-message fallback covers it)
+        let f = entries
+            .iter()
+            .find(|e| e.name.ends_with(GMAIL_SUFFIX))
+            .expect("a message file");
+        let mp = MountPath::new(format!("/INBOX/{y}/{m}/{}", f.name));
+        let v: Value =
+            serde_json::from_slice(&r.read_bytes(&mp, None).await.expect("cat")).unwrap();
+        let body_len = v["body_text"].as_str().unwrap_or("").len();
+        eprintln!(
+            "cat {}: subject={:?} body_text={}B attachments={}",
+            f.name,
+            v["subject"],
+            body_len,
+            v["attachments"].as_array().map_or(0, |a| a.len()),
+        );
+        assert!(body_len > 0, "body text extracted");
+
+        // 4. attachment dir + bytes
+        if let Some(d) = entries.iter().find(|e| matches!(e.kind, FileKind::Dir)) {
+            let atts = r
+                .readdir(&MountPath::new(format!("/INBOX/{y}/{m}/{}", d.name)))
+                .await
+                .expect("attachment dir");
+            eprintln!(
+                "attachments of {}: {:?}",
+                d.name,
+                atts.iter().map(|a| (&a.name, a.size)).collect::<Vec<_>>()
+            );
+            if let Some(a) = atts.first() {
+                let bytes = r
+                    .read_bytes(
+                        &MountPath::new(format!("/INBOX/{y}/{m}/{}/{}", d.name, a.name)),
+                        None,
+                    )
+                    .await
+                    .expect("attachment read");
+                eprintln!("read {}: {}B (listed {}B)", a.name, bytes.len(), a.size);
+                assert!(!bytes.is_empty(), "attachment bytes served");
+            }
+        } else {
+            eprintln!("(no attachment dir in {y}/{m})");
+        }
+
+        // 5. .search with operators
+        for q in ["has:attachment invoice", "subject:invoice newer_than:5y"] {
+            let hits = r
+                .readdir(&MountPath::new(format!("/.search/{q}")))
+                .await
+                .expect("search listing");
+            eprintln!("search {q:?}: {} entries", hits.len());
+        }
+
+        // 6. warm relist from a fresh resource (snapshot + blobs)
+        let r2 = CachedResource::new(Arc::new(
+            GmailResource::new(&cfg, Some(cache.path())).unwrap(),
+        ));
+        let t1 = std::time::Instant::now();
+        let again = r2.readdir(&month_path).await.expect("warm month");
+        eprintln!(
+            "warm relist: {} entries in {:?} (cold {:?})",
+            again.len(),
+            t1.elapsed(),
+            t0.elapsed()
+        );
+        assert_eq!(again.len(), entries.len());
+
+        // 7. rm against an endpoint without trash support must error loudly
+        if cfg.base_url.is_some() {
+            let rm = r2.unlink(&mp).await;
+            eprintln!("rm (endpoint lacks trash): {rm:?}");
+            assert!(rm.is_err(), "rm must surface the failure, not fake success");
+        }
+    }
+
     /// Live label-tree + disk-cache round-trip (no `q=`, so it runs even on a
     /// token whose scope set includes gmail.metadata): session 1 builds the
     /// INBOX index and lists the newest month cold; session 2 (fresh resource,
