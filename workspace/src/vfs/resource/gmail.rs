@@ -875,6 +875,22 @@ mod tests {
         assert!(!delta.full_resync, "cursor was honored");
         let after = GmailSyncState::load(&acct).expect("state");
         assert!(after.history_id.is_some() && after.completed);
+
+        // Fallback shape (what an expired cursor degrades to): a full re-sync
+        // over an already-complete mirror. Every id short-circuits on the done
+        // log, then the label sweep re-checks placements — the mirror must
+        // come through complete with a fresh cursor.
+        let t2 = std::time::Instant::now();
+        let resync = sync_gmail_mirror(&cfg, &acct)
+            .await
+            .expect("fallback resync");
+        eprintln!(
+            "fallback resync: {}/{} in {:?}",
+            resync.fetched,
+            resync.total,
+            t2.elapsed()
+        );
+        assert!(resync.completed && resync.history_id.is_some());
     }
 
     #[test]

@@ -33,10 +33,12 @@
 //! incremental run replays everything after that cursor — new messages are
 //! fetched and written, deletions removed from every label dir, label changes
 //! re-placed. If Gmail has expired the cursor (HTTP 404 — history is only
-//! retained for a week or so), the run degrades to a full sync, which is
-//! itself a cheap reconcile: already-written ids are skipped via the done
-//! log, and an untruncated listing removes mirrored messages the mailbox no
-//! longer contains.
+//! retained for a week or so), the run degrades to a full sync, which is a
+//! complete reconcile in its own right: already-written ids skip their
+//! (re-)fetch via the done log, an untruncated listing removes mirrored
+//! messages the mailbox no longer contains, and a labelIds-only sweep over
+//! the skipped ids re-places any whose labels changed while history was
+//! unavailable.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
@@ -195,15 +197,69 @@ pub async fn sync_gmail_mirror(
     // months whose completion we only know now the stream is exhausted).
     writer.promote_all()?;
 
-    // A full listing is authoritative: anything mirrored that the mailbox no
-    // longer contains is a leftover deletion — remove it. Skipped when the
-    // listing was cap-truncated (absence proves nothing then).
+    // Reconcile the tree against the authoritative listing (one walk feeds
+    // both passes). This is what makes the full sync a real fallback when the
+    // history cursor has expired: the gap's changes must be derivable from
+    // listing + disk alone.
+    let live: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    let on_disk = find_message_files(&writer.tree, None);
+
+    // Deletions: anything mirrored that the mailbox no longer contains is a
+    // leftover — remove it. Skipped when the listing was cap-truncated
+    // (absence proves nothing then).
     if ids.len() < cap {
-        let live: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        for (id, paths) in find_message_files(&writer.tree, None) {
+        for (id, paths) in &on_disk {
             if !live.contains(id.as_str()) {
-                remove_message_files(&writer.tree, &paths);
+                remove_message_files(&writer.tree, paths);
             }
+        }
+    }
+
+    // Label drift: messages skipped above (already in the done log) kept the
+    // placement of their *last* fetch. Re-check just their labelIds (the sync
+    // guide's format=minimal refetch for cached messages), and re-place the
+    // ones whose label dirs no longer match. First sync: `done` is empty, so
+    // this costs nothing.
+    let candidates: Vec<String> = on_disk
+        .keys()
+        .filter(|id| done.contains(*id) && live.contains(id.as_str()))
+        .cloned()
+        .collect();
+    let mut drifted: Vec<String> = Vec::new();
+    for window in candidates.chunks(WINDOW) {
+        for v in accessor.get_messages_batch(window, "labels").await? {
+            let Some(id) = v.get("id").and_then(|i| i.as_str()) else {
+                continue;
+            };
+            let want: HashSet<String> = v
+                .get("labelIds")
+                .and_then(|l| l.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|l| labels.get(l.as_str()?).cloned())
+                .collect();
+            let have = labels_on_disk(&writer.tree, &on_disk[id]);
+            if want != have {
+                drifted.push(id.to_string());
+            }
+        }
+    }
+    if !drifted.is_empty() {
+        tracing::info!(
+            "gmail sync: re-placing {} label-drifted message(s)",
+            drifted.len()
+        );
+    }
+    for window in drifted.chunks(WINDOW) {
+        for raw in accessor.get_messages_batch(window, "full").await? {
+            let Some(id) = raw.get("id").and_then(|i| i.as_str()) else {
+                continue;
+            };
+            if let Some(paths) = on_disk.get(id) {
+                remove_message_files(&writer.tree, paths);
+            }
+            let att_bytes = fetch_attachments(&accessor, id, &raw).await;
+            writer.place_message(&writer.tree, &raw, &labels, &att_bytes)?;
         }
     }
 
@@ -455,6 +511,27 @@ fn find_message_files(
         }
     }
     out
+}
+
+/// The label dirs a mirrored message currently occupies, read back from its
+/// located paths: each is `<label…>/<yyyy>/<mm>/<file>` under `tree`, so the
+/// label display name is everything above the last three components (nested
+/// user labels span several). The counterpart of the placement rule in
+/// [`MirrorWriter::place_message`], used to detect label drift.
+fn labels_on_disk(tree: &Path, paths: &[PathBuf]) -> HashSet<String> {
+    paths
+        .iter()
+        .filter_map(|p| {
+            let rel = p.strip_prefix(tree).ok()?;
+            let parts: Vec<&str> = rel.iter().filter_map(|c| c.to_str()).collect();
+            let label = parts.get(..parts.len().checked_sub(3)?)?;
+            if label.is_empty() {
+                None
+            } else {
+                Some(label.join("/"))
+            }
+        })
+        .collect()
 }
 
 /// Remove a message's file and attachment dir at every located path, pruning
@@ -1000,6 +1077,37 @@ mod tests {
                 .join("Kept__id2.gmail.json")
                 .exists()
         );
+    }
+
+    #[test]
+    fn labels_on_disk_reads_back_placement_including_nested_labels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let w = MirrorWriter::open(tmp.path()).unwrap();
+        // "Work/Receipts" is one Gmail label whose display name nests dirs.
+        let labels: HashMap<String, String> = [("INBOX", "INBOX"), ("Label_7", "Work/Receipts")]
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+
+        let m = raw_msg("id1", "Receipt", JUL, &["INBOX", "Label_7"], None);
+        w.place_message(&w.tree, &m, &labels, &[]).unwrap();
+        let located = find_message_files(&w.tree, None);
+        assert_eq!(
+            labels_on_disk(&w.tree, &located["id1"]),
+            HashSet::from(["INBOX".to_string(), "Work/Receipts".to_string()])
+        );
+
+        // Drift repair converges: re-place with one label gone — the stale
+        // appearance disappears, the survivor stays, and the readback agrees.
+        let moved = raw_msg("id1", "Receipt", JUL, &["Label_7"], None);
+        remove_message_files(&w.tree, &located["id1"]);
+        w.place_message(&w.tree, &moved, &labels, &[]).unwrap();
+        let relocated = find_message_files(&w.tree, None);
+        assert_eq!(
+            labels_on_disk(&w.tree, &relocated["id1"]),
+            HashSet::from(["Work/Receipts".to_string()])
+        );
+        assert!(!w.tree.join("INBOX").exists(), "stale label pruned");
     }
 
     #[test]

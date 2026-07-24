@@ -536,6 +536,10 @@ impl GmailAccessor {
     fn msg_query(format: &str) -> String {
         match format {
             "minimal" => "format=minimal&fields=id,internalDate".to_string(),
+            // Pseudo-format for the mirror's label-reconcile sweep: the sync
+            // guide's "previously cached messages can only change labelIds"
+            // fetch — minimal, masked to just that.
+            "labels" => "format=minimal&fields=id,labelIds".to_string(),
             other => format!("format={other}"),
         }
     }
