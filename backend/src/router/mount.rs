@@ -109,6 +109,7 @@ impl ProviderSpec {
                     client_secret,
                     &code,
                     &redirect_uri,
+                    oauth.base_url.as_deref(),
                 )
                 .await
                 .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gmail oauth: {e}")))?;
@@ -117,6 +118,9 @@ impl ProviderSpec {
                     client_secret: client_secret.to_string(),
                     refresh_token: exchanged.refresh_token,
                     account_email: exchanged.account_email,
+                    // Deployment-level override (mock/gateway), inherited from
+                    // backend config — never from the request.
+                    base_url: oauth.base_url.clone(),
                 })
             }
         })

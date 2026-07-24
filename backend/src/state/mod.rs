@@ -69,6 +69,11 @@ pub type StateResult<T> = Result<T, StateError>;
 pub struct GoogleOAuth {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
+    /// Alternative Google API origin for the whole deployment (an enterprise
+    /// mock or gateway; see `GmailConfig::base_url`). Deployment config only —
+    /// never user-suppliable, since the token endpoint receives the client
+    /// secret. `None` = production Google.
+    pub base_url: Option<String>,
 }
 
 impl GoogleOAuth {

@@ -64,6 +64,7 @@ async fn main() -> std::io::Result<()> {
     let google_oauth = crate::state::GoogleOAuth {
         client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
         client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok(),
+        base_url: std::env::var("GOOGLE_API_BASE_URL").ok(),
     };
 
     let app_state = Arc::new(

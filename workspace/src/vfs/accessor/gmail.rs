@@ -10,6 +10,19 @@ use tokio::sync::Mutex;
 const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GMAIL_API_BASE: &str = "https://gmail.googleapis.com/gmail/v1";
 
+/// `(api_base, token_url)` for a config: the real Google hosts by default, or
+/// both rooted at `base_url` when set — the enterprise-mock/gateway layout
+/// (`{base}/gmail/v1`, `{base}/oauth2/token`).
+fn endpoints(base_url: Option<&str>) -> (String, String) {
+    match base_url {
+        Some(b) => {
+            let b = b.trim_end_matches('/');
+            (format!("{b}/gmail/v1"), format!("{b}/oauth2/token"))
+        }
+        None => (GMAIL_API_BASE.to_string(), OAUTH_TOKEN_URL.to_string()),
+    }
+}
+
 /// Messages per batch request. Google's hard cap is 100, but 50 halves the
 /// worst-case response body (a `format=full` message can run to ~1 MB, and the
 /// whole multipart response must land within the client's 30s timeout) and
@@ -126,13 +139,17 @@ pub struct GmailExchange {
 /// Exchange an OAuth authorization `code` for a refresh token (confidential
 /// client, server-side). Run at mount-create so the browser never handles the
 /// client secret. Google only returns a refresh token when the consent used
-/// `access_type=offline` + `prompt=consent`.
+/// `access_type=offline` + `prompt=consent`. `base_url` overrides the Google
+/// hosts (mock/gateway deployments — see [`GmailConfig::base_url`]); `None` =
+/// production.
 pub async fn exchange_gmail_code(
     client_id: &str,
     client_secret: &str,
     code: &str,
     redirect_uri: &str,
+    base_url: Option<&str>,
 ) -> anyhow::Result<GmailExchange> {
+    let (api_base, token_url) = endpoints(base_url);
     // Bounded: this runs inside the create_mount HTTP handler, and a bare
     // reqwest client has NO default timeout — a hung upstream would hang the
     // mount creation indefinitely.
@@ -142,7 +159,7 @@ pub async fn exchange_gmail_code(
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     let resp = client
-        .post(OAUTH_TOKEN_URL)
+        .post(&token_url)
         .form(&[
             ("client_id", client_id),
             ("client_secret", client_secret),
@@ -173,7 +190,7 @@ pub async fn exchange_gmail_code(
     // (display + cache key), so a transient profile failure fails the create
     // with a clear message rather than minting a half-identified mount.
     let account_email = match v.get("access_token").and_then(|t| t.as_str()) {
-        Some(at) => fetch_profile_email(at).await,
+        Some(at) => fetch_profile_email(at, &api_base).await,
         None => None,
     }
     .ok_or_else(|| {
@@ -186,14 +203,14 @@ pub async fn exchange_gmail_code(
 }
 
 /// `users.getProfile` → lowercased email address, if the call succeeds.
-async fn fetch_profile_email(access_token: &str) -> Option<String> {
+async fn fetch_profile_email(access_token: &str, api_base: &str) -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .connect_timeout(Duration::from_secs(10))
         .build()
         .ok()?;
     let v: Value = client
-        .get(format!("{GMAIL_API_BASE}/users/me/profile"))
+        .get(format!("{api_base}/users/me/profile"))
         .bearer_auth(access_token)
         .send()
         .await
@@ -216,6 +233,14 @@ pub struct GmailConfig {
     /// (a refresh token changes each consent; the email doesn't), so it keys
     /// the disk cache and is shown in mount info.
     pub account_email: String,
+    /// Alternative API origin (an enterprise mock or gateway): requests go to
+    /// `{base_url}/gmail/v1` and `{base_url}/oauth2/token` instead of the real
+    /// Google hosts. `None` = production Google. Deployment-level only — the
+    /// token URL receives the app's client secret, so this must never be
+    /// user-suppliable: it is NOT part of the mount-create API; the backend
+    /// injects it from its own config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 /// Holds Google OAuth credentials (one refresh token) and a cached access
@@ -224,6 +249,11 @@ pub struct GmailConfig {
 pub struct GmailAccessor {
     client: reqwest::Client,
     config: GmailConfig,
+    /// Resolved API origin (`…/gmail/v1`) — real Google or the config's
+    /// `base_url` (see [`endpoints`]).
+    api_base: String,
+    /// Resolved OAuth token endpoint, same override rule.
+    token_url: String,
     /// Cached OAuth access token + its expiry. Refreshed proactively before
     /// expiry and on a 401 (see [`Self::send_with_refresh`]).
     access_token: Mutex<Option<(String, Instant)>>,
@@ -231,6 +261,7 @@ pub struct GmailAccessor {
 
 impl GmailAccessor {
     pub fn new(config: &GmailConfig) -> anyhow::Result<Self> {
+        let (api_base, token_url) = endpoints(config.base_url.as_deref());
         Ok(Self {
             // Bound every request: a hung upstream call run behind the FUSE
             // forward server would otherwise wedge the guest FUSE op (and any
@@ -241,6 +272,8 @@ impl GmailAccessor {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
             config: config.clone(),
+            api_base,
+            token_url,
             access_token: Mutex::new(None),
         })
     }
@@ -256,7 +289,7 @@ impl GmailAccessor {
         }
         let resp = self
             .client
-            .post(OAUTH_TOKEN_URL)
+            .post(&self.token_url)
             .form(&[
                 ("client_id", self.config.client_id.as_str()),
                 ("client_secret", self.config.client_secret.as_str()),
@@ -353,7 +386,7 @@ impl GmailAccessor {
 
     /// All Gmail labels (system + user). Each is `{id, name, type}`.
     pub async fn list_labels(&self) -> anyhow::Result<Vec<Value>> {
-        let url = format!("{GMAIL_API_BASE}/users/me/labels");
+        let url = format!("{}/users/me/labels", self.api_base);
         let v = self.get_json(&url).await?;
         Ok(v.get("labels")
             .and_then(|l| l.as_array())
@@ -404,7 +437,7 @@ impl GmailAccessor {
                 params.push(("pageToken", t.clone()));
             }
             let url = reqwest::Url::parse_with_params(
-                &format!("{GMAIL_API_BASE}/users/me/messages"),
+                &format!("{}/users/me/messages", self.api_base),
                 &params,
             )?;
             let text = self
@@ -460,7 +493,7 @@ impl GmailAccessor {
     /// Full message resource (`format=full`): headers, payload parts, labels,
     /// `internalDate`, `sizeEstimate`.
     pub async fn get_message_full(&self, id: &str) -> anyhow::Result<Value> {
-        let url = format!("{GMAIL_API_BASE}/users/me/messages/{id}?format=full");
+        let url = format!("{}/users/me/messages/{id}?format=full", self.api_base);
         self.get_json(&url).await
     }
 
@@ -468,7 +501,7 @@ impl GmailAccessor {
     /// — see [`Self::msg_query`]). Used to date-bucket a label listing cheaply.
     pub async fn get_message_minimal(&self, id: &str) -> anyhow::Result<Value> {
         let q = Self::msg_query("minimal");
-        let url = format!("{GMAIL_API_BASE}/users/me/messages/{id}?{q}");
+        let url = format!("{}/users/me/messages/{id}?{q}", self.api_base);
         self.get_json(&url).await
     }
 
@@ -500,13 +533,18 @@ impl GmailAccessor {
             }
             // A chunk that errors resolves to an empty Vec, so its ids simply stay
             // missing and are retried next round rather than failing the batch.
-            let chunks: Vec<Vec<String>> =
-                missing.chunks(BATCH_CHUNK).map(<[String]>::to_vec).collect();
-            let passes: Vec<Vec<Value>> = stream::iter(chunks)
-                .map(|chunk| async move { self.batch_chunk(&chunk, format).await.unwrap_or_default() })
-                .buffer_unordered(BATCH_CONCURRENCY)
-                .collect()
-                .await;
+            let chunks: Vec<Vec<String>> = missing
+                .chunks(BATCH_CHUNK)
+                .map(<[String]>::to_vec)
+                .collect();
+            let passes: Vec<Vec<Value>> =
+                stream::iter(chunks)
+                    .map(|chunk| async move {
+                        self.batch_chunk(&chunk, format).await.unwrap_or_default()
+                    })
+                    .buffer_unordered(BATCH_CONCURRENCY)
+                    .collect()
+                    .await;
             for v in passes.into_iter().flatten() {
                 if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
                     // Key on id: order-independent and dup-safe across retries.
@@ -536,9 +574,10 @@ impl GmailAccessor {
         body.push_str(&format!("--{BOUNDARY}--\r\n"));
 
         // Batch lives at the API origin (…/batch/gmail/v1), not under /gmail/v1.
-        let origin = GMAIL_API_BASE
+        let origin = self
+            .api_base
             .strip_suffix("/gmail/v1")
-            .unwrap_or(GMAIL_API_BASE);
+            .unwrap_or(&self.api_base);
         let url = format!("{origin}/batch/gmail/v1");
         let content_type = format!("multipart/mixed; boundary={BOUNDARY}");
 
@@ -565,8 +604,10 @@ impl GmailAccessor {
         message_id: &str,
         attachment_id: &str,
     ) -> anyhow::Result<Vec<u8>> {
-        let url =
-            format!("{GMAIL_API_BASE}/users/me/messages/{message_id}/attachments/{attachment_id}");
+        let url = format!(
+            "{}/users/me/messages/{message_id}/attachments/{attachment_id}",
+            self.api_base
+        );
         let v = self.get_json(&url).await?;
         let data = v.get("data").and_then(|d| d.as_str()).unwrap_or("");
         Ok(decode_b64url(data))
@@ -574,7 +615,7 @@ impl GmailAccessor {
 
     /// Move a message to Trash (the `rm` of a `.gmail.json`).
     pub async fn trash(&self, message_id: &str) -> anyhow::Result<()> {
-        let url = format!("{GMAIL_API_BASE}/users/me/messages/{message_id}/trash");
+        let url = format!("{}/users/me/messages/{message_id}/trash", self.api_base);
         self.send_with_refresh(|t| {
             self.client
                 .post(&url)
@@ -595,7 +636,7 @@ impl GmailAccessor {
         if let Some(tid) = thread_id {
             body["threadId"] = Value::from(tid);
         }
-        let url = format!("{GMAIL_API_BASE}/users/me/messages/send");
+        let url = format!("{}/users/me/messages/send", self.api_base);
         let resp = self
             .send_nonidempotent(|t| self.client.post(&url).bearer_auth(t).json(&body))
             .await?;
@@ -660,6 +701,23 @@ mod tests {
         );
         // Nested braces inside a JSON string ("a{b}c") must not break parsing.
         assert_eq!(msgs[0]["payload"]["headers"][0]["value"], "a{b}c");
+    }
+
+    #[test]
+    fn endpoints_default_to_google_and_reroot_on_base_url() {
+        let (api, tok) = endpoints(None);
+        assert_eq!(api, "https://gmail.googleapis.com/gmail/v1");
+        assert_eq!(tok, "https://oauth2.googleapis.com/token");
+        // A base_url reroots both (mock/gateway layout); trailing '/' tolerated.
+        let (api, tok) = endpoints(Some("https://enterprise-mock.brekkylab.com/"));
+        assert_eq!(api, "https://enterprise-mock.brekkylab.com/gmail/v1");
+        assert_eq!(tok, "https://enterprise-mock.brekkylab.com/oauth2/token");
+        // The batch origin derives from api_base by stripping /gmail/v1, so a
+        // rerooted base keeps batch under the same origin.
+        assert_eq!(
+            api.strip_suffix("/gmail/v1").unwrap(),
+            "https://enterprise-mock.brekkylab.com"
+        );
     }
 
     #[test]

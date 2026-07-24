@@ -1792,6 +1792,7 @@ mod tests {
             client_secret: std::env::var("GMAIL_CLIENT_SECRET").ok()?,
             refresh_token: std::env::var("GMAIL_REFRESH_TOKEN").ok()?,
             account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
+            base_url: std::env::var("GMAIL_BASE_URL").ok(),
         })
     }
 
@@ -1993,6 +1994,7 @@ mod tests {
                 client_secret: "sec".into(),
                 refresh_token: "tok".into(),
                 account_email: "t@example.com".into(),
+                base_url: None,
             },
             None,
         )
@@ -2025,6 +2027,7 @@ mod tests {
             client_secret: "sec".into(),
             refresh_token: "tok-123".into(),
             account_email: "Sello@Brekkylab.com".into(),
+            base_url: None,
         };
         // lowercased, readable, path-safe
         assert_eq!(account_cache_key(&base), "sello@brekkylab.com");
