@@ -82,6 +82,26 @@ pub fn mirror_tree(root: &Path) -> PathBuf {
     root.join(TREE_DIR)
 }
 
+/// One account's mirror root under the deployment mirror dir: the sanitized
+/// plain email names the directory (an identifier, not a secret — readable
+/// for ops, and stable across re-consents unlike anything token-derived).
+/// Both the sync worker and the serving resource derive paths through this.
+pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> PathBuf {
+    let safe: String = account_email
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '-' | '+') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    mirror_root.join("gmail").join(safe)
+}
+
 /// Mirror the whole mailbox (bounded by [`GmailConfig::index_cap`] if set)
 /// under `root`. Safe to re-run: already-written ids are skipped via the done
 /// log, and months already promoted merge instead of clobbering. Returns the

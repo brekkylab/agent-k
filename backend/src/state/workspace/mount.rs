@@ -177,6 +177,7 @@ impl WorkspacesState {
     pub(super) async fn build_fs(&self, workspace_id: Uuid) -> StateResult<WorkspaceFs> {
         let mut config = build_workspace_vfs(&self.db, workspace_id).await?;
         config.local_root = Some(self.get_root(workspace_id));
+        config.mirror_root = Some(self.mirror_root());
         WorkspaceFs::from_config(config)
             .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))
     }
@@ -202,6 +203,7 @@ pub(crate) async fn build_workspace_vfs(
         .collect::<StateResult<Vec<_>>>()?;
     Ok(FsConfig {
         local_root: None,
+        mirror_root: None,
         mounts: mounts
             .into_iter()
             .map(|m| MountSpec {

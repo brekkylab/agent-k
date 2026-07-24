@@ -45,6 +45,12 @@ pub struct FsConfig {
     /// struct, never persisted — the DB stores per-mount rows and the caller
     /// fills this.
     pub local_root: Option<PathBuf>,
+    /// Deployment-level mirror directory (the backend passes
+    /// `<data_root>/mirror`): providers that serve a synced on-disk mirror
+    /// (Gmail) derive their account dirs under it. Must live *outside* every
+    /// mount so the guest never sees sync state. `None` (tests, library
+    /// users) serves such mounts empty.
+    pub mirror_root: Option<PathBuf>,
     pub mounts: Vec<MountSpec>,
 }
 
@@ -68,13 +74,23 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
             resource: Arc::new(LocalResource::new(root)),
         });
     }
+    let mirror_root = config.mirror_root;
     for spec in config.mounts {
         let provider: Arc<dyn Resource> = match spec.provider {
             ProviderConfig::S3(c) => Arc::new(S3Resource::new(&c)?),
             ProviderConfig::Notion(c) => Arc::new(NotionResource::new(&c)?),
-            ProviderConfig::Gmail(c) => Arc::new(GmailResource::new(&c)?),
+            ProviderConfig::Gmail(c) => {
+                // Serves local mirror files — live and cheap like the local
+                // mount, so it skips the metadata cache (whose listing TTL
+                // would hide months the sync just promoted).
+                mounts.push(Mount {
+                    prefix: spec.prefix,
+                    resource: Arc::new(GmailResource::new(&c, mirror_root.as_deref())?),
+                });
+                continue;
+            }
         };
-        // Wrap every provider in the metadata index cache so `stat` after a
+        // Wrap remote providers in the metadata index cache so `stat` after a
         // `readdir` (e.g. `ls -la`) is served from memory.
         mounts.push(Mount {
             prefix: spec.prefix,

@@ -252,6 +252,11 @@ impl WorkspacesState {
         self.data_root.join("workspaces").join(wid.to_string())
     }
 
+    /// Deployment-level mailbox-mirror root (`data_root/mirror`) — outside
+    /// every workspace's `files/` tree, so sync state is never mounted.
+    fn mirror_root(&self) -> PathBuf {
+        self.data_root.join("mirror")
+    }
 }
 
 /// The change hook attached to every [`WorkspaceFs`] this backend builds: it
@@ -305,6 +310,7 @@ pub(crate) fn workspace_fs(
         .join(wid.to_string())
         .join("files");
     config.local_root = Some(root);
+    config.mirror_root = Some(data_root.join("mirror"));
     let fs = WorkspaceFs::from_config(config)
         .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
     Ok(fs.with_hook(knowledge_hook(wid, None)))

@@ -1,594 +1,149 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    time::{Duration, Instant},
-};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use futures::stream::{self, StreamExt};
 use serde_json::{Value, json};
 
 use crate::vfs::{
     accessor::{GmailAccessor, GmailConfig, encode_b64url},
     error::{ResourceError, ResourceResult},
     path::MountPath,
-    resource::{DirEntry, FileKind, FileStat, Resource},
+    resource::{DirEntry, FileKind, FileStat, LocalResource, Resource},
 };
 
-/// Listing TTL for the label set (cheap, changes rarely).
-const LABEL_TTL: Duration = Duration::from_secs(60);
-/// Raw-message cache TTL — dedups the per-message fetches that readdir, stat,
-/// read, and unlink all need for the same id. Matches [`INDEX_TTL`]: message
-/// content is immutable (only the `labels` field can change externally, and
-/// the label index already tolerates that much staleness), so a longer TTL
-/// can't serve wrong bytes — while a short one made a scan re-fetch: grep's
-/// `cat`s of a listed month often trail the listing (which batch-warmed the
-/// cache) by more than 30s, so entries expired mid-scan and were re-fetched
-/// one by one. Mutations through the mount (trash) invalidate explicitly;
-/// memory stays bounded by [`MSG_CACHE_MAX`], not the TTL.
-const MSG_TTL: Duration = Duration::from_secs(600);
-/// Max entries in `msg_cache`. Each is a full message JSON, so an unbounded
-/// cache would grow without limit during a large scan (`grep`); past this,
-/// entries are evicted oldest-first (which is also expired-first).
-const MSG_CACHE_MAX: usize = 2048;
-/// Concurrency for the per-message fetches a directory listing fans out.
-const FETCH_CONCURRENCY: usize = 6;
-/// TTL for a label's date→ids index. The index is a full label scan, so it's
-/// cached (like a directory listing) and shared by every `ls` under the label.
-const INDEX_TTL: Duration = Duration::from_secs(600);
-/// Two message-listings of the same label within this window read as a
-/// sequential (grep-style) scan rather than a one-off browse. Generous because
-/// grep reads a whole month's files *between* listings — a big month takes
-/// tens of seconds, and a tight window would reset detection on exactly the
-/// mailboxes that benefit from read-ahead.
-const SEQ_WINDOW: Duration = Duration::from_secs(60);
-/// Consecutive same-label listings needed before we treat it as a scan and
-/// read ahead one month. 2 = the second month dir grep opens; a single
-/// targeted browse (one month) never reaches it, so browse pays no read-ahead.
-const SEQ_THRESHOLD: u32 = 2;
-/// Over-estimate reported by `stat` for an `.gmail.json` whose processed length
-/// isn't known without fetching. The guest kernel clamps reads at the reported
-/// size even under direct_io, so this must exceed any real email JSON; reads
-/// return the real bytes then empty at EOF. Attachments report their exact size
-/// (known from the part).
-const MSG_SENTINEL_SIZE: u64 = 16 * 1024 * 1024;
+use super::gmail_sync::{account_mirror_dir, mirror_tree};
+
 const GMAIL_SUFFIX: &str = ".gmail.json";
 
-
-/// Attachment-bytes cache TTL. The attachments endpoint has no ranged fetch,
-/// so without this every FUSE chunk read of one file re-downloads the whole
-/// attachment (~200 full downloads to `cat` a 25 MB file). 30s absorbs the
-/// chunk sequence of a single read plus near-term re-reads (grep then cat);
-/// the bytes are immutable, so a longer TTL would also be correct — the cap
-/// only bounds memory.
-const ATT_TTL: Duration = Duration::from_secs(30);
-/// Total-bytes budget for cached attachments. Unlike message JSON (small),
-/// attachments run to ~25 MB each, so the cache evicts (expired first, then
-/// oldest) to stay under this.
-const ATT_CACHE_BUDGET: u64 = 128 * 1024 * 1024;
-
-/// `(display_name, label_id)` pairs for every Gmail label.
-type LabelList = Vec<(String, String)>;
-
-/// A label's message ids grouped by received (UTC) date: `yyyy-mm-dd` → ids.
-/// A `BTreeMap` keeps dates sorted so the listing is deterministic.
-type DateIndex = BTreeMap<String, Vec<String>>;
-
+/// The Gmail mount: a read-gate over the account's **on-disk mailbox mirror**
+/// (built by [`super::gmail_sync::sync_gmail_mirror`]). Reads are plain local
+/// file serving — `ls`/`grep`/`cat`/`find` never touch the API — while `rm`
+/// goes through the API (trash) before touching the mirror, and writes are
+/// rejected. Only complete months are ever visible (the sync promotes months
+/// atomically), so listings never show a partially-synced month.
 pub struct GmailResource {
     accessor: GmailAccessor,
-    /// `(display_name, label_id)` for every label, cached briefly.
-    label_cache: tokio::sync::Mutex<Option<(Instant, LabelList)>>,
-    /// Full raw message JSON by id, cached briefly and bounded ([`MsgCache`]).
-    msg_cache: tokio::sync::Mutex<MsgCache>,
-    /// Per-label "date → message ids" index, built by one full label scan and
-    /// cached ([`INDEX_TTL`]) so every `ls` under the label — and `find` — shares
-    /// that scan instead of re-listing per date. Invalidated on a mutation.
-    date_index: tokio::sync::Mutex<HashMap<String, (Instant, DateIndex)>>,
-    /// Global "message id → UTC date" cache. `internalDate` is immutable, so this
-    /// never goes stale; it lets a label's index build skip re-fetching the date
-    /// of a message already seen under another label (Gmail labels overlap — an
-    /// INBOX message is also in a CATEGORY_*, UNREAD, IMPORTANT, …). Small (id +
-    /// date ≈ 26 bytes/entry), bounded by the mailbox's unique message count.
-    id_date: tokio::sync::Mutex<HashMap<String, String>>,
-    /// Detects a sequential (grep-style) label scan to enable read-ahead only
-    /// then — `(label, last access, consecutive count)`. A targeted browse
-    /// (single month) stays at count 1 and never prefetches.
-    seq_scan: tokio::sync::Mutex<Option<(String, Instant, u32)>>,
-    /// Whole-attachment bytes, briefly cached ([`ATT_TTL`], [`ATT_CACHE_BUDGET`])
-    /// so the chunked reads of one file don't each re-download it. Keyed by
-    /// `(message id, filename)` — *not* the attachment id, which Gmail does not
-    /// keep stable across `messages.get` calls; the message is immutable, so
-    /// filename → content is.
-    att_cache: tokio::sync::Mutex<AttCache>,
-    /// Per-label index ceiling ([`GmailConfig::index_cap`], `usize::MAX` when
-    /// unset): how many of a label's newest messages the date index covers.
-    index_cap: usize,
-}
-
-/// Attachment-cache key: `(message id, filename)`.
-type AttKey = (String, String);
-/// Cached attachment bytes plus their fetch time.
-type AttEntry = (Instant, std::sync::Arc<Vec<u8>>);
-
-/// See [`GmailResource::att_cache`].
-#[derive(Default)]
-struct AttCache {
-    map: HashMap<AttKey, AttEntry>,
-    total: u64,
-}
-
-impl AttCache {
-    fn get(&self, key: &AttKey) -> Option<std::sync::Arc<Vec<u8>>> {
-        self.map
-            .get(key)
-            .filter(|(at, _)| at.elapsed() < ATT_TTL)
-            .map(|(_, v)| v.clone())
-    }
-
-    /// Insert, then bring the cache back under [`ATT_CACHE_BUDGET`]: drop
-    /// expired entries first, then the oldest, never the one just inserted.
-    fn put(&mut self, key: AttKey, bytes: std::sync::Arc<Vec<u8>>) {
-        if let Some((_, old)) = self
-            .map
-            .insert(key.clone(), (Instant::now(), bytes.clone()))
-        {
-            self.total -= old.len() as u64;
-        }
-        self.total += bytes.len() as u64;
-        while self.total > ATT_CACHE_BUDGET && self.map.len() > 1 {
-            let victim = self
-                .map
-                .iter()
-                .filter(|(k, _)| **k != key)
-                .min_by_key(|(_, (at, _))| *at)
-                .map(|(k, _)| k.clone());
-            let Some(victim) = victim else { break };
-            if let Some((_, v)) = self.map.remove(&victim) {
-                self.total -= v.len() as u64;
-            }
-        }
-    }
-}
-
-/// Full-message-JSON cache, bounded to [`MSG_CACHE_MAX`] entries (evict
-/// oldest-first) so a large scan can't grow it without limit. `get` honors
-/// [`MSG_TTL`]; entries are immutable message bodies, so the TTL only bounds
-/// staleness after a mutation elsewhere.
-#[derive(Default)]
-struct MsgCache {
-    map: HashMap<String, (Instant, Value)>,
-}
-
-impl MsgCache {
-    fn get(&self, id: &str) -> Option<Value> {
-        self.map
-            .get(id)
-            .filter(|(at, _)| at.elapsed() < MSG_TTL)
-            .map(|(_, v)| v.clone())
-    }
-
-    fn put(&mut self, id: String, v: Value) {
-        self.map.insert(id, (Instant::now(), v));
-        while self.map.len() > MSG_CACHE_MAX {
-            let victim = self
-                .map
-                .iter()
-                .min_by_key(|(_, (at, _))| *at)
-                .map(|(k, _)| k.clone());
-            let Some(victim) = victim else { break };
-            self.map.remove(&victim);
-        }
-    }
-
-    /// Drop one id (a mutation — trash — made its cached body stale).
-    fn remove(&mut self, id: &str) {
-        self.map.remove(id);
-    }
+    /// The served tree (`<mirror>/tree/`) as plain local files; `None` when no
+    /// mirror root was configured (tests, library users) — serves an empty
+    /// mailbox.
+    local: Option<LocalResource>,
+    tree: Option<PathBuf>,
+    /// Label id → display name, fetched once on first `rm`: trashing must
+    /// drop every hardlinked appearance of the message across label dirs, and
+    /// the message JSON carries label *ids*.
+    labels: tokio::sync::Mutex<Option<HashMap<String, String>>>,
 }
 
 impl GmailResource {
-    pub fn new(config: &GmailConfig) -> anyhow::Result<Self> {
+    /// `mirror_root` is the deployment-level mirror directory (the backend
+    /// passes `<data_root>/mirror`); the account's subdir is derived from its
+    /// email. `None` disables serving (empty mailbox) — the sync worker is a
+    /// separate concern and may still be filling the mirror.
+    pub fn new(config: &GmailConfig, mirror_root: Option<&std::path::Path>) -> anyhow::Result<Self> {
+        let tree = mirror_root
+            .map(|r| mirror_tree(&account_mirror_dir(r, &config.account_email)));
+        if let Some(t) = &tree {
+            // Pre-sync, the tree may not exist yet; an empty dir serves an
+            // empty (but valid) mailbox instead of erroring.
+            std::fs::create_dir_all(t)?;
+        }
         Ok(Self {
             accessor: GmailAccessor::new(config)?,
-            label_cache: tokio::sync::Mutex::new(None),
-            msg_cache: tokio::sync::Mutex::new(MsgCache::default()),
-            date_index: tokio::sync::Mutex::new(HashMap::new()),
-            id_date: tokio::sync::Mutex::new(HashMap::new()),
-            seq_scan: tokio::sync::Mutex::new(None),
-            att_cache: tokio::sync::Mutex::new(AttCache::default()),
-            index_cap: config.index_cap.unwrap_or(usize::MAX),
+            local: tree.clone().map(LocalResource::new),
+            tree,
+            labels: tokio::sync::Mutex::new(None),
         })
     }
 
-    // ---- labels -----------------------------------------------------------
-
-    /// `(display_name, id)` for every label. System labels display as their id
-    /// (INBOX, SENT, …); user labels display as their name.
-    async fn labels(&self) -> anyhow::Result<LabelList> {
-        {
-            let c = self.label_cache.lock().await;
-            if let Some((at, v)) = c.as_ref()
-                && at.elapsed() < LABEL_TTL
-            {
-                return Ok(v.clone());
+    /// Label id → display (system labels display as their id, user labels as
+    /// their name — the same rule the sync uses to name label dirs).
+    async fn label_map(&self) -> HashMap<String, String> {
+        let mut guard = self.labels.lock().await;
+        if let Some(m) = guard.as_ref() {
+            return m.clone();
+        }
+        let map: HashMap<String, String> = match self.accessor.list_labels().await {
+            Ok(raw) => raw
+                .iter()
+                .filter_map(|lb| {
+                    let id = lb.get("id").and_then(|x| x.as_str())?;
+                    let display = if lb.get("type").and_then(|t| t.as_str()) == Some("system") {
+                        id.to_string()
+                    } else {
+                        lb.get("name").and_then(|n| n.as_str()).unwrap_or(id).to_string()
+                    };
+                    Some((id.to_string(), display))
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!("gmail: labels fetch for rm failed: {e}");
+                HashMap::new()
             }
-        }
-        let raw = self.accessor.list_labels().await?;
-        let mut out = Vec::new();
-        for lb in &raw {
-            let id = lb.get("id").and_then(|x| x.as_str()).unwrap_or("");
-            if id.is_empty() {
-                continue;
-            }
-            let display = if lb.get("type").and_then(|t| t.as_str()) == Some("system") {
-                id.to_string()
-            } else {
-                lb.get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or(id)
-                    .to_string()
-            };
-            out.push((display, id.to_string()));
-        }
-        *self.label_cache.lock().await = Some((Instant::now(), out.clone()));
-        Ok(out)
-    }
-
-    async fn label_id(&self, display: &str) -> anyhow::Result<Option<String>> {
-        Ok(self
-            .labels()
-            .await?
-            .into_iter()
-            .find(|(d, _)| d == display)
-            .map(|(_, id)| id))
-    }
-
-    // ---- message fetch (cached) ------------------------------------------
-
-    async fn message_full(&self, id: &str) -> anyhow::Result<Value> {
-        if let Some(v) = self.msg_cache.lock().await.get(id) {
-            return Ok(v);
-        }
-        let v = self.accessor.get_message_full(id).await?;
-        self.msg_cache.lock().await.put(id.to_string(), v.clone());
-        Ok(v)
-    }
-
-    /// Whole bytes of one attachment, served from [`Self::att_cache`] while
-    /// fresh — the ranged reads a guest `cat`/`grep` issues each re-enter here,
-    /// and the API only serves whole attachments, so without the cache every
-    /// chunk would re-download the file.
-    async fn attachment_bytes(
-        &self,
-        msg_id: &str,
-        attachment_id: &str,
-        filename: &str,
-    ) -> anyhow::Result<std::sync::Arc<Vec<u8>>> {
-        let key = (msg_id.to_string(), filename.to_string());
-        if let Some(bytes) = self.att_cache.lock().await.get(&key) {
-            return Ok(bytes);
-        }
-        let bytes = std::sync::Arc::new(self.accessor.get_attachment(msg_id, attachment_id).await?);
-        self.att_cache.lock().await.put(key, bytes.clone());
-        Ok(bytes)
-    }
-
-    /// Fetch messages by id in one batch request (`format` = "full"/"minimal"),
-    /// falling back to concurrent per-message fetches if the batch call fails so
-    /// a listing still resolves. Order is not preserved; callers key on `id`.
-    async fn fetch_many(&self, ids: &[String], format: &str) -> Vec<Value> {
-        if ids.is_empty() {
-            return Vec::new();
-        }
-        if let Ok(raws) = self.accessor.get_messages_batch(ids, format).await
-            && !raws.is_empty()
-        {
-            return raws;
-        }
-        let minimal = format == "minimal";
-        stream::iter(ids.iter().cloned())
-            .map(|id| async move {
-                if minimal {
-                    self.accessor.get_message_minimal(&id).await.ok()
-                } else {
-                    self.accessor.get_message_full(&id).await.ok()
-                }
-            })
-            .buffer_unordered(FETCH_CONCURRENCY)
-            .filter_map(|x| async move { x })
-            .collect()
-            .await
-    }
-
-    /// Full messages for a listing, warming `msg_cache` so a following `cat`
-    /// of a listed message reuses the body without another fetch.
-    async fn fetch_full_many(&self, ids: &[String]) -> Vec<Value> {
-        let raws = self.fetch_many(ids, "full").await;
-        let mut cache = self.msg_cache.lock().await;
-        for v in &raws {
-            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                cache.put(id.to_string(), v.clone());
-            }
-        }
-        drop(cache);
-        raws
-    }
-
-    /// Full messages for `ids`, serving from `msg_cache` where fresh and fetching
-    /// only the misses (in batches) — a repeat listing within [`MSG_TTL`] costs
-    /// no re-fetch.
-    async fn ensure_full(&self, ids: &[String]) -> Vec<Value> {
-        let mut out = Vec::with_capacity(ids.len());
-        let mut missing = Vec::new();
-        {
-            let cache = self.msg_cache.lock().await;
-            for id in ids {
-                match cache.get(id) {
-                    Some(v) => out.push(v),
-                    None => missing.push(id.clone()),
-                }
-            }
-        }
-        if !missing.is_empty() {
-            out.extend(self.fetch_full_many(&missing).await);
-        }
-        out
-    }
-
-    /// Record a message-listing of `label` and report whether this looks like a
-    /// sequential (grep-style) scan we should read ahead for — true while the
-    /// same label keeps being listed within [`SEQ_WINDOW`] ([`SEQ_THRESHOLD`]th
-    /// listing onward), so every month of a scan prefetches the next one. A
-    /// single targeted browse stays at count 1 and never prefetches.
-    async fn note_scan(&self, label: &str) -> bool {
-        let now = Instant::now();
-        let mut g = self.seq_scan.lock().await;
-        let run = match g.as_ref() {
-            Some((l, at, n)) if l == label && at.elapsed() < SEQ_WINDOW => n + 1,
-            _ => 1,
         };
-        *g = Some((label.to_string(), now, run));
-        run >= SEQ_THRESHOLD
+        *guard = Some(map.clone());
+        map
     }
 
-    // ---- readdir levels ---------------------------------------------------
+    /// Remove one message's files from the mirror under every label dir that
+    /// carries it (hardlinked appearances), plus its attachment dir; empty
+    /// parents are pruned. Best-effort — the API trash already succeeded, and
+    /// the incremental sync reconciles anything missed.
+    async fn remove_mirror_entries(&self, rm_path: &MountPath, fname: &str) {
+        let Some(tree) = &self.tree else { return };
+        let seg = segments(rm_path);
+        let [_, y, m, _] = seg.as_slice() else { return };
+        let att_dir = fname.trim_end_matches(GMAIL_SUFFIX).to_string();
 
-    async fn readdir_labels(&self) -> anyhow::Result<Vec<DirEntry>> {
-        Ok(self
-            .labels()
-            .await?
-            .into_iter()
-            .map(|(display, _)| dir_entry(display))
-            .collect())
-    }
-
-    /// The label's date→ids index, rebuilt when absent/stale: scan every message
-    /// id (paginated), batch-fetch each internalDate (minimal), bucket by UTC
-    /// date. Cached and shared by every `readdir` under the label (years, months,
-    /// messages) so a listing scans the label once (and repeat/`find` reuse it).
-    async fn index_for(&self, label: &str) -> anyhow::Result<DateIndex> {
-        {
-            let c = self.date_index.lock().await;
-            if let Some((at, idx)) = c.get(label)
-                && at.elapsed() < INDEX_TTL
-            {
-                return Ok(idx.clone());
-            }
-        }
-        let Some(label_id) = self.label_id(label).await? else {
-            anyhow::bail!("no such label: {label}");
-        };
-        let ids = self
-            .accessor
-            .list_all_message_ids(&label_id, self.index_cap)
-            .await?;
-        let id_dates = self.dates_for_ids(&ids).await;
-        // Bucket in list order (newest-first) so a date's ids are deterministic.
-        let mut idx: DateIndex = BTreeMap::new();
-        for id in &ids {
-            if let Some(date) = id_dates.get(id) {
-                idx.entry(date.clone()).or_default().push(id.clone());
-            }
-        }
-        self.date_index
-            .lock()
-            .await
-            .insert(label.to_string(), (Instant::now(), idx.clone()));
-        Ok(idx)
-    }
-
-    /// Resolve each id's UTC date, reusing the global [`Self::id_date`] cache so a
-    /// message already seen under another label isn't re-fetched — only ids
-    /// missing from the cache cost a `messages.get` (minimal). `internalDate` is
-    /// immutable, so cached entries never go stale.
-    async fn dates_for_ids(&self, ids: &[String]) -> HashMap<String, String> {
-        let mut out: HashMap<String, String> = HashMap::with_capacity(ids.len());
-        let mut missing: Vec<String> = Vec::new();
-        {
-            let cache = self.id_date.lock().await;
-            for id in ids {
-                match cache.get(id) {
-                    Some(date) => {
-                        out.insert(id.clone(), date.clone());
-                    }
-                    None => missing.push(id.clone()),
-                }
-            }
-        }
-        if !missing.is_empty() {
-            let fetched = self.fetch_many(&missing, "minimal").await;
-            let mut cache = self.id_date.lock().await;
-            for v in &fetched {
-                if let Some(id) = v.get("id").and_then(|i| i.as_str())
-                    && let Some(ms) = v.get("internalDate").and_then(|d| d.as_str())
-                {
-                    let date = epoch_ms_to_date(ms);
-                    cache.insert(id.to_string(), date.clone());
-                    out.insert(id.to_string(), date);
-                }
-            }
-        }
-        out
-    }
-
-    /// Year dirs present in a label — complete and newest-first, from the shared
-    /// [`Self::index_for`] scan. Messages are bucketed `<label>/<yyyy>/<mm>/…` so
-    /// each listing stays small (a flat per-day layout was hundreds of dirs).
-    async fn readdir_years(&self, label: &str) -> anyhow::Result<Vec<DirEntry>> {
-        let index = self.index_for(label).await?;
-        // keys are `yyyy-mm-dd` sorted ascending, so equal years are adjacent.
-        let mut years: Vec<&str> = index.keys().map(|d| &d[..4]).collect();
-        years.dedup();
-        Ok(years
-            .into_iter()
-            .rev()
-            .map(|y| dir_entry(y.to_string()))
-            .collect())
-    }
-
-    /// Month dirs (`mm`) present under `<label>/<yyyy>`, newest-first.
-    async fn readdir_months(&self, label: &str, year: &str) -> anyhow::Result<Vec<DirEntry>> {
-        if !is_valid_year(year) {
-            anyhow::bail!("invalid year dir: {year}");
-        }
-        let index = self.index_for(label).await?;
-        let prefix = format!("{year}-");
-        let mut months: Vec<&str> = index
-            .keys()
-            .filter(|d| d.starts_with(&prefix))
-            .map(|d| &d[5..7])
-            .collect();
-        months.dedup();
-        Ok(months
-            .into_iter()
-            .rev()
-            .map(|m| dir_entry(m.to_string()))
-            .collect())
-    }
-
-    /// Messages (and per-message attachment dirs) within `<label>/<yyyy>/<mm>` —
-    /// complete, served from the shared label index (no search, no cap).
-    async fn readdir_messages(
-        &self,
-        label: &str,
-        year: &str,
-        month: &str,
-    ) -> anyhow::Result<Vec<DirEntry>> {
-        if !is_valid_year(year) || !is_valid_month(month) {
-            anyhow::bail!("invalid month dir: {year}/{month}");
-        }
-        let index = self.index_for(label).await?;
-        let prefix = format!("{year}-{month}-");
-        let ids: Vec<String> = index
-            .iter()
-            .filter(|(d, _)| d.starts_with(&prefix))
-            .flat_map(|(_, ids)| ids.iter().cloned())
-            .collect();
-        // Read-ahead: on a detected sequential (grep-style) scan, piggyback the
-        // next month in traversal order (listings are newest-first, so the
-        // adjacent older one) onto this month's batch — its chunks ride the
-        // concurrency slots this month leaves idle, so each listing overlaps
-        // the fetch of the following one. Bounded to one month: it can't blow
-        // [`MSG_CACHE_MAX`] or outlive [`MSG_TTL`] before grep reads it, and
-        // `ensure_full` skips ids the previous window already cached, so steady
-        // state costs nothing extra. A single targeted browse never triggers
-        // it — see [`Self::note_scan`].
-        let mut fetch_ids = ids.clone();
-        if self.note_scan(label).await {
-            fetch_ids.extend(next_month_ids(&index, year, month));
-            fetch_ids.truncate(MSG_CACHE_MAX);
-        }
-        let raws = self.ensure_full(&fetch_ids).await;
-        // Only this month's messages are listed; the read-ahead tail stays
-        // cache-only until its own readdir.
-        let listed: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        Ok(message_entries(raws.iter().filter(|r| {
-            r.get("id")
-                .and_then(|i| i.as_str())
-                .is_some_and(|id| listed.contains(id))
-        })))
-    }
-
-
-    /// Processed email JSON bytes for a `<subject>__<id>.gmail.json` name —
-    /// addressed by the id embedded in the name.
-    async fn read_message_bytes(&self, file: &str) -> ResourceResult<Vec<u8>> {
-        let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
-        let raw = self.message_full(&id).await?;
-        Ok(serde_json::to_vec(&process_message(&raw))?)
-    }
-
-    /// Ranged attachment bytes for a `<subject>__<id>/<filename>` pair (cached
-    /// whole; only the requested range is copied out).
-    async fn read_attachment(
-        &self,
-        dir: &str,
-        fname: &str,
-        range: Option<std::ops::Range<u64>>,
-    ) -> ResourceResult<Vec<u8>> {
-        let id = id_from_name(dir);
-        let raw = self.message_full(&id).await?;
-        let atts = attachments(&raw);
-        let names = unique_attachment_names(&atts);
-        let idx = names
-            .iter()
-            .position(|n| n == fname)
-            .ok_or(ResourceError::NotFound)?;
-        let bytes = self
-            .attachment_bytes(&id, &atts[idx].attachment_id, &names[idx])
-            .await?;
-        Ok(slice_ref(&bytes, range))
-    }
-
-    /// Stat of one attachment file: exact size from the part metadata plus the
-    /// message's received time.
-    async fn stat_attachment(&self, dir: &str, fname: &str) -> ResourceResult<FileStat> {
-        let raw = self.message_full(&id_from_name(dir)).await?;
-        let atts = attachments(&raw);
-        let names = unique_attachment_names(&atts);
-        let idx = names
-            .iter()
-            .position(|n| n == fname)
-            .ok_or(ResourceError::NotFound)?;
-        Ok(FileStat {
-            kind: FileKind::File,
-            size: atts[idx].size,
-            mtime: msg_time(&raw),
-            ..Default::default()
-        })
-    }
-
-    /// Trash one message and invalidate everything that cached it: the body,
-    /// its id→date entry, and all label indexes (a trashed message must vanish
-    /// from listings and reappear under TRASH on the next `ls`).
-    async fn trash_message(&self, id: &str) -> ResourceResult<()> {
-        self.accessor.trash(id).await?;
-        self.msg_cache.lock().await.remove(id);
-        self.id_date.lock().await.remove(id);
-        self.date_index.lock().await.clear();
-        Ok(())
-    }
-
-    /// Attachment files within a message's attachment dir. They carry the
-    /// message's received time as mtime (an attachment is as old as its mail).
-    async fn readdir_attachments(&self, msg_id: &str) -> anyhow::Result<Vec<DirEntry>> {
-        let raw = self.message_full(msg_id).await?;
-        let mtime = msg_time(&raw);
-        let atts = attachments(&raw);
-        let names = unique_attachment_names(&atts);
-        Ok(atts
-            .into_iter()
-            .zip(names)
-            .map(|(a, name)| DirEntry {
-                name,
-                kind: FileKind::File,
-                size: a.size,
-                mtime,
-                atime: None,
-                ctime: None,
-                created: None,
-                etag: None,
+        // Label ids from the message JSON (read before we delete anything).
+        let label_ids: Vec<String> = self
+            .local
+            .as_ref()
+            .and_then(|_| std::fs::read(tree.join(rm_path.as_str().trim_start_matches('/'))).ok())
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|v| {
+                v.get("labels").and_then(|l| l.as_array()).map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                })
             })
-            .collect())
+            .unwrap_or_default();
+        let map = if label_ids.is_empty() {
+            HashMap::new()
+        } else {
+            self.label_map().await
+        };
+
+        let mut dirs: Vec<PathBuf> = label_ids
+            .iter()
+            .filter_map(|id| map.get(id))
+            .map(|display| tree.join(display).join(y).join(m))
+            .collect();
+        // Always include the path actually rm'ed, even if label mapping failed.
+        dirs.push(
+            tree.join(rm_path.as_str().trim_start_matches('/'))
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| tree.clone()),
+        );
+        dirs.sort();
+        dirs.dedup();
+        for dir in dirs {
+            let _ = std::fs::remove_file(dir.join(fname));
+            let _ = std::fs::remove_dir_all(dir.join(&att_dir));
+            // Prune now-empty month/year/label dirs (never the tree root).
+            let mut cur = dir;
+            while cur.starts_with(tree) && cur != *tree {
+                if std::fs::remove_dir(&cur).is_err() {
+                    break;
+                }
+                match cur.parent() {
+                    Some(p) => cur = p.to_path_buf(),
+                    None => break,
+                }
+            }
+        }
     }
 }
 
@@ -599,103 +154,61 @@ impl Resource for GmailResource {
         path: &MountPath,
         range: Option<std::ops::Range<u64>>,
     ) -> ResourceResult<Vec<u8>> {
-        let seg = segments(path);
-        match seg.as_slice() {
-            // <label>/<yyyy>/<mm>/<file>.gmail.json -> processed email JSON
-            [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
-                let data = self.read_message_bytes(file).await?;
-                Ok(slice(data, range))
-            }
-            // <label>/<yyyy>/<mm>/<subject>__<id>/<filename> -> attachment bytes
-            [_label, _year, _month, dir, fname] => self.read_attachment(dir, fname, range).await,
-            _ => Err(ResourceError::NotFound),
+        match &self.local {
+            Some(l) => l.read_bytes(path, range).await,
+            None => Err(ResourceError::NotFound),
+        }
+    }
+
+    async fn read_bytes_pinned(
+        &self,
+        path: &MountPath,
+        range: Option<std::ops::Range<u64>>,
+        stat: &FileStat,
+    ) -> ResourceResult<Vec<u8>> {
+        match &self.local {
+            Some(l) => l.read_bytes_pinned(path, range, stat).await,
+            None => Err(ResourceError::NotFound),
         }
     }
 
     async fn write_bytes(&self, _path: &MountPath, _data: Vec<u8>) -> ResourceResult<()> {
-        // Gmail is read-only for file writes; send/reply/forward go through the
-        // `.cmd/` control path (see [`Self::command`]).
+        // The mirror is read-only for the guest; mail mutations go through the
+        // API (rm → trash below; send stays dormant scaffolding in command()).
         Err(ResourceError::Unsupported)
     }
 
     async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<DirEntry>> {
-        let seg = segments(path);
-        match seg.as_slice() {
-            [] => self.readdir_labels().await.map_err(ResourceError::from),
-            [label] => self.readdir_years(label).await.map_err(ResourceError::from),
-            [label, year] => self
-                .readdir_months(label, year)
-                .await
-                .map_err(ResourceError::from),
-            [label, year, month] => self
-                .readdir_messages(label, year, month)
-                .await
-                .map_err(ResourceError::from),
-            // attachment dir: <label>/<yyyy>/<mm>/<subject>__<id>
-            [_label, _year, _month, dir] if !dir.ends_with(GMAIL_SUFFIX) => self
-                .readdir_attachments(&id_from_name(dir))
-                .await
-                .map_err(ResourceError::from),
-            _ => Err(ResourceError::NotFound),
+        match &self.local {
+            Some(l) => l.readdir(path).await,
+            None if path.is_root() => Ok(Vec::new()),
+            None => Err(ResourceError::NotFound),
         }
     }
 
     async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
-        let seg = segments(path);
-        match seg.as_slice() {
-            [] => Ok(dir_stat()),
-            // a label: confirm it exists (cheap, cached) — else ENOENT
-            [label] => {
-                if self.label_id(label).await?.is_some() {
-                    Ok(dir_stat())
-                } else {
-                    Err(ResourceError::NotFound)
-                }
-            }
-            // a year dir: a well-formed yyyy is a (possibly empty) dir
-            [_label, year] => {
-                if is_valid_year(year) {
-                    Ok(dir_stat())
-                } else {
-                    Err(ResourceError::NotFound)
-                }
-            }
-            // a month dir: a well-formed mm is a (possibly empty) dir
-            [_label, _year, month] => {
-                if is_valid_month(month) {
-                    Ok(dir_stat())
-                } else {
-                    Err(ResourceError::NotFound)
-                }
-            }
-            // a message file (sentinel size — don't fetch just to size it) or
-            // an attachment dir
-            [_label, _year, _month, name] => {
-                if name.ends_with(GMAIL_SUFFIX) {
-                    Ok(FileStat {
-                        kind: FileKind::File,
-                        size: MSG_SENTINEL_SIZE,
-                        ..Default::default()
-                    })
-                } else {
-                    Ok(dir_stat())
-                }
-            }
-            // an attachment file: exact size from the message's part metadata
-            [_label, _year, _month, dir, fname] => self.stat_attachment(dir, fname).await,
-            _ => Err(ResourceError::NotFound),
+        match &self.local {
+            Some(l) => l.stat(path).await,
+            None if path.is_root() => Ok(FileStat {
+                kind: FileKind::Dir,
+                ..Default::default()
+            }),
+            None => Err(ResourceError::NotFound),
         }
     }
 
-    /// `rm <…>.gmail.json` moves the message to Trash. Dormant under a
-    /// `gmail.readonly` consent (Gmail rejects the trash call with 403); a
-    /// `gmail.modify` consent activates it with no code change.
+    /// `rm <…>.gmail.json` moves the message to Trash — API first, mirror
+    /// cleanup after, so a scope rejection (403 under `gmail.readonly`)
+    /// leaves the mirror untouched. `gmail.modify` activates it, no code
+    /// change.
     async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
         let seg = segments(path);
         match seg.as_slice() {
             [_label, _year, _month, file] if file.ends_with(GMAIL_SUFFIX) => {
-                self.trash_message(&id_from_name(file.trim_end_matches(GMAIL_SUFFIX)))
-                    .await
+                let id = id_from_name(file.trim_end_matches(GMAIL_SUFFIX));
+                self.accessor.trash(&id).await?;
+                self.remove_mirror_entries(path, file).await;
+                Ok(())
             }
             _ => Err(ResourceError::Unsupported),
         }
@@ -703,9 +216,8 @@ impl Resource for GmailResource {
 
     /// Domain write commands (`send` / `reply` / `reply-all` / `forward`),
     /// designed to hang off the (not yet wired) `.cmd/` control path. Dormant
-    /// today for the same reason as [`Self::unlink`] — the read-only
-    /// `gmail.readonly` provisioning 403s them — but kept for the planned
-    /// write-scoped flow rather than removed.
+    /// today — the read-only `gmail.readonly` provisioning 403s them — but
+    /// kept for the planned write-scoped flow rather than removed.
     async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
         let v: Value = serde_json::from_slice(body).map_err(|e| {
             ResourceError::Backend(anyhow::anyhow!("gmail {name}: invalid JSON: {e}"))
@@ -725,7 +237,7 @@ impl Resource for GmailResource {
                     ResourceError::Backend(anyhow::anyhow!("{name}: missing message_id"))
                 })?;
                 let body = s("body").unwrap_or_default();
-                let orig = self.message_full(&mid).await?;
+                let orig = self.accessor.get_message_full(&mid).await?;
                 let thread_id = orig.get("threadId").and_then(|t| t.as_str());
                 let mut subject = header(&orig, "Subject");
                 if !subject.to_lowercase().starts_with("re:") {
@@ -768,7 +280,7 @@ impl Resource for GmailResource {
                 let to = s("to").ok_or_else(|| {
                     ResourceError::Backend(anyhow::anyhow!("forward: missing to"))
                 })?;
-                let raw_msg = self.message_full(&mid).await?;
+                let raw_msg = self.accessor.get_message_full(&mid).await?;
                 let p = process_message(&raw_msg);
                 let mut subject = p
                     .get("subject")
@@ -801,65 +313,9 @@ impl Resource for GmailResource {
         Ok(serde_json::to_vec(&result)?)
     }
 
-
     fn prompt(&self) -> &str {
         GMAIL_PROMPT
     }
-
-    /// A listing is complete for the snapshot it was built from (the date index
-    /// holds every date and every id for the label), but that index is cached
-    /// with a TTL, so mail arriving before the TTL expires isn't in it yet.
-    /// Keep negative caching off so a date/message absent from a listing is still
-    /// probed against the adapter rather than answered `NotFound` from a possibly
-    /// stale parent listing (e.g. `stat INBOX/2026-05-01` after `ls INBOX`).
-    fn listings_complete(&self) -> bool {
-        false
-    }
-}
-
-/// Directory entries for full messages: the `.gmail.json` file (sizeEstimate,
-/// received-time mtime) plus, for messages with attachments, the sibling dir.
-/// Sorted by name.
-fn message_entries<'a>(raws: impl Iterator<Item = &'a Value>) -> Vec<DirEntry> {
-    let mut out = Vec::new();
-    for raw in raws {
-        let id = raw.get("id").and_then(|i| i.as_str()).unwrap_or("");
-        if id.is_empty() {
-            continue;
-        }
-        let subject = header(raw, "Subject");
-        let subject = if subject.is_empty() {
-            "No Subject".to_string()
-        } else {
-            subject
-        };
-        let size = raw.get("sizeEstimate").and_then(|s| s.as_u64());
-        let mtime = msg_time(raw);
-        out.push(DirEntry {
-            name: msg_filename(&subject, id),
-            kind: FileKind::File,
-            size: size.unwrap_or(0),
-            mtime,
-            atime: None,
-            ctime: None,
-            created: None,
-            etag: None,
-        });
-        if !attachments(raw).is_empty() {
-            out.push(DirEntry {
-                name: attach_dir_name(&subject, id),
-                kind: FileKind::Dir,
-                size: 0,
-                mtime,
-                atime: None,
-                ctime: None,
-                created: None,
-                etag: None,
-            });
-        }
-    }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
 }
 
 // ---- path helpers ---------------------------------------------------------
@@ -1252,41 +708,6 @@ pub(super) fn epoch_ms_to_date(ms: &str) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Whether `name` is a well-formed `yyyy` / `mm` path segment. Listings come from
-/// the label index (not a date search), so these only validate the path shape —
-/// a valid-but-empty year/month is a legitimately empty directory.
-fn is_valid_year(name: &str) -> bool {
-    name.len() == 4 && name.bytes().all(|b| b.is_ascii_digit())
-}
-
-fn is_valid_month(name: &str) -> bool {
-    name.len() == 2 && matches!(name.parse::<u32>(), Ok(m) if (1..=12).contains(&m))
-}
-
-/// Ids of the month directly older than `year-month` in `index` — the next dir
-/// a newest-first scan will list, so the read-ahead window. Empty when there is
-/// no older month. The month itself need not exist in the index (its ids are
-/// then simply the adjacent older month's).
-fn next_month_ids(index: &DateIndex, year: &str, month: &str) -> Vec<String> {
-    let current = format!("{year}-{month}");
-    // Keys are `yyyy-mm-dd` ascending; walk newest → oldest to the first month
-    // before the current one.
-    let next = index
-        .keys()
-        .rev()
-        .map(|d| &d[..7])
-        .find(|m| *m < current.as_str());
-    let Some(next) = next else {
-        return Vec::new();
-    };
-    let prefix = format!("{next}-");
-    index
-        .iter()
-        .filter(|(d, _)| d.starts_with(&prefix))
-        .flat_map(|(_, ids)| ids.iter().cloned())
-        .collect()
-}
-
 /// Days since 1970-01-01 -> (year, month, day). Howard Hinnant's algorithm.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
@@ -1317,52 +738,8 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 
 // ---- small builders -------------------------------------------------------
 
-fn dir_entry(name: String) -> DirEntry {
-    DirEntry {
-        name,
-        kind: FileKind::Dir,
-        size: 0,
-        mtime: None,
-        atime: None,
-        ctime: None,
-        created: None,
-        etag: None,
-    }
-}
-
-fn dir_stat() -> FileStat {
-    FileStat {
-        kind: FileKind::Dir,
-        ..Default::default()
-    }
-}
-
-fn slice(data: Vec<u8>, range: Option<std::ops::Range<u64>>) -> Vec<u8> {
-    match range {
-        Some(r) => {
-            let start = (r.start as usize).min(data.len());
-            let end = (r.end as usize).min(data.len());
-            data[start..end].to_vec()
-        }
-        None => data,
-    }
-}
-
-/// [`slice`] over borrowed bytes (cached attachments stay in the cache; only
-/// the requested window is copied out).
-fn slice_ref(data: &[u8], range: Option<std::ops::Range<u64>>) -> Vec<u8> {
-    match range {
-        Some(r) => {
-            let start = (r.start as usize).min(data.len());
-            let end = (r.end as usize).min(data.len());
-            data[start..end].to_vec()
-        }
-        None => data.to_vec(),
-    }
-}
-
 const GMAIL_PROMPT: &str = "\
-Gmail (read + trash on delete). Layout:
+Gmail (read + trash on delete). A synced on-disk mirror of the mailbox:
   <label>/<yyyy>/<mm>/<subject>__<message-id>.gmail.json   # the email (JSON)
   <label>/<yyyy>/<mm>/<subject>__<message-id>/<filename>   # attachments (only if any)
 
@@ -1378,6 +755,8 @@ Gmail (read + trash on delete). Layout:
      \"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
   The sibling dir (same name without .gmail.json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
+  While the initial sync is still running, months appear newest-first — a
+  visible month is always complete.
 
 
   rm <…>.gmail.json    moves the message to Trash (only .gmail.json is removable).";
@@ -1388,56 +767,83 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn att_cache_serves_fresh_and_expires_stale() {
-        let key = ("m1".to_string(), "a.pdf".to_string());
-        let mut c = AttCache::default();
-        c.put(key.clone(), std::sync::Arc::new(vec![1, 2, 3]));
-        assert_eq!(c.get(&key).unwrap().as_slice(), &[1, 2, 3]);
-        // Backdate the entry past the TTL: no longer served.
-        if let Some(stale) = Instant::now().checked_sub(ATT_TTL + Duration::from_secs(1)) {
-            c.map.get_mut(&key).unwrap().0 = stale;
-            assert!(c.get(&key).is_none());
-        }
-        // Re-putting the same key replaces (total stays consistent).
-        c.put(key.clone(), std::sync::Arc::new(vec![9; 5]));
-        assert_eq!(c.total, 5);
-    }
+    /// Live mirror round-trip: sync a capped slice of the real mailbox into a
+    /// temp mirror, then serve it through the gate resource. Run with:
+    ///
+    ///   GMAIL_CLIENT_ID=… GMAIL_CLIENT_SECRET=… GMAIL_REFRESH_TOKEN=… \
+    ///   [GMAIL_INDEX_CAP=60] cargo test -p workspace gmail_live -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "requires GMAIL_* env + network"]
+    async fn gmail_live_mirror() {
+        use crate::vfs::resource::sync_gmail_mirror;
 
-    #[test]
-    fn att_cache_evicts_oldest_over_budget_but_not_newest() {
-        let mut c = AttCache::default();
-        let big = (ATT_CACHE_BUDGET / 2 + 1) as usize;
-        let k1 = ("m1".to_string(), "a".to_string());
-        let k2 = ("m2".to_string(), "b".to_string());
-        c.put(k1.clone(), std::sync::Arc::new(vec![0; big]));
-        // Make k1 strictly older so eviction order is deterministic.
-        if let Some(older) = Instant::now().checked_sub(Duration::from_secs(1)) {
-            c.map.get_mut(&k1).unwrap().0 = older;
+        let Some(mut cfg) = live_config() else {
+            eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
+            return;
+        };
+        if cfg.index_cap.is_none() {
+            cfg.index_cap = Some(60); // keep the live probe cheap by default
         }
-        // Two halves exceed the budget: the older k1 is evicted, k2 survives.
-        c.put(k2.clone(), std::sync::Arc::new(vec![0; big]));
-        assert!(c.get(&k1).is_none());
-        assert!(c.get(&k2).is_some());
-        assert_eq!(c.total, big as u64);
-        // A single over-budget entry is kept (never evict the just-inserted).
-        let mut solo = AttCache::default();
-        let k = ("m".to_string(), "x".to_string());
-        solo.put(
-            k.clone(),
-            std::sync::Arc::new(vec![0; (ATT_CACHE_BUDGET + 1) as usize]),
+        let deploy = tempfile::tempdir().unwrap();
+        let acct = account_mirror_dir(deploy.path(), &cfg.account_email);
+
+        let t0 = std::time::Instant::now();
+        let state = sync_gmail_mirror(&cfg, &acct).await.expect("sync");
+        eprintln!(
+            "sync: {}/{} messages in {:?} (completed={})",
+            state.fetched,
+            state.total,
+            t0.elapsed(),
+            state.completed
         );
-        assert!(solo.get(&k).is_some());
-    }
+        assert!(state.completed);
 
-    #[test]
-    fn slice_ref_windows_and_clamps() {
-        let data = [1u8, 2, 3, 4, 5];
-        assert_eq!(slice_ref(&data, None), vec![1, 2, 3, 4, 5]);
-        assert_eq!(slice_ref(&data, Some(1..3)), vec![2, 3]);
-        // Out-of-bounds range clamps instead of panicking.
-        assert_eq!(slice_ref(&data, Some(3..99)), vec![4, 5]);
-        assert!(slice_ref(&data, Some(9..12)).is_empty());
+        let r = GmailResource::new(&cfg, Some(deploy.path())).unwrap();
+        let labels = r.readdir(&MountPath::new("/")).await.expect("labels");
+        eprintln!(
+            "labels ({}): {:?}",
+            labels.len(),
+            labels.iter().map(|e| &e.name).take(12).collect::<Vec<_>>()
+        );
+        assert!(!labels.is_empty(), "mirror serves at least one label");
+
+        // Walk newest year/month of the first label that has content.
+        let label = labels.first().unwrap().name.clone();
+        let years = r
+            .readdir(&MountPath::new(format!("/{label}")))
+            .await
+            .expect("years");
+        let y = years.iter().map(|e| e.name.clone()).max().expect("a year");
+        let months = r
+            .readdir(&MountPath::new(format!("/{label}/{y}")))
+            .await
+            .expect("months");
+        let m = months.iter().map(|e| e.name.clone()).max().expect("a month");
+        let entries = r
+            .readdir(&MountPath::new(format!("/{label}/{y}/{m}")))
+            .await
+            .expect("month listing");
+        eprintln!("{label}/{y}/{m}: {} entries", entries.len());
+        let f = entries
+            .iter()
+            .find(|e| e.name.ends_with(GMAIL_SUFFIX))
+            .expect("a message file");
+        assert!(f.mtime.is_some(), "mirror files carry received-time mtimes");
+        let bytes = r
+            .read_bytes(
+                &MountPath::new(format!("/{label}/{y}/{m}/{}", f.name)),
+                None,
+            )
+            .await
+            .expect("cat");
+        let v: Value = serde_json::from_slice(&bytes).unwrap();
+        eprintln!(
+            "cat {}: subject={:?} body_text={}B",
+            f.name,
+            v["subject"],
+            v["body_text"].as_str().unwrap_or("").len()
+        );
+        assert!(v.get("id").is_some(), "processed JSON shape");
     }
 
     #[test]
@@ -1552,189 +958,18 @@ mod tests {
     /// base_url set it also checks `rm` against an endpoint lacking trash
     /// support surfaces an error instead of pretending success.
     #[tokio::test]
-    #[ignore = "requires GMAIL_* env + network"]
-    async fn gmail_live_full_stack_probe() {
-        use crate::vfs::cache::CachedResource;
-        use std::sync::Arc;
-
-        let Some(cfg) = live_config() else {
-            eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
-            return;
-        };
-        let r = CachedResource::new(Arc::new(GmailResource::new(&cfg).unwrap()));
-
-        // 1. labels
-        let labels = r.readdir(&MountPath::new("/")).await.expect("labels");
-        eprintln!(
-            "labels ({}): {:?}",
-            labels.len(),
-            labels.iter().map(|e| &e.name).take(12).collect::<Vec<_>>()
-        );
-        assert!(labels.iter().any(|e| e.name == "INBOX"));
-
-        // 2. year/month navigation (builds the label index)
-        let t0 = std::time::Instant::now();
-        let years = r.readdir(&MountPath::new("/INBOX")).await.expect("years");
-        let y = years.first().expect("a year").name.clone();
-        let months = r
-            .readdir(&MountPath::new(format!("/INBOX/{y}")))
-            .await
-            .expect("months");
-        let m = months.first().expect("a month").name.clone();
-        let month_path = MountPath::new(format!("/INBOX/{y}/{m}"));
-        let entries = r.readdir(&month_path).await.expect("month listing");
-        eprintln!(
-            "INBOX index + {y}/{m}: {} entries in {:?}",
-            entries.len(),
-            t0.elapsed()
-        );
-        assert!(!entries.is_empty(), "newest month lists messages");
-        assert!(
-            entries.iter().any(|e| e.mtime.is_some()),
-            "received-time mtimes stamped"
-        );
-
-        // 3. cat — the body must be real text even when the batch endpoint
-        //    ignored format=full (per-message fallback covers it)
-        let f = entries
-            .iter()
-            .find(|e| e.name.ends_with(GMAIL_SUFFIX))
-            .expect("a message file");
-        let mp = MountPath::new(format!("/INBOX/{y}/{m}/{}", f.name));
-        let v: Value =
-            serde_json::from_slice(&r.read_bytes(&mp, None).await.expect("cat")).unwrap();
-        let body_len = v["body_text"].as_str().unwrap_or("").len();
-        eprintln!(
-            "cat {}: subject={:?} body_text={}B attachments={}",
-            f.name,
-            v["subject"],
-            body_len,
-            v["attachments"].as_array().map_or(0, |a| a.len()),
-        );
-        assert!(body_len > 0, "body text extracted");
-
-        // 4. attachment dir + bytes
-        if let Some(d) = entries.iter().find(|e| matches!(e.kind, FileKind::Dir)) {
-            let atts = r
-                .readdir(&MountPath::new(format!("/INBOX/{y}/{m}/{}", d.name)))
-                .await
-                .expect("attachment dir");
-            eprintln!(
-                "attachments of {}: {:?}",
-                d.name,
-                atts.iter().map(|a| (&a.name, a.size)).collect::<Vec<_>>()
-            );
-            if let Some(a) = atts.first() {
-                let bytes = r
-                    .read_bytes(
-                        &MountPath::new(format!("/INBOX/{y}/{m}/{}/{}", d.name, a.name)),
-                        None,
-                    )
-                    .await
-                    .expect("attachment read");
-                eprintln!("read {}: {}B (listed {}B)", a.name, bytes.len(), a.size);
-                assert!(!bytes.is_empty(), "attachment bytes served");
-            }
-        } else {
-            eprintln!("(no attachment dir in {y}/{m})");
-        }
-
-
-        // 6. warm relist (metadata-cache hit on the same resource)
-        let t1 = std::time::Instant::now();
-        let again = r.readdir(&month_path).await.expect("warm month");
-        eprintln!(
-            "warm relist: {} entries in {:?} (cold {:?})",
-            again.len(),
-            t1.elapsed(),
-            t0.elapsed()
-        );
-        assert_eq!(again.len(), entries.len());
-
-        // 7. rm against an endpoint without trash support must error loudly
-        if cfg.base_url.is_some() {
-            let rm = r.unlink(&mp).await;
-            eprintln!("rm (endpoint lacks trash): {rm:?}");
-            assert!(rm.is_err(), "rm must surface the failure, not fake success");
-        }
-    }
-
-    /// Live label-tree navigation (no `q=`): labels → years → months → newest
-    /// month listing → `cat`. Same env vars as [`gmail_live_full_stack_probe`].
-    #[tokio::test]
-    #[ignore = "requires GMAIL_* env + network"]
-    async fn gmail_live_label() {
-        use crate::vfs::cache::CachedResource;
-        use std::sync::Arc;
-
-        let Some(cfg) = live_config() else {
-            eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
-            return;
-        };
-        let r = CachedResource::new(Arc::new(GmailResource::new(&cfg).unwrap()));
-        let t0 = std::time::Instant::now();
-        let years = r.readdir(&MountPath::new("/INBOX")).await.expect("years");
-        let y = years.first().expect("some year").name.clone();
-        let months = r
-            .readdir(&MountPath::new(format!("/INBOX/{y}")))
-            .await
-            .expect("months");
-        let m = months.first().expect("some month").name.clone();
-        let entries = r
-            .readdir(&MountPath::new(format!("/INBOX/{y}/{m}")))
-            .await
-            .expect("month listing");
-        eprintln!(
-            "INBOX index + {y}/{m} listing ({} entries) in {:?}",
-            entries.len(),
-            t0.elapsed()
-        );
-        if let Some(f) = entries.iter().find(|e| e.name.ends_with(GMAIL_SUFFIX)) {
-            let p = MountPath::new(format!("/INBOX/{y}/{m}/{}", f.name));
-            let bytes = r.read_bytes(&p, None).await.expect("cat");
-            let v: Value = serde_json::from_slice(&bytes).unwrap();
-            eprintln!("cat: subject={:?} ({}B json)", v["subject"], bytes.len());
-        }
-    }
-
-    #[test]
-    fn message_entries_lists_file_and_attachment_dir() {
-        let with_att = json!({
-            "id": "m1",
-            "internalDate": "1777802400000",
-            "sizeEstimate": 1234,
-            "payload": {
-                "headers": [{"name": "Subject", "value": "Hello"}],
-                "parts": [{"filename": "a.pdf", "body": {"attachmentId": "x", "size": 5}}]
-            }
-        });
-        let plain = json!({ "id": "m2", "payload": { "headers": [] } });
-        let entries = message_entries([&with_att, &plain].into_iter());
-        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "Hello__m1",
-                "Hello__m1.gmail.json",
-                "No_Subject__m2.gmail.json"
-            ]
-        );
-        assert!(matches!(entries[0].kind, FileKind::Dir), "attachment dir");
-        assert_eq!(entries[1].size, 1234, "sizeEstimate carried");
-        assert!(entries[1].mtime.is_some(), "received time carried");
-        assert!(entries[2].mtime.is_none(), "no internalDate → no mtime");
-    }
-
-    #[tokio::test]
     async fn unlink_accepts_only_message_files_no_network_needed() {
-        let r = GmailResource::new(&GmailConfig {
+        let r = GmailResource::new(
+            &GmailConfig {
                 client_id: "id".into(),
                 client_secret: "sec".into(),
                 refresh_token: "tok".into(),
                 account_email: "t@example.com".into(),
                 base_url: None,
                 index_cap: None,
-            })
+            },
+            None,
+        )
         .unwrap();
         // Every shape that isn't a message file is rejected by the path match
         // alone, before any network I/O (dummy credentials would fail loudly
@@ -1773,41 +1008,6 @@ mod tests {
         // 2026-05-03T10:00:00Z = 1777800000 s
         assert_eq!(epoch_ms_to_date("1777802400000"), "2026-05-03");
         assert_eq!(epoch_ms_to_date("bogus"), "1970-01-01");
-    }
-
-    #[test]
-    fn year_and_month_validation() {
-        assert!(is_valid_year("2026"));
-        assert!(is_valid_year("1970"));
-        assert!(!is_valid_year("26")); // wrong length
-        assert!(!is_valid_year("202x")); // non-digit
-        assert!(!is_valid_year("2026-05")); // not a bare year
-
-        assert!(is_valid_month("01"));
-        assert!(is_valid_month("12"));
-        assert!(!is_valid_month("5")); // unpadded
-        assert!(!is_valid_month("13")); // out of range
-        assert!(!is_valid_month("00")); // month 0
-        assert!(!is_valid_month("xx")); // non-digit
-    }
-
-    #[test]
-    fn next_month_ids_walks_newest_to_oldest() {
-        let mut idx: DateIndex = BTreeMap::new();
-        idx.insert("2025-12-31".into(), vec!["d".into()]);
-        idx.insert("2026-03-10".into(), vec!["a".into()]);
-        idx.insert("2026-05-01".into(), vec!["b".into()]);
-        idx.insert("2026-05-20".into(), vec!["c".into()]);
-        // after 2026-05, the next older month with mail is 2026-03
-        assert_eq!(next_month_ids(&idx, "2026", "05"), vec!["a"]);
-        // after 2026-03 → 2025-12
-        assert_eq!(next_month_ids(&idx, "2026", "03"), vec!["d"]);
-        // oldest month → nothing to read ahead
-        assert!(next_month_ids(&idx, "2025", "12").is_empty());
-        // a month with no mail still finds the adjacent older one
-        assert_eq!(next_month_ids(&idx, "2026", "04"), vec!["a"]);
-        // a multi-day month returns all its ids (date order)
-        assert_eq!(next_month_ids(&idx, "2026", "07"), vec!["b", "c"]);
     }
 
     #[test]
