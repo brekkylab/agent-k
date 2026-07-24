@@ -34,7 +34,7 @@ pub enum ModelTier {
 ///
 /// Mirrors the session-creation `AgentType` in [`crate::router::session`]; keep
 /// the two variant sets in sync.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentType {
     Coworker,
