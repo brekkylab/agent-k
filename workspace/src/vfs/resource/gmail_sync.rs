@@ -181,9 +181,15 @@ pub async fn sync_gmail_mirror(
                 current_month = month;
             }
 
-            let att_bytes = fetch_attachments(&accessor, id, raw).await;
+            let (att_bytes, att_failed) = fetch_attachments(&accessor, id, raw).await;
             writer.write_message(raw, &labels, &att_bytes)?;
-            writer.mark_done(id)?;
+            // A message whose attachment download failed is written (body +
+            // whatever arrived) but NOT marked done, so the next run refetches
+            // it and retries the missing attachment instead of never trying
+            // again.
+            if att_failed == 0 {
+                writer.mark_done(id)?;
+            }
             state.fetched += 1;
             since_save += 1;
             if since_save >= STATE_EVERY {
@@ -258,7 +264,7 @@ pub async fn sync_gmail_mirror(
             if let Some(paths) = on_disk.get(id) {
                 remove_message_files(&writer.tree, paths);
             }
-            let att_bytes = fetch_attachments(&accessor, id, &raw).await;
+            let (att_bytes, _) = fetch_attachments(&accessor, id, &raw).await;
             writer.place_message(&writer.tree, &raw, &labels, &att_bytes)?;
         }
     }
@@ -376,10 +382,16 @@ pub async fn sync_gmail_incremental(
                     // Old label placement is stale; the rewrite below is authoritative.
                     remove_message_files(&writer.tree, paths);
                 }
-                let att_bytes = fetch_attachments(&accessor, &id, &raw).await;
+                let (att_bytes, att_failed) = fetch_attachments(&accessor, &id, &raw).await;
                 writer.place_message(&writer.tree, &raw, &labels, &att_bytes)?;
                 if added.contains(&id) {
-                    writer.mark_done(&id)?;
+                    // Same retry rule as the full sync: an attachment failure
+                    // leaves the id out of the done log, so the next full
+                    // (fallback) sync refetches it. The journal itself won't
+                    // replay it — the cursor moves past this record.
+                    if att_failed == 0 {
+                        writer.mark_done(&id)?;
+                    }
                     delta.added += 1;
                 } else {
                     delta.relabeled += 1;
@@ -463,22 +475,27 @@ async fn fetch_label_map(accessor: &GmailAccessor) -> anyhow::Result<HashMap<Str
 }
 
 /// Download a message's attachments (decoded bytes). A failure skips the one
-/// attachment (logged), not the message.
+/// attachment (logged), not the message; the failure count lets callers
+/// withhold the done mark so a later run retries the missing bytes.
 async fn fetch_attachments(
     accessor: &GmailAccessor,
     id: &str,
     raw: &Value,
-) -> Vec<(String, Vec<u8>)> {
+) -> (Vec<(String, Vec<u8>)>, usize) {
     let atts = attachments(raw);
     let names = unique_attachment_names(&atts);
     let mut out = Vec::with_capacity(atts.len());
+    let mut failed = 0usize;
     for (a, name) in atts.iter().zip(&names) {
         match accessor.get_attachment(id, &a.attachment_id).await {
             Ok(bytes) => out.push((name.clone(), bytes)),
-            Err(e) => tracing::warn!("gmail sync: attachment {name} of {id}: {e}"),
+            Err(e) => {
+                failed += 1;
+                tracing::warn!("gmail sync: attachment {name} of {id}: {e} (will retry next run)");
+            }
         }
     }
-    out
+    (out, failed)
 }
 
 /// Walk `tree` and map message id → every path carrying it (its hardlinked
