@@ -161,7 +161,9 @@ impl WorkspacesState {
         Ok(mount)
     }
 
-    /// Delete a mount by id, returning the removed row.
+    /// Delete a mount by id, returning the removed row. Provider-side cleanup
+    /// runs after the row is gone (e.g. Gmail's mirror GC — see
+    /// [`WorkspacesState::on_mount_removed`]).
     pub async fn remove_mount(&self, id: Uuid) -> StateResult<WorkspaceMount> {
         let existing = self.get_mount(id).await?.ok_or(StateError::NotFound)?;
         sqlx::query("DELETE FROM workspace_mounts WHERE id = ?")
@@ -169,6 +171,7 @@ impl WorkspacesState {
             .execute(&self.db)
             .await?;
         self.invalidate_fs(existing.workspace_id);
+        self.on_mount_removed(&existing.provider).await;
         Ok(existing)
     }
 
@@ -333,6 +336,54 @@ mod tests {
             state.remove_mount(created.id).await,
             Err(StateError::NotFound)
         ));
+    }
+
+    /// Removing a Gmail mount GCs the account's on-disk mirror — but only when
+    /// no other mount (case-insensitively) references the same account.
+    #[tokio::test]
+    async fn gmail_mirror_gc_on_last_reference() {
+        let (state, _tmp, wid) = fresh_state().await;
+        let gmail = |email: &str| {
+            ProviderConfig::Gmail(GmailConfig {
+                client_id: "c".into(),
+                client_secret: "s".into(),
+                refresh_token: "r".into(),
+                account_email: email.into(),
+                base_url: None,
+                index_cap: None,
+            })
+        };
+        // Two mounts referencing one account — the email case differs, but
+        // both map to the same (sanitized, lowercased) mirror dir.
+        let m1 = state
+            .create_mount(WorkspaceMount::new(
+                wid,
+                "g1".into(),
+                gmail("Sync.Test@x.com"),
+            ))
+            .await
+            .unwrap();
+        let m2 = state
+            .create_mount(WorkspaceMount::new(
+                wid,
+                "g2".into(),
+                gmail("sync.test@x.com"),
+            ))
+            .await
+            .unwrap();
+
+        // A fabricated mirror as the sync would leave it.
+        let acct = ::workspace::account_mirror_dir(&state.mirror_root(), "sync.test@x.com");
+        std::fs::create_dir_all(acct.join("tree/INBOX")).unwrap();
+        std::fs::write(acct.join("state.json"), b"{}").unwrap();
+
+        // First removal: the account is still referenced — mirror stays.
+        state.remove_mount(m1.id).await.unwrap();
+        assert!(acct.exists(), "mirror kept while a reference remains");
+
+        // Last removal: mirror dir is deleted wholesale.
+        state.remove_mount(m2.id).await.unwrap();
+        assert!(!acct.exists(), "mirror removed with its last mount");
     }
 
     #[tokio::test]

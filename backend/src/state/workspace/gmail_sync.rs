@@ -5,58 +5,44 @@
 //! initial full sync, incomplete → resumed full sync, complete → history.list
 //! journal replay). This module decides only *when* it runs:
 //!
-//! - **mount creation** spawns the initial full sync in the background, and
+//! - **mount creation** spawns the initial full sync in the background,
 //! - **the frontend** triggers later refreshes explicitly
-//!   (`POST /workspaces/{wid}/mounts/{mount_id}/sync`); there is no timer.
+//!   (`POST /workspaces/{wid}/mounts/{mount_id}/sync`); there is no timer, and
+//! - **mount removal** garbage-collects the account's mirror once no mount
+//!   anywhere references the account (aborting its running sync first).
 //!
-//! Both go through a per-account single-flight guard, so concurrent triggers
+//! Runs go through a per-account single-flight guard, so concurrent triggers
 //! (a double-clicked refresh, two mounts of one account, refresh-during-
 //! initial-sync) never run two engines over one mirror directory.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ::workspace::{GmailConfig, GmailSyncState, account_mirror_dir, sync_gmail_incremental};
+use ::workspace::{
+    GmailConfig, GmailSyncState, ProviderConfig, account_mirror_dir, sync_gmail_incremental,
+};
+use sqlx::Row as _;
 
 use super::WorkspacesState;
+use crate::state::StateResult;
 
 /// Per-account single-flight registry for mirror sync runs, keyed by the
-/// account mirror directory (the resource every run exclusively owns).
+/// account mirror directory (the resource every run exclusively owns). Holds
+/// each run's [`tokio::task::JoinHandle`] so mirror GC can abort it.
 #[derive(Clone, Default)]
 pub struct GmailSyncRunner {
-    active: Arc<Mutex<HashSet<PathBuf>>>,
-}
-
-/// An acquired run slot; releases the account on drop, so the slot is freed
-/// however the sync task ends (success, error, panic unwind).
-struct SyncSlot {
-    active: Arc<Mutex<HashSet<PathBuf>>>,
-    acct: PathBuf,
-}
-
-impl Drop for SyncSlot {
-    fn drop(&mut self) {
-        self.active.lock().unwrap().remove(&self.acct);
-    }
+    active: Arc<Mutex<HashMap<PathBuf, tokio::task::JoinHandle<()>>>>,
 }
 
 impl GmailSyncRunner {
-    /// Claim the account's run slot, or `None` if a run is already active.
-    fn try_begin(&self, acct: &Path) -> Option<SyncSlot> {
-        if self.active.lock().unwrap().insert(acct.to_path_buf()) {
-            Some(SyncSlot {
-                active: self.active.clone(),
-                acct: acct.to_path_buf(),
-            })
-        } else {
-            None
-        }
-    }
-
     /// Whether a sync run is currently active for the account dir.
     pub fn is_running(&self, acct: &Path) -> bool {
-        self.active.lock().unwrap().contains(acct)
+        self.active
+            .lock()
+            .unwrap()
+            .get(acct)
+            .is_some_and(|h| !h.is_finished())
     }
 
     /// Start a background sync for the account unless one is already running.
@@ -65,12 +51,14 @@ impl GmailSyncRunner {
     /// logged, not returned — callers poll status instead of awaiting.
     pub fn spawn(&self, config: GmailConfig, mirror_root: &Path) -> bool {
         let acct = account_mirror_dir(mirror_root, &config.account_email);
-        let Some(slot) = self.try_begin(&acct) else {
+        let mut active = self.active.lock().unwrap();
+        if active.get(&acct).is_some_and(|h| !h.is_finished()) {
             return false;
-        };
-        tokio::spawn(async move {
+        }
+        let dir = acct.clone();
+        let handle = tokio::spawn(async move {
             let email = config.account_email.clone();
-            match sync_gmail_incremental(&config, &acct).await {
+            match sync_gmail_incremental(&config, &dir).await {
                 Ok(d) => tracing::info!(
                     "gmail sync [{email}]: +{} -{} ~{} (full_resync={})",
                     d.added,
@@ -80,9 +68,17 @@ impl GmailSyncRunner {
                 ),
                 Err(e) => tracing::warn!("gmail sync [{email}] failed: {e:#}"),
             }
-            drop(slot);
         });
+        active.insert(acct, handle);
         true
+    }
+
+    /// Abort the account's sync run, if one is active. Used before deleting
+    /// the mirror dir — a live engine would otherwise recreate it mid-removal.
+    fn abort(&self, acct: &Path) {
+        if let Some(h) = self.active.lock().unwrap().remove(acct) {
+            h.abort();
+        }
     }
 }
 
@@ -104,27 +100,67 @@ impl WorkspacesState {
             self.gmail_sync.is_running(&acct),
         )
     }
+
+    /// Delete the account's on-disk mirror unless some other mount (any
+    /// workspace) still references the account. Called after a Gmail mount row
+    /// is removed: aborts the account's running sync first, then removes the
+    /// whole account dir (tree, staging, state, done log). Filesystem errors
+    /// are logged, not returned — the mount row is already gone, and a
+    /// leftover dir is re-adopted (resumed) if the account is ever re-mounted.
+    pub(super) async fn gc_gmail_mirror(&self, account_email: &str) -> StateResult<()> {
+        let acct = account_mirror_dir(&self.mirror_root(), account_email);
+
+        // Still referenced? Compare via the mirror dir each config maps to,
+        // the same identity the sync and the resource use.
+        let rows = sqlx::query("SELECT config FROM workspace_mounts WHERE provider = 'gmail'")
+            .fetch_all(&self.db)
+            .await?;
+        for row in &rows {
+            let cfg: GmailConfig = serde_json::from_str(&row.get::<String, _>("config"))?;
+            if account_mirror_dir(&self.mirror_root(), &cfg.account_email) == acct {
+                return Ok(());
+            }
+        }
+
+        self.gmail_sync.abort(&acct);
+        match tokio::fs::remove_dir_all(&acct).await {
+            Ok(()) => tracing::info!("gmail mirror gc: removed {}", acct.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("gmail mirror gc: {}: {e}", acct.display()),
+        }
+        Ok(())
+    }
+
+    /// Provider-dispatch hook for mount removal side effects.
+    pub(super) async fn on_mount_removed(&self, provider: &ProviderConfig) {
+        if let ProviderConfig::Gmail(c) = provider
+            && let Err(e) = self.gc_gmail_mirror(&c.account_email).await
+        {
+            tracing::warn!("gmail mirror gc for {}: {e}", c.account_email);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn single_flight_per_account() {
+    #[tokio::test]
+    async fn single_flight_and_abort() {
         let runner = GmailSyncRunner::default();
         let a = Path::new("/mirror/gmail/a@x.com");
-        let b = Path::new("/mirror/gmail/b@x.com");
 
-        let slot = runner.try_begin(a).expect("first claim wins");
+        // Simulate an in-flight run.
+        runner
+            .active
+            .lock()
+            .unwrap()
+            .insert(a.to_path_buf(), tokio::spawn(std::future::pending()));
         assert!(runner.is_running(a));
-        assert!(runner.try_begin(a).is_none(), "second claim blocked");
-        // A different account is unaffected.
-        assert!(runner.try_begin(b).is_some());
+        assert!(!runner.is_running(Path::new("/mirror/gmail/b@x.com")));
 
-        // Dropping the slot frees the account for the next run.
-        drop(slot);
+        // Abort frees the account.
+        runner.abort(a);
         assert!(!runner.is_running(a));
-        assert!(runner.try_begin(a).is_some());
     }
 }
