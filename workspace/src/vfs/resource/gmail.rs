@@ -681,6 +681,7 @@ pub(super) fn process_message(raw: &Value) -> Value {
         "date": header(raw, "Date"),
         "body_text": body_text,
         "links": body_links(&payload),
+        "drive_files": drive_files(&payload),
         "snippet": raw.get("snippet").and_then(|s| s.as_str()).unwrap_or(""),
         "labels": raw.get("labelIds").cloned().unwrap_or(json!([])),
         "attachments": atts,
@@ -707,22 +708,9 @@ fn body_links(payload: &Value) -> Vec<String> {
     };
     let mut out: Vec<String> = Vec::new();
     for (i, _) in html.match_indices("href") {
-        let rest = &html[i + 4..];
-        // href = "…" | '…' | bare
-        let rest = rest.trim_start();
-        let Some(rest) = rest.strip_prefix('=') else {
+        let Some(url) = attr_value(&html[i + 4..]) else {
             continue;
         };
-        let rest = rest.trim_start();
-        let (quote, rest) = match rest.as_bytes().first() {
-            Some(b'"') => ('"', &rest[1..]),
-            Some(b'\'') => ('\'', &rest[1..]),
-            _ => (' ', rest),
-        };
-        let end = rest
-            .find(|c: char| c == quote || (quote == ' ' && (c == '>' || c.is_whitespace())))
-            .unwrap_or(rest.len());
-        let url = decode_entities(rest[..end].trim());
         if (url.starts_with("http://") || url.starts_with("https://")) && !out.contains(&url) {
             out.push(url);
             if out.len() >= MAX_LINKS {
@@ -731,6 +719,78 @@ fn body_links(payload: &Value) -> Vec<String> {
         }
     }
     out
+}
+
+/// Files Gmail moved to Drive instead of attaching, as `{filename, url}`.
+///
+/// Over 25 MB Gmail drops the attachment and writes a Drive link, so the API
+/// reports nothing at all — no attachment part, no header, nothing in
+/// [`attachments`]. The composer does leave structured markup, and it is the
+/// only place the name and its link appear *together*:
+///
+/// ```text
+/// <div class="… gmail_drive_chip"><a href="URL" aria-label="NAME">…<span>NAME</span></a></div>
+/// ```
+///
+/// That class is Gmail's own and undocumented, so treat this as best-effort:
+/// if the markup ever changes, this goes empty and the URL still shows up in
+/// [`body_links`] — a chip degrades to a link, never to nothing.
+fn drive_files(payload: &Value) -> Vec<Value> {
+    let Some(html) = find_part(payload, "text/html") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (i, _) in html.match_indices("gmail_drive_chip") {
+        // The chip's anchor is what carries both fields; stop at its close so
+        // a later chip's attributes can't be read into this one.
+        let chip = &html[i..];
+        let chip = &chip[..chip.find("</a>").unwrap_or(chip.len())];
+        let Some(url) = attr_in(chip, "href") else {
+            continue;
+        };
+        if !url.starts_with("https://") {
+            continue;
+        }
+        let filename = attr_in(chip, "aria-label")
+            .filter(|n| !n.is_empty())
+            .or_else(|| span_text(chip))
+            .unwrap_or_default();
+        if out.len() < MAX_LINKS {
+            out.push(json!({ "filename": filename, "url": url }));
+        }
+    }
+    out
+}
+
+/// Text inside the first `<span …>…</span>`, the fallback name source when a
+/// Drive chip carries no `aria-label`.
+fn span_text(s: &str) -> Option<String> {
+    let open = s.find("<span")?;
+    let start = open + s[open..].find('>')? + 1;
+    let end = start + s[start..].find("</span>")?;
+    let t = decode_entities(s[start..end].trim());
+    (!t.is_empty()).then_some(t)
+}
+
+/// Value of attribute `name` in `s` (the first occurrence).
+fn attr_in(s: &str, name: &str) -> Option<String> {
+    let at = s.find(name)?;
+    attr_value(&s[at + name.len()..])
+}
+
+/// Parse `="…"` / `='…'` / `=bare` at the head of `s` — i.e. `s` starts right
+/// after an attribute's name — and return the entity-decoded value.
+fn attr_value(s: &str) -> Option<String> {
+    let rest = s.trim_start().strip_prefix('=')?.trim_start();
+    let (quote, rest) = match rest.as_bytes().first()? {
+        b'"' => ('"', &rest[1..]),
+        b'\'' => ('\'', &rest[1..]),
+        _ => (' ', rest),
+    };
+    let end = rest
+        .find(|c: char| c == quote || (quote == ' ' && (c == '>' || c.is_whitespace())))
+        .unwrap_or(rest.len());
+    Some(decode_entities(rest[..end].trim()))
 }
 
 /// The handful of XML entities that appear inside an `href` (`&amp;` above all,
@@ -836,9 +896,11 @@ Gmail (read + trash on delete). A synced on-disk mirror of the mailbox:
   cat <…>.json returns:
     {\"id\",\"thread_id\",\"from\":{\"name\",\"email\"},\"to\":[…],\"cc\":[…],
      \"subject\",\"date\",\"body_text\",\"snippet\",\"labels\":[…],
-     \"links\":[…],\"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
+     \"links\":[…],\"drive_files\":[{\"filename\",\"url\"}],
+     \"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
   body_text is the visible text only; \"links\" holds the URLs its hyperlinks
-  pointed at (a file too big to attach arrives as a Drive link, not a file).
+  pointed at. A file over 25MB isn't attached at all — Gmail sends a Drive
+  link instead, listed in \"drive_files\" (name + url, no bytes to read).
   The sibling dir (same name without .json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
   While the initial sync is still running, months appear newest-first — a
@@ -1227,6 +1289,54 @@ mod tests {
             "parts": [{ "mimeType": "text/plain", "body": { "data": b64("see https://x.io") } }],
         });
         assert!(body_links(&plain).is_empty());
+    }
+
+    /// A >25 MB file arrives as a Drive chip, not an attachment. The markup
+    /// below is verbatim from a real send (trimmed of styling), and it is the
+    /// only place the filename and its URL are paired.
+    #[test]
+    fn drive_chips_pair_filename_with_url() {
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+        let html = "<div dir=\"ltr\">25메가 이상 첨부파일 테스트.\
+            <div contenteditable=\"false\" class=\"gmail_chip gmail_drive_chip\" style=\"width:386px\">\
+            <a href=\"https://drive.google.com/file/d/15qL/view?usp=drive_web\" target=\"_blank\" \
+            aria-label=\"OpenWiki_0.3.20_aarch64.dmg\">\
+            <img src=\"https://ssl.gstatic.com/docs/doclist/images/icon.png\">\
+            <span dir=\"ltr\">OpenWiki_0.3.20_aarch64.dmg</span></a></div>\
+            <div class=\"gmail_chip gmail_drive_chip\">\
+            <a href=\"https://drive.google.com/file/d/ZZZ/view\"><span>second &amp; last.zip</span></a>\
+            </div></div>";
+        let payload = json!({
+            "mimeType": "multipart/alternative",
+            "parts": [{ "mimeType": "text/html", "body": { "data": b64(html) } }],
+        });
+
+        assert_eq!(
+            drive_files(&payload),
+            vec![
+                json!({
+                    "filename": "OpenWiki_0.3.20_aarch64.dmg",
+                    "url": "https://drive.google.com/file/d/15qL/view?usp=drive_web"
+                }),
+                // No aria-label → falls back to the chip's span text.
+                json!({ "filename": "second & last.zip", "url": "https://drive.google.com/file/d/ZZZ/view" }),
+            ]
+        );
+        // Each chip keeps its own url — the second must not inherit the first.
+        // The icon's <img src> is not a hyperlink, so it stays out of `links`.
+        assert_eq!(
+            body_links(&payload),
+            vec![
+                "https://drive.google.com/file/d/15qL/view?usp=drive_web",
+                "https://drive.google.com/file/d/ZZZ/view",
+            ]
+        );
+        // An ordinary mail has no chips.
+        let plain = json!({
+            "mimeType": "text/html",
+            "body": { "data": b64("<a href=\"https://x.io\">x</a>") },
+        });
+        assert!(drive_files(&plain).is_empty());
     }
 
     #[test]
