@@ -353,10 +353,17 @@ pub(super) fn attach_dir_name(subject: &str, id: &str) -> String {
 }
 
 const TITLE_MAX: usize = 80;
+/// Byte ceiling for the title part, on top of the [`TITLE_MAX`] character cap.
+/// A filename is capped at 255 **bytes** on the filesystems this deploys to
+/// (ext4/XFS), and exceeding it fails the write with `ENAMETOOLONG` — which
+/// would abort a sync mid-mailbox. macOS caps at 255 *characters* instead, so
+/// a name Linux rejects writes fine on a dev machine; only the byte bound
+/// catches it. Leaves ~55 bytes for the `__<id>.gmail.json` tail.
+const TITLE_MAX_BYTES: usize = 200;
 
 /// Sanitize a subject for use as a path segment:
 /// keep word chars / spaces / `-._`, collapse the rest to `_`, spaces->`_`,
-/// squeeze repeats, trim, cap length.
+/// squeeze repeats, trim, cap length (characters *and* bytes).
 fn sanitize(text: &str) -> String {
     if text.trim().is_empty() {
         return "No_Subject".to_string();
@@ -388,6 +395,20 @@ fn sanitize(text: &str) -> String {
     let mut out: String = trimmed.chars().collect();
     if out.chars().count() > TITLE_MAX {
         out = out.chars().take(TITLE_MAX - 3).collect::<String>() + "...";
+    }
+    // Then bound the bytes: `TITLE_MAX` counts characters, and 80 CJK or emoji
+    // characters run to 240–320 bytes on their own. Cut on a char boundary so
+    // multibyte text is shortened, never corrupted.
+    if out.len() > TITLE_MAX_BYTES {
+        let keep = TITLE_MAX_BYTES - 3; // room for the ellipsis
+        let cut = out
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|i| *i <= keep)
+            .last()
+            .unwrap_or(0);
+        out.truncate(cut);
+        out.push_str("...");
     }
     if out.is_empty() {
         "No_Subject".to_string()
@@ -967,6 +988,43 @@ mod tests {
         let s = sanitize(&long);
         assert_eq!(s.chars().count(), 80);
         assert!(s.ends_with("..."));
+    }
+
+    /// The char cap alone doesn't bound the *name*: ext4/XFS cap a filename at
+    /// 255 **bytes**, and 80 CJK/emoji characters are 240–320 bytes before the
+    /// `__<id>.gmail.json` tail is added. (macOS caps at 255 characters, so a
+    /// dev machine happily writes a name Linux would reject with
+    /// ENAMETOOLONG — which aborts the sync mid-mailbox.)
+    #[test]
+    fn filenames_stay_within_the_filesystem_byte_limit() {
+        const NAME_MAX: usize = 255;
+        let id = "19f8a471bcd83ca4";
+        for subject in [
+            "가".repeat(200),                    // Hangul, 3 bytes each
+            "🙂".repeat(200),                    // emoji, 4 bytes each
+            "日本語のとても長い件名".repeat(30), // CJK mix
+            format!("{} {}", "ascii ".repeat(40), "한글".repeat(60)),
+        ] {
+            let f = msg_filename(&subject, id);
+            assert!(
+                f.len() <= NAME_MAX,
+                "message filename is {} bytes (> {NAME_MAX}): {f}",
+                f.len()
+            );
+            let d = attach_dir_name(&subject, id);
+            assert!(
+                d.len() <= NAME_MAX,
+                "attachment dir is {} bytes (> {NAME_MAX}): {d}",
+                d.len()
+            );
+            // Truncation must not split a character.
+            assert!(std::str::from_utf8(f.as_bytes()).is_ok());
+        }
+        // Short subjects are untouched by the byte bound.
+        assert_eq!(
+            msg_filename("짧은 제목", id),
+            format!("짧은_제목__{id}.gmail.json")
+        );
     }
 
     #[test]
