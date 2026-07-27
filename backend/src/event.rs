@@ -50,7 +50,7 @@ impl EventQueue {
 
     /// Drop a channel. Any live subscribers will see `RecvError::Closed` on
     /// their next `recv()` and unwind cleanly. Used on session deletion to
-    /// kick attached WS clients off the now-dead session.
+    /// kick attached SSE subscribers off the now-dead session.
     pub fn remove_channel(&self, channel: &str) {
         self.channels.remove(channel);
     }
@@ -58,18 +58,67 @@ impl EventQueue {
 
 // channels & payloads
 
-/// `message/{session_id}` — fanout for messages appended to a session's
-/// history. Publishers (the run loop) and subscribers (the WS handler) both
+/// `message/{session_id}` — fanout for everything happening in a session: the
+/// messages appended to its history, live streaming deltas, and run lifecycle
+/// transitions. Publishers (the run loop) and subscribers (the SSE handler) both
 /// build the name through this helper so they stay aligned.
 pub fn message_channel(session_id: Uuid) -> String {
     format!("message/{session_id}")
 }
 
-/// Payload shape for the `message/{session_id}` channel. Encoded to a JSON
-/// `String` before being handed to [`EventQueue::publish`]; subscribers parse
-/// the same shape back out to filter by `seq`.
+/// Payload shape for the `message/{session_id}` channel, JSON-encoded before
+/// being handed to [`EventQueue::publish`]. The SSE handler forwards these to
+/// the client verbatim; only `Message` carries a `seq` (it is the persisted,
+/// catch-up-able record — `Delta` and `Run` are ephemeral and exist solely on
+/// the live stream).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MessageEvent {
-    pub seq: i64,
-    pub message: Message,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionEvent {
+    /// A message persisted to the session's history at sequence `seq`. Mirrors
+    /// the HTTP `GET /sessions/{id}/messages` item shape so catch-up over
+    /// either transport is interchangeable on the client.
+    Message {
+        seq: i64,
+        /// Nesting level relative to the top-level agent turn: `0` is the
+        /// conversation the user sees; `>= 1` is a sub-agent's internal
+        /// output (render it indented/collapsed under the calling turn).
+        depth: u8,
+        /// Name of the agent that produced the message, when known. `None`
+        /// for user turns and synthetic (interrupt) messages.
+        source_agent: Option<String>,
+        message: Message,
+    },
+
+    /// Newly streamed top-level assistant text for the in-progress turn.
+    /// Ephemeral: not persisted, no seq. `text` is the newly produced
+    /// fragment; `cum_len` is the turn's total length (in UTF-16 code units,
+    /// matching JS `String.length`) after appending it. The client uses
+    /// `cum_len` to dedup/order across the catch-up↔live boundary: skip if
+    /// already applied, slice off any overlap. The catch-up path sends the
+    /// whole partial turn as one delta. Reconciled by the completed `Message`
+    /// that follows.
+    Delta { text: String, cum_len: u64 },
+
+    /// Run lifecycle transition. `Started` is also re-sent by the SSE catch-up
+    /// when a client attaches while a run is in flight, so it reads as "a run
+    /// is active", not strictly "a run just began".
+    Run {
+        #[serde(flatten)]
+        status: RunStatus,
+    },
+}
+
+/// Terminal (and initial) states of an agent run, flattened into
+/// [`SessionEvent::Run`] as `{"status": "...", ...}`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RunStatus {
+    /// A run is in flight for this session.
+    Started,
+    /// The run finished on its own.
+    Done,
+    /// The run was cut short by a stop request.
+    Stopped,
+    /// The run failed; `message` is the error rendered for display.
+    Error { message: String },
 }

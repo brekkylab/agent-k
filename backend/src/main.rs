@@ -1,3 +1,4 @@
+mod agent_stream;
 mod auth;
 mod event;
 mod model;

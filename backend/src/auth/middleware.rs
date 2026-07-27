@@ -23,8 +23,8 @@ pub struct AuthUser {
 
 /// Decode `token`, load the subject, and require an active account, returning
 /// the authenticated principal. The single authentication gate shared by the
-/// `auth_required` middleware and the token-in-query endpoints (WebDAV and the
-/// message WebSocket) that bypass the middleware.
+/// `auth_required` middleware and the WebDAV routes, which bypass the
+/// middleware and authenticate inline from the `Authorization` header.
 pub async fn authenticate(state: &AppState, token: &str) -> Result<AuthUser, ApiError> {
     let claims = state.jwt.decode(token)?;
 
@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(principal.id, user.id);
 
         // Deactivated account → rejected, even with a still-valid token. This
-        // closes the WebDAV/WS bypass that only checked token validity.
+        // closes the WebDAV bypass that only checked token validity.
         state
             .users
             .update(

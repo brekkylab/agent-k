@@ -1,34 +1,41 @@
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
 use ailoy::message::{Message, Part};
 use axum::{
     Extension, Json,
-    extract::{
-        Path, Query, State,
-        ws::{Message as WsMessage, WebSocketUpgrade},
-    },
-    http::StatusCode,
-    response::Response,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::sse::{Event, KeepAlive, Sse},
 };
+use futures_util::Stream;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 use crate::{
-    auth::{AuthUser, authenticate},
-    event::{MessageEvent, message_channel},
+    auth::AuthUser,
+    event::{RunStatus, SessionEvent, message_channel},
     state::AppState,
 };
 
-use super::{error::{ApiError, err}, workspace::require_owned_session};
+use super::{
+    error::{ApiError, err},
+    workspace::require_owned_session,
+};
 
 /// A single persisted message together with its session-local sequence
-/// number. Mirrors the `message/{id}` channel's [`MessageEvent`] shape so HTTP
-/// catch-up and the WS stream are interchangeable on the client.
+/// number. Mirrors the `message/{id}` channel's [`SessionEvent::Message`]
+/// shape (minus the `type` tag) so HTTP catch-up and the SSE stream are
+/// interchangeable on the client.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct MessageResponse {
     pub seq: i64,
+    /// Nesting level: `0` is the top-level conversation, `>= 1` a sub-agent's
+    /// internal output.
+    pub depth: u8,
+    /// Name of the agent that produced the message, when known.
+    pub source_agent: Option<String>,
     pub message: Message,
 }
 
@@ -46,13 +53,10 @@ pub struct PostMessageRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct MessagesWsQuery {
-    /// Bearer JWT — passed as a query parameter because browser `WebSocket`
-    /// clients can't set custom headers on the upgrade request.
-    pub token: String,
-
+pub struct StreamQuery {
     /// Last seq the client already has. Resume forwards from `seq + 1`.
-    /// Omit to receive from the start of the session.
+    /// Omit to receive from the start of the session. On an SSE auto-reconnect
+    /// the `Last-Event-ID` header takes precedence over this.
     #[serde(default)]
     pub last_seq: Option<i64>,
 }
@@ -69,7 +73,12 @@ pub(super) async fn list_messages(
     Ok(Json(MessageListResponse {
         items: messages
             .into_iter()
-            .map(|(seq, message)| MessageResponse { seq, message })
+            .map(|(seq, stored)| MessageResponse {
+                seq,
+                depth: stored.depth,
+                source_agent: stored.source_agent,
+                message: stored.message,
+            })
             .collect(),
     }))
 }
@@ -98,25 +107,37 @@ pub(super) async fn stop_run(
     }
 }
 
+/// `GET /sessions/{id}/messages/stream` — the session's live event stream as
+/// SSE, carrying [`SessionEvent`] JSON in each event's `data`.
+///
 /// Subscribe-then-catch-up: subscribe to the per-session channel first so any
 /// publish concurrent with our DB catch-up is buffered into `rx`; then drain
-/// rows with `seq > last_seq` from the DB; then forward live events filtered
-/// by `seq > last_seq` (dedup against the catch-up). On `Lagged` we replay
-/// the catch-up to reconcile.
+/// rows with `seq > last_seq` from the DB, followed by the in-flight turn's
+/// partial text (as one cumulative delta) when a run is active; then forward
+/// live events — `message` events filtered by `seq > last_seq` (dedup against
+/// the catch-up), `delta`/`run` events verbatim (the client dedups deltas by
+/// `cum_len`). On `Lagged` we replay the catch-up to reconcile.
+///
+/// Only `message` events carry an SSE `id` (their `seq`), so the browser's
+/// `Last-Event-ID` on auto-reconnect resumes from the persisted cursor —
+/// ephemeral `delta`/`run` events never advance it.
 pub(super) async fn stream_messages(
     State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
     Path(sid): Path<Uuid>,
-    Query(query): Query<MessagesWsQuery>,
-    ws: WebSocketUpgrade,
-) -> Result<Response, ApiError> {
-    // Token via query (browser WebSockets can't set headers). authenticate +
-    // require_owned_session apply the same gate as the HTTP routes.
-    let user = authenticate(&state, &query.token).await?;
-    require_owned_session(&state, &user, sid).await?;
+    Query(query): Query<StreamQuery>,
+    headers: HeaderMap,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    require_owned_session(&state, &auth, sid).await?;
 
-    let last_seq = query.last_seq.unwrap_or(-1);
+    let last_seq = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok())
+        .or(query.last_seq)
+        .unwrap_or(-1);
 
-    Ok(ws.on_upgrade(move |mut socket| async move {
+    let stream = async_stream::stream! {
         let mut last_seq = last_seq;
         let channel = message_channel(sid);
         let mut rx = state.events.subscribe(&channel);
@@ -127,47 +148,91 @@ pub(super) async fn stream_messages(
             let rows = match state.sessions.list_messages_since(sid, last_seq).await {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::error!(session = %sid, "ws catch-up DB error: {e}");
+                    tracing::error!(session = %sid, "sse catch-up DB error: {e}");
                     return;
                 }
             };
-            for (seq, message) in rows {
-                let payload = match serde_json::to_string(&MessageEvent { seq, message }) {
+            for (seq, stored) in rows {
+                let event = SessionEvent::Message {
+                    seq,
+                    depth: stored.depth,
+                    source_agent: stored.source_agent,
+                    message: stored.message,
+                };
+                let payload = match serde_json::to_string(&event) {
                     Ok(s) => s,
                     Err(e) => {
-                        tracing::error!(session = %sid, "ws catch-up serialize error: {e}");
+                        tracing::error!(session = %sid, "sse catch-up serialize error: {e}");
                         return;
                     }
                 };
-                if socket.send(WsMessage::Text(payload.into())).await.is_err() {
-                    return;
-                }
+                yield Ok(Event::default().id(seq.to_string()).data(payload));
                 last_seq = seq;
+            }
+
+            // A run in flight when we attach: tell the client, then hand it
+            // the in-progress turn's streamed-so-far text as one cumulative
+            // delta so it doesn't wait for the next fragment. Live deltas
+            // buffered in `rx` meanwhile overlap this snapshot; the client's
+            // `cum_len` dedup drops them.
+            if let Some(partial) = state.sessions.live_partial(sid).await {
+                let mut events = vec![SessionEvent::Run {
+                    status: RunStatus::Started,
+                }];
+                if !partial.is_empty() {
+                    let cum_len = partial.encode_utf16().count() as u64;
+                    events.push(SessionEvent::Delta {
+                        text: partial,
+                        cum_len,
+                    });
+                }
+                for event in events {
+                    let payload = match serde_json::to_string(&event) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::error!(session = %sid, "sse catch-up serialize error: {e}");
+                            return;
+                        }
+                    };
+                    yield Ok(Event::default().data(payload));
+                }
             }
 
             // Live pump until lag forces another catch-up or the channel closes.
             loop {
                 match rx.recv().await {
                     Ok(payload) => {
-                        let seq = serde_json::from_str::<serde_json::Value>(&payload)
-                            .ok()
-                            .and_then(|v| v.get("seq").and_then(|s| s.as_i64()));
-                        let Some(seq) = seq else { continue };
-                        if seq <= last_seq {
-                            continue;
+                        // Only `message` events carry a seq and need dedup
+                        // against the catch-up; everything else (`delta`,
+                        // `run`) is ephemeral and forwarded verbatim.
+                        let value: serde_json::Value = match serde_json::from_str(&payload) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        if value.get("type").and_then(|t| t.as_str()) == Some("message") {
+                            let Some(seq) = value.get("seq").and_then(|s| s.as_i64()) else {
+                                continue;
+                            };
+                            if seq <= last_seq {
+                                continue;
+                            }
+                            yield Ok(Event::default().id(seq.to_string()).data(payload));
+                            last_seq = seq;
+                        } else {
+                            yield Ok(Event::default().data(payload));
                         }
-                        if socket.send(WsMessage::Text(payload.into())).await.is_err() {
-                            return;
-                        }
-                        last_seq = seq;
                     }
                     Err(RecvError::Lagged(missed)) => {
-                        tracing::warn!(session = %sid, missed, "ws subscriber lagged — reconciling from DB");
+                        tracing::warn!(session = %sid, missed, "sse subscriber lagged — reconciling from DB");
                         break;
                     }
+                    // Channel removed (session deleted) — end the stream; a
+                    // reconnect attempt will get a 404 from the ownership gate.
                     Err(RecvError::Closed) => return,
                 }
             }
         }
-    }))
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
