@@ -501,6 +501,13 @@ async fn fetch_attachments(
 /// Walk `tree` and map message id → every path carrying it (its hardlinked
 /// appearances across label dirs). `filter` restricts the map to ids of
 /// interest; `None` maps everything.
+///
+/// A message file is identified by **position as well as suffix**: it sits
+/// directly in a `<yyyy>/<mm>` dir. Attachment names are sender-controlled
+/// (an arbitrary MIME `filename`, dots included), so a suffix-only test would
+/// let an attachment called `x__<id>.gmail.json` pass as a message and be
+/// deleted or re-placed along with the id it names. Month dirs hold only
+/// message files and attachment dirs, so the walk stops descending there.
 fn find_message_files(
     tree: &Path,
     filter: Option<&HashSet<String>>,
@@ -511,14 +518,19 @@ fn find_message_files(
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
         };
+        let in_month = is_month_dir(&dir);
         for e in rd.flatten() {
             let p = e.path();
             if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                stack.push(p);
-            } else if let Some(stem) = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .and_then(|n| n.strip_suffix(GMAIL_SUFFIX))
+                // Below a month there are only attachment dirs.
+                if !in_month {
+                    stack.push(p);
+                }
+            } else if in_month
+                && let Some(stem) = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_suffix(GMAIL_SUFFIX))
             {
                 let id = id_from_name(stem);
                 if filter.is_none_or(|f| f.contains(&id)) {
@@ -528,6 +540,15 @@ fn find_message_files(
         }
     }
     out
+}
+
+/// Is `dir` a `<yyyy>/<mm>` month dir — the one messages sit in directly?
+fn is_month_dir(dir: &Path) -> bool {
+    let digits = |name: Option<&std::ffi::OsStr>, len: usize| {
+        name.and_then(|s| s.to_str())
+            .is_some_and(|s| s.len() == len && s.bytes().all(|b| b.is_ascii_digit()))
+    };
+    digits(dir.file_name(), 2) && digits(dir.parent().and_then(Path::file_name), 4)
 }
 
 /// The label dirs a mirrored message currently occupies, read back from its
@@ -1125,6 +1146,43 @@ mod tests {
             HashSet::from(["Work/Receipts".to_string()])
         );
         assert!(!w.tree.join("INBOX").exists(), "stale label pruned");
+    }
+
+    #[test]
+    fn a_crafted_attachment_name_cannot_pass_as_a_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let w = MirrorWriter::open(tmp.path()).unwrap();
+        let labels = labels_map();
+
+        // Attachment filenames come from the sender. This one is dressed up as
+        // another message's file, one level below the month dir.
+        let evil = "notice__victim9999.gmail.json";
+        let m = raw_msg("real1", "Invoice", JUL, &["INBOX"], Some(evil));
+        w.place_message(&w.tree, &m, &labels, &[(evil.into(), b"x".to_vec())])
+            .unwrap();
+        let jul = month_of(&m).unwrap();
+        let planted = w
+            .tree
+            .join("INBOX")
+            .join(&jul.0)
+            .join(&jul.1)
+            .join("Invoice__real1")
+            .join(evil);
+        assert!(planted.exists(), "the attachment was written as named");
+
+        // Only the real message — sitting directly in <yyyy>/<mm> — is indexed.
+        let found = find_message_files(&w.tree, None);
+        assert_eq!(found.len(), 1);
+        assert!(found.contains_key("real1"));
+        assert!(
+            !found.contains_key("victim9999"),
+            "an attachment must not be indexed as a message"
+        );
+
+        // So deleting the real message takes its attachment with it (it lives
+        // in the message's own dir) and nothing else is dragged along.
+        remove_message_files(&w.tree, &found["real1"]);
+        assert!(find_message_files(&w.tree, None).is_empty());
     }
 
     #[test]
