@@ -657,6 +657,17 @@ fn suffix_before_ext(name: &str, n: usize) -> String {
 pub(super) fn process_message(raw: &Value) -> Value {
     let payload = raw.get("payload").cloned().unwrap_or(Value::Null);
     let body_text = decode_body(&payload);
+    // A Drive chip's URL belongs to `drive_files`, not `links` — one URL, one
+    // field, so a client showing both doesn't render it twice. The split comes
+    // from the same parse, so if chip detection ever fails the URL simply
+    // stays in `links`.
+    let drive = drive_files(&payload);
+    let drive_urls: std::collections::HashSet<&str> =
+        drive.iter().filter_map(|d| d["url"].as_str()).collect();
+    let links: Vec<String> = body_links(&payload)
+        .into_iter()
+        .filter(|u| !drive_urls.contains(u.as_str()))
+        .collect();
     let atts_raw = attachments(raw);
     let names = unique_attachment_names(&atts_raw);
     let atts: Vec<Value> = atts_raw
@@ -680,8 +691,8 @@ pub(super) fn process_message(raw: &Value) -> Value {
         "subject": header(raw, "Subject"),
         "date": header(raw, "Date"),
         "body_text": body_text,
-        "links": body_links(&payload),
-        "drive_files": drive_files(&payload),
+        "links": links,
+        "drive_files": drive,
         "snippet": raw.get("snippet").and_then(|s| s.as_str()).unwrap_or(""),
         "labels": raw.get("labelIds").cloned().unwrap_or(json!([])),
         "attachments": atts,
@@ -900,7 +911,8 @@ Gmail (read + trash on delete). A synced on-disk mirror of the mailbox:
      \"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
   body_text is the visible text only; \"links\" holds the URLs its hyperlinks
   pointed at. A file over 25MB isn't attached at all — Gmail sends a Drive
-  link instead, listed in \"drive_files\" (name + url, no bytes to read).
+  link instead, listed in \"drive_files\" (name + url, no bytes to read) and
+  kept out of \"links\", so each URL appears once.
   The sibling dir (same name without .json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
   While the initial sync is still running, months appear newest-first — a
@@ -1331,6 +1343,12 @@ mod tests {
                 "https://drive.google.com/file/d/ZZZ/view",
             ]
         );
+
+        // In the assembled message a chip URL lives in `drive_files` only —
+        // no client should have to de-duplicate the two fields.
+        let msg = process_message(&json!({ "id": "m1", "payload": payload }));
+        assert_eq!(msg["links"], json!([]));
+        assert_eq!(msg["drive_files"].as_array().unwrap().len(), 2);
         // An ordinary mail has no chips.
         let plain = json!({
             "mimeType": "text/html",
