@@ -99,6 +99,41 @@ impl Session {
     }
 }
 
+/// One persisted history row: the message plus the agent-loop provenance a
+/// bare [`Message`] can't carry. This is the JSON shape of `messages.content`;
+/// rows written before provenance was recorded are a bare `Message` and are
+/// read back as depth-0 with no source (see [`parse_stored_message`]).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessage {
+    /// Nesting level relative to the top-level agent turn: `0` is the
+    /// conversation the user sees; `>= 1` is a sub-agent's internal output.
+    /// Only depth-0 rows are replayed into the model's history on the next
+    /// run.
+    #[serde(default)]
+    pub depth: u8,
+
+    /// Name of the agent that produced the message, when known. `None` for
+    /// user turns and synthetic (interrupt) messages.
+    #[serde(default)]
+    pub source_agent: Option<String>,
+
+    pub message: Message,
+}
+
+/// Decode one `messages.content` value. New rows store the wrapped
+/// [`SessionMessage`] shape; legacy rows are a bare [`Message`] (which lacks
+/// the `message` field, so the first parse fails cleanly) and fall back to
+/// depth-0 with no source.
+fn parse_stored_message(content: &str) -> serde_json::Result<SessionMessage> {
+    serde_json::from_str::<SessionMessage>(content).or_else(|_| {
+        serde_json::from_str::<Message>(content).map(|message| SessionMessage {
+            depth: 0,
+            source_agent: None,
+            message,
+        })
+    })
+}
+
 /// Book-keeping for one in-flight run, held in [`SessionsState::runs`].
 struct ActiveRun {
     /// Wakes the spawned task at its next safe point on
@@ -277,7 +312,7 @@ impl SessionsState {
 
     /// The streamed-so-far text of the in-progress assistant turn, if a run is
     /// in flight for `id`. `Some("")` means a run is active but hasn't
-    /// streamed top-level text yet; `None` means no active run. The WS
+    /// streamed top-level text yet; `None` means no active run. The SSE
     /// catch-up path uses this so a client attaching mid-turn starts from the
     /// full partial answer instead of the next delta.
     pub async fn live_partial(&self, id: Uuid) -> Option<String> {
@@ -291,7 +326,7 @@ impl SessionsState {
     /// Return all messages for `session_id`, ordered by `seq` ascending. Backs
     /// the `GET /sessions/{id}/messages` endpoint; the SSE catch-up path uses
     /// [`SessionsState::list_messages_since`] instead.
-    pub async fn list_messages(&self, session_id: Uuid) -> StateResult<Vec<(i64, Message)>> {
+    pub async fn list_messages(&self, session_id: Uuid) -> StateResult<Vec<(i64, SessionMessage)>> {
         self.list_messages_since(session_id, -1).await
     }
 
@@ -302,7 +337,7 @@ impl SessionsState {
         &self,
         session_id: Uuid,
         since: i64,
-    ) -> StateResult<Vec<(i64, Message)>> {
+    ) -> StateResult<Vec<(i64, SessionMessage)>> {
         let rows = sqlx::query(
             "SELECT seq, content FROM messages \
              WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
@@ -312,11 +347,10 @@ impl SessionsState {
         .fetch_all(&self.db)
         .await?;
         rows.into_iter()
-            .map(|r| -> StateResult<(i64, Message)> {
+            .map(|r| -> StateResult<(i64, SessionMessage)> {
                 let seq: i64 = r.get("seq");
                 let content: String = r.get("content");
-                let message: Message = serde_json::from_str(&content)?;
-                Ok((seq, message))
+                Ok((seq, parse_stored_message(&content)?))
             })
             .collect()
     }
@@ -429,15 +463,28 @@ impl SessionsState {
                 };
 
                 let rows = sqlx::query(
-                    "SELECT content FROM messages WHERE session_id = ? ORDER BY seq ASC",
+                    "SELECT seq, content FROM messages WHERE session_id = ? ORDER BY seq ASC",
                 )
                 .bind(&session_key)
                 .fetch_all(&db)
                 .await?;
+                // Sequence numbers continue from the last persisted row — not
+                // from the replayed-history length, which is shorter once
+                // sub-agent rows are filtered out below.
+                let next_seq_start = rows.last().map(|r| r.get::<i64, _>("seq") + 1).unwrap_or(0);
+                // Replay only the top-level conversation (depth 0). A
+                // sub-agent's work reaches the model through its capped
+                // depth-0 tool result, never its internal transcript —
+                // mirroring ailoy's own in-memory history, which only ever
+                // holds depth-0 messages.
                 let history: Vec<Message> = rows
                     .iter()
-                    .map(|r| serde_json::from_str::<Message>(&r.get::<String, _>("content")))
-                    .collect::<Result<_, _>>()?;
+                    .map(|r| parse_stored_message(&r.get::<String, _>("content")))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .filter(|stored| stored.depth == 0)
+                    .map(|stored| stored.message)
+                    .collect();
 
                 // Drive — stream the model's raw deltas, publishing live text
                 // fragments as they arrive and persisting each message at its
@@ -445,7 +492,7 @@ impl SessionsState {
                 // how this exits, so capture the drive's Result and propagate
                 // it after archiving.
                 let drive: anyhow::Result<bool> = async {
-                    let mut next_seq = history.len() as i64;
+                    let mut next_seq = next_seq_start;
                     let mut state = AgentState::new().with_history(history);
                     if let Some(ref r) = runenv {
                         state = state.with_runenv(r.clone());
@@ -453,8 +500,19 @@ impl SessionsState {
                     let mut agent = Agent::try_with_state(spec, state)?;
 
                     let user_msg = Message::new(Role::User).with_contents(query);
-                    persist_message(&db, &events, &channel, &session_key, next_seq, user_msg.clone())
-                        .await?;
+                    persist_message(
+                        &db,
+                        &events,
+                        &channel,
+                        &session_key,
+                        next_seq,
+                        SessionMessage {
+                            depth: 0,
+                            source_agent: None,
+                            message: user_msg.clone(),
+                        },
+                    )
+                    .await?;
                     next_seq += 1;
 
                     // `run_stream` yields raw `MessageDeltaOutput`s; the
@@ -607,7 +665,11 @@ impl SessionsState {
                                         &channel,
                                         &session_key,
                                         next_seq,
-                                        output.message,
+                                        SessionMessage {
+                                            depth: output.depth.unwrap_or(0),
+                                            source_agent: output.source_agent,
+                                            message: output.message,
+                                        },
                                     )
                                     .await?;
                                     next_seq += 1;
@@ -648,8 +710,19 @@ impl SessionsState {
                                     .with_contents([Part::text(
                                         "[Interrupted: the user stopped response generation before this tool call completed]",
                                     )]);
-                                persist_message(&db, &events, &channel, &session_key, next_seq, stub)
-                                    .await?;
+                                persist_message(
+                                    &db,
+                                    &events,
+                                    &channel,
+                                    &session_key,
+                                    next_seq,
+                                    SessionMessage {
+                                        depth: 0,
+                                        source_agent: None,
+                                        message: stub,
+                                    },
+                                )
+                                .await?;
                                 next_seq += 1;
                             }
                             const INTERRUPT_NOTE: &str =
@@ -668,7 +741,12 @@ impl SessionsState {
                                 &channel,
                                 &session_key,
                                 next_seq,
-                                Message::new(Role::Assistant).with_contents([Part::text(note)]),
+                                SessionMessage {
+                                    depth: 0,
+                                    source_agent: None,
+                                    message: Message::new(Role::Assistant)
+                                        .with_contents([Part::text(note)]),
+                                },
                             )
                             .await?;
                             partial.lock().expect("partial lock poisoned").clear();
@@ -722,15 +800,16 @@ impl SessionsState {
     }
 }
 
-/// `INSERT` one message row for `session_key` at `seq` and publish it on the
-/// session's channel (a no-op when nobody is subscribed).
+/// `INSERT` one message row for `session_key` at `seq` (stored in the wrapped
+/// [`SessionMessage`] shape) and publish it on the session's channel (a no-op
+/// when nobody is subscribed).
 async fn persist_message(
     db: &SqlitePool,
     events: &EventQueue,
     channel: &str,
     session_key: &str,
     seq: i64,
-    message: Message,
+    stored: SessionMessage,
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO messages (session_id, seq, content, created_at) \
@@ -738,13 +817,45 @@ async fn persist_message(
     )
     .bind(session_key)
     .bind(seq)
-    .bind(serde_json::to_string(&message)?)
+    .bind(serde_json::to_string(&stored)?)
     .bind(Utc::now().to_rfc3339())
     .execute(db)
     .await?;
     events.publish(
         channel,
-        serde_json::to_string(&SessionEvent::Message { seq, message })?,
+        serde_json::to_string(&SessionEvent::Message {
+            seq,
+            depth: stored.depth,
+            source_agent: stored.source_agent,
+            message: stored.message,
+        })?,
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rows written before provenance was recorded are a bare `Message`; they
+    /// must keep parsing (as depth-0, no source) alongside the wrapped shape,
+    /// or existing sessions break on upgrade.
+    #[test]
+    fn stored_message_parses_wrapped_and_legacy_rows() {
+        let wrapped = SessionMessage {
+            depth: 1,
+            source_agent: Some("researcher".into()),
+            message: Message::new(Role::Assistant).with_contents([Part::text("found it")]),
+        };
+        let parsed = parse_stored_message(&serde_json::to_string(&wrapped).unwrap()).unwrap();
+        assert_eq!(parsed.depth, 1);
+        assert_eq!(parsed.source_agent.as_deref(), Some("researcher"));
+        assert_eq!(parsed.message.contents[0].as_text(), Some("found it"));
+
+        let legacy = Message::new(Role::User).with_contents([Part::text("hi")]);
+        let parsed = parse_stored_message(&serde_json::to_string(&legacy).unwrap()).unwrap();
+        assert_eq!(parsed.depth, 0);
+        assert!(parsed.source_agent.is_none());
+        assert_eq!(parsed.message.role, Role::User);
+    }
 }

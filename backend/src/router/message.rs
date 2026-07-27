@@ -31,6 +31,11 @@ use super::{
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct MessageResponse {
     pub seq: i64,
+    /// Nesting level: `0` is the top-level conversation, `>= 1` a sub-agent's
+    /// internal output.
+    pub depth: u8,
+    /// Name of the agent that produced the message, when known.
+    pub source_agent: Option<String>,
     pub message: Message,
 }
 
@@ -68,7 +73,12 @@ pub(super) async fn list_messages(
     Ok(Json(MessageListResponse {
         items: messages
             .into_iter()
-            .map(|(seq, message)| MessageResponse { seq, message })
+            .map(|(seq, stored)| MessageResponse {
+                seq,
+                depth: stored.depth,
+                source_agent: stored.source_agent,
+                message: stored.message,
+            })
             .collect(),
     }))
 }
@@ -142,9 +152,14 @@ pub(super) async fn stream_messages(
                     return;
                 }
             };
-            for (seq, message) in rows {
-                let payload = match serde_json::to_string(&SessionEvent::Message { seq, message })
-                {
+            for (seq, stored) in rows {
+                let event = SessionEvent::Message {
+                    seq,
+                    depth: stored.depth,
+                    source_agent: stored.source_agent,
+                    message: stored.message,
+                };
+                let payload = match serde_json::to_string(&event) {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::error!(session = %sid, "sse catch-up serialize error: {e}");
