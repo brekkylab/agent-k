@@ -680,10 +680,68 @@ pub(super) fn process_message(raw: &Value) -> Value {
         "subject": header(raw, "Subject"),
         "date": header(raw, "Date"),
         "body_text": body_text,
+        "links": body_links(&payload),
         "snippet": raw.get("snippet").and_then(|s| s.as_str()).unwrap_or(""),
         "labels": raw.get("labelIds").cloned().unwrap_or(json!([])),
         "attachments": atts,
     })
+}
+
+/// Cap on `links`: a marketing mail can carry hundreds of tracking URLs, and
+/// the field exists to make real destinations reachable, not to mirror every
+/// pixel.
+const MAX_LINKS: usize = 50;
+
+/// Hyperlink targets from the message's HTML part, in document order and
+/// deduped.
+///
+/// The rendered `body_text` keeps only visible text — an anchor becomes
+/// "click here" and its `href` is gone. That loses the *destination* of a mail
+/// whose point is a link, most visibly a file too big to attach: Gmail strips
+/// attachments over 25 MB and leaves a Drive URL in the body instead, so
+/// without this the file is unreachable and ungreppable. Plain-text bodies
+/// already carry their URLs inline, so this only reads the HTML part.
+fn body_links(payload: &Value) -> Vec<String> {
+    let Some(html) = find_part(payload, "text/html") else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for (i, _) in html.match_indices("href") {
+        let rest = &html[i + 4..];
+        // href = "…" | '…' | bare
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let (quote, rest) = match rest.as_bytes().first() {
+            Some(b'"') => ('"', &rest[1..]),
+            Some(b'\'') => ('\'', &rest[1..]),
+            _ => (' ', rest),
+        };
+        let end = rest
+            .find(|c: char| c == quote || (quote == ' ' && (c == '>' || c.is_whitespace())))
+            .unwrap_or(rest.len());
+        let url = decode_entities(rest[..end].trim());
+        if (url.starts_with("http://") || url.starts_with("https://")) && !out.contains(&url) {
+            out.push(url);
+            if out.len() >= MAX_LINKS {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The handful of XML entities that appear inside an `href` (`&amp;` above all,
+/// which HTML-escaped query strings are full of).
+fn decode_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&#38;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
 }
 
 // ---- MIME build (RFC 2822) ------------------------------------------------
@@ -778,7 +836,9 @@ Gmail (read + trash on delete). A synced on-disk mirror of the mailbox:
   cat <…>.json returns:
     {\"id\",\"thread_id\",\"from\":{\"name\",\"email\"},\"to\":[…],\"cc\":[…],
      \"subject\",\"date\",\"body_text\",\"snippet\",\"labels\":[…],
-     \"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
+     \"links\":[…],\"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
+  body_text is the visible text only; \"links\" holds the URLs its hyperlinks
+  pointed at (a file too big to attach arrives as a Drive link, not a file).
   The sibling dir (same name without .json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
   While the initial sync is still running, months appear newest-first — a
@@ -1126,6 +1186,47 @@ mod tests {
             let days = days_from_civil(y, m, d);
             assert_eq!(civil_from_days(days), (y, m as u32, d as u32));
         }
+    }
+
+    #[test]
+    /// An HTML-only mail's `href`s survive as `links`. The motivating case is
+    /// an over-25 MB file: Gmail replaces the attachment with a Drive URL, and
+    /// the rendered text keeps only the anchor's words.
+    #[test]
+    fn html_hrefs_are_captured_as_links() {
+        let b64 = |s: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(s);
+        let html = "<p>Your file is ready: \
+             <a href=\"https://drive.google.com/file/d/ABC?usp=share&amp;x=1\">Open in Drive</a></p>\
+             <p><a href='http://example.com/a'>a</a> \
+             <a href=https://example.com/bare>bare</a> \
+             <a href=\"mailto:x@y.z\">mail</a> \
+             <a href=\"https://drive.google.com/file/d/ABC?usp=share&amp;x=1\">dup</a></p>";
+        let payload = json!({
+            "mimeType": "multipart/alternative",
+            "parts": [{ "mimeType": "text/html", "body": { "data": b64(html) } }],
+        });
+
+        // The URL is gone from the prose…
+        let body = decode_body(&payload);
+        assert!(body.contains("Open in Drive"));
+        assert!(!body.contains("drive.google.com"), "got: {body:?}");
+
+        // …but reachable, deduped, entity-decoded, and non-http dropped.
+        assert_eq!(
+            body_links(&payload),
+            vec![
+                "https://drive.google.com/file/d/ABC?usp=share&x=1",
+                "http://example.com/a",
+                "https://example.com/bare",
+            ]
+        );
+
+        // A plain-text-only mail already has its URLs inline — nothing to add.
+        let plain = json!({
+            "mimeType": "multipart/alternative",
+            "parts": [{ "mimeType": "text/plain", "body": { "data": b64("see https://x.io") } }],
+        });
+        assert!(body_links(&plain).is_empty());
     }
 
     #[test]
