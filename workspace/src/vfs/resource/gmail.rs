@@ -20,8 +20,8 @@ pub(super) const GMAIL_SUFFIX: &str = ".json";
 /// (built by [`super::gmail_sync::sync_gmail_mirror`]). Reads are plain local
 /// file serving — `ls`/`grep`/`cat`/`find` never touch the API — while `rm`
 /// goes through the API (trash) before touching the mirror, and writes are
-/// rejected. Only complete months are ever visible (the sync promotes months
-/// atomically), so listings never show a partially-synced month.
+/// rejected. Mail becomes visible as the sync writes it (newest first), so a
+/// listing taken mid-sync is a prefix of the mailbox, not the whole of it.
 pub struct GmailResource {
     accessor: GmailAccessor,
     /// The served tree (`<mirror>/tree/`) as plain local files; `None` when no
@@ -915,8 +915,8 @@ Gmail (read + trash on delete). A synced on-disk mirror of the mailbox:
   kept out of \"links\", so each URL appears once.
   The sibling dir (same name without .json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
-  While the initial sync is still running, months appear newest-first — a
-  visible month is always complete.
+  The initial sync fills the mirror newest-first, so until it finishes older
+  mail may be missing and the oldest visible month may be partial.
 
 
   rm <…>.json    moves the message to Trash (only a message file is removable).";

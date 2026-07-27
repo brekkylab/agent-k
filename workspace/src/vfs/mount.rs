@@ -82,7 +82,7 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
             ProviderConfig::Gmail(c) => {
                 // Serves local mirror files — live and cheap like the local
                 // mount, so it skips the metadata cache (whose listing TTL
-                // would hide months the sync just promoted).
+                // would hide mail the sync just wrote).
                 mounts.push(Mount {
                     prefix: spec.prefix,
                     resource: Arc::new(GmailResource::new(&c, mirror_root.as_deref())?),

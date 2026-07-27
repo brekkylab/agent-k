@@ -9,18 +9,14 @@
 //! 1. **List every id** (500/page — cheap and fast). This fixes the progress
 //!    denominator up front: remaining = total − fetched.
 //! 2. **Fetch newest-first** (the order `messages.list` returns) and write
-//!    into a staging area. Because the stream is ordered by received time,
-//!    the moment it crosses into an older month, the previous month can no
-//!    longer gain members — that month's dirs are then renamed into the
-//!    served tree **atomically, for every label at once**. Visible months are
-//!    therefore always complete: a grep over what's visible never lies about
-//!    what's visible.
+//!    straight into the served tree, so mail is readable as it lands. Mid-sync
+//!    the newest months are therefore complete and the oldest one in flight is
+//!    partial; `state.json` says how far along it is.
 //!
 //! Layout under the mirror root (only `tree/` is ever served):
 //! ```text
-//! <root>/tree/…      # the served, agent-visible mirror (complete months only)
-//! <root>/work/…      # staging: months still accumulating
-//! <root>/state.json  # { total, fetched, completed } — progress + resume
+//! <root>/tree/…      # the served, agent-visible mirror
+//! <root>/state.json  # { total, fetched, completed, history_id }
 //! <root>/done.ids    # append-only log of fully written ids (resume skip-set)
 //! ```
 //!
@@ -55,20 +51,18 @@ use super::gmail::{
 };
 
 const TREE_DIR: &str = "tree";
-const WORK_DIR: &str = "work";
 const STATE_FILE: &str = "state.json";
 const DONE_LOG: &str = "done.ids";
 
-/// Ids fetched per batch window. Windows are processed strictly in list order
-/// (newest-first) so month boundaries are detected correctly; the batch call
-/// inside a window still runs its chunks concurrently.
+/// Ids fetched per batch window, processed in list order (newest-first); the
+/// batch call inside a window still runs its chunks concurrently.
 const WINDOW: usize = 100;
 /// Persist `state.json` every this many messages, so progress survives a
 /// restart without a write per message.
 const STATE_EVERY: usize = 25;
 
 /// Sync progress, persisted to `state.json` after phase 1 and periodically
-/// during phase 2. `completed` flips only after the final month is promoted.
+/// during phase 2. `completed` flips once the stream is exhausted.
 /// `history_id` is the partial-sync cursor (the newest message's `historyId`
 /// at full-sync time, advanced by every incremental run); absent on mirrors
 /// written before partial sync existed — those full-sync once more to seed it.
@@ -122,8 +116,8 @@ pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> PathBuf {
 
 /// Mirror the whole mailbox (bounded by [`GmailConfig::index_cap`] if set)
 /// under `root`. Safe to re-run: already-written ids are skipped via the done
-/// log, and months already promoted merge instead of clobbering. Returns the
-/// final state (`completed == true` unless the id listing was empty-failed).
+/// log, and a re-written message overwrites its own files. Returns the final
+/// state (`completed == true` unless the id listing was empty-failed).
 pub async fn sync_gmail_mirror(
     config: &GmailConfig,
     root: &Path,
@@ -144,8 +138,8 @@ pub async fn sync_gmail_mirror(
     };
     state.save(root)?;
 
-    // Phase 2: fetch in list order; promote a month once the stream passes it.
-    let mut current_month: Option<(String, String)> = None;
+    // Phase 2: fetch in list order and write straight into the served tree, so
+    // mail is readable as it lands.
     let mut since_save = 0usize;
     for window in ids.chunks(WINDOW) {
         let need: Vec<String> = window
@@ -171,18 +165,8 @@ pub async fn sync_gmail_mirror(
                 state.fetched += 1;
                 continue;
             };
-            let month = month_of(raw);
-            if let (Some(prev), Some(cur)) = (&current_month, &month)
-                && prev != cur
-            {
-                writer.promote_month(prev)?;
-            }
-            if month.is_some() {
-                current_month = month;
-            }
-
             let (att_bytes, att_failed) = fetch_attachments(&accessor, id, raw).await;
-            writer.write_message(raw, &labels, &att_bytes)?;
+            writer.place_message(&writer.tree, raw, &labels, &att_bytes)?;
             // A message whose attachment download failed is written (body +
             // whatever arrived) but NOT marked done, so the next run refetches
             // it and retries the missing attachment instead of never trying
@@ -198,10 +182,6 @@ pub async fn sync_gmail_mirror(
             }
         }
     }
-
-    // Promote whatever is still staged (the oldest month, and on resume any
-    // months whose completion we only know now the stream is exhausted).
-    writer.promote_all()?;
 
     // Reconcile the tree against the authoritative listing (one walk feeds
     // both passes). This is what makes the full sync a real fallback when the
@@ -597,25 +577,21 @@ fn month_of(raw: &Value) -> Option<(String, String)> {
     Some((date[..4].to_string(), date[5..7].to_string()))
 }
 
-/// Writes messages into `work/` and promotes complete months into `tree/`.
-/// Synchronous std::fs on purpose: everything is local disk, and keeping it
-/// sync makes it directly unit-testable.
+/// Writes messages into the served tree. Synchronous std::fs on purpose:
+/// everything is local disk, and keeping it sync makes it directly
+/// unit-testable.
 struct MirrorWriter {
     root: PathBuf,
     tree: PathBuf,
-    work: PathBuf,
 }
 
 impl MirrorWriter {
     fn open(root: &Path) -> anyhow::Result<Self> {
         let tree = root.join(TREE_DIR);
-        let work = root.join(WORK_DIR);
         std::fs::create_dir_all(&tree)?;
-        std::fs::create_dir_all(&work)?;
         Ok(Self {
             root: root.to_path_buf(),
             tree,
-            work,
         })
     }
 
@@ -634,22 +610,11 @@ impl MirrorWriter {
         Ok(())
     }
 
-    /// Write one message into the staging area (`work/`) — the full-sync path;
-    /// the month promotes to the served tree once the stream passes it.
-    fn write_message(
-        &self,
-        raw: &Value,
-        labels: &HashMap<String, String>,
-        att_bytes: &[(String, Vec<u8>)],
-    ) -> anyhow::Result<()> {
-        self.place_message(&self.work, raw, labels, att_bytes)
-    }
-
     /// Write one message (processed JSON + decoded attachments) under every
     /// label it carries below `base`: real files for the first label, hard
     /// links for the rest. Files get the received time as mtime so
-    /// `find -newermt` works. Incremental sync passes `tree` as `base` —
-    /// changes land directly in the served mirror.
+    /// `find -newermt` works. `base` is always the served tree today; it stays
+    /// a parameter because both sync paths pass their own handle.
     fn place_message(
         &self,
         base: &Path,
@@ -713,40 +678,6 @@ impl MirrorWriter {
         }
         Ok(())
     }
-
-    /// Move every label's staged `<yyyy>/<mm>` into the served tree. A month
-    /// already present there (a previous partial run) merges entry-by-entry
-    /// instead of failing the rename.
-    fn promote_month(&self, (y, m): &(String, String)) -> anyhow::Result<()> {
-        for label_rel in staged_label_dirs(&self.work, &self.work)? {
-            let src = self.work.join(&label_rel).join(y).join(m);
-            if !src.exists() {
-                continue;
-            }
-            let dst = self.tree.join(&label_rel).join(y).join(m);
-            move_dir(&src, &dst)?;
-            prune_empty(&self.work, &self.work.join(&label_rel).join(y))?;
-        }
-        Ok(())
-    }
-
-    /// Promote everything still staged (end of stream / resume sweep).
-    fn promote_all(&self) -> anyhow::Result<()> {
-        for label_rel in staged_label_dirs(&self.work, &self.work)? {
-            let label_dir = self.work.join(&label_rel);
-            for y in dir_names(&label_dir)? {
-                for m in dir_names(&label_dir.join(&y))? {
-                    move_dir(
-                        &label_dir.join(&y).join(&m),
-                        &self.tree.join(&label_rel).join(&y).join(&m),
-                    )?;
-                }
-                prune_empty(&self.work, &label_dir.join(&y))?;
-            }
-            prune_empty(&self.work, &label_dir)?;
-        }
-        Ok(())
-    }
 }
 
 fn write_file(
@@ -773,65 +704,6 @@ fn link_or_copy(src: &Path, dst: &Path) -> anyhow::Result<()> {
     if std::fs::hard_link(src, dst).is_err() {
         std::fs::copy(src, dst)?;
     }
-    Ok(())
-}
-
-/// Relative paths of the label dirs under `work` — i.e. every directory chain
-/// down to (but excluding) a `yyyy` component. Label display names may contain
-/// `/` (Gmail's nested labels), so labels can be nested dirs; a dir whose name
-/// parses as a 4-digit year terminates the label path.
-fn staged_label_dirs(work_root: &Path, dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    for name in dir_names(dir)? {
-        let is_year = name.len() == 4 && name.bytes().all(|b| b.is_ascii_digit());
-        if is_year {
-            // `dir` itself is a label dir.
-            let rel = dir.strip_prefix(work_root).unwrap_or(dir).to_path_buf();
-            if !out.contains(&rel) {
-                out.push(rel);
-            }
-        } else {
-            out.extend(staged_label_dirs(work_root, &dir.join(&name))?);
-        }
-    }
-    Ok(out)
-}
-
-fn dir_names(dir: &Path) -> anyhow::Result<Vec<String>> {
-    let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                out.push(e.file_name().to_string_lossy().into_owned());
-            }
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
-/// Move a directory into place; if the destination already exists (a month
-/// promoted by an earlier run), merge the source's entries into it.
-fn move_dir(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    if !dst.exists() {
-        std::fs::rename(src, dst)?;
-        return Ok(());
-    }
-    for e in std::fs::read_dir(src)?.flatten() {
-        let to = dst.join(e.file_name());
-        if e.file_type()?.is_dir() {
-            move_dir(&e.path(), &to)?;
-        } else {
-            if to.exists() {
-                std::fs::remove_file(&to)?;
-            }
-            std::fs::rename(e.path(), &to)?;
-        }
-    }
-    std::fs::remove_dir(src)?;
     Ok(())
 }
 
@@ -904,12 +776,12 @@ mod tests {
     const JUN: i64 = 1_781_000_000_000;
 
     #[test]
-    fn writes_hardlinks_and_promotes_months_atomically() {
+    fn writes_every_label_as_hardlinks_visible_immediately() {
         let tmp = tempfile::tempdir().unwrap();
         let w = MirrorWriter::open(tmp.path()).unwrap();
         let labels = labels_map();
 
-        // Newest message (July, two labels, one attachment) staged in work/.
+        // July message, two labels, one attachment.
         let m1 = raw_msg(
             "id1",
             "Hello July",
@@ -917,26 +789,32 @@ mod tests {
             &["INBOX", "IMPORTANT"],
             Some("a.pdf"),
         );
-        w.write_message(&m1, &labels, &[("a.pdf".into(), b"PDF00".to_vec())])
-            .unwrap();
+        w.place_message(
+            &w.tree,
+            &m1,
+            &labels,
+            &[("a.pdf".into(), b"PDF00".to_vec())],
+        )
+        .unwrap();
         let jul = month_of(&m1).unwrap();
-        let staged = tmp
-            .path()
-            .join("work/INBOX")
+
+        // Readable as soon as it's written — no staging step in between.
+        let inbox = w
+            .tree
+            .join("INBOX")
             .join(&jul.0)
             .join(&jul.1)
             .join("Hello_July__id1.json");
-        assert!(staged.exists(), "staged in work/");
-        assert!(!tmp.path().join("tree/INBOX").exists(), "not yet visible");
+        assert!(inbox.exists(), "visible right away");
 
         // Same file under both labels shares an inode (hard link).
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let a = std::fs::metadata(&staged).unwrap();
+            let a = std::fs::metadata(&inbox).unwrap();
             let b = std::fs::metadata(
-                tmp.path()
-                    .join("work/IMPORTANT")
+                w.tree
+                    .join("IMPORTANT")
                     .join(&jul.0)
                     .join(&jul.1)
                     .join("Hello_July__id1.json"),
@@ -945,51 +823,30 @@ mod tests {
             assert_eq!(a.ino(), b.ino(), "labels share one inode");
         }
 
-        // Stream crosses into June → July promotes for BOTH labels at once.
-        let m2 = raw_msg("id2", "June mail", JUN, &["INBOX"], None);
-        let jun = month_of(&m2).unwrap();
-        assert_ne!(jul, jun, "test anchors must span two months");
-        w.promote_month(&jul).unwrap();
-        for label in ["INBOX", "IMPORTANT"] {
-            let vis = tmp
-                .path()
-                .join("tree")
-                .join(label)
-                .join(&jul.0)
-                .join(&jul.1)
-                .join("Hello_July__id1.json");
-            assert!(vis.exists(), "{label} July visible after promote");
-        }
-        // Attachment bytes came along, decoded.
-        let att = tmp
-            .path()
-            .join("tree/INBOX")
+        // Attachment bytes came along, decoded, in the message's own dir.
+        let att = w
+            .tree
+            .join("INBOX")
             .join(&jul.0)
             .join(&jul.1)
             .join("Hello_July__id1")
             .join("a.pdf");
         assert_eq!(std::fs::read(att).unwrap(), b"PDF00");
 
-        // June stays staged until promote_all.
-        w.write_message(&m2, &labels, &[]).unwrap();
+        // An older month lands in its own dir alongside, not replacing it.
+        let m2 = raw_msg("id2", "June mail", JUN, &["INBOX"], None);
+        let jun = month_of(&m2).unwrap();
+        assert_ne!(jul, jun, "test anchors must span two months");
+        w.place_message(&w.tree, &m2, &labels, &[]).unwrap();
         assert!(
-            !tmp.path()
-                .join("tree/INBOX")
-                .join(&jun.0)
-                .join(&jun.1)
-                .exists()
-        );
-        w.promote_all().unwrap();
-        assert!(
-            tmp.path()
-                .join("tree/INBOX")
+            w.tree
+                .join("INBOX")
                 .join(&jun.0)
                 .join(&jun.1)
                 .join("June_mail__id2.json")
                 .exists()
         );
-        // work/ fully drained.
-        assert!(dir_names(&tmp.path().join("work")).unwrap().is_empty());
+        assert!(inbox.exists(), "July untouched by the June write");
     }
 
     #[test]
@@ -1025,29 +882,31 @@ mod tests {
         assert!(old.completed && old.history_id.is_none());
     }
 
+    /// A resumed run adds to a month that already holds messages from the
+    /// interrupted one, rather than replacing it.
     #[test]
-    fn promoting_over_an_existing_month_merges() {
+    fn a_resumed_run_adds_to_an_existing_month() {
         let tmp = tempfile::tempdir().unwrap();
         let w = MirrorWriter::open(tmp.path()).unwrap();
         let labels = labels_map();
         let ym = month_of(&raw_msg("x", "x", JUL, &["INBOX"], None)).unwrap();
 
-        // Run 1 promoted one July message.
-        w.write_message(
+        w.place_message(
+            &w.tree,
             &raw_msg("id1", "First", JUL, &["INBOX"], None),
             &labels,
             &[],
         )
         .unwrap();
-        w.promote_month(&ym).unwrap();
-        // Run 2 (resume) stages another July message; promote must merge.
-        w.write_message(
+        // Second run, same month.
+        let w = MirrorWriter::open(tmp.path()).unwrap();
+        w.place_message(
+            &w.tree,
             &raw_msg("id2", "Second", JUL, &["INBOX"], None),
             &labels,
             &[],
         )
         .unwrap();
-        w.promote_all().unwrap();
         let month = tmp.path().join("tree/INBOX").join(&ym.0).join(&ym.1);
         assert!(month.join("First__id1.json").exists());
         assert!(month.join("Second__id2.json").exists());
@@ -1086,14 +945,18 @@ mod tests {
         let w = MirrorWriter::open(tmp.path()).unwrap();
         let labels = labels_map();
 
-        // Two messages promoted into the served tree, one carrying two labels
-        // and an attachment.
+        // Two messages in the served tree, one carrying two labels and an
+        // attachment.
         let m1 = raw_msg("id1", "Doomed", JUL, &["INBOX", "IMPORTANT"], Some("a.pdf"));
         let m2 = raw_msg("id2", "Kept", JUL, &["INBOX"], None);
-        w.write_message(&m1, &labels, &[("a.pdf".into(), b"PDF00".to_vec())])
-            .unwrap();
-        w.write_message(&m2, &labels, &[]).unwrap();
-        w.promote_all().unwrap();
+        w.place_message(
+            &w.tree,
+            &m1,
+            &labels,
+            &[("a.pdf".into(), b"PDF00".to_vec())],
+        )
+        .unwrap();
+        w.place_message(&w.tree, &m2, &labels, &[]).unwrap();
 
         // The walk finds every hardlinked appearance of the filtered id.
         let filter = HashSet::from(["id1".to_string()]);
@@ -1183,27 +1046,5 @@ mod tests {
         // in the message's own dir) and nothing else is dragged along.
         remove_message_files(&w.tree, &found["real1"]);
         assert!(find_message_files(&w.tree, None).is_empty());
-    }
-
-    #[test]
-    fn place_message_into_tree_is_immediately_visible() {
-        let tmp = tempfile::tempdir().unwrap();
-        let w = MirrorWriter::open(tmp.path()).unwrap();
-        let labels = labels_map();
-
-        // The incremental path writes straight into tree/ — no staging, no
-        // promotion step.
-        let m = raw_msg("idN", "Fresh arrival", JUL, &["INBOX"], None);
-        w.place_message(&w.tree, &m, &labels, &[]).unwrap();
-        let jul = month_of(&m).unwrap();
-        assert!(
-            w.tree
-                .join("INBOX")
-                .join(&jul.0)
-                .join(&jul.1)
-                .join("Fresh_arrival__idN.json")
-                .exists()
-        );
-        assert!(dir_names(&w.work).unwrap().is_empty(), "work/ untouched");
     }
 }
