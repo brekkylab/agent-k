@@ -674,7 +674,7 @@ impl GmailAccessor {
         Ok(decode_b64url(data))
     }
 
-    /// Move a message to Trash (the `rm` of a `.gmail.json`).
+    /// Move a message to Trash (the `rm` of a mirrored message file).
     pub async fn trash(&self, message_id: &str) -> anyhow::Result<()> {
         let url = format!("{}/users/me/messages/{message_id}/trash", self.api_base);
         self.send_with_refresh(|t| {

@@ -14,7 +14,7 @@ use crate::vfs::{
 
 use super::gmail_sync::{account_mirror_dir, mirror_tree};
 
-pub(super) const GMAIL_SUFFIX: &str = ".gmail.json";
+pub(super) const GMAIL_SUFFIX: &str = ".json";
 
 /// The Gmail mount: a read-gate over the account's **on-disk mailbox mirror**
 /// (built by [`super::gmail_sync::sync_gmail_mirror`]). Reads are plain local
@@ -202,7 +202,7 @@ impl Resource for GmailResource {
         }
     }
 
-    /// `rm <…>.gmail.json` moves the message to Trash — API first, mirror
+    /// `rm <…>.json` moves the message to Trash — API first, mirror
     /// cleanup after, so a scope rejection (403 under `gmail.readonly`)
     /// leaves the mirror untouched. `gmail.modify` activates it, no code
     /// change.
@@ -325,7 +325,7 @@ impl Resource for GmailResource {
 
 // ---- path helpers ---------------------------------------------------------
 
-/// Mount-relative path segments (`/INBOX/2026-05-03/x.gmail.json` -> 3).
+/// Mount-relative path segments (`/INBOX/2026/05/x__id.json` -> 4).
 fn segments(path: &MountPath) -> Vec<String> {
     path.as_str()
         .trim_matches('/')
@@ -358,7 +358,7 @@ const TITLE_MAX: usize = 80;
 /// (ext4/XFS), and exceeding it fails the write with `ENAMETOOLONG` — which
 /// would abort a sync mid-mailbox. macOS caps at 255 *characters* instead, so
 /// a name Linux rejects writes fine on a dev machine; only the byte bound
-/// catches it. Leaves ~55 bytes for the `__<id>.gmail.json` tail.
+/// catches it. Leaves ~50 bytes for the `__<id>.json` tail.
 const TITLE_MAX_BYTES: usize = 200;
 
 /// Sanitize a subject for use as a path segment:
@@ -626,7 +626,7 @@ pub(super) fn attachments(raw: &Value) -> Vec<Attach> {
 /// lists a name twice, `stat`/`read` match only the first). Keep the first
 /// occurrence verbatim and suffix later collisions with ` (n)` before the
 /// extension. The part order Gmail returns is stable across `messages.get`, so
-/// `readdir`, `stat`, `read`, and the `.gmail.json` listing all derive the same
+/// `readdir`, `stat`, `read`, and the message listing all derive the same
 /// unique name for a given part — and the `att_cache` key
 /// (`(message id, name)`) becomes per-attachment too.
 pub(super) fn unique_attachment_names(atts: &[Attach]) -> Vec<String> {
@@ -653,7 +653,7 @@ fn suffix_before_ext(name: &str, n: usize) -> String {
     }
 }
 
-/// Build the processed email JSON (the `.gmail.json` content).
+/// Build the processed email JSON (the message file content).
 pub(super) fn process_message(raw: &Value) -> Value {
     let payload = raw.get("payload").cloned().unwrap_or(Value::Null);
     let body_text = decode_body(&payload);
@@ -766,7 +766,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 
 const GMAIL_PROMPT: &str = "\
 Gmail (read + trash on delete). A synced on-disk mirror of the mailbox:
-  <label>/<yyyy>/<mm>/<subject>__<message-id>.gmail.json   # the email (JSON)
+  <label>/<yyyy>/<mm>/<subject>__<message-id>.json   # the email (JSON)
   <label>/<yyyy>/<mm>/<subject>__<message-id>/<filename>   # attachments (only if any)
 
   <label>       INBOX, SENT, DRAFT, IMPORTANT, STARRED, TRASH, SPAM, or a user label
@@ -775,17 +775,17 @@ Gmail (read + trash on delete). A synced on-disk mirror of the mailbox:
   <subject>     sanitized subject (don't construct it; ls the month dir)
   <message-id>  Gmail message id (the field after the last `__`)
 
-  cat <…>.gmail.json (keep the suffix) returns:
+  cat <…>.json returns:
     {\"id\",\"thread_id\",\"from\":{\"name\",\"email\"},\"to\":[…],\"cc\":[…],
      \"subject\",\"date\",\"body_text\",\"snippet\",\"labels\":[…],
      \"attachments\":[{\"id\",\"filename\",\"mime_type\",\"size\"}]}
-  The sibling dir (same name without .gmail.json) holds attachment bytes; cat a
+  The sibling dir (same name without .json) holds attachment bytes; cat a
   file inside to download it. ENOENT there means the message has no attachments.
   While the initial sync is still running, months appear newest-first — a
   visible month is always complete.
 
 
-  rm <…>.gmail.json    moves the message to Trash (only .gmail.json is removable).";
+  rm <…>.json    moves the message to Trash (only a message file is removable).";
 
 #[cfg(test)]
 mod tests {
@@ -992,7 +992,7 @@ mod tests {
 
     /// The char cap alone doesn't bound the *name*: ext4/XFS cap a filename at
     /// 255 **bytes**, and 80 CJK/emoji characters are 240–320 bytes before the
-    /// `__<id>.gmail.json` tail is added. (macOS caps at 255 characters, so a
+    /// `__<id>.json` tail is added. (macOS caps at 255 characters, so a
     /// dev machine happily writes a name Linux would reject with
     /// ENAMETOOLONG — which aborts the sync mid-mailbox.)
     #[test]
@@ -1023,7 +1023,7 @@ mod tests {
         // Short subjects are untouched by the byte bound.
         assert_eq!(
             msg_filename("짧은 제목", id),
-            format!("짧은_제목__{id}.gmail.json")
+            format!("짧은_제목__{id}.json")
         );
     }
 

@@ -1,7 +1,7 @@
 //! Full-mailbox mirror sync for the Gmail provider.
 //!
 //! Writes the mailbox to server disk as **real files in exactly the shape the
-//! agent sees** — `<label>/<yyyy>/<mm>/<subject>__<id>.gmail.json` plus
+//! agent sees** — `<label>/<yyyy>/<mm>/<subject>__<id>.json` plus
 //! decoded attachment bytes in the sibling dir — so after sync, `ls`/`grep`/
 //! `cat`/`find` run at local-disk speed with no API round trips.
 //!
@@ -505,7 +505,7 @@ async fn fetch_attachments(
 /// A message file is identified by **position as well as suffix**: it sits
 /// directly in a `<yyyy>/<mm>` dir. Attachment names are sender-controlled
 /// (an arbitrary MIME `filename`, dots included), so a suffix-only test would
-/// let an attachment called `x__<id>.gmail.json` pass as a message and be
+/// let an attachment called `x__<id>.json` pass as a message and be
 /// deleted or re-placed along with the id it names. Month dirs hold only
 /// message files and attachment dirs, so the walk stops descending there.
 fn find_message_files(
@@ -925,7 +925,7 @@ mod tests {
             .join("work/INBOX")
             .join(&jul.0)
             .join(&jul.1)
-            .join("Hello_July__id1.gmail.json");
+            .join("Hello_July__id1.json");
         assert!(staged.exists(), "staged in work/");
         assert!(!tmp.path().join("tree/INBOX").exists(), "not yet visible");
 
@@ -939,7 +939,7 @@ mod tests {
                     .join("work/IMPORTANT")
                     .join(&jul.0)
                     .join(&jul.1)
-                    .join("Hello_July__id1.gmail.json"),
+                    .join("Hello_July__id1.json"),
             )
             .unwrap();
             assert_eq!(a.ino(), b.ino(), "labels share one inode");
@@ -957,7 +957,7 @@ mod tests {
                 .join(label)
                 .join(&jul.0)
                 .join(&jul.1)
-                .join("Hello_July__id1.gmail.json");
+                .join("Hello_July__id1.json");
             assert!(vis.exists(), "{label} July visible after promote");
         }
         // Attachment bytes came along, decoded.
@@ -985,7 +985,7 @@ mod tests {
                 .join("tree/INBOX")
                 .join(&jun.0)
                 .join(&jun.1)
-                .join("June_mail__id2.gmail.json")
+                .join("June_mail__id2.json")
                 .exists()
         );
         // work/ fully drained.
@@ -1049,8 +1049,8 @@ mod tests {
         .unwrap();
         w.promote_all().unwrap();
         let month = tmp.path().join("tree/INBOX").join(&ym.0).join(&ym.1);
-        assert!(month.join("First__id1.gmail.json").exists());
-        assert!(month.join("Second__id2.gmail.json").exists());
+        assert!(month.join("First__id1.json").exists());
+        assert!(month.join("Second__id2.json").exists());
     }
 
     #[test]
@@ -1112,7 +1112,7 @@ mod tests {
                 .join("INBOX")
                 .join(&jul.0)
                 .join(&jul.1)
-                .join("Kept__id2.gmail.json")
+                .join("Kept__id2.json")
                 .exists()
         );
     }
@@ -1156,7 +1156,7 @@ mod tests {
 
         // Attachment filenames come from the sender. This one is dressed up as
         // another message's file, one level below the month dir.
-        let evil = "notice__victim9999.gmail.json";
+        let evil = "notice__victim9999.json";
         let m = raw_msg("real1", "Invoice", JUL, &["INBOX"], Some(evil));
         w.place_message(&w.tree, &m, &labels, &[(evil.into(), b"x".to_vec())])
             .unwrap();
@@ -1201,7 +1201,7 @@ mod tests {
                 .join("INBOX")
                 .join(&jul.0)
                 .join(&jul.1)
-                .join("Fresh_arrival__idN.gmail.json")
+                .join("Fresh_arrival__idN.json")
                 .exists()
         );
         assert!(dir_names(&w.work).unwrap().is_empty(), "work/ untouched");
