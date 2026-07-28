@@ -2,6 +2,7 @@
 //! [`run`]; exposing the modules as a lib lets integration tests in `tests/`
 //! drive internals like [`sandbox_tunnel`].
 
+pub mod agent_stream;
 pub mod auth;
 pub mod event;
 pub mod model;

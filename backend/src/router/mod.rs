@@ -31,10 +31,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
     //   (admin + `/me` + workspaces + sessions HTTP), wrapping them as the
     //   outer layer so `AuthUser` is populated before `admin_required`
     //   inspects the role.
-    // - Public routes (`/auth/*`, the WS endpoint) are registered after
-    //   both layers and therefore bypass them. The WS endpoint authenticates
-    //   inline via a `?token=…` query parameter because browser `WebSocket`
-    //   clients can't send custom `Authorization` headers.
+    // - Public routes (`/auth/*`) are registered after both layers and
+    //   therefore bypass them. The SSE stream sits inside the auth layer like
+    //   any other session route — clients consume it via `fetch`, which can
+    //   send the `Authorization` header (unlike the native `EventSource`).
     ApiRouter::new()
         .api_route(
             "/admin/users",
@@ -108,16 +108,17 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             get(message::list_messages).post(message::start_run),
         )
         .api_route("/sessions/{id}/messages/stop", post(message::stop_run))
+        // Plain route (not api_route): aide can't document an SSE stream.
+        .route(
+            "/sessions/{id}/messages/stream",
+            axum::routing::get(message::stream_messages),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,
         ))
         .api_route("/auth/signup", post(auth::signup))
         .api_route("/auth/login", post(auth::login))
-        .route(
-            "/sessions/{id}/messages/ws",
-            axum::routing::get(message::stream_messages),
-        )
         // WebDAV serves the unified workspace tree (local under `files/`, each
         // provider mount as a sibling) at `/sources`. Two routes: matchit's
         // `{*rest}` wildcard needs one-or-more segments, so the bare collection
