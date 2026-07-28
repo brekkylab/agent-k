@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=6aca191dbf8f4a862ff9415102af564ad4ea5070#6aca191dbf8f4a862ff9415102af564ad4ea5070"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=53039e7905c2e43aba85af04433379df2407140c#53039e7905c2e43aba85af04433379df2407140c"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4672,7 +4672,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "log",
- "lru 0.18.1",
+ "lru 0.16.4",
  "msb-imago",
  "msb_krun_arch",
  "msb_krun_hvf",
@@ -9329,6 +9329,7 @@ dependencies = [
  "pin-project-lite",
  "socket2",
  "sync_wrapper",
+ "system-configuration",
  "tokio",
  "tokio-btls",
  "tokio-util",
@@ -9336,6 +9337,7 @@ dependencies = [
  "tower-http 0.6.11",
  "url",
  "webpki-root-certs",
+ "windows-registry",
  "wreq-proto",
  "wreq-rt",
 ]
