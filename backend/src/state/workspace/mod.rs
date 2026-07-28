@@ -263,6 +263,13 @@ impl WorkspacesState {
         )))
     }
 
+    /// A hookless [`WorkspaceFs`] for read-only scanning (the source poller walks
+    /// provider-mount subtrees). Reuses the cached mount assembly and attaches no
+    /// hook, so a scan triggers no resync or event side effects.
+    pub async fn scan_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
+        self.fs_for(wid).await
+    }
+
     /// Absolute on-disk path of workspace `wid`'s file root
     /// (`data_root/workspaces/{wid}/files`).
     fn get_root(&self, wid: Uuid) -> PathBuf {

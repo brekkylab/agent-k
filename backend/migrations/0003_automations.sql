@@ -101,6 +101,17 @@ CREATE UNIQUE INDEX idx_runs_trigger_event
     ON automation_runs(trigger_id, event_id)
     WHERE trigger_id IS NOT NULL AND event_id IS NOT NULL;
 
+-- Per-mount snapshot for external-source polling: `snapshot` is a JSON map of
+-- workspace-relative path → change signature (modified:size). The poller diffs a
+-- fresh scan against this to synthesize s3.*/notion.* events, then overwrites it.
+CREATE TABLE source_poll_state (
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    prefix       TEXT NOT NULL,            -- mount prefix, e.g. /s3-prod
+    snapshot     TEXT NOT NULL,            -- JSON: { path: signature }
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, prefix)
+);
+
 -- Append-only run log (lifecycle entries: triggered/queued/started/…). Distinct
 -- from the `events` outbox above — this is the per-run audit trail, that is the
 -- trigger event bus. Full lifecycle set minus step_started/step_finished

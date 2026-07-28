@@ -973,6 +973,33 @@ impl AutomationsState {
         self.insert_run_with_session(spec, Utc::now(), Some(&payload)).await
     }
 
+    /// `(workspace_id, sources)` for every enabled event trigger of an enabled
+    /// automation. The source poller uses this to poll only subscribed provider
+    /// mounts (lazy activation).
+    pub async fn list_enabled_event_trigger_sources(
+        &self,
+    ) -> StateResult<Vec<(Uuid, Vec<String>)>> {
+        let rows = sqlx::query(
+            "SELECT a.workspace_id AS workspace_id, t.spec_json AS spec_json \
+             FROM automation_triggers t JOIN automations a ON a.id = t.automation_id \
+             WHERE t.kind = 'event' AND t.enabled = 1 AND a.enabled = 1",
+        )
+        .fetch_all(&self.db)
+        .await?;
+        let mut out = Vec::new();
+        for r in rows {
+            let workspace_id = parse_uuid(r.get::<String, _>("workspace_id"), "automations.workspace_id")?;
+            let spec_json: String = r.get("spec_json");
+            if let Ok(TriggerSpec::Event { conditions }) =
+                TriggerSpec::from_db(TriggerKind::Event, &spec_json)
+            {
+                let sources = conditions.into_iter().map(|c| c.source).collect();
+                out.push((workspace_id, sources));
+            }
+        }
+        Ok(out)
+    }
+
     // ── runs ────────────────────────────────────────────────────────────
 
     /// Enqueue a run + its session, emitting `triggered` + `queued` atomically.
@@ -1715,6 +1742,32 @@ mod tests {
             .await
             .unwrap();
         assert!(state.create_webhook_run(&a, t.id, serde_json::json!({})).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn lazy_poll_sources_from_enabled_event_triggers() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool);
+
+        let a = state
+            .create_automation(wid, "on s3".into(), None, "go".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        let spec = TriggerSpec::Event {
+            conditions: vec![Condition { source: "s3.object_created".into(), filter: None }],
+        };
+        state.create_trigger(a.id, &spec, true, None, None).await.unwrap();
+
+        let subs = state.list_enabled_event_trigger_sources().await.unwrap();
+        assert_eq!(subs, vec![(wid, vec!["s3.object_created".to_string()])]);
+
+        // A disabled automation drops out of the poll-activation set.
+        state
+            .update_automation(a.id, None, None, None, None, None, Some(false))
+            .await
+            .unwrap();
+        assert!(state.list_enabled_event_trigger_sources().await.unwrap().is_empty());
     }
 
     #[tokio::test]

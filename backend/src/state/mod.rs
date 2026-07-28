@@ -12,6 +12,7 @@ mod automation;
 mod events;
 mod knowledge;
 mod session;
+mod source_poll;
 mod user;
 mod workspace;
 
@@ -20,6 +21,7 @@ pub use automation::*;
 pub use events::*;
 pub use knowledge::*;
 pub use session::*;
+pub use source_poll::*;
 pub use user::*;
 pub use workspace::*;
 
@@ -72,6 +74,7 @@ pub struct AppState {
     pub users: UsersState,
     pub automations: AutomationsState,
     pub event_store: EventsState,
+    pub source_poll: SourcePollState,
     pub events: EventQueue,
     pub jwt: JwtConfig,
 }
@@ -102,6 +105,7 @@ impl AppState {
             sessions: SessionsState::new(db.clone(), data_root, events.clone()),
             automations: AutomationsState::new(db.clone()),
             event_store: EventsState::new(db.clone()),
+            source_poll: SourcePollState::new(db.clone()),
             users: UsersState::new(db),
             events,
             jwt,

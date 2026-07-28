@@ -73,6 +73,15 @@ impl WorkspaceMount {
             ProviderConfig::Notion(c) => ("notion", serde_json::to_string(c)?),
         })
     }
+
+    /// Provider discriminator (`"s3"` / `"notion"`) — the source poller matches
+    /// this against a subscribed event source's provider.
+    pub fn provider_str(&self) -> &'static str {
+        match &self.provider {
+            ProviderConfig::S3(_) => "s3",
+            ProviderConfig::Notion(_) => "notion",
+        }
+    }
 }
 
 /// Rebuild a [`ProviderConfig`] from its stored discriminator + config JSON.

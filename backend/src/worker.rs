@@ -10,6 +10,7 @@
 //! re-runs its one prompt on the (message-less) session — no replay/orphan.
 
 use std::{
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -19,15 +20,17 @@ use std::{
 
 use ailoy::message::Part;
 use chrono::Utc;
+use futures_util::StreamExt as _;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+use workspace::WorkspaceFs;
 
 use crate::{
     cron::{default_tz_name, next_fire_after},
     state::{
-        AppState, AutomationRun, AutomationTrigger, Condition, RunLogKind, MAX_ATTEMPTS,
-        MAX_CHAIN_DEPTH, RunStatus, TriggerSpec,
+        AppState, AutomationRun, AutomationTrigger, Change, Condition, RunLogKind, MAX_ATTEMPTS,
+        MAX_CHAIN_DEPTH, NewEvent, RunStatus, Snapshot, TriggerSpec, diff_snapshots,
     },
 };
 
@@ -51,8 +54,194 @@ pub fn spawn_runtime(state: Arc<AppState>, count: usize) {
     }
     spawn_housekeeper(state.clone());
     spawn_cron_ticker(state.clone());
-    spawn_dispatcher(state);
+    spawn_dispatcher(state.clone());
+    spawn_source_poller(state);
     tracing::info!(workers = count, "automation runtime spawned");
+}
+
+/// Interval between external-source poll sweeps. `0` disables polling.
+fn source_poll_interval() -> Duration {
+    let secs = std::env::var("AGENT_K_SOURCE_POLL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60);
+    Duration::from_secs(secs)
+}
+
+/// Cap on files recorded per mount per poll — a backstop against walking an
+/// enormous provider tree.
+const SCAN_ENTRY_CAP: usize = 5000;
+
+/// Periodically poll subscribed external mounts and emit change events.
+fn spawn_source_poller(state: Arc<AppState>) {
+    let interval = source_poll_interval();
+    if interval.is_zero() {
+        tracing::info!("source polling disabled (AGENT_K_SOURCE_POLL_SECS=0)");
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            if let Err(e) = poll_sources_once(&state).await {
+                tracing::error!("source poll failed: {e}");
+            }
+        }
+    });
+}
+
+/// The provider a subscribed event `source` belongs to (`s3.*` → `"s3"`), or
+/// `None` for non-provider sources (workspace/knowledge/run/webhook).
+fn provider_of_source(source: &str) -> Option<&'static str> {
+    if source.starts_with("s3.") {
+        Some("s3")
+    } else if source.starts_with("notion.") {
+        Some("notion")
+    } else {
+        None
+    }
+}
+
+/// The event kind for a provider + change (e.g. s3 + Created → s3.object_created).
+fn source_event_kind(provider: &str, change: &Change) -> &'static str {
+    match (provider, change) {
+        ("s3", Change::Created(_)) => "s3.object_created",
+        ("s3", Change::Modified(_)) => "s3.object_modified",
+        ("s3", Change::Removed(_)) => "s3.object_removed",
+        ("notion", Change::Created(_)) => "notion.page_created",
+        ("notion", Change::Modified(_)) => "notion.page_updated",
+        ("notion", Change::Removed(_)) => "notion.page_removed",
+        // Unknown provider: a generic, still-filterable fallback.
+        (_, Change::Created(_)) => "source.created",
+        (_, Change::Modified(_)) => "source.modified",
+        (_, Change::Removed(_)) => "source.removed",
+    }
+}
+
+/// One poll sweep: for each workspace with an enabled event subscriber, poll its
+/// mounts of the subscribed providers (lazy activation), diff, and emit events.
+async fn poll_sources_once(state: &Arc<AppState>) -> Result<(), String> {
+    let subs = state
+        .automations
+        .list_enabled_event_trigger_sources()
+        .await
+        .map_err(|e| e.to_string())?;
+    // workspace_id → set of subscribed providers.
+    let mut want: HashMap<Uuid, HashSet<&'static str>> = HashMap::new();
+    for (wid, sources) in subs {
+        for s in &sources {
+            if let Some(p) = provider_of_source(s) {
+                want.entry(wid).or_default().insert(p);
+            }
+        }
+    }
+    for (wid, providers) in want {
+        let mounts = match state.workspaces.list_mounts(wid).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(%wid, "poll: list_mounts failed: {e}");
+                continue;
+            }
+        };
+        for m in mounts {
+            let provider = m.provider_str();
+            if !providers.contains(provider) {
+                continue;
+            }
+            if let Err(e) = poll_mount(state, wid, &m.prefix, provider).await {
+                tracing::warn!(%wid, prefix = %m.prefix, "poll mount failed: {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Scan one mount, diff against its stored snapshot, emit change events, and save
+/// the new snapshot. The first poll only seeds the baseline (emits nothing).
+async fn poll_mount(
+    state: &Arc<AppState>,
+    wid: Uuid,
+    prefix: &str,
+    provider: &str,
+) -> Result<(), String> {
+    let fs = state.workspaces.scan_fs(wid).await.map_err(|e| e.to_string())?;
+    let mut next = Snapshot::new();
+    scan_tree(&fs, prefix, &mut next, 0).await;
+    if next.len() >= SCAN_ENTRY_CAP {
+        // The scan was truncated: the partial snapshot is order-dependent, so
+        // diffs would churn. Skip emitting/persisting rather than fire spurious
+        // events for a mount this large.
+        tracing::warn!(%wid, prefix, cap = SCAN_ENTRY_CAP, "source poll: mount exceeds scan cap — skipping");
+        return Ok(());
+    }
+
+    match state.source_poll.get(wid, prefix).await.map_err(|e| e.to_string())? {
+        None => {} // first poll — seed baseline below without emitting
+        Some(prev) => {
+            for change in diff_snapshots(&prev, &next) {
+                let path = match &change {
+                    Change::Created(p) | Change::Modified(p) | Change::Removed(p) => p.clone(),
+                };
+                let kind = source_event_kind(provider, &change);
+                if let Err(e) = state
+                    .event_store
+                    .emit(NewEvent {
+                        kind: kind.into(),
+                        workspace_id: Some(wid),
+                        payload: Some(json!({
+                            "workspace_id": wid.to_string(),
+                            "prefix": prefix,
+                            "path": path,
+                        })),
+                    })
+                    .await
+                {
+                    tracing::error!(%wid, "emit {kind} failed: {e}");
+                }
+            }
+        }
+    }
+    state.source_poll.put(wid, prefix, &next).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Recursively walk `path` under a mount, recording each file's change signature
+/// (`modified:len`) into `out`. Bounded by [`SCAN_ENTRY_CAP`] and a depth cap.
+async fn scan_tree(fs: &WorkspaceFs, path: &str, out: &mut Snapshot, depth: usize) {
+    if out.len() >= SCAN_ENTRY_CAP || depth > 32 {
+        return;
+    }
+    let Ok(mut stream) = fs.read_dir(path).await else {
+        return;
+    };
+    while let Some(entry) = stream.next().await {
+        let Ok(entry) = entry else { continue };
+        let name = String::from_utf8_lossy(&entry.name()).into_owned();
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        let child = format!("{}/{}", path.trim_end_matches('/'), name);
+        match entry.metadata() {
+            Ok(stat) if stat.is_dir() => {
+                Box::pin(scan_tree(fs, &child, out, depth + 1)).await;
+            }
+            Ok(stat) => {
+                // Stable signature (`nanos:len`): a `Debug` format of SystemTime
+                // could change across a library update and re-fire every file.
+                let mtime_ns = stat
+                    .modified
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                out.insert(child, format!("{mtime_ns}:{}", stat.len));
+            }
+            Err(_) => {}
+        }
+        if out.len() >= SCAN_ENTRY_CAP {
+            break;
+        }
+    }
 }
 
 /// Poll the durable event outbox and fire matching event triggers.
@@ -116,6 +305,10 @@ async fn dispatch_once(state: &Arc<AppState>) -> Result<(), String> {
             0
         };
 
+        // A transient DB error on any trigger leaves the event undispatched so the
+        // next sweep retries it; the (trigger, event) dedup makes reprocessing of
+        // already-created runs a no-op.
+        let mut all_ok = true;
         for (trigger, conditions) in &triggers {
             // OR: fire if any condition (its own source + filter) matches.
             if !conditions.iter().any(|c| c.matches(&event.kind, event.payload.as_ref())) {
@@ -135,6 +328,7 @@ async fn dispatch_once(state: &Arc<AppState>) -> Result<(), String> {
                 Ok(false) => {}
                 Err(e) => {
                     tracing::error!(trigger = %trigger.id, "run_exists check failed: {e}");
+                    all_ok = false;
                     continue;
                 }
             }
@@ -143,6 +337,7 @@ async fn dispatch_once(state: &Arc<AppState>) -> Result<(), String> {
                 Ok(None) => continue,
                 Err(e) => {
                     tracing::error!(trigger = %trigger.id, "get_automation failed: {e}");
+                    all_ok = false;
                     continue;
                 }
             };
@@ -156,14 +351,20 @@ async fn dispatch_once(state: &Arc<AppState>) -> Result<(), String> {
                     tracing::info!(trigger = %trigger.id, run = %run.id, event = %event.id, "event trigger fired")
                 }
                 Ok(None) => {} // automation disabled
-                Err(e) => tracing::error!(trigger = %trigger.id, "create_event_run failed: {e}"),
+                Err(e) => {
+                    tracing::error!(trigger = %trigger.id, "create_event_run failed: {e}");
+                    all_ok = false;
+                }
             }
         }
-        state
-            .event_store
-            .mark_dispatched(event.id)
-            .await
-            .map_err(|e| e.to_string())?;
+        // Only consume the event once every matching trigger was handled cleanly.
+        if all_ok {
+            state
+                .event_store
+                .mark_dispatched(event.id)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
