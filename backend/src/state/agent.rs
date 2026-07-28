@@ -106,9 +106,6 @@ impl Agent {
     }
 }
 
-const SELECT_COLUMNS: &str =
-    "id, workspace_id, name, description, active, spec, runenv, created_at, updated_at";
-
 pub struct AgentsState {
     db: SqlitePool,
 }
@@ -119,9 +116,10 @@ impl AgentsState {
     }
 
     pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Agent>> {
-        let rows = sqlx::query(&format!(
-            "SELECT {SELECT_COLUMNS} FROM agents WHERE workspace_id = ? ORDER BY created_at ASC"
-        ))
+        let rows = sqlx::query(
+            "SELECT id, workspace_id, name, description, active, spec, runenv, created_at, updated_at \
+             FROM agents WHERE workspace_id = ? ORDER BY created_at ASC",
+        )
         .bind(workspace_id.to_string())
         .fetch_all(&self.db)
         .await?;
@@ -129,10 +127,13 @@ impl AgentsState {
     }
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Agent>> {
-        let row = sqlx::query(&format!("SELECT {SELECT_COLUMNS} FROM agents WHERE id = ?"))
-            .bind(id.to_string())
-            .fetch_optional(&self.db)
-            .await?;
+        let row = sqlx::query(
+            "SELECT id, workspace_id, name, description, active, spec, runenv, created_at, updated_at \
+             FROM agents WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.db)
+        .await?;
         row.as_ref().map(Agent::from_sqlite_row).transpose()
     }
 
@@ -182,15 +183,14 @@ impl AgentsState {
 /// Map a SQLite UNIQUE violation on `(workspace_id, name)` to a typed error so
 /// the router can answer `409 Conflict`. Everything else passes through.
 fn map_sqlx_error(e: sqlx::Error) -> StateError {
-    if let sqlx::Error::Database(ref db_err) = e {
-        if db_err
+    if let sqlx::Error::Database(ref db_err) = e
+        && (db_err
             .code()
             .map(|c| c == "2067" || c == "1555")
             .unwrap_or(false)
-            || db_err.message().contains("UNIQUE")
-        {
-            return StateError::UniqueViolation("agents.name".to_string());
-        }
+            || db_err.message().contains("UNIQUE"))
+    {
+        return StateError::UniqueViolation("agents.name".to_string());
     }
     StateError::Sqlx(e)
 }

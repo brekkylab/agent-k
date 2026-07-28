@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tantivy::{Index, TantivyDocument, collector::TopDocs, schema::OwnedValue};
+use tantivy::{Index, TantivyDocument, collector::TopDocs, schema::Value as _};
 
 use crate::knowledge_base::Document;
 
@@ -43,7 +43,12 @@ pub fn search_page(
 
     let offset = (page * page_size) as usize;
     let fetch = page_size as usize + 1;
-    let top_docs = searcher.search(&query, &TopDocs::with_limit(fetch).and_offset(offset))?;
+    let top_docs = searcher.search(
+        &query,
+        &TopDocs::with_limit(fetch)
+            .and_offset(offset)
+            .order_by_score(),
+    )?;
 
     let has_more = top_docs.len() > page_size as usize;
     let results: Vec<SearchResult> = top_docs
@@ -66,10 +71,10 @@ pub fn search_page(
 }
 
 fn get_str(doc: &TantivyDocument, field: tantivy::schema::Field) -> String {
-    match doc.get_first(field) {
-        Some(OwnedValue::Str(s)) => s.clone(),
-        _ => String::new(),
-    }
+    doc.get_first(field)
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn doc_to_result(

@@ -12,7 +12,7 @@ exclude = [
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "e3f909153c3d3f9b9d58af456fd9a47a3ca32894", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "c2163c4b27228cdbed3c0bd65c84a403462be3e1", features = ["sandbox"] }
 
 # Patched fuser (branch feat/macfuse-abi): on macOS, upstream fuser emits macFUSE
 # wire structs (extra crtime/flags in fuse_attr, minor pinned to 19) that a Linux
@@ -23,3 +23,19 @@ ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "e3f909153c3d3f9
 # forwarder does. No-op on a Linux host.
 [patch.crates-io]
 fuser = { git = "https://github.com/brekkylab/fuser.git", rev = "4a08d0ba46f7e4911da1fdb73883f30a36637a28" }
+
+# microsandbox 0.6.7 computes a sparse-sha256 integrity digest over the upper
+# layer's full logical size (default 4 GiB) on snapshot create, save, and load.
+# The backend archives a session's sandbox on shutdown and restores it on
+# resume, so a dev-profile backend pays that hashing at unoptimized-sha2 speed
+# (~130 MB/s, ~32 s per pass) on every archive/restore. Optimizing just the
+# hash crates restores hardware-speed hashing (~2.6 GB/s). ailoy carries the
+# same override, but Cargo applies profile overrides only from the workspace
+# root of the build, so it has to be repeated here. Release builds already
+# hash at full speed and are unaffected.
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.digest]
+opt-level = 3
+[profile.dev.package.block-buffer]
+opt-level = 3

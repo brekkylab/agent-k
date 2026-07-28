@@ -188,23 +188,24 @@ impl SessionsState {
     /// choreography collects them *before* the agent-row cascade removes the
     /// session rows, so it can still sweep their artifacts afterwards.
     pub async fn ids_by_agent(&self, agent_id: Uuid) -> StateResult<Vec<Uuid>> {
-        self.session_ids("agent_id", agent_id).await
+        self.session_ids(SessionOwner::Agent, agent_id).await
     }
 
     /// Ids of every session in `workspace_id`. See [`Self::ids_by_agent`] for
     /// why the ids are collected ahead of a cascading row delete.
     pub async fn ids_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Uuid>> {
-        self.session_ids("workspace_id", workspace_id).await
+        self.session_ids(SessionOwner::Workspace, workspace_id)
+            .await
     }
 
-    /// Session ids where `column` equals `value`. `column` is always an internal
-    /// string literal (never user input), so interpolating it is safe.
-    async fn session_ids(&self, column: &str, value: Uuid) -> StateResult<Vec<Uuid>> {
-        let sql = format!("SELECT id FROM sessions WHERE {column} = ?");
-        let rows = sqlx::query(&sql)
-            .bind(value.to_string())
-            .fetch_all(&self.db)
-            .await?;
+    async fn session_ids(&self, owner: SessionOwner, value: Uuid) -> StateResult<Vec<Uuid>> {
+        let query = match owner {
+            SessionOwner::Agent => sqlx::query("SELECT id FROM sessions WHERE agent_id = ?"),
+            SessionOwner::Workspace => {
+                sqlx::query("SELECT id FROM sessions WHERE workspace_id = ?")
+            }
+        };
+        let rows = query.bind(value.to_string()).fetch_all(&self.db).await?;
         rows.iter()
             .map(|r| parse_uuid(r.get::<String, _>("id"), "sessions.id"))
             .collect()
@@ -289,10 +290,10 @@ impl SessionsState {
     pub async fn discard_artifacts(&self, id: Uuid) {
         self.cancel(id).await;
         let dir = self.data_root.join("sessions").join(id.to_string());
-        if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::error!(session = %id, "failed to remove session dir: {e}");
-            }
+        if let Err(e) = tokio::fs::remove_dir_all(&dir).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::error!(session = %id, "failed to remove session dir: {e}");
         }
         self.events.remove_channel(&message_channel(id));
     }
@@ -799,6 +800,12 @@ impl SessionsState {
 
         Ok(())
     }
+}
+
+#[derive(Clone, Copy)]
+enum SessionOwner {
+    Agent,
+    Workspace,
 }
 
 /// `INSERT` one message row for `session_key` at `seq` (stored in the wrapped
