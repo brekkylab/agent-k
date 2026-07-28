@@ -29,9 +29,14 @@ CREATE TABLE automation_triggers (
     spec_json     TEXT NOT NULL,
     enabled       INTEGER NOT NULL DEFAULT 1,
     next_fire_at  TEXT,
+    webhook_token_hash TEXT,                     -- webhook only; sha256 hex of the issued token
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
+-- A webhook token identifies its trigger globally; the hash is the lookup key.
+CREATE UNIQUE INDEX idx_triggers_webhook_token
+    ON automation_triggers(webhook_token_hash)
+    WHERE webhook_token_hash IS NOT NULL;
 CREATE INDEX idx_triggers_automation ON automation_triggers(automation_id);
 -- Partial index for the cron ticker's "due" scan.
 CREATE INDEX idx_triggers_due ON automation_triggers(next_fire_at)

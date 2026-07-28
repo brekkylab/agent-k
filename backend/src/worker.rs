@@ -116,7 +116,9 @@ async fn fire_cron_trigger_once(
         .ok_or_else(|| format!("automation {} not found", trigger.automation_id))?;
     let spec = TriggerSpec::from_db(trigger.kind, &trigger.spec_json)
         .map_err(|e| format!("trigger spec decode: {e}"))?;
-    let TriggerSpec::Cron { expr, tz } = &spec;
+    let TriggerSpec::Cron { expr, tz } = &spec else {
+        return Err(format!("trigger {} is not a cron trigger", trigger.id));
+    };
     let tz_name = tz.as_deref().unwrap_or(default_tz_name());
     let next_fire = next_fire_after(expr, tz_name, now)?;
     let payload = json!({

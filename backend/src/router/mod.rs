@@ -152,6 +152,14 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         ))
         .api_route("/auth/signup", post(auth::signup))
         .api_route("/auth/login", post(auth::login))
+        // Public webhook receiver: gated only by the Bearer token (its hash
+        // identifies the trigger), so it sits outside `auth_required`. Cap the
+        // body (public + unauthenticated) to bound memory per request.
+        .api_route(
+            "/webhooks/automations",
+            post(automation::fire_webhook_trigger)
+                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
+        )
         // WebDAV serves the unified workspace tree (local under `files/`, each
         // provider mount as a sibling) at `/sources`. Two routes: matchit's
         // `{*rest}` wildcard needs one-or-more segments, so the bare collection

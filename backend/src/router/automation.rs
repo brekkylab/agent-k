@@ -122,6 +122,17 @@ impl TriggerResponse {
     }
 }
 
+/// Create response: for a webhook trigger, `webhook_token` carries the raw token
+/// ONCE (only its hash is stored). Present POSTs to `POST /webhooks/automations`
+/// with `Authorization: Bearer <token>`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CreatedTriggerResponse {
+    #[serde(flatten)]
+    pub trigger: TriggerResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_token: Option<String>,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TriggerListResponse {
     pub items: Vec<TriggerResponse>,
@@ -354,10 +365,12 @@ pub(super) async fn create_trigger(
     Extension(auth): Extension<AuthUser>,
     Path(automation_id): Path<Uuid>,
     Json(payload): Json<CreateTriggerRequest>,
-) -> Result<(StatusCode, Json<TriggerResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CreatedTriggerResponse>), ApiError> {
     require_owned_automation(&state, &auth, automation_id).await?;
 
-    // Validate the cron expression up front + compute the first fire instant.
+    // Cron: validate the expression + compute the first fire instant. Webhook:
+    // issue a token (client never provides it) and store only its hash.
+    let (mut token_hash, mut webhook_token) = (None, None);
     let next_fire_at = match &payload.spec {
         TriggerSpec::Cron { expr, tz } => {
             let tz_name = tz.as_deref().unwrap_or(default_tz_name());
@@ -365,13 +378,25 @@ pub(super) async fn create_trigger(
                 .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
             payload.enabled.then_some(fire)
         }
+        TriggerSpec::Webhook {} => {
+            let (token, hash) = crate::state::AutomationsState::new_webhook_token();
+            token_hash = Some(hash);
+            webhook_token = Some(token);
+            None
+        }
     };
 
     let trigger = state
         .automations
-        .create_trigger(automation_id, &payload.spec, payload.enabled, next_fire_at)
+        .create_trigger(automation_id, &payload.spec, payload.enabled, next_fire_at, token_hash)
         .await?;
-    Ok((StatusCode::CREATED, Json(TriggerResponse::from_db(trigger)?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedTriggerResponse {
+            trigger: TriggerResponse::from_db(trigger)?,
+            webhook_token,
+        }),
+    ))
 }
 
 pub(super) async fn list_triggers(
@@ -404,6 +429,39 @@ pub(super) async fn delete_trigger(
     }
     state.automations.delete_trigger(trigger_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Public webhook receiver (no auth middleware): fires the automation whose
+/// webhook trigger matches the `Authorization: Bearer <token>` header. The token
+/// hashes to a globally-unique `webhook_token_hash`, so it alone identifies the
+/// trigger. The request body is accepted but not yet used (body → render input
+/// arrives with the event infrastructure). A generic 401 masks unknown tokens.
+pub(super) async fn fire_webhook_trigger(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    _body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "invalid token"))?;
+    let hash = crate::state::AutomationsState::webhook_token_hash(token);
+    let trigger = state
+        .automations
+        .find_trigger_by_webhook_token_hash(&hash)
+        .await?
+        .filter(|t| t.enabled)
+        .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "invalid token"))?;
+    let automation = state
+        .automations
+        .get_automation(trigger.automation_id)
+        .await?
+        .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "trigger's automation missing"))?;
+    match state.automations.create_webhook_run(&automation, trigger.id).await? {
+        Some(run) => Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "run_id": run.id })))),
+        None => Err(err(StatusCode::CONFLICT, "automation is disabled")),
+    }
 }
 
 // ── runs (top-level resource: /automation-runs) ─────────────────────────────

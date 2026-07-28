@@ -78,18 +78,21 @@ impl RunStatus {
 #[serde(rename_all = "snake_case")]
 pub enum TriggerKind {
     Cron,
+    Webhook,
 }
 
 impl TriggerKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             TriggerKind::Cron => "cron",
+            TriggerKind::Webhook => "webhook",
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "cron" => Some(TriggerKind::Cron),
+            "webhook" => Some(TriggerKind::Webhook),
             _ => None,
         }
     }
@@ -105,12 +108,17 @@ pub enum TriggerSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tz: Option<String>,
     },
+    /// Fired directly by an authenticated HTTP POST (automation-direct). The
+    /// token isn't in the spec — its sha256 hash lives in the
+    /// `webhook_token_hash` column and the raw token is shown once on create.
+    Webhook {},
 }
 
 impl TriggerSpec {
     pub fn kind(&self) -> TriggerKind {
         match self {
             TriggerSpec::Cron { .. } => TriggerKind::Cron,
+            TriggerSpec::Webhook {} => TriggerKind::Webhook,
         }
     }
 
@@ -119,6 +127,7 @@ impl TriggerSpec {
             TriggerSpec::Cron { expr, tz } => {
                 serde_json::to_string(&serde_json::json!({ "expr": expr, "tz": tz }))
             }
+            TriggerSpec::Webhook {} => serde_json::to_string(&serde_json::json!({})),
         }
     }
 
@@ -134,8 +143,23 @@ impl TriggerSpec {
                 let CronFields { expr, tz } = serde_json::from_str(spec_json)?;
                 Ok(TriggerSpec::Cron { expr, tz })
             }
+            TriggerKind::Webhook => Ok(TriggerSpec::Webhook {}),
         }
     }
+}
+
+/// sha256 hex of a webhook token — the lookup key stored in
+/// `automation_triggers.webhook_token_hash`.
+fn sha256_hex(s: impl AsRef<[u8]>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_ref());
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 256 bits of entropy from two UUID v4s (OS-RNG backed).
+fn generate_webhook_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -229,6 +253,8 @@ pub struct AutomationTrigger {
     pub spec_json: String,
     pub enabled: bool,
     pub next_fire_at: Option<DateTime<Utc>>,
+    /// sha256 hex of the issued webhook token (webhook triggers only; else `None`).
+    pub webhook_token_hash: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -252,6 +278,7 @@ impl AutomationTrigger {
             spec_json: row.get("spec_json"),
             enabled: row.get("enabled"),
             next_fire_at,
+            webhook_token_hash: row.get("webhook_token_hash"),
             created_at: parse_ts(
                 &row.get::<String, _>("created_at"),
                 "automation_triggers.created_at",
@@ -360,7 +387,7 @@ impl RunLog {
 const AUTOMATION_COLS: &str =
     "id, workspace_id, name, description, prompt, agent_type, model, enabled, created_by, created_at, updated_at";
 const TRIGGER_COLS: &str =
-    "id, automation_id, kind, spec_json, enabled, next_fire_at, created_at, updated_at";
+    "id, automation_id, kind, spec_json, enabled, next_fire_at, webhook_token_hash, created_at, updated_at";
 const RUN_COLS: &str =
     "id, automation_id, trigger_id, session_id, workspace_id, prompt, agent_type, model, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at";
 
@@ -583,14 +610,15 @@ impl AutomationsState {
         spec: &TriggerSpec,
         enabled: bool,
         next_fire_at: Option<DateTime<Utc>>,
+        webhook_token_hash: Option<String>,
     ) -> StateResult<AutomationTrigger> {
         let id = Uuid::new_v4();
         let now = Self::now();
         let spec_json = spec.to_db_spec_json()?;
         let next_s = next_fire_at.map(|t| t.to_rfc3339());
         sqlx::query(
-            "INSERT INTO automation_triggers (id, automation_id, kind, spec_json, enabled, next_fire_at, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO automation_triggers (id, automation_id, kind, spec_json, enabled, next_fire_at, webhook_token_hash, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(automation_id.to_string())
@@ -598,6 +626,7 @@ impl AutomationsState {
         .bind(&spec_json)
         .bind(enabled)
         .bind(&next_s)
+        .bind(&webhook_token_hash)
         .bind(&now)
         .bind(&now)
         .execute(&self.db)
@@ -610,6 +639,7 @@ impl AutomationsState {
             spec_json,
             enabled,
             next_fire_at,
+            webhook_token_hash,
             created_at: parse_ts(&now, "automation_triggers.created_at")?,
             updated_at: parse_ts(&now, "automation_triggers.updated_at")?,
         })
@@ -644,6 +674,52 @@ impl AutomationsState {
             .execute(&self.db)
             .await?;
         Ok(res.rows_affected() == 1)
+    }
+
+    /// The enabled webhook trigger of `automation_id` whose secret matches
+    /// `token`, or `None`. Used by the public webhook receive endpoint.
+    /// The webhook trigger whose token hashes to `token_hash`, or `None`. The
+    /// hash is globally unique, so the token alone identifies its trigger.
+    pub async fn find_trigger_by_webhook_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> StateResult<Option<AutomationTrigger>> {
+        let sql = format!(
+            "SELECT {TRIGGER_COLS} FROM automation_triggers WHERE webhook_token_hash = ?"
+        );
+        let row = sqlx::query(&sql)
+            .bind(token_hash)
+            .fetch_optional(&self.db)
+            .await?;
+        row.as_ref().map(AutomationTrigger::from_row).transpose()
+    }
+
+    /// sha256 hex of a webhook token — for the caller to hash a presented token
+    /// before looking it up.
+    pub fn webhook_token_hash(token: &str) -> String {
+        sha256_hex(token)
+    }
+
+    /// Generate a fresh webhook token; returns `(token, hash)`. Store the hash,
+    /// return the token to the client once.
+    pub fn new_webhook_token() -> (String, String) {
+        let token = generate_webhook_token();
+        let hash = sha256_hex(&token);
+        (token, hash)
+    }
+
+    /// Create a queued run fired directly by a webhook (automation-direct). The
+    /// automation's stored prompt runs as-is — the POST body is not yet used as
+    /// render input (that arrives with the event infrastructure). `None` if the
+    /// automation is disabled.
+    pub async fn create_webhook_run(
+        &self,
+        automation: &Automation,
+        trigger_id: Uuid,
+    ) -> StateResult<Option<AutomationRun>> {
+        let spec = NewRun::from_automation(automation, Some(trigger_id), None);
+        let payload = serde_json::json!({ "source": "webhook" });
+        self.insert_run_with_session(spec, Utc::now(), Some(&payload)).await
     }
 
     /// Cron triggers whose `next_fire_at` has elapsed (enabled only).
@@ -1227,7 +1303,7 @@ mod tests {
         let spec = TriggerSpec::Cron { expr: "0 9 * * *".into(), tz: None };
         let next = crate::cron::next_fire_after("0 9 * * *", "UTC", Utc::now()).unwrap();
         let t = state
-            .create_trigger(a.id, &spec, true, Some(next))
+            .create_trigger(a.id, &spec, true, Some(next), None)
             .await
             .unwrap();
         assert_eq!(t.kind, TriggerKind::Cron);
@@ -1239,6 +1315,53 @@ mod tests {
             .await
             .unwrap();
         assert!(!updated.enabled);
+    }
+
+    #[tokio::test]
+    async fn webhook_trigger_lookup_and_run() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool);
+
+        let a = state
+            .create_automation(wid, "hooked".into(), None, "go".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        let (token, hash) = AutomationsState::new_webhook_token();
+        let t = state
+            .create_trigger(a.id, &TriggerSpec::Webhook {}, true, None, Some(hash))
+            .await
+            .unwrap();
+        assert_eq!(t.kind, TriggerKind::Webhook);
+
+        // Lookup by token hash: correct → Some(trigger); wrong → None.
+        assert_eq!(
+            state
+                .find_trigger_by_webhook_token_hash(&AutomationsState::webhook_token_hash(&token))
+                .await
+                .unwrap()
+                .map(|f| f.id),
+            Some(t.id)
+        );
+        assert!(
+            state
+                .find_trigger_by_webhook_token_hash(&AutomationsState::webhook_token_hash("wrong"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Fire it: a run is created for the automation.
+        let run = state.create_webhook_run(&a, t.id).await.unwrap().unwrap();
+        assert_eq!(run.trigger_id, Some(t.id));
+        assert_eq!(run.automation_id, Some(a.id));
+
+        // Disabled automation gates run creation.
+        state
+            .update_automation(a.id, None, None, None, None, None, Some(false))
+            .await
+            .unwrap();
+        assert!(state.create_webhook_run(&a, t.id).await.unwrap().is_none());
     }
 
     #[tokio::test]
