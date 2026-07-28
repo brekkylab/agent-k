@@ -193,18 +193,13 @@ fn serve_conn(
     // TCP (stream) -> shim (datagram): reframe each message (FUSE self-frames via
     // its header `len`), send as one datagram to the fuse end.
     let up = thread::spawn(move || {
-        loop {
-            match read_frame(&mut tcp_rx) {
-                Ok(msg) => {
-                    // SAFETY: sending `msg.len()` bytes from an owned buffer.
-                    let n = unsafe {
-                        libc::send(shim_fd, msg.as_ptr() as *const libc::c_void, msg.len(), 0)
-                    };
-                    if n != msg.len() as isize {
-                        break;
-                    }
-                }
-                Err(_) => break, // guest closed the TCP connection
+        while let Ok(msg) = read_frame(&mut tcp_rx) {
+            // SAFETY: sending `msg.len()` bytes from an owned buffer.
+            let n = unsafe {
+                libc::send(shim_fd, msg.as_ptr() as *const libc::c_void, msg.len(), 0)
+            };
+            if n != msg.len() as isize {
+                break;
             }
         }
         // Closing the shim end makes fuser's fuse_fd see EOF → session ends.

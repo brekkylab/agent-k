@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const PYINSTALLER_ARGS: &[&str] = &[
@@ -147,7 +147,7 @@ fn main() {
 ///
 /// Uses a directory symlink (Unix or Windows) and falls back to a
 /// recursive copy if symlinks aren't permitted.
-fn link_bundle_into_profile(out_dir: &PathBuf, bundle_dir: &PathBuf) {
+fn link_bundle_into_profile(out_dir: &Path, bundle_dir: &Path) {
     let Some(profile_dir) = out_dir.ancestors().nth(3) else {
         println!("cargo:warning=docling-sys: could not locate profile dir from OUT_DIR");
         return;
@@ -169,7 +169,7 @@ fn link_bundle_into_profile(out_dir: &PathBuf, bundle_dir: &PathBuf) {
     }
 }
 
-fn place_bundle_link(bundle_dir: &PathBuf, link: &PathBuf) {
+fn place_bundle_link(bundle_dir: &Path, link: &Path) {
     match fs::symlink_metadata(link) {
         Ok(meta) => {
             let result = if meta.file_type().is_symlink() || meta.file_type().is_file() {
@@ -207,16 +207,16 @@ fn place_bundle_link(bundle_dir: &PathBuf, link: &PathBuf) {
 }
 
 #[cfg(unix)]
-fn symlink_dir(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+fn symlink_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(src, dst)
 }
 
 #[cfg(windows)]
-fn symlink_dir(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+fn symlink_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(src, dst)
 }
 
-fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
@@ -268,4 +268,3 @@ fn fail(msg: &str) -> ! {
     eprintln!("docling-sys build error: {msg}");
     std::process::exit(1);
 }
-

@@ -272,7 +272,7 @@ mod tests {
     fn special_char_key_round_trips() {
         let r = resource();
         for name in ["50%off.txt", "a#b.txt", "note~1", "q?x", "a[b]"] {
-            let vp = MountPath::new(&format!("/{name}"));
+            let vp = MountPath::new(format!("/{name}"));
             assert_eq!(
                 r.os_path(&vp).unwrap().as_ref(),
                 r.accessor.key(&vp),
