@@ -30,9 +30,11 @@ const FILE_FIELDS: &[&str] = &[
     "mimeType",
     // Shared-drive scoping: children of a shared drive must be listed with it.
     "driveId",
-    // Drive's own size, absent on native Docs/Sheets/Slides (they have no byte
-    // size). Informational only — the mount never transfers content, so this is
-    // never the entry's size.
+    // Drive's own size: populated for binary files *and* Docs-editors files,
+    // absent for folders and shortcuts. (enterprise-mock omits it on native
+    // docs — a divergence from Google, so don't rely on either shape.)
+    // Informational only: the mount never transfers content, so this is never
+    // the entry's own size.
     "size",
     "modifiedTime",
     "createdTime",

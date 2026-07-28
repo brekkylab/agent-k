@@ -51,10 +51,10 @@ Google Drive (read-only, metadata + links). Layout mirrors Drive's own sidebar:
   only its metadata card — NOT the file's bytes:
     {\"name\",\"id\",\"mime_type\",\"size\",\"modified_time\",\"created_time\",
      \"owner\":{\"name\",\"email\"},\"web_view_link\"}
-  `size` is the file's real size in Drive (absent for Docs/Sheets/Slides, which
-  have none); the entry itself is only as big as the card. To let someone see
-  the document, hand them `web_view_link` — this mount cannot download or
-  convert file content. Duplicate names get ` (2)`, ` (3)`, … suffixes.
+  `size` is the file's real size in Drive when Drive reports one (folders and
+  shortcuts have none); the entry itself is only as big as the card. To let
+  someone see the document, hand them `web_view_link` — this mount cannot
+  download or convert file content. Duplicate names get ` (2)`, ` (3)`, ….
 
   There is no content search: grep matches names and card fields only (no
   document text lives here). Find things by walking the tree with ls.
@@ -370,8 +370,9 @@ fn card_of(f: &Value, name: &str, id: &str, mime: &str) -> Value {
     card.insert("name".into(), Value::from(name));
     card.insert("id".into(), Value::from(id));
     card.insert("mime_type".into(), Value::from(mime));
-    // Drive reports `size` as a string, and omits it for native Docs/Sheets/
-    // Slides (they have no byte size) — keep it numeric for consumers.
+    // Drive reports `size` as a string — keep it numeric for consumers. Some
+    // rows have none (folders, shortcuts; also native docs on enterprise-mock,
+    // which diverges from Google there), and the card then omits the field.
     if let Some(size) = f
         .get("size")
         .and_then(|s| s.as_str())
@@ -719,17 +720,27 @@ mod tests {
         })
     }
 
-    /// Tree + link round-trip against a running enterprise-mock. Ignored by
-    /// default; run with:
+    /// Tree + card round-trip against an enterprise-mock, local or hosted.
+    /// Ignored by default; run with:
     ///
-    ///   # in the enterprise-mock repo: python -m app.importer.byo \
+    ///   # local: python -m app.importer.byo \
     ///   #   examples/bring-your-own-corpus/sample_corpus.jsonl
-    ///   # then: python -m uvicorn app.main:app --port 8000
+    ///   #        then python -m uvicorn app.main:app --port 8000
     ///   GDRIVE_BASE_URL=http://localhost:8000 \
-    ///     cargo test -p workspace gdrive_mock -- --ignored --nocapture
+    ///     [GDRIVE_MOCK_TOKEN=…] cargo test -p workspace gdrive_mock -- --ignored --nocapture
+    ///
+    /// The walk is bounded ([`WALK_DIRS`]/[`WALK_FILES`]) so the same test runs
+    /// against a five-file sample corpus and a 25k-document hosted one; a real
+    /// corpus also spans several listing pages, which exercises the accessor's
+    /// pagination for free.
     #[tokio::test]
     #[ignore = "requires a running enterprise-mock (GDRIVE_BASE_URL)"]
     async fn gdrive_mock_tree_and_cards() {
+        /// Bounds on the walk — enough to cross a page boundary on a real
+        /// corpus, small enough to stay quick on a tiny one.
+        const WALK_DIRS: usize = 12;
+        const WALK_FILES: usize = 200;
+
         let Some(cfg) = mock_config() else {
             eprintln!("set GDRIVE_BASE_URL (e.g. http://localhost:8000) to run");
             return;
@@ -744,20 +755,47 @@ mod tests {
         assert!(root.iter().any(|e| e.name == MY_DRIVE_NAME));
         assert!(root.iter().any(|e| e.name == SHARED_WITH_ME_NAME));
 
-        // Walk the tree; every file must be a `.json` card that parses, names
-        // itself, and whose stat size matches the bytes a read returns.
+        // A path that cannot exist must be NotFound (from the parent listing),
+        // not a 500 — the WebDAV layer turns this into a 404.
+        for bogus in [
+            format!("/{MY_DRIVE_NAME}/definitely-not-here-9f3c.json"),
+            "/NoSuchSection".to_string(),
+            format!("/{MY_DRIVE_NAME}/nope/deeper.json"),
+        ] {
+            let p = MountPath::new(&bogus);
+            assert!(
+                matches!(r.stat(&p).await, Err(ResourceError::NotFound)),
+                "stat {bogus} should be NotFound"
+            );
+            assert!(
+                matches!(r.read_bytes(&p, None).await, Err(ResourceError::NotFound)),
+                "read {bogus} should be NotFound"
+            );
+        }
+
+        // Walk the tree (bounded); every file must be a `.json` card that
+        // parses, names itself, and whose stat size matches the bytes a read
+        // returns.
         let mut queue: Vec<String> = root
             .iter()
             .filter(|e| e.kind == FileKind::Dir)
             .map(|e| format!("/{}", e.name))
             .collect();
-        let mut files = 0usize;
+        let (mut files, mut dirs, mut biggest) = (0usize, 0usize, 0usize);
+        let mut sample: Option<MountPath> = None;
         while let Some(dir) = queue.pop() {
-            for e in r
+            if dirs >= WALK_DIRS || files >= WALK_FILES {
+                eprintln!("walk bound reached ({dirs} dirs, {files} files); stopping");
+                break;
+            }
+            dirs += 1;
+            let entries = r
                 .readdir(&MountPath::new(&dir))
                 .await
-                .expect("folder readdir")
-            {
+                .expect("folder readdir");
+            biggest = biggest.max(entries.len());
+            eprintln!("  {dir} -> {} entries", entries.len());
+            for e in entries.iter().take(WALK_FILES.saturating_sub(files)) {
                 let p = format!("{dir}/{}", e.name);
                 if e.kind == FileKind::Dir {
                     queue.push(p);
@@ -771,14 +809,42 @@ mod tests {
                 let v: Value = serde_json::from_slice(&bytes).expect("card parses");
                 assert!(v["name"].is_string(), "{p}: {v}");
                 assert!(v["id"].is_string(), "{p}: {v}");
-                if files == 0 {
+                if sample.is_none() {
                     eprintln!("{p} ->\n{}", String::from_utf8_lossy(&bytes));
+                    sample = Some(mp);
                 }
                 files += 1;
             }
         }
-        eprintln!("{files} card files listed");
-        assert!(files > 0, "sample corpus should expose files");
+        eprintln!("{files} cards checked across {dirs} dirs; biggest listing {biggest}");
+        assert!(files > 0, "the corpus should expose files");
+        // >1000 in one listing means the accessor followed `nextPageToken`
+        // (Drive's page size here) — only true on a corpus that big.
+        if biggest > 1000 {
+            eprintln!("pagination exercised: one listing spanned {biggest} entries");
+        }
+
+        // Ranged reads come out of the same card bytes, clamped at the end.
+        let mp = sample.expect("a card to range-read");
+        let whole = r.read_bytes(&mp, None).await.expect("whole card");
+        assert_eq!(
+            r.read_bytes(&mp, Some(0..1)).await.expect("first byte"),
+            b"{"
+        );
+        let tail = whole.len() as u64;
+        assert_eq!(
+            r.read_bytes(&mp, Some(tail - 1..tail + 999))
+                .await
+                .expect("clamped tail"),
+            b"\n",
+            "a range past the end clamps instead of erroring"
+        );
+        assert!(
+            r.read_bytes(&mp, Some(tail + 5..tail + 9))
+                .await
+                .expect("beyond end")
+                .is_empty()
+        );
     }
 
     fn live_config() -> Option<GdriveConfig> {
