@@ -1,4 +1,4 @@
-//! Automation HTTP surface: automations CRUD, cron triggers, runs, run events.
+//! Automation HTTP surface: automations CRUD, cron triggers, runs, run logs.
 //! Ownership is workspace-scoped (an automation belongs to a workspace the
 //! caller owns); missing and foreign resources both report `404`.
 
@@ -166,6 +166,10 @@ pub struct RunResponse {
     pub scheduled_for: DateTime<Utc>,
     pub lease_until: Option<DateTime<Utc>>,
     pub previous_run_id: Option<Uuid>,
+    /// The triggering event's payload (the run's render input), if event-triggered.
+    pub input: Option<serde_json::Value>,
+    /// The event that triggered this run, if any.
+    pub event_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -185,6 +189,8 @@ impl From<AutomationRun> for RunResponse {
             scheduled_for: r.scheduled_for,
             lease_until: r.lease_until,
             previous_run_id: r.previous_run_id,
+            input: r.input,
+            event_id: r.event_id,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -368,7 +374,8 @@ pub(super) async fn create_trigger(
 ) -> Result<(StatusCode, Json<CreatedTriggerResponse>), ApiError> {
     require_owned_automation(&state, &auth, automation_id).await?;
 
-    // Cron: validate the expression + compute the first fire instant. Webhook:
+    // Cron: validate the expression + compute the first fire instant. Event
+    // triggers have no scheduled fire time (the dispatcher fires them). Webhook:
     // issue a token (client never provides it) and store only its hash.
     let (mut token_hash, mut webhook_token) = (None, None);
     let next_fire_at = match &payload.spec {
@@ -378,7 +385,13 @@ pub(super) async fn create_trigger(
                 .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
             payload.enabled.then_some(fire)
         }
-        TriggerSpec::Webhook {} => {
+        TriggerSpec::Event { conditions } => {
+            if conditions.is_empty() {
+                return Err(err(StatusCode::BAD_REQUEST, "event trigger needs at least one condition"));
+            }
+            None
+        }
+        TriggerSpec::Webhook { .. } => {
             let (token, hash) = crate::state::AutomationsState::new_webhook_token();
             token_hash = Some(hash);
             webhook_token = Some(token);
@@ -434,12 +447,13 @@ pub(super) async fn delete_trigger(
 /// Public webhook receiver (no auth middleware): fires the automation whose
 /// webhook trigger matches the `Authorization: Bearer <token>` header. The token
 /// hashes to a globally-unique `webhook_token_hash`, so it alone identifies the
-/// trigger. The request body is accepted but not yet used (body → render input
-/// arrives with the event infrastructure). A generic 401 masks unknown tokens.
+/// trigger (automation-direct — no outbox event). The request body (JSON, else
+/// wrapped raw text) becomes the run's render input; an optional filter gates
+/// firing on it. A generic 401 masks unknown tokens.
 pub(super) async fn fire_webhook_trigger(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
-    _body: axum::body::Bytes,
+    body: axum::body::Bytes,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -458,7 +472,25 @@ pub(super) async fn fire_webhook_trigger(
         .get_automation(trigger.automation_id)
         .await?
         .ok_or_else(|| err(StatusCode::INTERNAL_SERVER_ERROR, "trigger's automation missing"))?;
-    match state.automations.create_webhook_run(&automation, trigger.id).await? {
+    let input = if body.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&body)
+            .unwrap_or_else(|_| serde_json::json!({ "raw": String::from_utf8_lossy(&body) }))
+    };
+    // Optional filter gates firing on the body: a non-matching POST is accepted
+    // but fires no run.
+    if let Ok(TriggerSpec::Webhook { filter: Some(f), .. }) =
+        TriggerSpec::from_db(trigger.kind, &trigger.spec_json)
+        && !crate::state::event_filter_matches(Some(&f), Some(&input))
+    {
+        return Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "matched": false }))));
+    }
+    match state
+        .automations
+        .create_webhook_run(&automation, trigger.id, input)
+        .await?
+    {
         Some(run) => Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "run_id": run.id })))),
         None => Err(err(StatusCode::CONFLICT, "automation is disabled")),
     }
@@ -579,15 +611,15 @@ pub(super) async fn cancel_run(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /automation-runs/{id}/events` — audit event log.
+/// `GET /automation-runs/{id}/logs` — per-run audit log.
 pub(super) async fn list_run_logs(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<RunLogListResponse>, ApiError> {
     require_owned_run(&state, &auth, run_id).await?;
-    let events = state.automations.list_logs_for_run(run_id).await?;
+    let logs = state.automations.list_logs_for_run(run_id).await?;
     Ok(Json(RunLogListResponse {
-        items: events.into_iter().map(RunLogResponse::from).collect(),
+        items: logs.into_iter().map(RunLogResponse::from).collect(),
     }))
 }

@@ -9,6 +9,7 @@ use crate::{auth::JwtConfig, event::EventQueue};
 
 mod agent;
 mod automation;
+mod events;
 mod knowledge;
 mod session;
 mod user;
@@ -16,6 +17,7 @@ mod workspace;
 
 pub use agent::*;
 pub use automation::*;
+pub use events::*;
 pub use knowledge::*;
 pub use session::*;
 pub use user::*;
@@ -69,6 +71,7 @@ pub struct AppState {
     pub sessions: SessionsState,
     pub users: UsersState,
     pub automations: AutomationsState,
+    pub event_store: EventsState,
     pub events: EventQueue,
     pub jwt: JwtConfig,
 }
@@ -98,6 +101,7 @@ impl AppState {
             agents: AgentsState::new(db.clone()),
             sessions: SessionsState::new(db.clone(), data_root, events.clone()),
             automations: AutomationsState::new(db.clone()),
+            event_store: EventsState::new(db.clone()),
             users: UsersState::new(db),
             events,
             jwt,

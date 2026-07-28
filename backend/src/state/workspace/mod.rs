@@ -8,7 +8,7 @@ use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
 
 use super::knowledge::Resyncer;
-use super::{StateError, StateResult, User, parse_ts, parse_uuid};
+use super::{EventsState, NewEvent, StateError, StateResult, User, parse_ts, parse_uuid};
 
 mod mount;
 
@@ -210,7 +210,26 @@ impl WorkspacesState {
     pub async fn create_default(&self, user: &User) -> StateResult<Workspace> {
         let ws = Workspace::with_id(user.id, user.id, format!("{}'s workspace", user.username));
         self.upsert(ws.clone()).await?;
+        self.emit_workspace_created(&ws).await;
         Ok(ws)
+    }
+
+    /// Best-effort `workspace.created` domain event (doesn't fail creation).
+    async fn emit_workspace_created(&self, ws: &Workspace) {
+        let events = EventsState::new(self.db.clone());
+        if let Err(e) = events
+            .emit(NewEvent {
+                kind: "workspace.created".into(),
+                workspace_id: Some(ws.id),
+                payload: Some(serde_json::json!({
+                    "workspace_id": ws.id.to_string(),
+                    "title": ws.title,
+                })),
+            })
+            .await
+        {
+            tracing::error!("emit workspace.created failed: {e}");
+        }
     }
 
     /// Ensure the user's default workspace exists both as a row and on disk.
@@ -237,7 +256,11 @@ impl WorkspacesState {
     pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
         // Cached assembly (local `/files` + providers); the hook is per-call.
         let fs = self.fs_for(wid).await?;
-        Ok(fs.with_hook(knowledge_hook(wid, Some(self.resyncer.clone()))))
+        Ok(fs.with_hook(knowledge_hook(
+            wid,
+            Some(self.resyncer.clone()),
+            Some(EventsState::new(self.db.clone())),
+        )))
     }
 
     /// Absolute on-disk path of workspace `wid`'s file root
@@ -253,9 +276,15 @@ impl WorkspacesState {
     }
 }
 
-/// The change hook attached to every [`WorkspaceFs`] this backend builds: it
-/// runs the `knowledge/` side-processing (today just logging; ingestion/indexing
-/// lands later) and ignores everything else.
+/// Event type for a `knowledge/` file appearing or being updated.
+const KNOWLEDGE_INDEXED: &str = "knowledge.indexed";
+/// Event type for a `knowledge/` file leaving.
+const KNOWLEDGE_REMOVED: &str = "knowledge.removed";
+
+/// The change hook attached to every [`WorkspaceFs`] this backend builds: for
+/// `knowledge/` mutations it triggers a resync and emits a durable domain event
+/// (so automations can trigger on indexing-target changes); everything else is
+/// ignored.
 struct KnowledgeHook {
     /// The workspace this hook is bound to — the crate is workspace-agnostic, so
     /// the backend carries the DB identity here rather than in `WorkspaceFs`.
@@ -263,25 +292,59 @@ struct KnowledgeHook {
     /// Resync trigger. `None` for the guest-serving handle (the session run loop
     /// builds it without one), so guest writes don't auto-resync.
     resyncer: Option<Resyncer>,
+    /// Durable event emission. `None` for the guest-serving handle, so guest
+    /// writes don't fire automation triggers.
+    events: Option<EventsState>,
 }
 
 impl FsHook for KnowledgeHook {
     fn on_change(&self, event: FsEvent<'_>) {
-        let touched = match event {
-            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => {
-                super::knowledge::is_under_knowledge(p)
-            }
+        let (path, kind) = match event {
+            FsEvent::Created(p) | FsEvent::Modified(p) => (p, KNOWLEDGE_INDEXED),
+            FsEvent::Removed(p) => (p, KNOWLEDGE_REMOVED),
         };
-        if touched {
-            if let Some(r) = &self.resyncer {
-                r.spawn_resync(self.wid);
-            }
+        if !super::knowledge::is_under_knowledge(path) {
+            return;
+        }
+        if let Some(r) = &self.resyncer {
+            r.spawn_resync(self.wid);
+        }
+        if let Some(events) = &self.events {
+            emit_knowledge(events.clone(), self.wid, path.to_string(), kind);
         }
     }
 }
 
-fn knowledge_hook(wid: Uuid, resyncer: Option<Resyncer>) -> Option<Arc<dyn FsHook>> {
-    Some(Arc::new(KnowledgeHook { wid, resyncer }))
+/// Emit a `knowledge/` change event. `on_change` is synchronous, so the async
+/// append is spawned; best-effort, mirroring [`Resyncer::spawn_resync`].
+fn emit_knowledge(events: EventsState, wid: Uuid, rel_path: String, kind: &'static str) {
+    tokio::spawn(async move {
+        if let Err(e) = events
+            .emit(NewEvent {
+                kind: kind.into(),
+                workspace_id: Some(wid),
+                payload: Some(serde_json::json!({
+                    "workspace_id": wid.to_string(),
+                    "path": rel_path,
+                })),
+            })
+            .await
+        {
+            tracing::error!("emit {kind} failed: {e}");
+        }
+    });
+}
+
+fn knowledge_hook(
+    wid: Uuid,
+    resyncer: Option<Resyncer>,
+    events: Option<EventsState>,
+) -> Option<Arc<dyn FsHook>> {
+    Some(Arc::new(KnowledgeHook {
+        wid,
+        resyncer,
+        events,
+    }))
 }
 
 /// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`
@@ -306,7 +369,7 @@ pub(crate) fn workspace_fs(
     config.local_root = Some(root);
     let fs = WorkspaceFs::from_config(config)
         .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
-    Ok(fs.with_hook(knowledge_hook(wid, None)))
+    Ok(fs.with_hook(knowledge_hook(wid, None, None)))
 }
 
 #[cfg(test)]

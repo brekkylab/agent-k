@@ -839,12 +839,14 @@ impl SessionsState {
     /// (fire-and-forget, gated by the runs map) this awaits and returns the
     /// result, so a caller like the automation worker can finalize the run.
     /// Errors (including cancellation) surface as [`StateError`].
+    /// Drives one turn and returns the final agent message text (the run's
+    /// "output", used for event chaining), or `None` if there was none.
     pub async fn drive_prompt(
         &self,
         id: Uuid,
         query: Vec<Part>,
         cancel: CancellationToken,
-    ) -> StateResult<()> {
+    ) -> StateResult<Option<String>> {
         let session_key = id.to_string();
         let channel = message_channel(id);
 
@@ -896,6 +898,7 @@ impl SessionsState {
             .await?;
         next_seq += 1;
 
+        let mut last_text: Option<String> = None;
         let drive: StateResult<()> = async {
             let mut stream = agent.run(user_msg);
             loop {
@@ -908,6 +911,9 @@ impl SessionsState {
                         let Some(output) = next else { break };
                         let output = output
                             .map_err(|e| StateError::InvalidData(format!("agent run: {e:#}")))?;
+                        if let Some(t) = message_text(&output.message) {
+                            last_text = Some(t);
+                        }
                         self.persist_message(&session_key, next_seq, &output.message, &channel)
                             .await?;
                         next_seq += 1;
@@ -934,7 +940,7 @@ impl SessionsState {
             }
         }
 
-        drive
+        drive.map(|()| last_text)
     }
 }
 
@@ -969,6 +975,19 @@ async fn persist_message(
         })?,
     );
     Ok(())
+}
+
+/// Best-effort extraction of an agent message's text (joins its text parts).
+/// Serde-based so it doesn't depend on ailoy's `Part` internals.
+fn message_text(m: &Message) -> Option<String> {
+    let v = serde_json::to_value(m).ok()?;
+    let parts = v.get("contents").or_else(|| v.get("content"))?.as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 #[cfg(test)]

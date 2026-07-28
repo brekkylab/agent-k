@@ -25,13 +25,17 @@ use uuid::Uuid;
 
 use crate::{
     cron::{default_tz_name, next_fire_after},
-    state::{AppState, AutomationRun, AutomationTrigger, RunLogKind, MAX_ATTEMPTS, RunStatus, TriggerSpec},
+    state::{
+        AppState, AutomationRun, AutomationTrigger, Condition, RunLogKind, MAX_ATTEMPTS,
+        MAX_CHAIN_DEPTH, RunStatus, TriggerSpec,
+    },
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const REAP_INTERVAL: Duration = Duration::from_secs(60);
 const CRON_TICK_INTERVAL: Duration = Duration::from_secs(15);
+const DISPATCH_INTERVAL: Duration = Duration::from_secs(2);
 const LEASE_MINUTES: i64 = 3;
 
 /// Backoffs between consecutive attempts. `RETRY_BACKOFFS[N-1]` is the wait
@@ -46,8 +50,122 @@ pub fn spawn_runtime(state: Arc<AppState>, count: usize) {
         tokio::spawn(async move { worker_loop(state, idx).await });
     }
     spawn_housekeeper(state.clone());
-    spawn_cron_ticker(state);
+    spawn_cron_ticker(state.clone());
+    spawn_dispatcher(state);
     tracing::info!(workers = count, "automation runtime spawned");
+}
+
+/// Poll the durable event outbox and fire matching event triggers.
+fn spawn_dispatcher(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(DISPATCH_INTERVAL).await;
+            if let Err(e) = dispatch_once(&state).await {
+                tracing::error!("event dispatch failed: {e}");
+            }
+        }
+    });
+}
+
+async fn dispatch_once(state: &Arc<AppState>) -> Result<(), String> {
+    let events = state
+        .event_store
+        .list_undispatched(100)
+        .await
+        .map_err(|e| e.to_string())?;
+    if events.is_empty() {
+        return Ok(());
+    }
+    // Pre-parse enabled event triggers into (trigger, conditions).
+    let triggers: Vec<(AutomationTrigger, Vec<Condition>)> = state
+        .automations
+        .list_event_triggers()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter_map(|t| match TriggerSpec::from_db(t.kind, &t.spec_json) {
+            Ok(TriggerSpec::Event { conditions }) => Some((t, conditions)),
+            _ => None,
+        })
+        .collect();
+
+    for event in events {
+        // Causal chain depth of any run this event spawns: a `run.succeeded`
+        // event continues its producer's chain (parent + 1); every other source
+        // roots a fresh chain at 0. Computed once per event (same for all
+        // matching triggers).
+        let spawn_depth = if event.kind == "run.succeeded" {
+            let parent = event
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("run_id"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok());
+            let parent_depth = match parent {
+                Some(rid) => state
+                    .automations
+                    .run_chain_depth(rid)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0),
+                None => 0,
+            };
+            parent_depth + 1
+        } else {
+            0
+        };
+
+        for (trigger, conditions) in &triggers {
+            // OR: fire if any condition (its own source + filter) matches.
+            if !conditions.iter().any(|c| c.matches(&event.kind, event.payload.as_ref())) {
+                continue;
+            }
+            // Loop guard: suppress the run once the causal chain hits the cap.
+            if spawn_depth > MAX_CHAIN_DEPTH {
+                tracing::warn!(
+                    trigger = %trigger.id, event = %event.id, depth = spawn_depth,
+                    "chain depth cap ({MAX_CHAIN_DEPTH}) reached — run suppressed"
+                );
+                continue;
+            }
+            // Idempotency: one run per (trigger, event) — guards re-processing.
+            match state.automations.run_exists_for_event(trigger.id, event.id).await {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::error!(trigger = %trigger.id, "run_exists check failed: {e}");
+                    continue;
+                }
+            }
+            let automation = match state.automations.get_automation(trigger.automation_id).await {
+                Ok(Some(a)) => a,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::error!(trigger = %trigger.id, "get_automation failed: {e}");
+                    continue;
+                }
+            };
+            let input = event.payload.clone().unwrap_or_else(|| json!({}));
+            match state
+                .automations
+                .create_event_run(&automation, trigger.id, event.id, input, spawn_depth)
+                .await
+            {
+                Ok(Some(run)) => {
+                    tracing::info!(trigger = %trigger.id, run = %run.id, event = %event.id, "event trigger fired")
+                }
+                Ok(None) => {} // automation disabled
+                Err(e) => tracing::error!(trigger = %trigger.id, "create_event_run failed: {e}"),
+            }
+        }
+        state
+            .event_store
+            .mark_dispatched(event.id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn spawn_housekeeper(state: Arc<AppState>) {
@@ -117,7 +235,7 @@ async fn fire_cron_trigger_once(
     let spec = TriggerSpec::from_db(trigger.kind, &trigger.spec_json)
         .map_err(|e| format!("trigger spec decode: {e}"))?;
     let TriggerSpec::Cron { expr, tz } = &spec else {
-        return Err(format!("trigger {} is not a cron trigger", trigger.id));
+        return Err("non-cron trigger surfaced in cron path".into());
     };
     let tz_name = tz.as_deref().unwrap_or(default_tz_name());
     let next_fire = next_fire_after(expr, tz_name, now)?;
@@ -205,7 +323,7 @@ async fn try_claim_and_execute(state: &Arc<AppState>) -> Result<bool, String> {
 
     let result = agent_result.expect("agent_result branch checked above");
     let (final_status, kind, payload) = match &result {
-        Ok(()) => {
+        Ok(_) => {
             tracing::info!(run = %run.id, "run succeeded");
             (RunStatus::Succeeded, RunLogKind::Succeeded, None)
         }
@@ -247,6 +365,28 @@ async fn try_claim_and_execute(state: &Arc<AppState>) -> Result<bool, String> {
             }
             Ok(None) => tracing::info!(run = %run.id, "retry skipped: automation disabled"),
             Err(e) => tracing::error!(run = %run.id, "schedule_retry failed: {e}"),
+        }
+    }
+
+    // Chaining: a successful run emits `run.succeeded` carrying its output, which
+    // other automations can subscribe to (fan-out via multiple subscribers).
+    if finalize_owned && matches!(final_status, RunStatus::Succeeded) {
+        let output = result.ok().flatten();
+        let payload = json!({
+            "automation_id": run.automation_id.map(|a| a.to_string()),
+            "run_id": run.id.to_string(),
+            "output": output,
+        });
+        if let Err(e) = state
+            .event_store
+            .emit(crate::state::NewEvent {
+                kind: "run.succeeded".into(),
+                workspace_id: Some(run.workspace_id),
+                payload: Some(payload),
+            })
+            .await
+        {
+            tracing::error!(run = %run.id, "emit run.succeeded failed: {e}");
         }
     }
 
@@ -294,19 +434,159 @@ async fn execute_run(
     state: &Arc<AppState>,
     run: &AutomationRun,
     cancel: &CancellationToken,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     state
         .automations
         .append_log(run.id, RunLogKind::Started, None)
         .await
         .map_err(|e| e.to_string())?;
 
-    // The run is self-describing: it carries the rendered prompt it executes, so
-    // no automation lookup is needed (and ad-hoc runs have no automation).
-    let parts = vec![Part::text(run.prompt.clone())];
+    // Render the prompt template at execution time against the triggering event
+    // payload (`{{event.*}}`) + date builtins. Fail-closed on undefined vars.
+    let prompt = crate::state::render(&run.prompt, run.input.as_ref())
+        .map_err(|e| format!("template render: {e}"))?;
+    let parts = vec![Part::text(prompt)];
     state
         .sessions
         .drive_prompt(run.session_id, parts, cancel.clone())
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dispatch_once;
+    use crate::auth::JwtConfig;
+    use crate::state::{AppState, Condition, MAX_CHAIN_DEPTH, NewEvent, TriggerSpec, render};
+    use chrono::Utc;
+    use serde_json::json;
+    use sqlx::SqlitePool;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    /// Fresh AppState on a temp file DB, plus a second pool to the same file for
+    /// seeding/asserting (AppState owns its pool privately). Returns
+    /// `(state, seed_pool, dir)`; caller removes `dir`.
+    async fn boot() -> (Arc<AppState>, SqlitePool, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("agentk-e2e-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_url = format!("sqlite://{}/e2e.db", dir.display());
+        let state = AppState::new(&db_url, dir.clone(), JwtConfig::new("test", 3600))
+            .await
+            .unwrap();
+        let pool = SqlitePool::connect(&db_url).await.unwrap();
+        (Arc::new(state), pool, dir)
+    }
+
+    async fn seed_user_ws(pool: &SqlitePool) -> (Uuid, Uuid) {
+        let (uid, wid) = (Uuid::new_v4(), Uuid::new_v4());
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, is_active, preferred_language, created_at, updated_at) \
+             VALUES (?, ?, 'x', 'user', 1, 'en', ?, ?)",
+        )
+        .bind(uid.to_string()).bind(format!("u-{uid}")).bind(&now).bind(&now)
+        .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO workspaces (id, user_id, title, created_at, updated_at) VALUES (?, ?, 'W', ?, ?)")
+            .bind(wid.to_string()).bind(uid.to_string()).bind(&now).bind(&now)
+            .execute(pool).await.unwrap();
+        (uid, wid)
+    }
+
+    /// End-to-end through the real dispatch pipeline (no agent execution):
+    /// outbox event → `dispatch_once` → run creation, covering filter matching,
+    /// payload→input+render, dedup, `run.succeeded` chaining, and the
+    /// chain-depth loop guard.
+    #[tokio::test]
+    async fn dispatch_pipeline_e2e() {
+        let (state, pool, dir) = boot().await;
+        let (uid, wid) = seed_user_ws(&pool).await;
+
+        // Automation A: knowledge.indexed for *.pdf; prompt renders {{event.path}}.
+        let a = state
+            .automations
+            .create_automation(
+                wid, "index pdf".into(), None,
+                "New PDF at {{event.path}}".into(), "coworker".into(), None, uid,
+            )
+            .await.unwrap();
+        let a_spec = TriggerSpec::Event {
+            conditions: vec![Condition {
+                source: "knowledge.indexed".into(),
+                filter: Some(json!({ "path": { "glob": "*.pdf" } })),
+            }],
+        };
+        state.automations.create_trigger(a.id, &a_spec, true, None, None).await.unwrap();
+
+        // (1) Non-matching event (.txt) → no run.
+        state.event_store.emit(NewEvent {
+            kind: "knowledge.indexed".into(),
+            workspace_id: Some(wid),
+            payload: Some(json!({ "path": "/knowledge/note.txt" })),
+        }).await.unwrap();
+        dispatch_once(&state).await.unwrap();
+        assert_eq!(state.automations.list_runs(a.id).await.unwrap().len(), 0, "txt must not match *.pdf");
+
+        // (2) Matching event (.pdf) → one run; input = payload, event set, depth 0.
+        let ev = state.event_store.emit(NewEvent {
+            kind: "knowledge.indexed".into(),
+            workspace_id: Some(wid),
+            payload: Some(json!({ "path": "/knowledge/report.pdf" })),
+        }).await.unwrap();
+        dispatch_once(&state).await.unwrap();
+        let runs = state.automations.list_runs(a.id).await.unwrap();
+        assert_eq!(runs.len(), 1, "pdf must trigger exactly one run");
+        let a_run = runs[0].clone();
+        assert_eq!(a_run.event_id, Some(ev.id));
+        assert_eq!(a_run.chain_depth, 0);
+        assert_eq!(a_run.input.as_ref().unwrap()["path"], "/knowledge/report.pdf");
+        assert_eq!(
+            render(&a_run.prompt, a_run.input.as_ref()).unwrap(),
+            "New PDF at /knowledge/report.pdf",
+        );
+
+        // (3) Dedup: the event is marked dispatched; re-dispatch adds nothing.
+        dispatch_once(&state).await.unwrap();
+        assert_eq!(state.automations.list_runs(a.id).await.unwrap().len(), 1, "no duplicate run");
+
+        // (4) Chaining: B subscribes to run.succeeded; A's success spawns a B run
+        //     at parent depth + 1.
+        let b = state
+            .automations
+            .create_automation(wid, "on success".into(), None, "chained".into(), "coworker".into(), None, uid)
+            .await.unwrap();
+        let b_spec = TriggerSpec::Event {
+            conditions: vec![Condition { source: "run.succeeded".into(), filter: None }],
+        };
+        state.automations.create_trigger(b.id, &b_spec, true, None, None).await.unwrap();
+
+        state.event_store.emit(NewEvent {
+            kind: "run.succeeded".into(),
+            workspace_id: Some(wid),
+            payload: Some(json!({ "automation_id": a.id.to_string(), "run_id": a_run.id.to_string(), "output": "done" })),
+        }).await.unwrap();
+        dispatch_once(&state).await.unwrap();
+        let b_runs = state.automations.list_runs(b.id).await.unwrap();
+        assert_eq!(b_runs.len(), 1, "run.succeeded must chain into B");
+        assert_eq!(b_runs[0].chain_depth, 1, "chained run is parent depth + 1");
+
+        // (5) Loop guard: a run.succeeded from a run already AT the cap is
+        //     suppressed (spawn depth would exceed MAX_CHAIN_DEPTH).
+        sqlx::query("UPDATE automation_runs SET chain_depth = ? WHERE id = ?")
+            .bind(MAX_CHAIN_DEPTH).bind(b_runs[0].id.to_string())
+            .execute(&pool).await.unwrap();
+        state.event_store.emit(NewEvent {
+            kind: "run.succeeded".into(),
+            workspace_id: Some(wid),
+            payload: Some(json!({ "run_id": b_runs[0].id.to_string() })),
+        }).await.unwrap();
+        dispatch_once(&state).await.unwrap();
+        assert_eq!(
+            state.automations.list_runs(b.id).await.unwrap().len(),
+            1,
+            "chain at cap must be suppressed",
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

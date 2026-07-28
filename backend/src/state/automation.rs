@@ -2,8 +2,8 @@
 //! `repository/automation.rs`, adapted to v2 conventions (workspace-scoped,
 //! `SqlitePool` store, `StateError`) and **single-prompt**: an automation runs
 //! exactly one prompt, so there is no per-step cursor and the multi-step
-//! machinery (StepStarted/StepFinished, resume) is gone. Cron is the only
-//! trigger kind (webhook is out of scope).
+//! machinery (StepStarted/StepFinished, resume) is gone. Trigger kinds: `cron`
+//! (schedule), `event` (durable outbox), and `webhook` (automation-direct HTTP).
 
 use ailoy::agent::AgentSpec;
 use chrono::{DateTime, Utc};
@@ -22,6 +22,11 @@ const DEFAULT_MODEL_DEEP_RESEARCH: &str = "anthropic/claude-sonnet-4-5";
 /// Total attempts including the first; RETRY_BACKOFFS has MAX_ATTEMPTS-1 gaps.
 pub const MAX_ATTEMPTS: i64 = 3;
 
+/// Max causal chain depth for `run.succeeded`-triggered runs. A run at this
+/// depth still runs, but the run it would spawn is suppressed at dispatch — this
+/// breaks run→run trigger loops (self or cyclic). Roots start at 0.
+pub const MAX_CHAIN_DEPTH: i64 = 5;
+
 /// Build a session [`AgentSpec`] from an automation's stored agent surface.
 /// Unknown `agent_type` falls back to the coworker preset.
 pub fn build_spec(agent_type: &str, model: Option<&str>) -> AgentSpec {
@@ -36,6 +41,45 @@ pub fn build_spec(agent_type: &str, model: Option<&str>) -> AgentSpec {
             model.unwrap_or(DEFAULT_MODEL_COWORKER),
             true,
         ),
+    }
+}
+
+/// Render a `{{ ... }}` template against an event input context. Supports
+/// `{{now}}`, `{{today}}`, and `{{event.<field>}}` (one level of the input
+/// JSON object). Unknown or missing variables error (fail-closed).
+pub fn render(template: &str, input: Option<&serde_json::Value>) -> Result<String, String> {
+    let now = Utc::now();
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            return Err("unterminated '{{' in template".into());
+        };
+        out.push_str(&resolve_var(after[..end].trim(), input, now)?);
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn resolve_var(
+    key: &str,
+    input: Option<&serde_json::Value>,
+    now: DateTime<Utc>,
+) -> Result<String, String> {
+    match key {
+        "now" => Ok(now.to_rfc3339()),
+        "today" => Ok(now.format("%Y-%m-%d").to_string()),
+        _ => match key.strip_prefix("event.") {
+            Some(field) => match input.and_then(|v| v.as_object()).and_then(|m| m.get(field)) {
+                Some(serde_json::Value::String(s)) => Ok(s.clone()),
+                Some(v) => Ok(v.to_string()),
+                None => Err(format!("undefined template variable '{{{{{key}}}}}'")),
+            },
+            None => Err(format!("unknown template variable '{{{{{key}}}}}'")),
+        },
     }
 }
 
@@ -78,6 +122,7 @@ impl RunStatus {
 #[serde(rename_all = "snake_case")]
 pub enum TriggerKind {
     Cron,
+    Event,
     Webhook,
 }
 
@@ -85,6 +130,7 @@ impl TriggerKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             TriggerKind::Cron => "cron",
+            TriggerKind::Event => "event",
             TriggerKind::Webhook => "webhook",
         }
     }
@@ -92,9 +138,28 @@ impl TriggerKind {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "cron" => Some(TriggerKind::Cron),
+            "event" => Some(TriggerKind::Event),
             "webhook" => Some(TriggerKind::Webhook),
             _ => None,
         }
+    }
+}
+
+/// One event condition of an event trigger: a source type + optional payload
+/// filter.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Condition {
+    /// Dotted event type, e.g. `file.added`, `run.succeeded`.
+    pub source: String,
+    /// Predicate over the event payload (see [`event_filter_matches`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<serde_json::Value>,
+}
+
+impl Condition {
+    /// True when an event of `kind`/`payload` satisfies this condition.
+    pub fn matches(&self, kind: &str, payload: Option<&serde_json::Value>) -> bool {
+        self.source == kind && event_filter_matches(self.filter.as_ref(), payload)
     }
 }
 
@@ -108,17 +173,26 @@ pub enum TriggerSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tz: Option<String>,
     },
-    /// Fired directly by an authenticated HTTP POST (automation-direct). The
-    /// token isn't in the spec — its sha256 hash lives in the
-    /// `webhook_token_hash` column and the raw token is shown once on create.
-    Webhook {},
+    /// Fire when ANY condition matches (OR); each condition has its own source +
+    /// filter. Multi-step work is the triggered agent's job. (AND/fan-in later.)
+    Event { conditions: Vec<Condition> },
+    /// Fired directly by an authenticated HTTP POST (automation-direct: bypasses
+    /// the event outbox). The token isn't in the spec — its sha256 hash lives in
+    /// the `webhook_token_hash` column and the raw token is shown once on create.
+    /// `filter` (optional) gates firing on the POST body — same predicate shape as
+    /// an event condition's filter; a non-matching POST is accepted but fires no run.
+    Webhook {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<serde_json::Value>,
+    },
 }
 
 impl TriggerSpec {
     pub fn kind(&self) -> TriggerKind {
         match self {
             TriggerSpec::Cron { .. } => TriggerKind::Cron,
-            TriggerSpec::Webhook {} => TriggerKind::Webhook,
+            TriggerSpec::Event { .. } => TriggerKind::Event,
+            TriggerSpec::Webhook { .. } => TriggerKind::Webhook,
         }
     }
 
@@ -127,7 +201,12 @@ impl TriggerSpec {
             TriggerSpec::Cron { expr, tz } => {
                 serde_json::to_string(&serde_json::json!({ "expr": expr, "tz": tz }))
             }
-            TriggerSpec::Webhook {} => serde_json::to_string(&serde_json::json!({})),
+            TriggerSpec::Event { conditions } => {
+                serde_json::to_string(&serde_json::json!({ "conditions": conditions }))
+            }
+            TriggerSpec::Webhook { filter } => {
+                serde_json::to_string(&serde_json::json!({ "filter": filter }))
+            }
         }
     }
 
@@ -143,7 +222,24 @@ impl TriggerSpec {
                 let CronFields { expr, tz } = serde_json::from_str(spec_json)?;
                 Ok(TriggerSpec::Cron { expr, tz })
             }
-            TriggerKind::Webhook => Ok(TriggerSpec::Webhook {}),
+            TriggerKind::Event => {
+                #[derive(Deserialize)]
+                struct EventFields {
+                    conditions: Vec<Condition>,
+                }
+                let EventFields { conditions } = serde_json::from_str(spec_json)?;
+                Ok(TriggerSpec::Event { conditions })
+            }
+            TriggerKind::Webhook => {
+                #[derive(Deserialize)]
+                struct WebhookFields {
+                    #[serde(default)]
+                    filter: Option<serde_json::Value>,
+                }
+                // Webhooks created before the `filter` field stored `{}`; default covers it.
+                let WebhookFields { filter } = serde_json::from_str(spec_json)?;
+                Ok(TriggerSpec::Webhook { filter })
+            }
         }
     }
 }
@@ -160,6 +256,64 @@ fn sha256_hex(s: impl AsRef<[u8]>) -> String {
 /// 256 bits of entropy from two UUID v4s (OS-RNG backed).
 fn generate_webhook_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+/// Match an event trigger's `filter` against the event `payload`. Each key in
+/// `filter` is a predicate on `payload[key]`: a scalar means equality; an
+/// object means operator(s) — `eq`, `glob`, `contains`, `gte`, `lte`. All keys
+/// must hold. `None`/empty filter matches any event of the right source.
+pub fn event_filter_matches(
+    filter: Option<&serde_json::Value>,
+    payload: Option<&serde_json::Value>,
+) -> bool {
+    let Some(filter) = filter.and_then(|f| f.as_object()) else {
+        return true;
+    };
+    let pl = payload.and_then(|p| p.as_object());
+    filter.iter().all(|(key, cond)| {
+        let actual = pl.and_then(|m| m.get(key));
+        match cond {
+            serde_json::Value::Object(ops) => ops.iter().all(|(op, want)| eval_op(op, want, actual)),
+            scalar => actual == Some(scalar),
+        }
+    })
+}
+
+fn eval_op(op: &str, want: &serde_json::Value, actual: Option<&serde_json::Value>) -> bool {
+    let Some(actual) = actual else { return false };
+    match op {
+        "eq" => actual == want,
+        "glob" => matches!((actual.as_str(), want.as_str()), (Some(s), Some(p)) if glob_match(p, s)),
+        "contains" => matches!((actual.as_str(), want.as_str()), (Some(s), Some(sub)) if s.contains(sub)),
+        "gte" => json_cmp(actual, want).map(|o| o.is_ge()).unwrap_or(false),
+        "lte" => json_cmp(actual, want).map(|o| o.is_le()).unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Compare two JSON scalars: numerically if both numbers, else lexicographically
+/// as strings (so ISO dates order correctly). `None` if incomparable.
+fn json_cmp(a: &serde_json::Value, b: &serde_json::Value) -> Option<std::cmp::Ordering> {
+    if let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) {
+        return x.partial_cmp(&y);
+    }
+    match (a.as_str(), b.as_str()) {
+        (Some(x), Some(y)) => Some(x.cmp(y)),
+        _ => None,
+    }
+}
+
+/// Minimal glob matcher supporting `*` (any run) and `?` (one char).
+fn glob_match(pattern: &str, s: &str) -> bool {
+    fn m(p: &[u8], s: &[u8]) -> bool {
+        match p.first() {
+            None => s.is_empty(),
+            Some(b'*') => m(&p[1..], s) || (!s.is_empty() && m(p, &s[1..])),
+            Some(b'?') => !s.is_empty() && m(&p[1..], &s[1..]),
+            Some(&c) => !s.is_empty() && s[0] == c && m(&p[1..], &s[1..]),
+        }
+    }
+    m(pattern.as_bytes(), s.as_bytes())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -307,6 +461,12 @@ pub struct AutomationRun {
     pub scheduled_for: DateTime<Utc>,
     pub lease_until: Option<DateTime<Utc>>,
     pub previous_run_id: Option<Uuid>,
+    /// Triggering event payload(s) as render input context, if event-triggered.
+    pub input: Option<serde_json::Value>,
+    /// The event that triggered this run, if any.
+    pub event_id: Option<Uuid>,
+    /// Causal chain depth (0 for roots; parent+1 for run.succeeded-triggered).
+    pub chain_depth: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -344,6 +504,12 @@ impl AutomationRun {
             )?,
             lease_until,
             previous_run_id: opt_uuid("previous_run_id")?,
+            input: row
+                .get::<Option<String>, _>("input")
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?,
+            event_id: opt_uuid("event_id")?,
+            chain_depth: row.get("chain_depth"),
             created_at: parse_ts(
                 &row.get::<String, _>("created_at"),
                 "automation_runs.created_at",
@@ -389,7 +555,7 @@ const AUTOMATION_COLS: &str =
 const TRIGGER_COLS: &str =
     "id, automation_id, kind, spec_json, enabled, next_fire_at, webhook_token_hash, created_at, updated_at";
 const RUN_COLS: &str =
-    "id, automation_id, trigger_id, session_id, workspace_id, prompt, agent_type, model, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at";
+    "id, automation_id, trigger_id, session_id, workspace_id, prompt, agent_type, model, status, scheduled_for, lease_until, previous_run_id, input, event_id, chain_depth, created_at, updated_at";
 
 /// Everything needed to enqueue a run + its session. `automation_id = None` for
 /// ad-hoc one-time runs that depend on no automation.
@@ -402,6 +568,9 @@ struct NewRun {
     agent_type: String,
     model: Option<String>,
     previous_run_id: Option<Uuid>,
+    input: Option<serde_json::Value>,
+    event_id: Option<Uuid>,
+    chain_depth: i64,
 }
 
 impl NewRun {
@@ -420,11 +589,15 @@ impl NewRun {
             agent_type: a.agent_type.clone(),
             model: a.model.clone(),
             previous_run_id,
+            input: None,
+            event_id: None,
+            chain_depth: 0,
         }
     }
 
     /// Re-run the same snapshot as a prior run (for retries). Preserves the
-    /// executed prompt rather than re-reading a possibly-changed template.
+    /// executed prompt + input + event rather than re-reading a
+    /// possibly-changed template.
     fn retry_of(prev: &AutomationRun) -> Self {
         Self {
             automation_id: prev.automation_id,
@@ -435,6 +608,10 @@ impl NewRun {
             agent_type: prev.agent_type.clone(),
             model: prev.model.clone(),
             previous_run_id: Some(prev.id),
+            input: prev.input.clone(),
+            event_id: prev.event_id,
+            // Retries re-run the same node; they don't deepen the causal chain.
+            chain_depth: prev.chain_depth,
         }
     }
 }
@@ -676,8 +853,6 @@ impl AutomationsState {
         Ok(res.rows_affected() == 1)
     }
 
-    /// The enabled webhook trigger of `automation_id` whose secret matches
-    /// `token`, or `None`. Used by the public webhook receive endpoint.
     /// The webhook trigger whose token hashes to `token_hash`, or `None`. The
     /// hash is globally unique, so the token alone identifies its trigger.
     pub async fn find_trigger_by_webhook_token_hash(
@@ -708,20 +883,6 @@ impl AutomationsState {
         (token, hash)
     }
 
-    /// Create a queued run fired directly by a webhook (automation-direct). The
-    /// automation's stored prompt runs as-is — the POST body is not yet used as
-    /// render input (that arrives with the event infrastructure). `None` if the
-    /// automation is disabled.
-    pub async fn create_webhook_run(
-        &self,
-        automation: &Automation,
-        trigger_id: Uuid,
-    ) -> StateResult<Option<AutomationRun>> {
-        let spec = NewRun::from_automation(automation, Some(trigger_id), None);
-        let payload = serde_json::json!({ "source": "webhook" });
-        self.insert_run_with_session(spec, Utc::now(), Some(&payload)).await
-    }
-
     /// Cron triggers whose `next_fire_at` has elapsed (enabled only).
     pub async fn list_due_cron_triggers(
         &self,
@@ -737,6 +898,79 @@ impl AutomationsState {
             .fetch_all(&self.db)
             .await?;
         rows.iter().map(AutomationTrigger::from_row).collect()
+    }
+
+    /// All enabled `event` triggers (the dispatcher matches events against these).
+    pub async fn list_event_triggers(&self) -> StateResult<Vec<AutomationTrigger>> {
+        let sql = format!(
+            "SELECT {TRIGGER_COLS} FROM automation_triggers WHERE kind = 'event' AND enabled = 1"
+        );
+        let rows = sqlx::query(&sql).fetch_all(&self.db).await?;
+        rows.iter().map(AutomationTrigger::from_row).collect()
+    }
+
+    /// True if a run already exists for this (trigger, event) — the dispatcher's
+    /// idempotency check against re-processing an event after a crash.
+    pub async fn run_exists_for_event(
+        &self,
+        trigger_id: Uuid,
+        event_id: Uuid,
+    ) -> StateResult<bool> {
+        let row = sqlx::query(
+            "SELECT 1 FROM automation_runs WHERE trigger_id = ? AND event_id = ? LIMIT 1",
+        )
+        .bind(trigger_id.to_string())
+        .bind(event_id.to_string())
+        .fetch_optional(&self.db)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    /// Causal chain depth of a run, or `None` if the run is gone. Used by the
+    /// dispatcher to compute a `run.succeeded`-triggered run's depth (parent+1).
+    pub async fn run_chain_depth(&self, run_id: Uuid) -> StateResult<Option<i64>> {
+        let row = sqlx::query("SELECT chain_depth FROM automation_runs WHERE id = ?")
+            .bind(run_id.to_string())
+            .fetch_optional(&self.db)
+            .await?;
+        Ok(row.map(|r| r.get::<i64, _>("chain_depth")))
+    }
+
+    /// Create a queued run from an event trigger: snapshots the automation's
+    /// prompt/agent surface, carries the event `input` + `event_id`.
+    /// `None` if the automation is disabled.
+    pub async fn create_event_run(
+        &self,
+        automation: &Automation,
+        trigger_id: Uuid,
+        event_id: Uuid,
+        input: serde_json::Value,
+        chain_depth: i64,
+    ) -> StateResult<Option<AutomationRun>> {
+        let mut spec = NewRun::from_automation(automation, Some(trigger_id), None);
+        spec.input = Some(input);
+        spec.event_id = Some(event_id);
+        spec.chain_depth = chain_depth;
+        let payload = serde_json::json!({
+            "source": "event",
+            "event_id": event_id.to_string(),
+        });
+        self.insert_run_with_session(spec, Utc::now(), Some(&payload)).await
+    }
+
+    /// Create a queued run fired directly by a webhook (automation-direct: no
+    /// outbox event). The POST body becomes the run's render `input`; chain depth
+    /// is 0 (external root). `None` if the automation is disabled.
+    pub async fn create_webhook_run(
+        &self,
+        automation: &Automation,
+        trigger_id: Uuid,
+        input: serde_json::Value,
+    ) -> StateResult<Option<AutomationRun>> {
+        let mut spec = NewRun::from_automation(automation, Some(trigger_id), None);
+        spec.input = Some(input);
+        let payload = serde_json::json!({ "source": "webhook" });
+        self.insert_run_with_session(spec, Utc::now(), Some(&payload)).await
     }
 
     // ── runs ────────────────────────────────────────────────────────────
@@ -774,13 +1008,16 @@ impl AutomationsState {
         .execute(&mut *tx)
         .await?;
 
+        let input_str = spec.input.as_ref().map(serde_json::to_string).transpose()?;
+        let event_id_s = spec.event_id.map(|c| c.to_string());
+
         // Run row. Automation-linked runs are gated on the automation still being
         // enabled (atomic against a concurrent disable); ad-hoc runs insert plainly.
         let run_cols = "INSERT INTO automation_runs \
-             (id, automation_id, trigger_id, session_id, workspace_id, prompt, agent_type, model, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at)";
+             (id, automation_id, trigger_id, session_id, workspace_id, prompt, agent_type, model, status, scheduled_for, lease_until, previous_run_id, input, event_id, chain_depth, created_at, updated_at)";
         let res = if let Some(aid) = spec.automation_id {
             sqlx::query(&format!(
-                "{run_cols} SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ? \
+                "{run_cols} SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?, ?, ?, ? \
                   WHERE EXISTS (SELECT 1 FROM automations WHERE id = ? AND enabled = 1)"
             ))
             .bind(run_id.to_string())
@@ -793,6 +1030,9 @@ impl AutomationsState {
             .bind(&spec.model)
             .bind(&scheduled_s)
             .bind(spec.previous_run_id.map(|u| u.to_string()))
+            .bind(&input_str)
+            .bind(&event_id_s)
+            .bind(spec.chain_depth)
             .bind(&now)
             .bind(&now)
             .bind(aid.to_string())
@@ -800,7 +1040,7 @@ impl AutomationsState {
             .await?
         } else {
             sqlx::query(&format!(
-                "{run_cols} VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?)"
+                "{run_cols} VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?, ?, ?, ?)"
             ))
             .bind(run_id.to_string())
             .bind(spec.trigger_id.map(|u| u.to_string()))
@@ -811,6 +1051,9 @@ impl AutomationsState {
             .bind(&spec.model)
             .bind(&scheduled_s)
             .bind(spec.previous_run_id.map(|u| u.to_string()))
+            .bind(&input_str)
+            .bind(&event_id_s)
+            .bind(spec.chain_depth)
             .bind(&now)
             .bind(&now)
             .execute(&mut *tx)
@@ -839,6 +1082,9 @@ impl AutomationsState {
             scheduled_for,
             lease_until: None,
             previous_run_id: spec.previous_run_id,
+            input: spec.input,
+            event_id: spec.event_id,
+            chain_depth: spec.chain_depth,
             created_at: parse_ts(&now, "automation_runs.created_at")?,
             updated_at: parse_ts(&now, "automation_runs.updated_at")?,
         }))
@@ -886,6 +1132,9 @@ impl AutomationsState {
             agent_type,
             model,
             previous_run_id: None,
+            input: None,
+            event_id: None,
+            chain_depth: 0,
         };
         self.insert_run_with_session(spec, at, Some(&payload))
             .await?
@@ -1241,6 +1490,53 @@ mod tests {
     use super::*;
     use sqlx::SqlitePool;
 
+    #[test]
+    fn render_fills_and_fails_closed() {
+        let input = serde_json::json!({ "path": "knowledge/report.md" });
+        assert_eq!(
+            render("indexed {{event.path}}", Some(&input)).unwrap(),
+            "indexed knowledge/report.md"
+        );
+        assert!(render("{{today}}", None).is_ok());
+        assert!(render("{{event.missing}}", Some(&input)).is_err());
+        assert!(render("{{bogus}}", None).is_err());
+    }
+
+    #[test]
+    fn condition_matching_with_equality() {
+        let c = Condition {
+            source: "run.succeeded".into(),
+            filter: Some(serde_json::json!({ "automation_id": "A" })),
+        };
+        assert!(c.matches("run.succeeded", Some(&serde_json::json!({ "automation_id": "A" }))));
+        assert!(!c.matches("run.succeeded", Some(&serde_json::json!({ "automation_id": "B" }))));
+        assert!(!c.matches("run.failed", Some(&serde_json::json!({ "automation_id": "A" }))));
+        let c2 = Condition { source: "file.added".into(), filter: None };
+        assert!(c2.matches("file.added", None));
+    }
+
+    #[test]
+    fn filter_operators() {
+        // "after 2026-07-01 AND a new PDF" — predicates on one event.
+        let filter = serde_json::json!({
+            "path": { "glob": "*.pdf" },
+            "created_at": { "gte": "2026-07-01" },
+        });
+        let f = Some(&filter);
+        assert!(event_filter_matches(
+            f,
+            Some(&serde_json::json!({ "path": "report.pdf", "created_at": "2026-08-10" }))
+        ));
+        assert!(!event_filter_matches(
+            f,
+            Some(&serde_json::json!({ "path": "notes.md", "created_at": "2026-08-10" }))
+        )); // wrong extension
+        assert!(!event_filter_matches(
+            f,
+            Some(&serde_json::json!({ "path": "old.pdf", "created_at": "2026-06-01" }))
+        )); // before date
+    }
+
     async fn fresh_db() -> SqlitePool {
         let pool = SqlitePool::connect(":memory:").await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
@@ -1318,18 +1614,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn event_run_carries_and_reads_chain_depth() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool.clone());
+
+        let a = state
+            .create_automation(wid, "chained".into(), None, "go".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        let spec = TriggerSpec::Event {
+            conditions: vec![Condition { source: "run.succeeded".into(), filter: None }],
+        };
+        let t = state.create_trigger(a.id, &spec, true, None, None).await.unwrap();
+
+        // Event row is the FK target for the run's event_id.
+        let ev = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO events (id, type, workspace_id, payload, created_at) \
+             VALUES (?, 'run.succeeded', ?, NULL, ?)",
+        )
+        .bind(ev.to_string())
+        .bind(wid.to_string())
+        .bind(Utc::now().to_rfc3339())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let run = state
+            .create_event_run(&a, t.id, ev, serde_json::json!({ "x": 1 }), 3)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.chain_depth, 3);
+        // Reads back through the dispatcher's lookup and through from_row.
+        assert_eq!(state.run_chain_depth(run.id).await.unwrap(), Some(3));
+        assert_eq!(state.get_run(run.id).await.unwrap().unwrap().chain_depth, 3);
+        assert_eq!(state.run_chain_depth(Uuid::new_v4()).await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn webhook_trigger_lookup_and_run() {
         let pool = fresh_db().await;
         let (uid, wid) = seed(&pool).await;
         let state = AutomationsState::new(pool);
 
         let a = state
-            .create_automation(wid, "hooked".into(), None, "go".into(), "coworker".into(), None, uid)
+            .create_automation(wid, "hooked".into(), None, "run {{event.x}}".into(), "coworker".into(), None, uid)
             .await
             .unwrap();
         let (token, hash) = AutomationsState::new_webhook_token();
         let t = state
-            .create_trigger(a.id, &TriggerSpec::Webhook {}, true, None, Some(hash))
+            .create_trigger(a.id, &TriggerSpec::Webhook { filter: None }, true, None, Some(hash))
             .await
             .unwrap();
         assert_eq!(t.kind, TriggerKind::Webhook);
@@ -1351,17 +1687,34 @@ mod tests {
                 .is_none()
         );
 
-        // Fire it: a run is created for the automation.
-        let run = state.create_webhook_run(&a, t.id).await.unwrap().unwrap();
+        // Fire it: run carries the body as input, is chain root, no event.
+        let run = state
+            .create_webhook_run(&a, t.id, serde_json::json!({ "x": 1 }))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.input.as_ref().unwrap()["x"], 1);
+        assert_eq!(run.chain_depth, 0);
+        assert!(run.event_id.is_none());
         assert_eq!(run.trigger_id, Some(t.id));
-        assert_eq!(run.automation_id, Some(a.id));
+
+        // Webhook filter roundtrips through spec_json and gates on the body.
+        let wf = TriggerSpec::Webhook {
+            filter: Some(serde_json::json!({ "action": { "eq": "opened" } })),
+        };
+        let back = TriggerSpec::from_db(TriggerKind::Webhook, &wf.to_db_spec_json().unwrap()).unwrap();
+        let TriggerSpec::Webhook { filter: Some(f), .. } = back else {
+            panic!("expected webhook filter");
+        };
+        assert!(event_filter_matches(Some(&f), Some(&serde_json::json!({ "action": "opened" }))));
+        assert!(!event_filter_matches(Some(&f), Some(&serde_json::json!({ "action": "closed" }))));
 
         // Disabled automation gates run creation.
         state
             .update_automation(a.id, None, None, None, None, None, Some(false))
             .await
             .unwrap();
-        assert!(state.create_webhook_run(&a, t.id).await.unwrap().is_none());
+        assert!(state.create_webhook_run(&a, t.id, serde_json::json!({})).await.unwrap().is_none());
     }
 
     #[tokio::test]
