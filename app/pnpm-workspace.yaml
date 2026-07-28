@@ -1,2 +1,7 @@
 allowBuilds:
   esbuild: true
+
+peerDependencyRules:
+  allowedVersions:
+    "i18next>typescript": "^7.0.0"
+    "react-i18next>typescript": "^7.0.0"
