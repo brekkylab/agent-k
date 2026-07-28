@@ -15,7 +15,18 @@ name = "test_case"
 path = "src/bin/test_case.rs"
 
 [features]
-internal = []
+
+# The FinanceBench harness behind cfg(feature = "internal") needs the
+# knowledge-base-examples crate, which lives outside this repository and is not
+# vendored, submoduled, or published. Declaring `internal` as a real Cargo
+# feature would make --all-features enable code whose dependency cannot be
+# declared portably: a path dependency is resolved at manifest load regardless of
+# which features are on, so it breaks `cargo check` for any clone without a
+# sibling checkout. Tell rustc the cfg name is expected instead, which silences
+# the unexpected_cfgs lint while leaving the harness opt-in through RUSTFLAGS for
+# the few environments that have the crate.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("internal"))'] }
 
 [dependencies]
 ailoy = { workspace = true }
