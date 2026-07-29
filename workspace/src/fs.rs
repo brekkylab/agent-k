@@ -99,6 +99,10 @@ pub struct Stat {
     pub created: Option<SystemTime>,
     pub status_changed: Option<SystemTime>,
     pub executable: Option<bool>,
+    /// What the node's subject is, when the provider knows better than the
+    /// filename (a Drive card is `report.pdf.json`, so the extension only ever
+    /// says `application/json`). `None` = go by the name.
+    pub content_type: Option<String>,
 }
 
 impl Stat {
@@ -135,6 +139,7 @@ fn stat_from_vfs(fs: FileStat) -> Stat {
         created: fs.created,
         status_changed: fs.ctime,
         executable: None,
+        content_type: fs.content_type,
     }
 }
 
@@ -149,6 +154,7 @@ fn dir_stat() -> Stat {
         created: None,
         status_changed: None,
         executable: None,
+        content_type: None,
     }
 }
 
@@ -718,6 +724,7 @@ fn dir_entry_from_vfs(e: crate::vfs::DirEntry) -> DirEntry {
         created: e.created,
         status_changed: e.ctime,
         executable: None,
+        content_type: e.content_type,
     };
     DirEntry {
         name: e.name.into_bytes(),
@@ -789,6 +796,7 @@ mod tests {
                     ctime: None,
                     created: None,
                     etag: None,
+                    content_type: None,
                 }])
             } else {
                 Err(ResourceError::NotFound)

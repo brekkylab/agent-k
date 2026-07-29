@@ -83,6 +83,11 @@ struct Child {
     /// Set when the entry lives in a shared drive (listing scope).
     drive_id: Option<String>,
     kind: GKind,
+    /// Drive's own `mimeType`. The entry's *bytes* are always a JSON card, so
+    /// this is the only place the original type survives — and for the
+    /// Docs-editors types it is the only place it exists at all, since those
+    /// names carry no extension.
+    mime_type: Option<String>,
     mtime: Option<std::time::SystemTime>,
     created: Option<std::time::SystemTime>,
     /// The metadata card this entry reads as — built once from the listing row
@@ -115,6 +120,8 @@ impl GdriveResource {
             id: id.to_string(),
             drive_id,
             kind,
+            // A section is a directory, and a directory's type is a directory.
+            mime_type: None,
             mtime: None,
             created: None,
             card: Value::Null,
@@ -267,6 +274,7 @@ impl Resource for GdriveResource {
             },
             mtime: child.mtime,
             created: child.created,
+            content_type: child.mime_type.clone(),
             ..Default::default()
         })
     }
@@ -309,6 +317,7 @@ fn dir_entry_for(c: &Child) -> DirEntry {
         ctime: None,
         created: c.created,
         etag: None,
+        content_type: c.mime_type.clone(),
     }
 }
 
@@ -349,6 +358,7 @@ fn child_from_file(f: &Value) -> Option<Child> {
         } else {
             GKind::File
         },
+        mime_type: (!is_folder).then(|| mime.to_string()),
         mtime: time_field(f, "modifiedTime"),
         created: time_field(f, "createdTime"),
         // Directories have no content; files carry the card they read as.
@@ -647,6 +657,33 @@ mod tests {
         }
     }
 
+    /// A listing has to say what the file *is*, not what its bytes are. Every
+    /// entry here is named `….json` and holds JSON, so a client guessing from the
+    /// extension learns `application/json` and nothing else — and a Google Doc's
+    /// name carries no extension at all, so guessing gets it nowhere. The entry
+    /// therefore carries Drive's own `mimeType`, and `stat` reports the same.
+    #[test]
+    fn a_listing_reports_what_the_file_is_not_what_the_card_is() {
+        for (name, mime) in [
+            ("paper.pdf", "application/pdf"),
+            ("setup.exe", "application/vnd.microsoft.portable-executable"),
+            // The case extension-guessing cannot reach.
+            ("Q3 Plan", "application/vnd.google-apps.document"),
+        ] {
+            let c = child_from_file(&file_row(name, "x1", mime)).unwrap();
+            let entry = dir_entry_for(&c);
+            assert!(entry.name.ends_with(CARD_SUFFIX), "{name}");
+            assert_eq!(entry.content_type.as_deref(), Some(mime), "{name}");
+            // ...and it agrees with the card's own field, so a client that reads
+            // one file gets the same answer as one that only listed the folder.
+            assert_eq!(card(&c)["mime_type"], mime);
+        }
+
+        // A directory's type is a directory — nothing to report.
+        let dir = child_from_file(&file_row("Reports", "f1", FOLDER_MIME)).unwrap();
+        assert_eq!(dir_entry_for(&dir).content_type, None);
+    }
+
     #[test]
     fn drive_names_cannot_escape_their_directory() {
         // Drive allows `/` in a name; it must not become a path separator.
@@ -663,6 +700,7 @@ mod tests {
             id: "x".into(),
             drive_id: None,
             kind: GKind::File,
+            mime_type: None,
             mtime: None,
             created: None,
             card: Value::Null,

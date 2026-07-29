@@ -165,7 +165,11 @@ impl Resource for NotionResource {
                     .await
                     .map_err(|_| ResourceError::NotFound)?;
                 Ok(FileStat {
-                    kind: if is_json { FileKind::File } else { FileKind::Dir },
+                    kind: if is_json {
+                        FileKind::File
+                    } else {
+                        FileKind::Dir
+                    },
                     size: 0,
                     mtime: page_time(&page, "last_edited_time"),
                     ctime: page_time(&page, "created_time"),
@@ -506,6 +510,7 @@ fn dir(name: &str) -> DirEntry {
         ctime: None,
         created: None,
         etag: None,
+        content_type: None,
     }
 }
 
@@ -525,6 +530,7 @@ fn dir_t(
         ctime,
         created: None,
         etag: None,
+        content_type: None,
     }
 }
 
@@ -546,6 +552,7 @@ fn file(name: &str, size: u64) -> DirEntry {
         ctime: None,
         created: None,
         etag: None,
+        content_type: None,
     }
 }
 

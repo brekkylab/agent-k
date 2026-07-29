@@ -85,6 +85,9 @@ fn stat_of(m: &std::fs::Metadata) -> FileStat {
         created: m.created().ok(),
         etag: None,
         version: None,
+        // The filename is the truth here — a client's own extension guess is
+        // exactly as good as anything this layer could add.
+        content_type: None,
     }
 }
 
@@ -152,6 +155,7 @@ impl Resource for LocalResource {
                         ctime: s.ctime,
                         created: s.created,
                         etag: None,
+                        content_type: None,
                     }
                 }
                 Err(_) => DirEntry {
@@ -163,6 +167,7 @@ impl Resource for LocalResource {
                     ctime: None,
                     created: None,
                     etag: None,
+                    content_type: None,
                 },
             };
             out.push(entry);

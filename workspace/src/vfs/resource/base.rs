@@ -34,6 +34,14 @@ pub struct DirEntry {
     /// one. Carried so the stat fast-path can pin a read to it (`If-Match`)
     /// instead of validating by the coarser mtime.
     pub etag: Option<String>,
+    /// What the entry's *subject* is, when the backend knows better than the
+    /// filename does. A provider that serves a rendering rather than the
+    /// original bytes has to say so somewhere: a Drive card is
+    /// `report.pdf.json`, so a client guessing from the extension only ever
+    /// learns `application/json`, never that the thing described is a PDF — and
+    /// Google's own document types carry no extension at all. `None` = nothing
+    /// better than the name to go on.
+    pub content_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -56,6 +64,8 @@ pub struct FileStat {
     pub etag: Option<String>,
     /// Version id, if the backend is versioned (S3 `VersionId`).
     pub version: Option<String>,
+    /// See [`DirEntry::content_type`].
+    pub content_type: Option<String>,
 }
 
 /// A mounted provider. One instance owns one set of credentials, so the same

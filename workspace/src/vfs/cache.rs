@@ -36,6 +36,11 @@ struct Entry {
     /// Strong version tag (S3 `ETag`) carried from the listing, so the stat
     /// fast-path can hand `open` a pin-able snapshot (`If-Match`).
     etag: Option<String>,
+    /// The provider's own idea of what the entry is (see
+    /// [`DirEntry::content_type`]). Carried so `ls`-then-`stat` keeps it: a
+    /// listing that knows a card describes a PDF must not lose that on the
+    /// fast path.
+    content_type: Option<String>,
 }
 
 #[derive(Default)]
@@ -111,6 +116,7 @@ impl IndexCache {
                     ctime: e.ctime,
                     created: None,
                     etag: e.etag.clone(),
+                    content_type: e.content_type.clone(),
                 })
             })
             .collect();
@@ -156,6 +162,7 @@ impl IndexCache {
                     atime: e.atime,
                     ctime: e.ctime,
                     etag: e.etag.clone(),
+                    content_type: e.content_type.clone(),
                 },
             );
         }
@@ -523,6 +530,7 @@ impl Resource for CachedResource {
                     // can pin itself to the ETag (`If-Match`); dropping it here
                     // silently disabled the pin on the PROPFIND-then-GET path.
                     etag: e.etag.clone(),
+                    content_type: e.content_type.clone(),
                     ..Default::default()
                 });
             }
@@ -672,7 +680,11 @@ mod tests {
         }
         #[async_trait]
         impl Resource for Obj {
-            async fn read_bytes(&self, _p: &MountPath, range: Option<Range<u64>>) -> ResourceResult<Vec<u8>> {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                range: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
                 Ok(slice(self.data.lock().unwrap().as_slice(), &range))
             }
             async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
@@ -700,7 +712,10 @@ mod tests {
 
         // Read opens by stat'ing (v1); the first chunk caches that snapshot.
         let s1 = obj.stat(&p).await.unwrap();
-        assert_eq!(cached.read_bytes_pinned(&p, Some(0..5), &s1).await.unwrap(), b"hello");
+        assert_eq!(
+            cached.read_bytes_pinned(&p, Some(0..5), &s1).await.unwrap(),
+            b"hello"
+        );
 
         // The object is edited behind the cache.
         *obj.data.lock().unwrap() = b"EDITED text".to_vec();
@@ -708,12 +723,24 @@ mod tests {
 
         // A continuation chunk of the SAME read (pinned to v1) stays on v1 — no
         // torn response.
-        assert_eq!(cached.read_bytes_pinned(&p, Some(6..11), &s1).await.unwrap(), b"world");
+        assert_eq!(
+            cached
+                .read_bytes_pinned(&p, Some(6..11), &s1)
+                .await
+                .unwrap(),
+            b"world"
+        );
 
         // A fresh read stats again (v2); its ranged request must NOT serve the
         // stale v1 bytes.
         let s2 = obj.stat(&p).await.unwrap();
-        assert_eq!(cached.read_bytes_pinned(&p, Some(6..11), &s2).await.unwrap(), b" text");
+        assert_eq!(
+            cached
+                .read_bytes_pinned(&p, Some(6..11), &s2)
+                .await
+                .unwrap(),
+            b" text"
+        );
     }
 
     // A's pinned snapshot can be evicted/replaced by B's fresh read before A's
@@ -781,7 +808,10 @@ mod tests {
 
         // A opens (pins v1) and reads its first chunk.
         let s1 = obj.stat(&p).await.unwrap();
-        assert_eq!(cached.read_bytes_pinned(&p, Some(0..5), &s1).await.unwrap(), b"hello");
+        assert_eq!(
+            cached.read_bytes_pinned(&p, Some(0..5), &s1).await.unwrap(),
+            b"hello"
+        );
 
         // External edit -> v2.
         *obj.data.lock().unwrap() = b"EDITED text".to_vec();
@@ -790,12 +820,18 @@ mod tests {
         // B opens fresh (pins v2); its read refetches and replaces the cache
         // entry with v2 bytes.
         let s2 = obj.stat(&p).await.unwrap();
-        assert_eq!(cached.read_bytes_pinned(&p, Some(0..5), &s2).await.unwrap(), b"EDITE");
+        assert_eq!(
+            cached.read_bytes_pinned(&p, Some(0..5), &s2).await.unwrap(),
+            b"EDITE"
+        );
 
         // A's continuation, still pinned to v1: cache holds v2 now, so it misses
         // and refetches under If-Match(v1) -> clean error, not a torn v2 read.
         let a2 = cached.read_bytes_pinned(&p, Some(6..11), &s1).await;
-        assert!(a2.is_err(), "stale v1 pin must fail cleanly, not tear: {a2:?}");
+        assert!(
+            a2.is_err(),
+            "stale v1 pin must fail cleanly, not tear: {a2:?}"
+        );
     }
 
     // A stat served from the metadata cache (primed by readdir, i.e. the
@@ -826,6 +862,7 @@ mod tests {
                     ctime: None,
                     created: None,
                     etag: Some("\"abc123\"".into()),
+                    content_type: None,
                 }])
             }
             async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
@@ -937,6 +974,7 @@ mod tests {
             ctime: None,
             created: None,
             etag: None,
+            content_type: None,
         }
     }
 
@@ -979,6 +1017,34 @@ mod tests {
         assert!(c.get("/a.txt").is_none());
     }
 
+    /// The metadata cache sits between `readdir` and `stat`, so a type the
+    /// listing knew has to survive it — otherwise `ls` shows the right icon and
+    /// the follow-up `stat` (the PROPFIND fast path) contradicts it.
+    #[test]
+    fn content_type_carried_through_cache() {
+        let c = IndexCache::new(Duration::from_secs(600));
+        c.set_dir(
+            "/",
+            &[DirEntry {
+                name: "report.pdf.json".to_string(),
+                kind: FileKind::File,
+                size: 400,
+                mtime: None,
+                atime: None,
+                ctime: None,
+                created: None,
+                etag: None,
+                content_type: Some("application/pdf".to_string()),
+            }],
+        );
+        // The stat fast path reads the cached `Entry`…
+        let entry = c.get("/report.pdf.json").expect("entry cached");
+        assert_eq!(entry.content_type.as_deref(), Some("application/pdf"));
+        // …and a re-listing reconstructs `DirEntry` from the same store.
+        let listed = c.list_dir_entries("/").expect("listing cached");
+        assert_eq!(listed[0].content_type.as_deref(), Some("application/pdf"));
+    }
+
     // R2: the stat fast-path reads mtime from the cached Entry, which is
     // populated from the DirEntry carried by readdir. Verify mtime survives
     // set_dir -> get (fast-path source) and -> list_dir_entries (reconstruction).
@@ -998,6 +1064,7 @@ mod tests {
                 ctime: None,
                 created: None,
                 etag: None,
+                content_type: None,
             }],
         );
         // fast-path source: get() returns the stored mtime (not None/epoch).

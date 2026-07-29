@@ -647,6 +647,7 @@ mod tests {
                     ctime: None,
                     created: None,
                     etag: None,
+                    content_type: None,
                 }])
             } else {
                 Err(ResourceError::NotFound)
@@ -672,7 +673,9 @@ mod tests {
 
     async fn write(root: &Path, rel: &str, body: &[u8]) {
         let p = root.join(rel);
-        tokio::fs::create_dir_all(p.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(p.parent().unwrap())
+            .await
+            .unwrap();
         tokio::fs::write(p, body).await.unwrap();
     }
 
