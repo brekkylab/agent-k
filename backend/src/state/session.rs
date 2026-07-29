@@ -7,7 +7,7 @@ use std::{
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
     message::{FinishReason, Message, Part, Role},
-    runenv::{Machine as _, Sandbox, SandboxNetwork},
+    runenv::{Machine as _, Sandbox, SandboxNetwork, VolumeMount},
 };
 use chrono::{DateTime, Utc};
 use futures_util::{FutureExt as _, StreamExt as _};
@@ -414,9 +414,30 @@ impl SessionsState {
                 let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
                 let has_runenv: bool = row.get("runenv");
 
-                // The workspace's external-provider mounts, if any. Mounted into
-                // the guest below so the agent reads them as files.
+                // The workspace's external-provider sources. Each is served into
+                // the guest as a cortex-backed virtio-fs mount, resolved in the
+                // sandbox process via the fs-backend registry (no host-side FUSE
+                // tunnel). Providers cortex doesn't serve yet (e.g. Notion) are
+                // skipped.
                 let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
+                let fs_mounts: Vec<VolumeMount> = vfs
+                    .mounts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, m)| match &m.provider {
+                        ::workspace::ProviderConfig::S3(cfg) => {
+                            let params = serde_json::to_string(cfg).ok()?;
+                            let prefix = m.prefix.trim_matches('/');
+                            Some(VolumeMount::FsBackend {
+                                tag: format!("wsfs{i}"),
+                                guest: format!("/mnt/workspace/{prefix}"),
+                                backend_type: "cortex-s3".to_string(),
+                                params,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect();
 
                 let runenv = if has_runenv {
                     if !tokio::fs::try_exists(&archive_path).await? {
@@ -425,43 +446,28 @@ impl SessionsState {
                             archive_path.display()
                         );
                     }
-                    // A runenv always runs an in-guest FUSE forwarder (the
-                    // unified workspace mount, below), which reaches the host
-                    // forward server via host.microsandbox.internal and so needs
-                    // guest->host egress. The archive doesn't carry the network
-                    // policy, so re-apply it on restore.
-                    let sandbox =
-                        Sandbox::try_from_archive_with_network(&archive_path, SandboxNetwork::Public).await?;
+                    // Restore the snapshot with the cortex-backed sources attached
+                    // at boot. The archive doesn't carry the network policy, so
+                    // re-apply it on restore.
+                    let sandbox = Sandbox::try_from_archive_with_network_and_mounts(
+                        &archive_path,
+                        SandboxNetwork::Public,
+                        &fs_mounts,
+                    )
+                    .await?;
                     Some(Arc::new(Mutex::new(sandbox)))
                 } else {
                     None
                 };
 
-                // Mount the unified workspace tree into the guest before the
-                // agent runs — local files under `files/` plus the provider
-                // mounts as siblings, the browser-WebDAV view served over FUSE
-                // at /mnt/workspace. The raw-FUSE tunnel host engine is held for
-                // the whole run; dropping it (at the end of this scope) tears the
-                // mount down.
-                let _vfs_forward = match &runenv {
-                    Some(r) => {
-                        let mut sandbox = r.lock().await;
-                        let console = sandbox.start().await?;
-                        let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(
-                            crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
-                        );
-                        Some(
-                            crate::sandbox_tunnel::mount_vfs_tunnel_in_guest(
-                                console,
-                                unified,
-                                "/mnt/workspace",
-                                tokio::runtime::Handle::current(),
-                            )
-                            .await?,
-                        )
-                    }
-                    None => None,
-                };
+                // Start the sandbox before the agent runs. cortex-backed sources
+                // are attached at boot and auto-mounted by agentd under
+                // /mnt/workspace/<source> (via MSB_DIR_MOUNTS). Requires MSB_PATH
+                // to point at a binary that registered the cortex fs-backends
+                // (cortex's `msb_cortex`); otherwise `build_vm` rejects the mount.
+                if let Some(r) = &runenv {
+                    r.lock().await.start().await?;
+                }
 
                 let rows = sqlx::query(
                     "SELECT seq, content FROM messages WHERE session_id = ? ORDER BY seq ASC",

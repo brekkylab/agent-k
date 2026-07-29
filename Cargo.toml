@@ -12,7 +12,7 @@ exclude = [
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "e3f909153c3d3f9b9d58af456fd9a47a3ca32894", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "296ff4fce77af632485d15fb16d3055fd4e499f2", features = ["sandbox"] }
 
 # Patched fuser (branch feat/macfuse-abi): on macOS, upstream fuser emits macFUSE
 # wire structs (extra crtime/flags in fuse_attr, minor pinned to 19) that a Linux
@@ -23,3 +23,9 @@ ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "e3f909153c3d3f9
 # forwarder does. No-op on a Linux host.
 [patch.crates-io]
 fuser = { git = "https://github.com/brekkylab/fuser.git", rev = "4a08d0ba46f7e4911da1fdb73883f30a36637a28" }
+# microsandbox branch with the pluggable fs-backend registry. `[patch]` only
+# applies from the root workspace, so agent-k must repeat ailoy's patch (same
+# rev cortex + ailoy build against) for the whole graph to unify.
+microsandbox = { git = "https://github.com/brekkylab/microsandbox.git", rev = "835d9afef58ee2b89da31f6c563974387d7ae0a2" }
+microsandbox-network = { git = "https://github.com/brekkylab/microsandbox.git", rev = "835d9afef58ee2b89da31f6c563974387d7ae0a2" }
+microsandbox-types = { git = "https://github.com/brekkylab/microsandbox.git", rev = "835d9afef58ee2b89da31f6c563974387d7ae0a2" }
