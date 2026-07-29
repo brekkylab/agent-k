@@ -1,5 +1,5 @@
-//! [`ForwardFs`] — the filesystem surface the host [`ForwardServer`](super::ForwardServer)
-//! server exposes to the in-guest FUSE forwarder.
+//! [`ForwardFs`] — the filesystem surface the backend serves to an in-guest
+//! FUSE client (over the raw-FUSE tunnel host engine).
 //!
 //! Implemented by `WorkspaceFs` (in [`crate::state`]) — the unified workspace
 //! tree: the workspace's local files under `files/` plus the provider mounts as
@@ -52,7 +52,7 @@ impl FwdStat {
     }
 }
 
-/// The filesystem the [`ForwardServer`](super::ForwardServer) server serves over HTTP.
+/// The filesystem the backend serves to the in-guest FUSE client.
 /// Implemented by `WorkspaceFs` (the unified workspace tree).
 #[async_trait]
 pub trait ForwardFs: Send + Sync + 'static {

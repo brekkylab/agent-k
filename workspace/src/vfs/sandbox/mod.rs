@@ -1,14 +1,15 @@
-//! Sandbox VFS frontend — the host-side forward server that exposes a
-//! [`ForwardFs`] (the unified `WorkspaceFs` — local files + provider mounts)
-//! over a tiny HTTP/1.1 API for an in-guest FUSE forwarder.
+//! Sandbox VFS frontend:
+//! - [`ForwardFs`] — the filesystem surface (the unified `WorkspaceFs`: local
+//!   files + provider mounts) served to an in-guest FUSE client.
+//! - [`TunnelServer`] — the host-side raw-FUSE engine that answers a guest's
+//!   tunneled `/dev/fuse` traffic against a `ForwardFs`.
 //!
-//! Vendored/adapted from ailoy's `src/vfs/sandbox/` (61c4c43). The guest-side
-//! injection (ailoy `Console` wiring + the embedded forwarder ELF) lives in the
-//! backend, which consumes [`ForwardServer`] / [`ForwardFs`] from here — this crate
-//! carries no microsandbox coupling.
-mod forward;
+//! The guest-side injection (ailoy `Console` wiring + the pump ELF) lives in the
+//! backend, which starts a [`TunnelServer`] from here — this crate carries no
+//! microsandbox coupling.
 mod fwdfs;
+mod tunnel;
 
-pub use forward::ForwardServer;
 pub(crate) use fwdfs::secs_since_epoch;
 pub use fwdfs::{ForwardFs, FwdEntry, FwdStat};
+pub use tunnel::TunnelServer;
