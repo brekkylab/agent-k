@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,7 @@ use fuser::{
     KernelConfig, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
     SessionACL,
 };
+use subtle::ConstantTimeEq;
 use tokio::runtime::Handle;
 
 use super::{ForwardFs, FwdStat};
@@ -52,9 +53,18 @@ const RELAY_BUF: usize = 2 * 1024 * 1024;
 /// render-on-read sizes, so page-cache reads are never clamped short).
 const MAX_READAHEAD: u32 = 8 * 1024 * 1024;
 
-/// Host-side raw-FUSE tunnel server. Bound to an ephemeral port; the guest pump
-/// connects, sends a one-line token, then streams raw FUSE bytes. Aborts its
-/// accept loop on drop.
+/// Host-side raw-FUSE tunnel server. Bound to an ephemeral loopback port; the
+/// guest pump connects, sends a one-line token, then streams raw FUSE bytes.
+/// Aborts its accept loop on drop.
+///
+/// Loopback is enough because microsandbox runs a user-space network stack: the
+/// guest dials `host.microsandbox.internal:<port>`, and the host side of that
+/// connection is opened by the microsandbox process itself, so this server sees
+/// a peer of `127.0.0.1`. Measured with a loopback-only listener and a guest
+/// `nc` against the gateway address: the guest connects and the host observes
+/// `127.0.0.1`. Binding the wildcard address instead would additionally expose
+/// the whole workspace tree — every file this server can read — to any peer on
+/// the same LAN that learns the token.
 pub struct TunnelServer {
     addr: SocketAddr,
     token: String,
@@ -69,7 +79,7 @@ impl Drop for TunnelServer {
 
 impl TunnelServer {
     pub fn spawn(fs: Arc<dyn ForwardFs>, rt: Handle) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(("0.0.0.0", 0))?;
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let token = uuid::Uuid::new_v4().as_simple().to_string();
@@ -83,13 +93,13 @@ impl TunnelServer {
                     return;
                 }
                 match listener.accept() {
-                    Ok((stream, _)) => {
+                    Ok((stream, peer)) => {
                         let fs = fs.clone();
                         let rt = rt.clone();
                         let token = task_token.clone();
                         thread::spawn(move || {
-                            if let Err(e) = serve_conn(stream, fs, rt, token) {
-                                tracing::debug!("vfs tunnel: connection ended: {e}");
+                            if let Err(e) = serve_conn(stream, fs, rt, token, peer) {
+                                tracing::debug!("vfs tunnel: connection from {peer} ended: {e}");
                             }
                         });
                     }
@@ -114,6 +124,16 @@ impl TunnelServer {
     pub fn token(&self) -> &str {
         &self.token
     }
+}
+
+/// Compare a presented token against the expected one without branching on
+/// content, so the time a rejection takes carries no information about how many
+/// leading bytes were right. Length is compared first and in the clear: the
+/// token is a fixed-length UUID, so its length is not a secret.
+fn token_matches(expected: &str, presented: &str) -> bool {
+    let expected = expected.as_bytes();
+    let presented = presented.as_bytes();
+    expected.len() == presented.len() && bool::from(expected.ct_eq(presented))
 }
 
 /// Read the leading one-line token (bytes up to `\n`), one byte at a time so we
@@ -169,10 +189,15 @@ fn serve_conn(
     fs: Arc<dyn ForwardFs>,
     rt: Handle,
     token: String,
+    peer: SocketAddr,
 ) -> anyhow::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_nodelay(true).ok();
-    if read_token_line(&mut stream)? != token {
+    if !token_matches(&token, &read_token_line(&mut stream)?) {
+        // Warn rather than debug: the only client that should ever reach this
+        // port is the guest pump, which is handed the token directly, so a
+        // rejection means something else is dialing it.
+        tracing::warn!("vfs tunnel: rejected connection from {peer}: bad token");
         anyhow::bail!("bad token");
     }
 
@@ -518,7 +543,7 @@ mod host_engine_test {
 
     use async_trait::async_trait;
 
-    use super::TunnelServer;
+    use super::{TunnelServer, token_matches};
     use crate::vfs::sandbox::{ForwardFs, FwdEntry, FwdStat};
 
     struct FakeFs;
@@ -621,5 +646,55 @@ mod host_engine_test {
         assert_eq!(err, 0, "LOOKUP /x should succeed");
 
         println!("host engine served INIT + GETATTR + LOOKUP over TCP tunnel — OK");
+    }
+
+    /// The listener must stay on loopback. Everything this server can read — the
+    /// whole workspace tree, provider mounts included — is behind one token, so a
+    /// wildcard bind would put it in reach of every peer on the LAN. The guest
+    /// still reaches it because microsandbox opens the host side of the
+    /// connection itself.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn listener_is_bound_to_loopback() {
+        let fs: Arc<dyn ForwardFs> = Arc::new(FakeFs);
+        let srv = TunnelServer::spawn(fs, tokio::runtime::Handle::current()).expect("spawn server");
+        assert!(
+            srv.addr.ip().is_loopback(),
+            "tunnel listener must not be reachable off-host, bound to {}",
+            srv.addr
+        );
+    }
+
+    /// A wrong token is refused before any FUSE traffic is served. Paired with
+    /// the successful handshake above, this is what makes the token the gate
+    /// rather than decoration.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wrong_token_is_refused() {
+        let fs: Arc<dyn ForwardFs> = Arc::new(FakeFs);
+        let srv = TunnelServer::spawn(fs, tokio::runtime::Handle::current()).expect("spawn server");
+
+        let mut c = TcpStream::connect(("127.0.0.1", srv.port())).expect("connect");
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // Same length as the real token so the length check is not what refuses it.
+        let wrong: String = srv.token().chars().rev().collect();
+        assert_ne!(wrong, srv.token(), "reversed token must differ");
+        c.write_all(format!("{wrong}\n").as_bytes()).unwrap();
+        c.write_all(&req(26, 1, 0, &init_body())).unwrap();
+
+        // The server drops the connection instead of answering INIT, so the read
+        // ends without a reply.
+        let mut hdr = [0u8; 4];
+        assert!(
+            c.read_exact(&mut hdr).is_err(),
+            "a bad token must not get a FUSE reply"
+        );
+    }
+
+    #[test]
+    fn token_matches_only_on_exact_equality() {
+        assert!(token_matches("abc123", "abc123"));
+        assert!(!token_matches("abc123", "abc124"));
+        assert!(!token_matches("abc123", "abc12"));
+        assert!(!token_matches("abc123", "abc1234"));
+        assert!(!token_matches("abc123", ""));
     }
 }
