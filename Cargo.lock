@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=0767a0872e665a9a505589b8d2b498269453fe9a#0767a0872e665a9a505589b8d2b498269453fe9a"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=d0cbf7b6b311b4c17ce9b673bea8f9ff440ae61d#d0cbf7b6b311b4c17ce9b673bea8f9ff440ae61d"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2164,8 +2164,10 @@ name = "docling-sys"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -9298,6 +9300,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

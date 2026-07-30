@@ -171,15 +171,18 @@ pub(super) async fn create_session(
     }
     // Build a sandbox (runenv) when requested. The agent then runs in a VM and
     // reads the workspace — local files plus the external mounts — as one FUSE
-    // tree at /mnt/workspace (see `SessionsState::run`). Coworker image + host
-    // egress so the in-guest forwarder can reach the host forward server.
-    // `insert` stops + archives it; each run restores it (with host egress).
+    // tree at /mnt/workspace (see `SessionsState::run`).
+    //
+    // Nothing runs in this sandbox here: `insert` stops and archives it straight
+    // away, and each run restores it with the posture that run needs (public
+    // egress plus the one host port its VFS tunnel listens on). So this one gets
+    // the narrow posture — it has no work to do that needs the network.
     let runenv = if payload.runenv.unwrap_or(false) {
         let sandbox = SandboxBuilder::new()
             .image("brekkylab/agent-k-libreoffice:latest")
             .cpus(8)
             .memory_mib(1024)
-            .network(SandboxNetwork::Public)
+            .network(SandboxNetwork::HostOnly)
             .build()
             .await
             .map_err(|e| {

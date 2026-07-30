@@ -2,7 +2,7 @@ use std::path::Path;
 
 use ailoy::{
     agent::AgentSpec,
-    runenv::{Sandbox, SandboxBuilder, VolumeMount},
+    runenv::{Sandbox, SandboxBuilder, SandboxNetwork, VolumeMount},
     tool::get_tool_providers_mut,
 };
 
@@ -111,6 +111,10 @@ pub async fn get_deep_research_agent_runenv(
         .cpus(8)
         .memory_mib(1024)
         .workdir("/workspace")
+        // Stated rather than inherited, as in the coworker runenv: the guest
+        // installs Python packages, so it needs public egress. It reaches no host
+        // service, so no host port is granted.
+        .network(SandboxNetwork::Public)
         .env([("HOME".to_string(), "/workspace".to_string())])
         .mount(VolumeMount::Bind {
             host: artifacts_dir.as_ref().to_path_buf(),
