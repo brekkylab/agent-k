@@ -100,8 +100,8 @@ pub struct Stat {
     pub status_changed: Option<SystemTime>,
     pub executable: Option<bool>,
     /// What the node's subject is, when the provider knows better than the
-    /// filename (a Drive card is `report.pdf.json`, so the extension only ever
-    /// says `application/json`). `None` = go by the name.
+    /// filename (a Google Doc is served as `report.gdoc.json`, so the extension
+    /// only ever says `application/json`). `None` = go by the name.
     pub content_type: Option<String>,
 }
 

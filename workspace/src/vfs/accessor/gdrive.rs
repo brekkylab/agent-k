@@ -50,8 +50,8 @@ fn endpoints(base_url: Option<&str>) -> Endpoints {
     }
 }
 
-/// Per-file fields requested from every listing — exactly what the mount puts
-/// in a file's metadata card. One entry per field, joined at request time: the
+/// Per-file fields requested from every listing — exactly what the mount needs to
+/// shape an entry. One entry per field, joined at request time: the
 /// separators aren't hand-maintained, so a mask can't grow a stray space or a
 /// missing comma the way a single hand-written literal can.
 const FILE_FIELDS: &[&str] = &[

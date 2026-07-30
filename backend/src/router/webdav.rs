@@ -215,10 +215,9 @@ impl DavFileSystem for DavFs {
     /// The type of the thing an entry *describes*, as a dead property.
     ///
     /// It cannot ride `getcontenttype`: dav-server derives that from the request
-    /// path, and a Drive path ends in `.json` because the bytes really are a JSON
-    /// card — so the live property would answer `application/json` for a card
-    /// describing a PDF, and answer nothing useful for a Google Doc, whose name
-    /// has no extension at all.
+    /// path, and a Drive document's path ends in `.json` because the bytes really
+    /// are JSON — so the live property would answer `application/json` for every
+    /// document, never saying which of the three it is.
     fn get_props<'a>(&'a self, path: &'a DavPath, do_content: bool) -> FsFuture<'a, Vec<DavProp>> {
         Box::pin(async move {
             let meta = self
@@ -399,8 +398,8 @@ impl DavDirEntry for DavDirEntryAdapter {
 }
 
 /// Dead property naming the media type of what an entry describes:
-/// `application/pdf` for a card describing a PDF,
-/// `application/vnd.google-apps.spreadsheet` for a Google Sheet.
+/// `application/vnd.google-apps.spreadsheet` for a Google Sheet served as
+/// `.gsheet.json`, `application/pdf` for a PDF.
 const SUBJECT_TYPE_PROP: &str = "subject-content-type";
 const PROP_NAMESPACE: &str = "urn:agent-k:workspace";
 const PROP_PREFIX: &str = "W";

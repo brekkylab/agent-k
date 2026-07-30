@@ -38,8 +38,8 @@ struct Entry {
     etag: Option<String>,
     /// The provider's own idea of what the entry is (see
     /// [`DirEntry::content_type`]). Carried so `ls`-then-`stat` keeps it: a
-    /// listing that knows a card describes a PDF must not lose that on the
-    /// fast path.
+    /// listing that knows a `.json` entry is a spreadsheet must not lose that on
+    /// the fast path.
     content_type: Option<String>,
     /// See [`FileStat::size_is_estimate`] — carried so a `stat` after a `readdir`
     /// still knows the length was only an upper bound.

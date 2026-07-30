@@ -35,11 +35,11 @@ pub struct DirEntry {
     pub etag: Option<String>,
     /// What the entry's *subject* is, when the backend knows better than the
     /// filename does. A provider that serves a rendering rather than the
-    /// original bytes has to say so somewhere: a Drive card is
-    /// `report.pdf.json`, so a client guessing from the extension only ever
-    /// learns `application/json`, never that the thing described is a PDF — and
-    /// Google's own document types carry no extension at all. `None` = nothing
-    /// better than the name to go on.
+    /// original bytes has to say so somewhere: a Google Doc is served as
+    /// `report.gdoc.json`, so a client guessing from the extension only ever
+    /// learns `application/json`, never which of the three document types it is —
+    /// and the Drive names those come from carry no extension at all. `None` =
+    /// nothing better than the name to go on.
     pub content_type: Option<String>,
     /// See [`FileStat::size_is_estimate`]. Carried from the listing so the value
     /// survives `readdir` → cache → `stat`.
