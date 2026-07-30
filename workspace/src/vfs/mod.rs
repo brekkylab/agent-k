@@ -40,4 +40,4 @@ pub use resource::{
     LocalResource, NotionResource, Resource, S3Resource, account_mirror_dir, mirror_tree,
     sync_gmail_incremental, sync_gmail_mirror,
 };
-pub use sandbox::{ForwardFs, ForwardServer, FwdEntry, FwdStat};
+pub use sandbox::{ForwardFs, FwdEntry, FwdStat, TunnelServer};

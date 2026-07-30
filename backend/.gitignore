@@ -1,0 +1,4 @@
+
+
+# Local live smoke test — hits real provider APIs, not committed
+/examples/model_smoke.rs

@@ -14,7 +14,7 @@ ailoy = { workspace = true }
 anyhow = "1"
 argon2 = { version = "0.5", features = ["std"] }
 async-stream = "0.3"
-axum = { version = "0.8", features = ["multipart", "ws"] }
+axum = { version = "0.8", features = ["multipart"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 bytes = "1"
 chrono = { version = "0.4.42", features = ["serde", "clock"] }

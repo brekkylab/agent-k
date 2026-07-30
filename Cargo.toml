@@ -13,3 +13,13 @@ exclude = [
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
 ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "e3f909153c3d3f9b9d58af456fd9a47a3ca32894", features = ["sandbox"] }
+
+# Patched fuser (branch feat/macfuse-abi): on macOS, upstream fuser emits macFUSE
+# wire structs (extra crtime/flags in fuse_attr, minor pinned to 19) that a Linux
+# guest kernel rejects with EINVAL. That layout is gated behind the `macfuse-abi`
+# feature (on by default); backend opts out via `default-features = false` to
+# emit the LINUX wire layout on macOS, so the raw-FUSE tunnel host engine
+# (backend/src/sandbox_tunnel.rs) speaks the same protocol the in-guest Linux
+# forwarder does. No-op on a Linux host.
+[patch.crates-io]
+fuser = { git = "https://github.com/brekkylab/fuser.git", rev = "4a08d0ba46f7e4911da1fdb73883f30a36637a28" }

@@ -307,12 +307,12 @@ mod tests {
     /// for a local run, or leave it unset for real AWS.
     fn live_config() -> Option<S3Config> {
         Some(S3Config {
-            bucket: std::env::var("S3_BUCKET").ok()?,
-            region: std::env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".into()),
-            access_key_id: std::env::var("S3_ACCESS_KEY_ID").ok()?,
-            secret_access_key: std::env::var("S3_SECRET_ACCESS_KEY").ok()?,
-            endpoint: std::env::var("S3_ENDPOINT").ok(),
-            key_prefix: std::env::var("S3_KEY_PREFIX").ok(),
+            bucket: std::env::var("AWS_S3_BUCKET").ok()?,
+            region: std::env::var("AWS_DEFAULT_REGION").unwrap_or_else(|_| "us-east-1".into()),
+            access_key_id: std::env::var("AWS_ACCESS_KEY_ID").ok()?,
+            secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").ok()?,
+            endpoint: None,
+            key_prefix: None,
         })
     }
 
@@ -325,6 +325,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires S3_* env + network"]
     async fn s3_live_round_trip() {
+        dotenvy::dotenv().ok();
+
         let Some(cfg) = live_config() else {
             eprintln!("set S3_BUCKET / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY to run");
             return;

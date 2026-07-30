@@ -151,7 +151,7 @@ impl WorkspacesState {
 
     /// Fetch `wid` only if it is owned by `user_id`. This is the single
     /// definition of the workspace access rule, reused by every caller (HTTP
-    /// routes, WebDAV, message WS). A workspace the user doesn't own is
+    /// routes, WebDAV, the message stream). A workspace the user doesn't own is
     /// indistinguishable from a missing one (`None`), so existence can't be
     /// probed.
     pub async fn get_for_user(&self, user_id: Uuid, wid: Uuid) -> StateResult<Option<Workspace>> {
