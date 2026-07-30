@@ -91,16 +91,7 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
                 });
                 continue;
             }
-            ProviderConfig::Gdrive(c) => {
-                // Reads render a link out of the listing metadata — no content
-                // fetch, no disk state — so the metadata cache would only
-                // duplicate this resource's own listing cache. Skip it.
-                mounts.push(Mount {
-                    prefix: spec.prefix,
-                    resource: Arc::new(GdriveResource::new(&c)?),
-                });
-                continue;
-            }
+            ProviderConfig::Gdrive(c) => Arc::new(GdriveResource::new(&c)?),
         };
         // Wrap remote providers in the metadata index cache so `stat` after a
         // `readdir` (e.g. `ls -la`) is served from memory.

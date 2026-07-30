@@ -33,6 +33,25 @@ const MY_DRIVE_NAME: &str = "My Drive";
 const SHARED_WITH_ME_ID: &str = "@sharedWithMe";
 const SHARED_WITH_ME_NAME: &str = "Shared with me";
 
+/// Suffix on the text sidecar: a second entry beside the card, holding the
+/// document's text as plain lines. Text cannot live *in* the card — JSON escapes
+/// every newline, so the whole document would be one line, unmatchable by a
+/// grep spanning a line break and unreadable by `cat`.
+const TEXT_SUFFIX: &str = ".txt";
+
+/// Native types Drive converts to text, and to what. Sheets go to CSV (Drive
+/// exports the first tab only — a documented Google limitation); Docs and Slides
+/// to plain text. Drawings/Forms/Maps have no text form at all.
+const TEXT_EXPORTS: &[(&str, &str)] = &[
+    ("application/vnd.google-apps.document", "text/plain"),
+    ("application/vnd.google-apps.presentation", "text/plain"),
+    ("application/vnd.google-apps.spreadsheet", "text/csv"),
+];
+
+/// A blob is served as its own text only when it already *is* text and Drive
+/// reported a size small enough that one read can't blow up.
+const BLOB_TEXT_MAX: u64 = 1024 * 1024;
+
 /// Per-directory listing TTL. A listing is one `files.list`, so a short TTL
 /// keeps `ls` fresh; path resolution walks parent listings and rides this cache.
 const DIR_TTL: Duration = Duration::from_secs(60);
@@ -53,12 +72,52 @@ Google Drive (read-only, metadata + links). Layout mirrors Drive's own sidebar:
      \"owner\":{\"name\",\"email\"},\"web_view_link\"}
   `size` is the file's real size in Drive when Drive reports one (folders and
   shortcuts have none); the entry itself is only as big as the card. To let
-  someone see the document, hand them `web_view_link` — this mount cannot
-  download or convert file content. Duplicate names get ` (2)`, ` (3)`, ….
+  someone see the original, hand them `web_view_link` — this mount serves no
+  original bytes. Duplicate names get ` (2)`, ` (3)`, ….
 
-  There is no content search: grep matches names and card fields only (no
-  document text lives here). Find things by walking the tree with ls.
+  Google Docs, Sheets, Slides and small already-text files ALSO get a sibling
+  `<drive name>.txt` holding the document's text (Sheets: first tab, as CSV).
+  That file is the only content here: `cat` it to read a document, and
+  `Glob **/*.txt` lists everything whose contents are readable at all. PDFs,
+  Office files, hwp, archives, images and video have no `.txt` — find those by
+  name, mime_type or owner, then hand over `web_view_link`.
+
+  Reading a `.txt` converts the document through Drive: expect a few seconds on
+  the first read of each (cached after), and expect a listing to report its size
+  as 0 until then. So `grep -r` over a whole folder pays that per document — grep
+  a narrowed subtree, or match on names and cards first.
   The mount is read-only: no writes, no rm, no mkdir.";
+
+/// How a file's text is obtained, when it can be at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TextSource {
+    /// A native Workspace doc converted by Drive (`files.export`).
+    Export(&'static str),
+    /// A file that is already text — fetched as-is (`alt=media`).
+    Download,
+}
+
+/// How (or whether) this row's text can be fetched. Everything else — PDFs,
+/// Office files, hwp, archives, images, video, Forms/Maps — has no text form
+/// here, and gets no sidecar.
+fn text_source(f: &Value, mime: &str) -> Option<TextSource> {
+    if let Some((_, target)) = TEXT_EXPORTS.iter().find(|(m, _)| *m == mime) {
+        return Some(TextSource::Export(target));
+    }
+    let is_text = mime.starts_with("text/")
+        || matches!(
+            mime,
+            "application/json" | "application/xml" | "application/x-yaml"
+        );
+    let size = f
+        .get("size")
+        .and_then(|s| s.as_str())
+        .and_then(|s| s.parse::<u64>().ok());
+    match (is_text, size) {
+        (true, Some(n)) if n <= BLOB_TEXT_MAX => Some(TextSource::Download),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum GKind {
@@ -91,8 +150,11 @@ struct Child {
     mtime: Option<std::time::SystemTime>,
     created: Option<std::time::SystemTime>,
     /// The metadata card this entry reads as — built once from the listing row
-    /// (see [`card_bytes`]). `Null` for directories, which have no content.
+    /// (see [`card_bytes`]). `Null` for directories, and for a text sidecar,
+    /// whose content is fetched on read.
     card: Value,
+    /// Set on a `.txt` sidecar entry: how to fetch the text it serves.
+    text: Option<TextSource>,
 }
 
 pub struct GdriveResource {
@@ -125,6 +187,7 @@ impl GdriveResource {
             mtime: None,
             created: None,
             card: Value::Null,
+            text: None,
         };
         let mut children = vec![
             section(MY_DRIVE_NAME, MY_DRIVE_ID, GKind::Folder, None),
@@ -175,7 +238,9 @@ impl GdriveResource {
                     .await
             }
             .map_err(not_found_or_backend)?;
-            let mut children: Vec<Child> = files.iter().filter_map(child_from_file).collect();
+            // A card per row, plus a `.txt` sidecar for the rows Drive can hand
+            // over as text — the only content this mount can actually serve.
+            let mut children: Vec<Child> = files.iter().flat_map(children_from_file).collect();
             // Children of a shared drive stay scoped to it (list_files needs the
             // drive id); the drive's own listing rows don't carry `driveId`.
             if let Some(d) = &drive_id {
@@ -238,6 +303,18 @@ impl Resource for GdriveResource {
                 path.as_str()
             )));
         }
+        if let Some(source) = child.text {
+            // The one path in this mount that transfers content. An export takes
+            // seconds, so it is deliberately not something a listing triggers:
+            // only reading the `.txt` does, and the metadata cache holds the
+            // result for the chunked reads that follow.
+            let bytes = match source {
+                TextSource::Export(mime) => self.accessor.export(&child.id, mime).await,
+                TextSource::Download => self.accessor.download(&child.id).await,
+            }
+            .map_err(not_found_or_backend)?;
+            return Ok(slice(&bytes, range));
+        }
         // No network: the card was built from the listing this resolved from.
         Ok(slice(&card_bytes(&child), range))
     }
@@ -265,12 +342,14 @@ impl Resource for GdriveResource {
             } else {
                 FileKind::File
             },
-            // Exact — the content is the card and nothing else, so no
-            // over-estimating sentinel is needed.
-            size: if child.kind.is_dir() {
-                0
-            } else {
-                card_bytes(&child).len() as u64
+            // A card is exact — it renders from data the listing already
+            // carried. A sidecar reports 0, the codebase's "ask me by reading"
+            // signal: its length needs the export, and the metadata cache
+            // resolves it once and caches the bytes.
+            size: match (child.kind.is_dir(), child.text.is_some()) {
+                (true, _) => 0,
+                (_, true) => 0,
+                _ => card_bytes(&child).len() as u64,
             },
             mtime: child.mtime,
             created: child.created,
@@ -313,10 +392,12 @@ fn dir_entry_for(c: &Child) -> DirEntry {
         } else {
             FileKind::File
         },
-        size: if c.kind.is_dir() {
-            0
-        } else {
-            card_bytes(c).len() as u64
+        size: match (c.kind.is_dir(), c.text.is_some()) {
+            (true, _) => 0,
+            // See `sidecar_of`: 0 means "length needs a fetch", which the
+            // metadata cache resolves on first stat/read.
+            (_, true) => 0,
+            _ => card_bytes(c).len() as u64,
         },
         mtime: c.mtime,
         atime: None,
@@ -373,7 +454,53 @@ fn child_from_file(f: &Value) -> Option<Child> {
         } else {
             card_of(f, name, id, mime)
         },
+        // This entry is the card; its sidecar (if any) is a separate `Child`
+        // built by `text_sidecar`.
+        text: None,
     })
+}
+
+/// The entries one listing row becomes: its card, plus a `.txt` sidecar when
+/// Drive can hand the file over as text.
+fn children_from_file(f: &Value) -> Vec<Child> {
+    let Some(card) = child_from_file(f) else {
+        return Vec::new();
+    };
+    let mime = f.get("mimeType").and_then(|m| m.as_str()).unwrap_or("");
+    match text_source(f, mime) {
+        Some(src) if !card.kind.is_dir() => {
+            let side = sidecar_of(&card, src);
+            vec![card, side]
+        }
+        _ => vec![card],
+    }
+}
+
+/// The `.txt` sidecar beside a card.
+///
+/// Named off the card (`report.pdf.json` → `report.pdf.txt`), so the two sort
+/// together and `Glob **/*.txt` finds exactly what is searchable. Size stays 0:
+/// the length is only known once Drive has converted the document, and sizing
+/// every entry at listing time would mean one export per row. The metadata cache
+/// resolves the real length on first stat/read and keeps the bytes — the same
+/// path Notion's `page.json` takes.
+fn sidecar_of(card: &Child, source: TextSource) -> Child {
+    let base = card
+        .vfs_name
+        .strip_suffix(CARD_SUFFIX)
+        .unwrap_or(&card.vfs_name);
+    Child {
+        vfs_name: format!("{base}{TEXT_SUFFIX}"),
+        id: card.id.clone(),
+        drive_id: card.drive_id.clone(),
+        kind: GKind::File,
+        // The sidecar really is plain text, whatever the original was.
+        mime_type: Some("text/plain".to_string()),
+        mtime: card.mtime,
+        created: card.created,
+        card: Value::Null,
+        text: Some(source),
+    }
 }
 
 /// The metadata card a file entry reads as. Carries the *original* Drive name
@@ -690,6 +817,75 @@ mod tests {
         assert_eq!(dir_entry_for(&dir).content_type, None);
     }
 
+    /// Which rows get a text sidecar, and what the pair looks like. This is the
+    /// only content the mount serves, so the classification is the difference
+    /// between a document an agent can read and one it can only link to.
+    #[test]
+    fn only_convertible_files_get_a_text_sidecar() {
+        let names = |row: &Value| -> Vec<String> {
+            children_from_file(row)
+                .iter()
+                .map(|c| c.vfs_name.clone())
+                .collect()
+        };
+        let sized = |name: &str, mime: &str, size: Option<&str>| {
+            let mut row = file_row(name, "id1", mime);
+            let obj = row.as_object_mut().unwrap();
+            match size {
+                Some(s) => obj.insert("size".into(), Value::from(s)),
+                None => obj.remove("size"),
+            };
+            row
+        };
+
+        // Natives Drive converts: plain text for prose, CSV for a grid.
+        assert_eq!(
+            names(&sized("Q3 Plan", "application/vnd.google-apps.document", None)),
+            ["Q3 Plan.json", "Q3 Plan.txt"]
+        );
+        assert_eq!(
+            names(&sized("Budget", "application/vnd.google-apps.spreadsheet", None)),
+            ["Budget.json", "Budget.txt"]
+        );
+        // Already text, small enough to be worth fetching. The sidecar hangs off
+        // the card's name, so the original extension stays visible.
+        assert_eq!(
+            names(&sized("notes.md", "text/markdown", Some("2048"))),
+            ["notes.md.json", "notes.md.txt"]
+        );
+        // No text form, or too big to fetch on a whim: card only.
+        let oversized = (BLOB_TEXT_MAX + 1).to_string();
+        for (mime, size) in [
+            ("application/pdf", Some("47065")),
+            ("application/x-hwp", Some("47065")),
+            ("image/jpeg", Some("47065")),
+            ("application/zip", Some("47065")),
+            ("application/vnd.google-apps.form", None),
+            ("text/plain", Some(oversized.as_str())),
+            // A text file Drive reported no size for — don't risk the fetch.
+            ("text/plain", None),
+        ] {
+            assert_eq!(names(&sized("thing", mime, size)).len(), 1, "{mime} {size:?}");
+        }
+
+        // A folder is a folder: no card, no sidecar.
+        assert_eq!(names(&file_row("Reports", "f1", FOLDER_MIME)), ["Reports"]);
+
+        // The sidecar reports size 0 — its length needs the export, and the
+        // metadata cache resolves that on first read. The card stays exact.
+        let pair = children_from_file(&sized(
+            "Q3 Plan",
+            "application/vnd.google-apps.document",
+            None,
+        ));
+        let card = dir_entry_for(&pair[0]);
+        let side = dir_entry_for(&pair[1]);
+        assert_eq!(card.size, card_bytes(&pair[0]).len() as u64);
+        assert_eq!(side.size, 0, "0 = ask by reading");
+        assert_eq!(side.content_type.as_deref(), Some("text/plain"));
+        assert_eq!(pair[1].id, pair[0].id, "same Drive file behind both");
+    }
+
     #[test]
     fn drive_names_cannot_escape_their_directory() {
         // Drive allows `/` in a name; it must not become a path separator.
@@ -710,6 +906,7 @@ mod tests {
             mtime: None,
             created: None,
             card: Value::Null,
+            text: None,
         };
         let mut children = vec![
             mk("a.pdf.json"),
@@ -889,6 +1086,75 @@ mod tests {
                 .expect("beyond end")
                 .is_empty()
         );
+    }
+
+    /// Live: the text sidecar is the only content this mount serves, so read one
+    /// end to end against real Drive — a Sheet (CSV) and, if present, a Doc.
+    /// Prints the conversion latency, which is what makes reading deliberate
+    /// rather than something a listing does.
+    ///
+    ///   GDRIVE_CLIENT_ID=… GDRIVE_CLIENT_SECRET=… GDRIVE_REFRESH_TOKEN=… \
+    ///     cargo test -p workspace gdrive_live_text -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "requires GDRIVE_* env + network"]
+    async fn gdrive_live_text_sidecars_are_readable() {
+        let Some(cfg) = live_config() else {
+            eprintln!("set GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REFRESH_TOKEN to run");
+            return;
+        };
+        let r = GdriveResource::new(&cfg).unwrap();
+
+        // Shared-with-me holds this account's documents; My Drive is mostly
+        // binaries. Take whichever section offers sidecars.
+        let mut checked = 0usize;
+        for section in [SHARED_WITH_ME_NAME, MY_DRIVE_NAME] {
+            let entries = r
+                .readdir(&MountPath::new(format!("/{section}")))
+                .await
+                .expect("section readdir");
+            let sidecars: Vec<&DirEntry> = entries
+                .iter()
+                .filter(|e| e.name.ends_with(TEXT_SUFFIX))
+                .collect();
+            eprintln!(
+                "{section}: {} entries, {} of them .txt sidecars",
+                entries.len(),
+                sidecars.len()
+            );
+            for e in sidecars.iter().take(2) {
+                // A listing reports 0 — the length needs the conversion.
+                assert_eq!(e.size, 0, "{}", e.name);
+                let p = MountPath::new(format!("/{section}/{}", e.name));
+                let t0 = std::time::Instant::now();
+                let bytes = r.read_bytes(&p, None).await.expect("read sidecar");
+                let took = t0.elapsed();
+                let text = String::from_utf8_lossy(&bytes);
+                eprintln!(
+                    "  {} -> {} bytes in {:.2}s | {:?}",
+                    e.name,
+                    bytes.len(),
+                    took.as_secs_f64(),
+                    text.chars().take(60).collect::<String>()
+                );
+                assert!(!bytes.is_empty(), "{}: empty text", e.name);
+                // Real lines, not one JSON-escaped blob — the reason the text is
+                // a sibling file instead of a card field.
+                assert!(!text.contains("\\n"), "{}: escaped newlines", e.name);
+                // And the card beside it still parses.
+                let card_path = MountPath::new(format!(
+                    "/{section}/{}{CARD_SUFFIX}",
+                    e.name.trim_end_matches(TEXT_SUFFIX)
+                ));
+                let card = r.read_bytes(&card_path, None).await.expect("read card");
+                let v: Value = serde_json::from_slice(&card).expect("card parses");
+                assert!(v["mime_type"].is_string());
+                checked += 1;
+            }
+            if checked > 0 {
+                break;
+            }
+        }
+        assert!(checked > 0, "no convertible document found to read");
     }
 
     fn live_config() -> Option<GdriveConfig> {

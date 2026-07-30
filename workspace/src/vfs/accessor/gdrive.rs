@@ -394,6 +394,36 @@ impl GdriveAccessor {
             .await
     }
 
+    /// A native Workspace doc converted to `mime` (`files.export` — Docs/Slides
+    /// → `text/plain`, Sheets → `text/csv`). Google caps an export at 10 MB and
+    /// fails the request past that, which bounds what one read can return.
+    pub async fn export(&self, id: &str, mime: &str) -> anyhow::Result<Vec<u8>> {
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/files/{id}/export", self.api_base),
+            &[("mimeType", mime)],
+        )?;
+        let resp = self
+            .send_with_refresh(|t| self.client.get(url.clone()).bearer_auth(t))
+            .await?
+            .error_for_status()?;
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// A blob file's bytes (`files.get?alt=media`). Only used for files already
+    /// judged small and text-shaped; a native doc 403s here and goes through
+    /// [`Self::export`] instead.
+    pub async fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+        let url = format!(
+            "{}/files/{id}?alt=media&supportsAllDrives=true",
+            self.api_base
+        );
+        let resp = self
+            .send_with_refresh(|t| self.client.get(&url).bearer_auth(t))
+            .await?
+            .error_for_status()?;
+        Ok(resp.bytes().await?.to_vec())
+    }
+
     /// Shared drives visible to the account (best-effort; needs scope).
     pub async fn list_shared_drives(&self) -> anyhow::Result<Vec<Value>> {
         let mut drives = Vec::new();
