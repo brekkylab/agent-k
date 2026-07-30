@@ -409,19 +409,42 @@ impl GdriveAccessor {
         Ok(resp.bytes().await?.to_vec())
     }
 
-    /// A blob file's bytes (`files.get?alt=media`). Only used for files already
-    /// judged small and text-shaped; a native doc 403s here and goes through
+    /// A blob file's bytes (`files.get?alt=media`), or just one window of them.
+    /// A native Google doc has no bytes and 403s here; it goes through
     /// [`Self::export`] instead.
-    pub async fn download(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+    ///
+    /// The range is what makes serving originals affordable. A filesystem read
+    /// arrives in chunks, and a search tool reads only the head of a file before
+    /// deciding it is binary — without `Range`, each of those chunk reads would
+    /// pull the whole object, so one `grep` over a folder of 5 MB PDFs would
+    /// transfer gigabytes to look at a few kilobytes.
+    pub async fn download(
+        &self,
+        id: &str,
+        range: Option<std::ops::Range<u64>>,
+    ) -> anyhow::Result<Vec<u8>> {
         let url = format!(
             "{}/files/{id}?alt=media&supportsAllDrives=true",
             self.api_base
         );
         let resp = self
-            .send_with_refresh(|t| self.client.get(&url).bearer_auth(t))
-            .await?
-            .error_for_status()?;
-        Ok(resp.bytes().await?.to_vec())
+            .send_with_refresh(|t| {
+                let req = self.client.get(&url).bearer_auth(t);
+                match &range {
+                    // HTTP byte ranges are inclusive at both ends.
+                    Some(r) if r.end > r.start => {
+                        req.header("Range", format!("bytes={}-{}", r.start, r.end - 1))
+                    }
+                    _ => req,
+                }
+            })
+            .await?;
+        // A range starting at or past EOF answers 416. For a reader walking a
+        // file to its end that is a clean EOF, not a failure.
+        if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            return Ok(Vec::new());
+        }
+        Ok(resp.error_for_status()?.bytes().await?.to_vec())
     }
 
     /// Shared drives visible to the account (best-effort; needs scope).
