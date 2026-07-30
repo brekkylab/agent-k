@@ -339,6 +339,12 @@ impl GdriveAccessor {
                     format!("nextPageToken,files({})", FILE_FIELDS.join(",")),
                 ),
                 ("pageSize", "1000".to_string()),
+                // Ask Drive to order, rather than leaving it unspecified: two
+                // `ls` of one folder should not disagree, and newest-first is
+                // what a person scanning a Drive folder expects. (The mock
+                // ignored `orderBy` until enterprise-mock#28 fixed it, which is
+                // why this was done locally before.)
+                ("orderBy", "modifiedTime desc".to_string()),
             ];
             if let Some(d) = drive_id {
                 params.push(("corpora", "drive".to_string()));
