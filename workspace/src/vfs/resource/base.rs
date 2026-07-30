@@ -145,6 +145,21 @@ pub trait Resource: Send + Sync {
         true
     }
 
+    /// Whether a `stat` may *read* a file to learn a size the listing reported as
+    /// 0 (see [`FileStat::size`]).
+    ///
+    /// `true` (the default) keeps `stat`/`HEAD`/`PROPFIND` exact for providers
+    /// that render on read: Notion's `page.json` is one file per page directory,
+    /// so one render per `ls -l` is a fair trade for a correct length.
+    ///
+    /// `false` is for providers where that trade inverts. Google Drive serves one
+    /// converted document *per file*, and each conversion takes seconds — so
+    /// `ls -l` in a folder of documents would convert every one of them just to
+    /// print their sizes. Such a provider reports 0 and lets the read fill it in.
+    fn resolve_size_on_stat(&self) -> bool {
+        true
+    }
+
     /// Whether this provider ever fills [`DirEntry::content_type`].
     ///
     /// A capability answer, not a per-path one, so a caller can decide *without

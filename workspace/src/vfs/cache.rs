@@ -554,10 +554,25 @@ impl Resource for CachedResource {
             }
         }
         let st = self.inner.stat(path).await?;
+        // Content already in hand? Then its length is known exactly, for free —
+        // better than either the provider's estimate or a fetch. (A provider that
+        // cannot size a rendered file reports an over-estimate; see
+        // `Resource::resolve_size_on_stat`.)
+        if matches!(st.kind, FileKind::File)
+            && let Some(bytes) = self.content_get(path.as_str(), &Version::of(&st))
+        {
+            return Ok(FileStat {
+                size: bytes.len() as u64,
+                ..st
+            });
+        }
         // A file the backend can't cheaply size (render-on-read, e.g. Notion
         // page.json) reports 0 — resolve its real length via the content cache so
-        // stat/HEAD/PROPFIND are correct and a following read is a hit.
-        if matches!(st.kind, FileKind::File) && st.size == 0 {
+        // stat/HEAD/PROPFIND are correct and a following read is a hit. Providers
+        // whose per-file render is expensive opt out (see
+        // `Resource::resolve_size_on_stat`): for them 0 stands, and the read that
+        // actually wants the bytes pays for them.
+        if matches!(st.kind, FileKind::File) && st.size == 0 && self.inner.resolve_size_on_stat() {
             let version = Version::of(&st);
             let size = self.resolve_size(path, &version).await;
             return Ok(FileStat { size, ..st });
@@ -636,6 +651,10 @@ impl Resource for CachedResource {
 
     fn reports_content_type(&self) -> bool {
         self.inner.reports_content_type()
+    }
+
+    fn resolve_size_on_stat(&self) -> bool {
+        self.inner.resolve_size_on_stat()
     }
 }
 
@@ -1018,6 +1037,78 @@ mod tests {
     /// The metadata cache sits between `readdir` and `stat`, so a type the
     /// listing knew has to survive it — otherwise `ls` shows the right icon and
     /// the follow-up `stat` (the PROPFIND fast path) contradicts it.
+    /// A `stat` must not become a document conversion. A provider that renders one
+    /// file per directory (Notion) wants the length resolved so `ls -l` is exact;
+    /// one that renders per *document* (Drive) would convert a whole folder just
+    /// to print sizes, so it opts out and 0 stands until a read fills it.
+    #[tokio::test]
+    async fn stat_resolves_an_unknown_size_only_when_the_provider_allows_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Renderer {
+            reads: Arc<AtomicUsize>,
+            resolve: bool,
+        }
+        #[async_trait]
+        impl Resource for Renderer {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<std::ops::Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                Ok(b"rendered".to_vec())
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+                Ok(Vec::new())
+            }
+            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+                // The listing cannot cheaply know the length: 0 means "unknown".
+                Ok(FileStat {
+                    kind: FileKind::File,
+                    size: 0,
+                    mtime: Some(std::time::UNIX_EPOCH),
+                    ..Default::default()
+                })
+            }
+            fn resolve_size_on_stat(&self) -> bool {
+                self.resolve
+            }
+        }
+
+        for (resolve, want_size, want_reads) in [(true, 8, 1), (false, 0, 0)] {
+            // (`want_size` 0 is this mock's own report; a real provider that
+            // declines resolution reports an over-estimate instead — see
+            // gdrive's CONVERSION_SENTINEL_SIZE.)
+            let reads = Arc::new(AtomicUsize::new(0));
+            let c = CachedResource::new(Arc::new(Renderer {
+                reads: reads.clone(),
+                resolve,
+            }));
+            let st = c.stat(&MountPath::new("/page.json")).await.unwrap();
+            assert_eq!(st.size, want_size, "resolve={resolve}");
+            assert_eq!(
+                reads.load(Ordering::SeqCst),
+                want_reads,
+                "resolve={resolve}: stat should{} read",
+                if resolve { "" } else { " not" }
+            );
+            // Either way the read itself returns the real bytes...
+            let bytes = c
+                .read_bytes(&MountPath::new("/page.json"), None)
+                .await
+                .unwrap();
+            assert_eq!(bytes, b"rendered");
+            // ...and once the content is cached, `stat` answers the exact length
+            // from it — no estimate, no fetch.
+            let st = c.stat(&MountPath::new("/page.json")).await.unwrap();
+            assert_eq!(st.size, 8, "resolve={resolve}: exact from the cache");
+        }
+    }
+
     #[test]
     fn content_type_carried_through_cache() {
         let c = IndexCache::new(Duration::from_secs(600));
