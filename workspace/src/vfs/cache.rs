@@ -343,11 +343,6 @@ pub struct CachedResource {
     sizes: Mutex<HashMap<String, (Version, u64)>>,
 }
 
-/// Concurrent renders while sizing one listing. A Drive document takes 1-2s to
-/// produce, so a folder of them is unusable serially; past this the provider's own
-/// rate limits, not latency, are the constraint.
-const SIZING_CONCURRENCY: usize = 8;
-
 /// Cap on [`CachedResource::sizes`]: one entry per path ever sized in this
 /// session. Cleared wholesale when exceeded — a learned length is an optimisation,
 /// so losing it costs a re-render, not correctness.

@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -101,7 +102,7 @@ const MAX_TABS: usize = 64;
 /// document: measured 2.4s for a six-document folder listing, 6.3s when the
 /// kernel's per-entry `getattr` serialises them. See
 /// [`GdriveResource::resolve_size_on_stat`].
-const CONVERSION_SENTINEL_SIZE: u64 = 8 * 1024 * 1024;
+const UNKNOWN_LENGTH_SIZE: u64 = 8 * 1024 * 1024;
 
 /// Safety ceiling on one folder's listing (10 pages). Beyond this the listing
 /// truncates (the accessor logs it) — a >10k-child folder is pathological to
@@ -153,7 +154,7 @@ fn has_original_bytes(mime: &str) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Serves {
     /// A directory — nothing to read.
-    Local,
+    Nothing,
     /// The file's own bytes (`alt=media`), ranged.
     Original,
     /// The document's own structure, from its own API (`documents.get` and
@@ -186,33 +187,38 @@ impl GKind {
 #[derive(Clone)]
 struct Child {
     /// Listing name: the sanitized (and, on collision, disambiguated) Drive
-    /// name — plus an extension when the entry serves a conversion or its JSON.
+    /// name — plus a `.json` suffix when the entry serves a document's API JSON.
     vfs_name: String,
     id: String,
     /// Set when the entry lives in a shared drive (listing scope).
     drive_id: Option<String>,
     kind: GKind,
-    /// Drive's own `mimeType`, reported as the entry's content type. For a
-    /// converted doc it is the *source* type (a Sheet, not the CSV), which is
-    /// what a client picking an icon wants, and the only place it exists at all
-    /// since those names carry no extension.
+    /// Drive's own `mimeType`, reported as the entry's content type. For a document
+    /// that is its Google type (a Sheet, not the JSON we serve), which is what a
+    /// client picking an icon wants and the only place it exists at all — the Drive
+    /// names those come from carry no extension.
     mime_type: Option<String>,
     mtime: Option<std::time::SystemTime>,
     created: Option<std::time::SystemTime>,
     /// What this entry hands back when read.
     serves: Serves,
-    /// Byte length when it is known without fetching: Drive reports it for an
-    /// original. `None` = only a fetch can tell, which `entry_size` reports as 0
-    /// so the metadata cache resolves it on first read.
+    /// Byte length when it is known without fetching: Drive reports it for a file
+    /// it holds bytes for. `None` = only producing the bytes can tell, which
+    /// `entry_size` reports as [`UNKNOWN_LENGTH_SIZE`].
     size: Option<u64>,
 }
 
+/// One folder's children as the cache holds them: shared, so a `stat` or a read
+/// borrows the listing instead of copying it (a shared folder in the corpus lists
+/// 10,000 entries).
+type CachedListing = (Instant, Arc<Vec<Child>>);
+
 pub struct GdriveResource {
     accessor: GdriveAccessor,
-    /// Per-directory listing cache (folder path → children). Path resolution
-    /// walks parent listings, so this serves resolve/stat/read as well — reads
-    /// render from a `Child` and never hit the network.
-    dir_cache: Mutex<HashMap<String, (Instant, Vec<Child>)>>,
+    /// Per-directory listing cache (folder path → children). Path resolution walks
+    /// parent listings, so one cached listing answers readdir, stat and the lookup
+    /// a read starts with; fetching the bytes themselves still costs a request.
+    dir_cache: Mutex<HashMap<String, CachedListing>>,
 }
 
 impl GdriveResource {
@@ -236,7 +242,7 @@ impl GdriveResource {
             mime_type: None,
             mtime: None,
             created: None,
-            serves: Serves::Local,
+            serves: Serves::Nothing,
             size: None,
         };
         let mut children = vec![
@@ -267,7 +273,7 @@ impl GdriveResource {
 
     /// List a directory's immediate children (cached). The root is virtual (see
     /// [`Self::root_sections`]); everything else is a Drive listing.
-    async fn list_dir(&self, folder: &str) -> ResourceResult<Vec<Child>> {
+    async fn list_dir(&self, folder: &str) -> ResourceResult<Arc<Vec<Child>>> {
         {
             let cache = self.dir_cache.lock().await;
             if let Some((at, children)) = cache.get(folder)
@@ -303,6 +309,7 @@ impl GdriveResource {
         // reachable (readdir shows distinct names, resolve finds each one).
         disambiguate(&mut children);
 
+        let children = Arc::new(children);
         self.dir_cache
             .lock()
             .await
@@ -338,19 +345,9 @@ impl GdriveResource {
     /// on it, so a reader sees a stated omission rather than an empty sheet.
     async fn spreadsheet_bytes(&self, id: &str) -> anyhow::Result<Vec<u8>> {
         let mut v: Value = serde_json::from_slice(&self.accessor.spreadsheet_json(id).await?)?;
-        let titles: Vec<String> = v
-            .get("sheets")
-            .and_then(|s| s.as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|t| t.pointer("/properties/title")?.as_str())
-            .map(str::to_string)
-            .take(MAX_TABS)
-            .collect();
+        let titles: Vec<String> = tab_titles(&v);
         if titles.is_empty() {
-            let mut bytes = serde_json::to_vec_pretty(&v)?;
-            bytes.push(b'\n');
-            return Ok(bytes);
+            return pretty(&v);
         }
         // Whole tabs by name: an A1 range with no cell part means "everything used".
         // A values endpoint that is missing (a Drive-only mock) or forbidden (the
@@ -363,9 +360,7 @@ impl GdriveResource {
                 if let Some(obj) = v.as_object_mut() {
                     obj.insert("valuesUnavailable".into(), Value::String(format!("{e:#}")));
                 }
-                let mut bytes = serde_json::to_vec_pretty(&v)?;
-                bytes.push(b'\n');
-                return Ok(bytes);
+                return pretty(&v);
             }
         };
         let mut ranges = batch
@@ -386,7 +381,7 @@ impl GdriveResource {
                 continue;
             };
             let values = range.get("values").cloned().unwrap_or(Value::Array(vec![]));
-            let cost = values.to_string().len() as u64;
+            let cost = json_len(&values);
             if cost > budget {
                 obj.insert(
                     "valuesOmitted".into(),
@@ -398,9 +393,7 @@ impl GdriveResource {
             budget -= cost;
             obj.insert("values".into(), values);
         }
-        let mut bytes = serde_json::to_vec_pretty(&v)?;
-        bytes.push(b'\n');
-        Ok(bytes)
+        pretty(&v)
     }
 
     /// Resolve any path (file or folder) to its child entry via its parent dir.
@@ -408,8 +401,9 @@ impl GdriveResource {
         let (parent, name) = split_last(path);
         let children = self.list_dir(&parent).await?;
         children
-            .into_iter()
+            .iter()
             .find(|c| c.vfs_name == name)
+            .cloned()
             .ok_or(ResourceError::NotFound)
     }
 }
@@ -466,7 +460,7 @@ impl Resource for GdriveResource {
             }
             // Only a directory serves nothing, and directories were rejected
             // above — so this is unreachable for a resolved file.
-            Serves::Local => Err(ResourceError::NotFound),
+            Serves::Nothing => Err(ResourceError::NotFound),
         }
     }
 
@@ -518,7 +512,7 @@ impl Resource for GdriveResource {
     /// real account: 2.4s for one folder's six documents concurrently, 6.3s when
     /// the kernel's per-entry `getattr` serialises them — spent every time a
     /// listing goes cold, on a number that `ls`, `find -name` and `Glob` never
-    /// read. So the listing reports [`CONVERSION_SENTINEL_SIZE`] and the length
+    /// read. So the listing reports [`UNKNOWN_LENGTH_SIZE`] and the length
     /// becomes exact as soon as anything reads the file: a handle resolves it on
     /// `open` (`File::metadata`), and the cache answers from the bytes it kept.
     ///
@@ -534,18 +528,16 @@ impl Resource for GdriveResource {
 
 /// The size an entry reports.
 ///
-/// An original is exact: Drive gives its length in the listing, so `ls -l` is
-/// honest and a ranged read lands where the caller asked. A conversion reports 0
-/// — its length is only known once Drive has produced it, and sizing every row at
-/// listing time would mean one export per row. 0 is this codebase's "ask me by
-/// reading" signal (Notion's `page.json` uses it): the metadata cache resolves it
-/// on first stat/read and keeps the bytes for the chunks that follow.
+/// A file Drive holds bytes for is exact: its length comes in the listing, so
+/// `ls -l` is honest and a ranged read lands where the caller asked. Everything
+/// else reports [`UNKNOWN_LENGTH_SIZE`], because knowing the real length would mean
+/// producing the document first.
 fn entry_size(c: &Child) -> u64 {
     match (c.kind.is_dir(), c.size) {
         (true, _) => 0,
         (_, Some(n)) => n,
-        // A conversion, before anyone has read it: see CONVERSION_SENTINEL_SIZE.
-        (_, None) => CONVERSION_SENTINEL_SIZE,
+        // A document nobody has read yet: see UNKNOWN_LENGTH_SIZE.
+        (_, None) => UNKNOWN_LENGTH_SIZE,
     }
 }
 
@@ -569,10 +561,12 @@ fn dir_entry_for(c: &Child) -> DirEntry {
     }
 }
 
-/// Whether this entry's size is only an upper bound: true exactly for a
-/// conversion, whose length nobody knows until Drive has produced it. An original
-/// with no reported size keeps the estimate too — but reading a 1 GB object to
-/// answer `stat` is not a trade worth making, so it is not marked resolvable.
+/// Whether this entry's size is a placeholder rather than a length: true for a
+/// document, whose JSON nobody has measured until it is produced.
+///
+/// Deliberately false for a file Drive reported no size for, even though that also
+/// gets the placeholder: resolving it would mean downloading the object — possibly
+/// gigabytes — to answer a `stat`.
 fn is_estimate(c: &Child) -> bool {
     matches!(c.serves, Serves::Native(_))
 }
@@ -611,7 +605,7 @@ fn child_from_file(f: &Value) -> Option<Child> {
             mime_type: None,
             mtime,
             created,
-            serves: Serves::Local,
+            serves: Serves::Nothing,
             size: None,
         });
     }
@@ -639,6 +633,44 @@ fn child_from_file(f: &Value) -> Option<Child> {
         serves,
         size,
     })
+}
+
+/// Pretty-printed JSON with a trailing newline — the form every document is served
+/// in, so the bytes read as lines rather than one long string.
+fn pretty(v: &Value) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec_pretty(v)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+/// A workbook's tab titles, in order, capped at [`MAX_TABS`].
+fn tab_titles(workbook: &Value) -> Vec<String> {
+    workbook
+        .get("sheets")
+        .and_then(|s| s.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t.pointer("/properties/title")?.as_str())
+        .map(str::to_string)
+        .take(MAX_TABS)
+        .collect()
+}
+
+/// How many bytes `v` would serialize to, counted without building them: a tab's
+/// values can run to megabytes, and this only decides whether they fit the budget.
+fn json_len(v: &Value) -> u64 {
+    struct Counting(u64);
+    impl std::io::Write for Counting {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len() as u64;
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut c = Counting(0);
+    serde_json::to_writer(&mut c, v).map(|()| c.0).unwrap_or(0)
 }
 
 fn time_field(f: &Value, key: &str) -> Option<std::time::SystemTime> {
@@ -673,23 +705,61 @@ fn sanitize_name(name: &str) -> String {
     }
 }
 
-/// Give every child a unique `vfs_name`: on a collision, append ` (2)`, ` (3)`,
+/// Give every child a unique `vfs_name`: on a collision, number it ` (2)`, ` (3)`,
 /// … so duplicate Drive names don't shadow each other in readdir/resolve.
+///
+/// The number goes *before* the extension. Appending it (`sheet.gsheet.json (2)`)
+/// kept the name unique but took the entry out of every glob a reader would use to
+/// find it — measured against a real account, two of 33 spreadsheets were invisible
+/// to `**/*.gsheet.json`.
 fn disambiguate(children: &mut [Child]) {
     let mut seen: HashSet<String> = HashSet::new();
     for c in children.iter_mut() {
         if seen.insert(c.vfs_name.clone()) {
             continue;
         }
+        let (stem, ext) = split_extension(&c.vfs_name, c.serves);
         let mut n = 2;
         loop {
-            let cand = format!("{} ({n})", c.vfs_name);
+            let cand = format!("{stem} ({n}){ext}");
             if seen.insert(cand.clone()) {
                 c.vfs_name = cand;
                 break;
             }
             n += 1;
         }
+    }
+}
+
+/// Split a listing name into the part a number can follow and the extension it must
+/// stay in front of.
+///
+/// A document's suffix is known exactly (`.gsheet.json`, not `.json`). A file keeps
+/// whatever follows its last dot when that looks like an extension. A directory has
+/// no extension to protect, so `v1.2` numbers as `v1.2 (2)`.
+fn split_extension(name: &str, serves: Serves) -> (&str, &str) {
+    if serves == Serves::Nothing {
+        return (name, "");
+    }
+    if let Serves::Native(api) = serves {
+        let suffix = NATIVE_KINDS
+            .iter()
+            .find(|(_, a, _)| *a == api)
+            .map(|(_, _, s)| *s)
+            .unwrap_or("");
+        if let Some(stem) = name.strip_suffix(suffix) {
+            return (stem, suffix);
+        }
+    }
+    match name.rsplit_once('.') {
+        Some((stem, ext))
+            if !stem.is_empty()
+                && ext.len() <= 8
+                && ext.chars().all(|c| c.is_ascii_alphanumeric()) =>
+        {
+            (stem, &name[stem.len()..])
+        }
+        _ => (name, ""),
     }
 }
 
@@ -802,7 +872,7 @@ mod tests {
             assert_eq!(c.vfs_name, format!("Q3 Plan{suffix}"), "{mime}");
             assert_eq!(c.serves, Serves::Native(api), "{mime}");
             // Its length is only known once the API has answered.
-            assert_eq!(entry_size(&c), CONVERSION_SENTINEL_SIZE, "{mime}");
+            assert_eq!(entry_size(&c), UNKNOWN_LENGTH_SIZE, "{mime}");
         }
 
         // Nothing to convert, nothing to serve: not listed at all.
@@ -865,12 +935,12 @@ mod tests {
         row.as_object_mut().unwrap().remove("size");
         let c = child_from_file(&row).unwrap();
         assert_eq!(c.serves, Serves::Original);
-        assert_eq!(entry_size(&c), CONVERSION_SENTINEL_SIZE);
+        assert_eq!(entry_size(&c), UNKNOWN_LENGTH_SIZE);
         // Never 0 (that reads as empty), and at or under the content cache's
         // per-object limit, so the first read of a document replaces the
         // placeholder with its exact length for every later listing.
-        const _: () = assert!(CONVERSION_SENTINEL_SIZE > 0);
-        const _: () = assert!(CONVERSION_SENTINEL_SIZE <= 8 * 1024 * 1024);
+        const _: () = assert!(UNKNOWN_LENGTH_SIZE > 0);
+        const _: () = assert!(UNKNOWN_LENGTH_SIZE <= 8 * 1024 * 1024);
     }
 
     #[test]
@@ -891,29 +961,52 @@ mod tests {
     }
 
     #[test]
-    fn disambiguate_suffixes_collisions() {
-        let mk = |n: &str| Child {
+    fn disambiguate_keeps_a_name_findable_by_its_extension() {
+        let mk = |n: &str, serves: Serves| Child {
             vfs_name: n.to_string(),
             id: "x".into(),
             drive_id: None,
-            kind: GKind::File,
+            kind: if matches!(serves, Serves::Nothing) {
+                GKind::Folder
+            } else {
+                GKind::File
+            },
             mime_type: None,
             mtime: None,
             created: None,
-            serves: Serves::Local,
+            serves,
             size: None,
         };
         let mut children = vec![
-            mk("a.pdf.json"),
-            mk("a.pdf.json"),
-            mk("a.pdf.json"),
-            mk("b"),
+            // Three spreadsheets of the same Drive name: the number has to land
+            // before `.gsheet.json` or a `**/*.gsheet.json` search loses two of them.
+            mk("report.gsheet.json", Serves::Native(NativeApi::Sheet)),
+            mk("report.gsheet.json", Serves::Native(NativeApi::Sheet)),
+            mk("report.gsheet.json", Serves::Native(NativeApi::Sheet)),
+            // A plain file keeps its own extension.
+            mk("photo.jpeg", Serves::Original),
+            mk("photo.jpeg", Serves::Original),
+            // No extension to preserve, and a folder is not renamed around a dot.
+            mk("notes", Serves::Original),
+            mk("notes", Serves::Original),
+            mk("v1.2", Serves::Nothing),
+            mk("v1.2", Serves::Nothing),
         ];
         disambiguate(&mut children);
         let names: Vec<&str> = children.iter().map(|c| c.vfs_name.as_str()).collect();
         assert_eq!(
             names,
-            vec!["a.pdf.json", "a.pdf.json (2)", "a.pdf.json (3)", "b"]
+            vec![
+                "report.gsheet.json",
+                "report (2).gsheet.json",
+                "report (3).gsheet.json",
+                "photo.jpeg",
+                "photo (2).jpeg",
+                "notes",
+                "notes (2)",
+                "v1.2",
+                "v1.2 (2)",
+            ]
         );
     }
 
