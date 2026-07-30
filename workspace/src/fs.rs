@@ -370,6 +370,16 @@ impl WorkspaceFs {
         }
     }
 
+    /// Whether the mount owning `rel_path` can report a
+    /// [`content_type`](crate::vfs::DirEntry::content_type) at all. A prefix
+    /// lookup — no provider call — so a frontend can skip asking on the mounts
+    /// that would only ever answer "nothing".
+    pub fn reports_content_type(&self, rel_path: &str) -> bool {
+        self.route(rel_path)
+            .map(|(r, _)| r.reports_content_type())
+            .unwrap_or(false)
+    }
+
     /// Route a workspace-relative path to the mount that owns it, by longest
     /// prefix. `None` means the path names no node (the virtual root, or a top
     /// segment that is neither the local mount nor a provider prefix).
@@ -1115,5 +1125,57 @@ mod tests {
         );
         assert!(ForwardFs::mkdir(&fs, "/mock/newdir").await.is_err());
         assert!(ForwardFs::rename(&fs, "/files/a", "/mock/b").await.is_err());
+    }
+    /// The capability gate: whether asking a mount for a subject type is worth a
+    /// call at all. It has to answer from the prefix alone — the WebDAV layer
+    /// consults it per node while building a PROPFIND, so a provider that never
+    /// has an answer must not cost a `metadata()` to say so.
+    #[test]
+    fn reports_content_type_is_answered_by_the_mount_not_a_stat() {
+        struct Typed;
+        #[async_trait]
+        impl Resource for Typed {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                Err(ResourceError::NotFound)
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<ResourceDirEntry>> {
+                Ok(Vec::new())
+            }
+            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+                Err(ResourceError::NotFound)
+            }
+            fn reports_content_type(&self) -> bool {
+                true
+            }
+        }
+
+        let fs = WorkspaceFs::from_mounts(vec![
+            Mount {
+                prefix: "/typed".to_string(),
+                resource: Arc::new(Typed),
+            },
+            Mount {
+                prefix: "/plain".to_string(),
+                resource: Arc::new(MockResource {
+                    content: b"x".to_vec(),
+                }),
+            },
+        ])
+        .unwrap();
+
+        assert!(fs.reports_content_type("/typed"));
+        assert!(fs.reports_content_type("/typed/deep/file.pdf.json"));
+        // The default: a provider whose filenames already carry the type.
+        assert!(!fs.reports_content_type("/plain/file.txt"));
+        // And nothing at all outside the mounts (the virtual root).
+        assert!(!fs.reports_content_type("/"));
+        assert!(!fs.reports_content_type("/nope/x"));
     }
 }

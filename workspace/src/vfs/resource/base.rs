@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use crate::vfs::error::{ResourceError, ResourceResult};
 use crate::vfs::path::MountPath;
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FileKind {
     #[default]
@@ -135,8 +134,6 @@ pub trait Resource: Send + Sync {
         ""
     }
 
-
-
     /// Whether `readdir` returns a *complete* listing of a directory. When true,
     /// a fresh parent listing that lacks a name proves that name doesn't exist,
     /// so the cache can answer `stat` of a missing child with `NotFound` without
@@ -146,5 +143,17 @@ pub trait Resource: Send + Sync {
     /// Default: `true`.
     fn listings_complete(&self) -> bool {
         true
+    }
+
+    /// Whether this provider ever fills [`DirEntry::content_type`].
+    ///
+    /// A capability answer, not a per-path one, so a caller can decide *without
+    /// a stat* whether asking is worth it. The WebDAV layer needs exactly that:
+    /// it has to serve the type as a dead property, and dav-server asks for dead
+    /// properties one node at a time — so a provider that never has an answer
+    /// must be able to say so up front rather than pay a `metadata()` per entry
+    /// to return nothing.
+    fn reports_content_type(&self) -> bool {
+        false
     }
 }

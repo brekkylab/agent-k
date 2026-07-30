@@ -15,8 +15,8 @@ use dav_server::{
     davpath::DavPath,
     fakels::FakeLs,
     fs::{
-        DavDirEntry, DavFile, DavFileSystem, DavMetaData, FsError, FsFuture, FsResult, FsStream,
-        OpenOptions, ReadDirMeta,
+        DavDirEntry, DavFile, DavFileSystem, DavMetaData, DavProp, FsError, FsFuture, FsResult,
+        FsStream, OpenOptions, ReadDirMeta,
     },
 };
 use futures_util::StreamExt;
@@ -199,6 +199,56 @@ impl DavFileSystem for DavFs {
         })
     }
 
+    /// Whether this node's mount can name its subject's type at all.
+    ///
+    /// dav-server asks per node, and answering `true` everywhere would cost a
+    /// `metadata()` per entry on providers that never have one (local files, S3 —
+    /// their names already carry the type). The mount answers from its own
+    /// capability, a prefix lookup with no provider call.
+    fn have_props<'a>(
+        &'a self,
+        path: &'a DavPath,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        Box::pin(ready(self.0.reports_content_type(&rel_path_string(path))))
+    }
+
+    /// The type of the thing an entry *describes*, as a dead property.
+    ///
+    /// It cannot ride `getcontenttype`: dav-server derives that from the request
+    /// path, and a Drive path ends in `.json` because the bytes really are a JSON
+    /// card — so the live property would answer `application/json` for a card
+    /// describing a PDF, and answer nothing useful for a Google Doc, whose name
+    /// has no extension at all.
+    fn get_props<'a>(&'a self, path: &'a DavPath, do_content: bool) -> FsFuture<'a, Vec<DavProp>> {
+        Box::pin(async move {
+            let meta = self
+                .0
+                .metadata(&rel_path_string(path))
+                .await
+                .map_err(to_dav_err)?;
+            Ok(match meta.content_type {
+                Some(t) => vec![subject_type_prop(do_content.then_some(t))],
+                None => Vec::new(),
+            })
+        })
+    }
+
+    fn get_prop<'a>(&'a self, path: &'a DavPath, prop: DavProp) -> FsFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            if prop.name != SUBJECT_TYPE_PROP || prop.namespace.as_deref() != Some(PROP_NAMESPACE) {
+                return Err(FsError::NotFound);
+            }
+            let meta = self
+                .0
+                .metadata(&rel_path_string(path))
+                .await
+                .map_err(to_dav_err)?;
+            meta.content_type
+                .map(String::into_bytes)
+                .ok_or(FsError::NotFound)
+        })
+    }
+
     fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         Box::pin(async move {
             self.0
@@ -345,6 +395,22 @@ impl DavDirEntry for DavDirEntryAdapter {
             .map(|m| Box::new(DavMetaAdapter(m)) as Box<dyn DavMetaData>)
             .map_err(to_dav_err);
         Box::pin(ready(meta))
+    }
+}
+
+/// Dead property naming the media type of what an entry describes:
+/// `application/pdf` for a card describing a PDF,
+/// `application/vnd.google-apps.spreadsheet` for a Google Sheet.
+const SUBJECT_TYPE_PROP: &str = "subject-content-type";
+const PROP_NAMESPACE: &str = "urn:agent-k:workspace";
+const PROP_PREFIX: &str = "W";
+
+fn subject_type_prop(value: Option<String>) -> DavProp {
+    DavProp {
+        name: SUBJECT_TYPE_PROP.to_string(),
+        prefix: Some(PROP_PREFIX.to_string()),
+        namespace: Some(PROP_NAMESPACE.to_string()),
+        xml: value.map(String::into_bytes),
     }
 }
 

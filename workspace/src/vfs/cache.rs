@@ -630,12 +630,14 @@ impl Resource for CachedResource {
         self.inner.prompt()
     }
 
-
     fn listings_complete(&self) -> bool {
         self.inner.listings_complete()
     }
-}
 
+    fn reports_content_type(&self) -> bool {
+        self.inner.reports_content_type()
+    }
+}
 
 /// Parent directory of an absolute mount-relative path: `/a/b` -> `/a`,
 /// `/a` -> `/`, `/` -> `/`.
@@ -906,7 +908,6 @@ mod tests {
         assert!(c.total <= 10, "within budget");
     }
 
-
     // On an incomplete-listing provider (gmail), an unlink must drop EVERY
     // cached listing — the object may be listed under paths unrelated to the
     // unlinked one (other labels, .search dirs) — not just the parent dir.
@@ -952,10 +953,7 @@ mod tests {
         cached.readdir(&MountPath::new("/l1")).await.unwrap();
         assert_eq!(inner.readdirs.load(Ordering::SeqCst), 2, "cached");
         // Unlink under /l2: /l1's listing must be dropped too.
-        cached
-            .unlink(&MountPath::new("/l2/a.json"))
-            .await
-            .unwrap();
+        cached.unlink(&MountPath::new("/l2/a.json")).await.unwrap();
         cached.readdir(&MountPath::new("/l1")).await.unwrap();
         assert_eq!(
             inner.readdirs.load(Ordering::SeqCst),

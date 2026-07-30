@@ -283,6 +283,12 @@ impl Resource for GdriveResource {
         GDRIVE_PROMPT
     }
 
+    /// Every file entry carries Drive's `mimeType`: the served bytes are a JSON
+    /// card, so the name can never say what the file actually is.
+    fn reports_content_type(&self) -> bool {
+        true
+    }
+
     // `listings_complete` stays at the default `true`: a per-folder
     // `files.list` is complete at fetch time (the >MAX_FOLDER_FILES truncation
     // case is pathological and logged), so a missing child really is missing.
