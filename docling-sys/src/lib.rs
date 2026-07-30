@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
@@ -93,10 +94,27 @@ impl Default for PdfOptions {
     }
 }
 
-/// Convert PDF bytes to Markdown.
-pub async fn convert_pdf_to_md(
+/// How long a single conversion may run before the parser is killed. The input
+/// is a document from outside — uploaded, or fetched from the web — and the
+/// parser runs on the host with the caller's own privileges, so a document that
+/// makes it spin must not be able to hold a worker forever.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Convert PDF bytes to Markdown, giving up after [`DEFAULT_TIMEOUT`].
+pub async fn convert_pdf_to_md(pdf_bytes: &[u8], options: &PdfOptions) -> anyhow::Result<String> {
+    convert_pdf_to_md_within(pdf_bytes, options, DEFAULT_TIMEOUT).await
+}
+
+/// Convert PDF bytes to Markdown, giving up after `timeout`.
+///
+/// On expiry the parser process is killed rather than left behind: the command
+/// is spawned with `kill_on_drop`, and letting the timeout drop the future drops
+/// the child handle with it. Without that, a parse that never finishes leaves an
+/// orphan holding CPU and memory for the life of the host process.
+pub async fn convert_pdf_to_md_within(
     pdf_bytes: &[u8],
     options: &PdfOptions,
+    timeout: Duration,
 ) -> anyhow::Result<String> {
     let dir = bundle_dir().ok_or_else(|| {
         anyhow!(
@@ -105,35 +123,92 @@ pub async fn convert_pdf_to_md(
         )
     })?;
     let exe = dir.join(BUNDLE_BINARY);
+    let options_json = serde_json::to_string(options).context("serialize PdfOptions")?;
+    let stdout = run_bundle(&exe, pdf_bytes, &options_json, timeout).await?;
+    String::from_utf8(stdout).context("run_docling stdout was not valid UTF-8")
+}
 
-    let options_json =
-        serde_json::to_string(options).context("serialize PdfOptions")?;
-
-    let mut child = Command::new(&exe)
+/// Spawn `exe`, feed it `pdf_bytes` on stdin, and return its stdout — or kill it
+/// and fail once `timeout` elapses.
+///
+/// Takes the executable path rather than resolving the bundle so the timeout
+/// path is exercisable against a stand-in parser.
+async fn run_bundle(
+    exe: &Path,
+    pdf_bytes: &[u8],
+    options_json: &str,
+    timeout: Duration,
+) -> anyhow::Result<Vec<u8>> {
+    let mut command = Command::new(exe);
+    command
         .arg("--options")
-        .arg(&options_json)
+        .arg(options_json)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Backstop for the direct child if this future is dropped for any
+        // reason other than the timeout below.
+        .kill_on_drop(true);
+    // Its own process group, so the kill on timeout reaches whatever the parser
+    // started as well. docling shells out (OCR helpers, for one), and killing
+    // only the process we spawned would leave those holding the CPU.
+    #[cfg(unix)]
+    command.process_group(0);
+
+    let mut child = command
         .spawn()
         .with_context(|| format!("failed to spawn {}", exe.display()))?;
+    let pid = child.id();
 
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("child stdin unavailable"))?;
-        stdin.write_all(pdf_bytes).await?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("child stdin unavailable"))?;
+
+    // The write is inside the timeout too, not just the wait: a parser that
+    // never drains stdin fills the pipe buffer and blocks the write instead of
+    // the wait, which is the same hang through a different door.
+    let pdf_bytes = pdf_bytes.to_vec();
+    let run = async move {
+        stdin.write_all(&pdf_bytes).await?;
         stdin.shutdown().await?;
-    }
+        drop(stdin);
+        child.wait_with_output().await
+    };
 
-    let output = child.wait_with_output().await?;
+    let output = match tokio::time::timeout(timeout, run).await {
+        Ok(result) => result?,
+        Err(_) => {
+            kill_process_group(pid);
+            anyhow::bail!("run_docling timed out after {timeout:?}; parser killed");
+        }
+    };
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("run_docling exited with {}: {}", output.status, stderr);
     }
-    String::from_utf8(output.stdout).context("run_docling stdout was not valid UTF-8")
+    Ok(output.stdout)
 }
+
+/// SIGKILL the process group led by `pid`. Best-effort: by the time this runs
+/// the group may already be gone, and the only failure mode that matters
+/// (nothing left to kill) is the one we want anyway.
+#[cfg(unix)]
+fn kill_process_group(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        // SAFETY: `killpg` on a pid we spawned into its own group. A stale pid
+        // returns ESRCH rather than signalling an unrelated process, because the
+        // group leader id is not reused while we hold the child handle.
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+}
+
+/// No process groups here; `kill_on_drop` handles the direct child.
+#[cfg(not(unix))]
+fn kill_process_group(_pid: Option<u32>) {}
 
 /// Read a file from disk and convert it to Markdown.
 pub async fn convert_pdf_file(
@@ -144,4 +219,109 @@ pub async fn convert_pdf_file(
         .await
         .with_context(|| format!("failed to read {}", path.as_ref().display()))?;
     convert_pdf_to_md(&bytes, options).await
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::*;
+
+    /// Write an executable stand-in parser that records the pid of a child it
+    /// starts, then hangs. The recorded child is what proves the kill reaches
+    /// past the process we spawned.
+    fn hanging_parser(dir: &Path, pidfile: &Path) -> PathBuf {
+        let script = dir.join("stub_parser");
+        let mut f = std::fs::File::create(&script).expect("create stub");
+        write!(
+            f,
+            "#!/bin/sh\nsleep 120 &\necho $! > {}\nwait\n",
+            pidfile.display()
+        )
+        .expect("write stub");
+        drop(f);
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod stub");
+        script
+    }
+
+    fn pid_alive(pid: u32) -> bool {
+        // SAFETY: signal 0 only probes for the process's existence.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+
+    /// The stub writes its pidfile with a shell redirect, so allow a moment for
+    /// the file to appear and hold a complete number.
+    fn read_recorded_pid(pidfile: &Path) -> Option<u32> {
+        for _ in 0..100 {
+            if let Ok(s) = std::fs::read_to_string(pidfile)
+                && let Ok(pid) = s.trim().parse::<u32>()
+            {
+                return Some(pid);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        None
+    }
+
+    /// A parse that never finishes must be cut off by the library itself, and
+    /// must not leave the parser (or what the parser started) behind. Before the
+    /// timeout existed, the call returned only when the caller imposed its own
+    /// deadline, and the child stayed on the host.
+    #[tokio::test]
+    async fn timeout_cuts_off_a_hanging_parse_and_kills_its_children() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pidfile = dir.path().join("child.pid");
+        let stub = hanging_parser(dir.path(), &pidfile);
+
+        // Comfortably longer than shell startup, so the stub is certain to have
+        // recorded its child before the deadline fires. A tighter deadline races
+        // the stub and turns this into a flake under parallel test load.
+        let started = std::time::Instant::now();
+        let err = run_bundle(&stub, b"%PDF-1.4", "{}", Duration::from_secs(2))
+            .await
+            .expect_err("a hanging parser must not return Ok");
+        let elapsed = started.elapsed();
+
+        assert!(
+            err.to_string().contains("timed out"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "the library must impose the deadline itself, took {elapsed:?}"
+        );
+
+        // The grandchild `sleep` is only reachable through the process group, so
+        // this is what distinguishes a group kill from killing just the child.
+        let pid: u32 = read_recorded_pid(&pidfile).expect("stub should record its child pid");
+        let mut alive = true;
+        for _ in 0..40 {
+            if !pid_alive(pid) {
+                alive = false;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!alive, "parser's child {pid} survived the timeout");
+    }
+
+    /// The happy path still returns stdout, so the timeout wrapper is not
+    /// swallowing successful conversions.
+    #[tokio::test]
+    async fn successful_parse_returns_stdout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = dir.path().join("stub_ok");
+        let mut f = std::fs::File::create(&script).expect("create stub");
+        write!(f, "#!/bin/sh\ncat >/dev/null\nprintf '# ok'\n").expect("write stub");
+        drop(f);
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod stub");
+
+        let out = run_bundle(&script, b"%PDF-1.4", "{}", Duration::from_secs(20))
+            .await
+            .expect("stub should succeed");
+        assert_eq!(String::from_utf8(out).unwrap(), "# ok");
+    }
 }
