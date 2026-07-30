@@ -648,6 +648,7 @@ mod tests {
                     created: None,
                     etag: None,
                     content_type: None,
+                    size_is_estimate: false,
                 }])
             } else {
                 Err(ResourceError::NotFound)

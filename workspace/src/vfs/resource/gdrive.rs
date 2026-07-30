@@ -16,12 +16,6 @@ use crate::vfs::{
 
 const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 
-/// Suffix on every file entry: the mount serves a metadata *card* (JSON, with
-/// the Drive link inside), not the file's bytes, and the name has to say so — a
-/// `report.pdf` whose content is JSON would be a lie. `report.pdf` →
-/// `report.pdf.json`. Same plain `.json` the gmail mirror settled on.
-const CARD_SUFFIX: &str = ".json";
-
 /// The mount root mirrors Drive's own sidebar as virtual sections. `My Drive` is
 /// the literal Drive folder id `root`; `Shared with me` is a sentinel resolved
 /// to a `sharedWithMe=true` listing (shared items carry no `parents`, so the
@@ -33,44 +27,81 @@ const MY_DRIVE_NAME: &str = "My Drive";
 const SHARED_WITH_ME_ID: &str = "@sharedWithMe";
 const SHARED_WITH_ME_NAME: &str = "Shared with me";
 
-/// Suffix for a native Workspace doc's converted text. Those types hold no bytes
-/// of their own, so the conversion *is* the file's content — and the name has to
-/// say what the bytes are, since `Q3 Plan` carries no extension.
-const TEXT_SUFFIX: &str = ".txt";
-
-/// Whether a listing entry is a conversion rather than a file's own bytes: its
-/// content type is the *source* mime, which only the Docs-editors types have.
+/// Whether a listing entry is a document's JSON rather than a file's own bytes:
+/// its content type is the *source* mime, which only the Docs-editors types have.
 #[cfg(test)]
-fn is_conversion(e: &DirEntry) -> bool {
+fn is_native_json(e: &DirEntry) -> bool {
     e.content_type
         .as_deref()
         .is_some_and(|t| t.starts_with("application/vnd.google-apps."))
 }
 
-/// Native types Drive converts to text, and to what. Sheets go to CSV (Drive
-/// exports the first tab only — a documented Google limitation); Docs and Slides
-/// to plain text. Drawings/Forms/Maps have no text form at all.
-const TEXT_EXPORTS: &[(&str, &str)] = &[
-    ("application/vnd.google-apps.document", "text/plain"),
-    ("application/vnd.google-apps.presentation", "text/plain"),
-    ("application/vnd.google-apps.spreadsheet", "text/csv"),
+/// How each Docs-editors type is served: the API that answers for it, and the
+/// suffix its entry carries.
+///
+/// These types hold no bytes of their own — Drive can only export a rendering of
+/// them — so the document's own API is the only form that carries everything:
+/// formulas, slide geometry, and the character indices an edit has to address.
+/// The suffix says which document it is, since the Drive name has no extension.
+const NATIVE_KINDS: &[(&str, NativeApi, &str)] = &[
+    (
+        "application/vnd.google-apps.document",
+        NativeApi::Doc,
+        ".gdoc.json",
+    ),
+    (
+        "application/vnd.google-apps.spreadsheet",
+        NativeApi::Sheet,
+        ".gsheet.json",
+    ),
+    (
+        "application/vnd.google-apps.presentation",
+        NativeApi::Slides,
+        ".gslide.json",
+    ),
 ];
+
+/// The API and suffix for a native mime, if it is one.
+fn native_kind(mime: &str) -> Option<(NativeApi, &'static str)> {
+    NATIVE_KINDS
+        .iter()
+        .find(|(m, _, _)| *m == mime)
+        .map(|(_, api, suffix)| (*api, *suffix))
+}
 
 /// Per-directory listing TTL. A listing is one `files.list`, so a short TTL
 /// keeps `ls` fresh; path resolution walks parent listings and rides this cache.
 const DIR_TTL: Duration = Duration::from_secs(60);
-/// Size reported for a conversion whose length nobody has learned yet.
+/// Ceiling on the cell values one spreadsheet's JSON will carry, spent tab by tab
+/// in the workbook's own order until it runs out.
+///
+/// Values are proportional to what is actually filled in — 443 B to 105 KB per tab
+/// measured, an 8-tab workbook around 185 KB — so this bounds the outlier rather
+/// than the common case. A workbook of 634,410 cells exists in the corpus.
+const GRID_BYTES_BUDGET: u64 = 8 * 1024 * 1024;
+/// Tabs whose values are requested in one `batchGet`. Each title rides in the
+/// query string, so an unbounded count would eventually build an unsendable URL.
+const MAX_TABS: usize = 64;
+
+/// Size reported for a document whose length nobody has learned yet.
 ///
 /// It cannot be 0. Reads run under the guest's FUSE mount with `direct_io`, and a
 /// 0-length file was measured (in ailoy's Drive mount, which hit this first) to
-/// clamp reads to nothing — the file would list but never open. An over-estimate
-/// is safe in the other direction: the read returns the real bytes and then empty
-/// at EOF, so `cat` stops at the true end. 64 MiB clears any Drive export, which
-/// Google itself caps at 10 MB.
+/// clamp reads to nothing — and a search tool skips a file it is told is empty. An
+/// over-estimate is safe in the other direction: the read returns the real bytes
+/// and then empty at EOF, so `cat` stops at the true end.
 ///
-/// Exact once something has read the file: the metadata cache then knows the
-/// length and answers from it (see `CachedResource::stat`).
-const CONVERSION_SENTINEL_SIZE: u64 = 64 * 1024 * 1024;
+/// 8 MiB, matching the content cache's per-object limit: anything at or under it
+/// reports its exact length from the moment it is first read, so the placeholder is
+/// what an unread document shows, not what a document shows. Measured real lengths
+/// were 52 KB to 3.4 MB.
+///
+/// This is a placeholder, not a measurement — `find -size` and `ls -l` see it until
+/// something reads the file. Making it exact up front costs one render per
+/// document: measured 2.4s for a six-document folder listing, 6.3s when the
+/// kernel's per-entry `getattr` serialises them. See
+/// [`GdriveResource::resolve_size_on_stat`].
+const CONVERSION_SENTINEL_SIZE: u64 = 8 * 1024 * 1024;
 
 /// Safety ceiling on one folder's listing (10 pages). Beyond this the listing
 /// truncates (the accessor logs it) — a >10k-child folder is pathological to
@@ -85,30 +116,32 @@ Drive's own sidebar:
   <shared drive>/         # each shared drive, when the account has any
 
   Folders are directories, files are files: `cat`, `head`, `cp` and `grep` all
-  work on the real bytes. Google Docs, Sheets and Slides hold no bytes of their
-  own, so each appears as `<name>.txt` carrying its converted text instead
-  (Sheets: first tab, as CSV). Files with no readable form at all (Forms, Maps,
+  work on the real bytes.
+
+  Google Docs, Sheets and Slides hold no bytes of their own, so each appears as
+  its own API's JSON — the only form that carries everything about it:
+    <name>.gdoc.json     paragraphs, styles, tables, and the character indices
+                         an edit addresses
+    <name>.gsheet.json   the workbook: tabs, named ranges, charts, conditional
+                         formats, and each tab's cell values under
+                         sheets[].values (rows of columns, formatted as the
+                         sheet displays them). A tab past the size budget says
+                         so in sheets[].valuesOmitted instead.
+    <name>.gslide.json   pages, shapes, transforms, speaker notes
+  Text inside these is split across style runs, so a search finds words but not
+  always phrases, and `-A`/`-B` context shows JSON siblings rather than the next
+  lines of the document. A cell or paragraph holding a line break carries it as
+  an escaped \\n on one JSON line, so match within a line, not across one. Files with no readable form at all (Forms, Maps,
   Drawings) are not listed.
 
   This is a remote mount, so every read costs network:
   - `head`/`grep` transfer only what they touch; `cat` of a 70MB file moves 70MB
-  - narrow a search with an include/glob filter (e.g. '*.txt', '*.pdf'). A
+  - narrow a search with an include/glob filter (e.g. '*.json', '*.pdf'). A
     filtered search never opens the other files at all
-  - a `.txt` conversion takes a few seconds on its first read (cached after) and
-    lists as size 0 until then; every other file lists its true size
+  - a `.json` takes a second or two on its first read (cached after). Until then
+    its listed size is a placeholder, so `ls -l` and `find -size` say 8MB for any
+    unread document; every other file lists its true size
   The mount is read-only: no writes, no rm, no mkdir.";
-
-/// The mime a native Workspace doc converts to, if it converts at all.
-///
-/// Only these need a sidecar: every other file has real bytes, served at its own
-/// name, and a file that is already text is already readable there. A native doc
-/// has no byte form of its own, so the conversion is the only content it has.
-fn export_mime(mime: &str) -> Option<&'static str> {
-    TEXT_EXPORTS
-        .iter()
-        .find(|(m, _)| *m == mime)
-        .map(|(_, target)| *target)
-}
 
 /// Whether Drive holds real bytes for this row. The Docs-editors types (and
 /// Forms, Maps, Drawings) do not — `alt=media` answers 403 for them.
@@ -123,8 +156,17 @@ enum Serves {
     Local,
     /// The file's own bytes (`alt=media`), ranged.
     Original,
-    /// A native doc converted to this mime (`files.export`).
-    Export(&'static str),
+    /// The document's own structure, from its own API (`documents.get` and
+    /// friends) rather than Drive.
+    Native(NativeApi),
+}
+
+/// Which API answers for a document's structure.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NativeApi {
+    Doc,
+    Sheet,
+    Slides,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -144,7 +186,7 @@ impl GKind {
 #[derive(Clone)]
 struct Child {
     /// Listing name: the sanitized (and, on collision, disambiguated) Drive
-    /// name — plus [`TEXT_SUFFIX`] when the entry serves a conversion.
+    /// name — plus an extension when the entry serves a conversion or its JSON.
     vfs_name: String,
     id: String,
     /// Set when the entry lives in a shared drive (listing scope).
@@ -281,6 +323,86 @@ impl GdriveResource {
         Ok((entry.id.clone(), entry.drive_id.clone()))
     }
 
+    /// A spreadsheet's JSON: its structure, with each tab's cell values folded in
+    /// under `values`.
+    ///
+    /// Two calls, because Sheets has no single one that answers both cheaply.
+    /// `spreadsheets.get` gives the workbook's shape (3.7-19.5 KB measured) and,
+    /// with it, the tab titles that name the ranges; `values:batchGet` then returns
+    /// the used range of every tab at once. The flag that looks like the direct
+    /// route — `includeGridData=true` — bills per *allocated* cell, and the first
+    /// real workbook tried allocated 210,125 for an estimated 189 MB, so it is not
+    /// a route at all. See [`GdriveAccessor::sheet_values_batch`].
+    ///
+    /// A tab whose values exceed the budget is left out with a `valuesOmitted` note
+    /// on it, so a reader sees a stated omission rather than an empty sheet.
+    async fn spreadsheet_bytes(&self, id: &str) -> anyhow::Result<Vec<u8>> {
+        let mut v: Value = serde_json::from_slice(&self.accessor.spreadsheet_json(id).await?)?;
+        let titles: Vec<String> = v
+            .get("sheets")
+            .and_then(|s| s.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.pointer("/properties/title")?.as_str())
+            .map(str::to_string)
+            .take(MAX_TABS)
+            .collect();
+        if titles.is_empty() {
+            let mut bytes = serde_json::to_vec_pretty(&v)?;
+            bytes.push(b'\n');
+            return Ok(bytes);
+        }
+        // Whole tabs by name: an A1 range with no cell part means "everything used".
+        // A values endpoint that is missing (a Drive-only mock) or forbidden (the
+        // Sheets API not enabled on the project) costs the cells, not the read —
+        // the workbook's shape is still worth serving, with the reason attached.
+        let batch = match self.accessor.sheet_values_batch(id, &titles).await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::debug!("gdrive: {id} values unavailable: {e:#}");
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("valuesUnavailable".into(), Value::String(format!("{e:#}")));
+                }
+                let mut bytes = serde_json::to_vec_pretty(&v)?;
+                bytes.push(b'\n');
+                return Ok(bytes);
+            }
+        };
+        let mut ranges = batch
+            .get("valueRanges")
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default()
+            .into_iter();
+        let mut budget = GRID_BYTES_BUDGET;
+        for tab in v
+            .get_mut("sheets")
+            .and_then(|s| s.as_array_mut())
+            .into_iter()
+            .flatten()
+        {
+            let Some(range) = ranges.next() else { break };
+            let Some(obj) = tab.as_object_mut() else {
+                continue;
+            };
+            let values = range.get("values").cloned().unwrap_or(Value::Array(vec![]));
+            let cost = values.to_string().len() as u64;
+            if cost > budget {
+                obj.insert(
+                    "valuesOmitted".into(),
+                    serde_json::json!({ "bytes": cost, "remainingBudget": budget }),
+                );
+                budget = 0;
+                continue;
+            }
+            budget -= cost;
+            obj.insert("values".into(), values);
+        }
+        let mut bytes = serde_json::to_vec_pretty(&v)?;
+        bytes.push(b'\n');
+        Ok(bytes)
+    }
+
     /// Resolve any path (file or folder) to its child entry via its parent dir.
     async fn resolve(&self, path: &str) -> ResourceResult<Child> {
         let (parent, name) = split_last(path);
@@ -325,14 +447,21 @@ impl Resource for GdriveResource {
                     _ => bytes,
                 });
             }
-            // A conversion takes seconds and has no ranged form, so the whole
-            // text comes back and the metadata cache serves the chunks after.
-            Serves::Export(mime) => {
+            // A document from its own API. A spreadsheet takes two calls, its
+            // structure and its cells — see [`Self::spreadsheet_bytes`].
+            Serves::Native(NativeApi::Sheet) => {
                 let bytes = self
-                    .accessor
-                    .export(&child.id, mime)
+                    .spreadsheet_bytes(&child.id)
                     .await
                     .map_err(not_found_or_backend)?;
+                return Ok(slice(&bytes, range));
+            }
+            Serves::Native(api) => {
+                let bytes = match api {
+                    NativeApi::Doc => self.accessor.document_json(&child.id).await,
+                    _ => self.accessor.presentation_json(&child.id).await,
+                }
+                .map_err(not_found_or_backend)?;
                 return Ok(slice(&bytes, range));
             }
             // Only a directory serves nothing, and directories were rejected
@@ -368,6 +497,7 @@ impl Resource for GdriveResource {
             mtime: child.mtime,
             created: child.created,
             content_type: child.mime_type.clone(),
+            size_is_estimate: is_estimate(&child),
             ..Default::default()
         })
     }
@@ -376,15 +506,23 @@ impl Resource for GdriveResource {
         GDRIVE_PROMPT
     }
 
-    /// Every file entry carries Drive's `mimeType`: the served bytes are a JSON
-    /// A converted doc is served as `.txt`, so its name cannot say that the
-    /// source is a spreadsheet; Drive's own mime can.
+    /// Every file entry carries Drive's `mimeType`. A native doc is served as
+    /// `.gdoc.json`/`.gsheet.json`/`.gslide.json`, whose extension says "JSON" and
+    /// not which of the three it came from; Drive's own mime says that.
     fn reports_content_type(&self) -> bool {
         true
     }
 
-    /// Conversions are per document and take seconds, so `ls -l` must not
-    /// trigger them: an unknown length stays 0 until something reads the file.
+    /// A document's JSON has to be produced before anyone knows how long it is, so
+    /// sizing a listing means rendering every document in it. Measured against a
+    /// real account: 2.4s for one folder's six documents concurrently, 6.3s when
+    /// the kernel's per-entry `getattr` serialises them — spent every time a
+    /// listing goes cold, on a number that `ls`, `find -name` and `Glob` never
+    /// read. So the listing reports [`CONVERSION_SENTINEL_SIZE`] and the length
+    /// becomes exact as soon as anything reads the file: a handle resolves it on
+    /// `open` (`File::metadata`), and the cache answers from the bytes it kept.
+    ///
+    /// Notion opts in instead — its render is a page fetch, not a document export.
     fn resolve_size_on_stat(&self) -> bool {
         false
     }
@@ -427,7 +565,16 @@ fn dir_entry_for(c: &Child) -> DirEntry {
         created: c.created,
         etag: None,
         content_type: c.mime_type.clone(),
+        size_is_estimate: is_estimate(c),
     }
+}
+
+/// Whether this entry's size is only an upper bound: true exactly for a
+/// conversion, whose length nobody knows until Drive has produced it. An original
+/// with no reported size keeps the estimate too — but reading a 1 GB object to
+/// answer `stat` is not a trade worth making, so it is not marked resolvable.
+fn is_estimate(c: &Child) -> bool {
+    matches!(c.serves, Serves::Native(_))
 }
 
 /// Map an accessor error to [`ResourceError`]: an upstream HTTP 404 (a file id
@@ -446,13 +593,8 @@ fn not_found_or_backend(e: anyhow::Error) -> ResourceError {
 }
 
 /// Map one `files.list` row into the entry it becomes, or `None` when the mount
-/// has nothing to serve for it.
-///
-/// A folder is a directory. A file with bytes of its own keeps its Drive name and
-/// serves those bytes. A native Workspace doc has no bytes, so its converted text
-/// takes the name with a [`TEXT_SUFFIX`]; the ones that convert to nothing
-/// (Forms, Maps, Drawings) are dropped — there is no content to stand behind an
-/// entry, and a name that cannot be read is worse than an absence.
+/// has nothing to serve for it (Forms, Maps and Drawings answer no API and export
+/// to nothing — a name that cannot be read is worse than an absence).
 fn child_from_file(f: &Value) -> Option<Child> {
     let name = sanitize_name(f.get("name")?.as_str()?);
     let id = f.get("id")?.as_str()?.to_string();
@@ -482,11 +624,9 @@ fn child_from_file(f: &Value) -> Option<Child> {
             .and_then(|s| s.parse::<u64>().ok());
         (name, Serves::Original, size)
     } else {
-        (
-            format!("{name}{TEXT_SUFFIX}"),
-            Serves::Export(export_mime(mime)?),
-            None,
-        )
+        // A native document: served as its own API's JSON.
+        let (api, suffix) = native_kind(mime)?;
+        (format!("{name}{suffix}"), Serves::Native(api), None)
     };
     Some(Child {
         vfs_name,
@@ -639,20 +779,30 @@ mod tests {
             "notes.md"
         );
 
-        // Docs-editors types: the conversion is the content, so it takes the name.
-        for (mime, want) in [
-            ("application/vnd.google-apps.document", "text/plain"),
-            ("application/vnd.google-apps.presentation", "text/plain"),
-            ("application/vnd.google-apps.spreadsheet", "text/csv"),
+        // Docs-editors types: one entry, the document's own API JSON. The suffix
+        // says which kind it is, since the Drive name carries no extension.
+        for (mime, suffix, api) in [
+            (
+                "application/vnd.google-apps.document",
+                ".gdoc.json",
+                NativeApi::Doc,
+            ),
+            (
+                "application/vnd.google-apps.spreadsheet",
+                ".gsheet.json",
+                NativeApi::Sheet,
+            ),
+            (
+                "application/vnd.google-apps.presentation",
+                ".gslide.json",
+                NativeApi::Slides,
+            ),
         ] {
             let c = entry("Q3 Plan", mime).unwrap();
-            assert_eq!(c.vfs_name, "Q3 Plan.txt", "{mime}");
-            assert_eq!(c.serves, Serves::Export(want), "{mime}");
-            assert_eq!(
-                entry_size(&c),
-                CONVERSION_SENTINEL_SIZE,
-                "{mime}: an over-estimate, never 0 — see the constant"
-            );
+            assert_eq!(c.vfs_name, format!("Q3 Plan{suffix}"), "{mime}");
+            assert_eq!(c.serves, Serves::Native(api), "{mime}");
+            // Its length is only known once the API has answered.
+            assert_eq!(entry_size(&c), CONVERSION_SENTINEL_SIZE, "{mime}");
         }
 
         // Nothing to convert, nothing to serve: not listed at all.
@@ -703,22 +853,24 @@ mod tests {
             "application/vnd.google-apps.document",
         ))
         .unwrap();
-        assert_eq!(doc.vfs_name, "분기 보고서.txt");
+        assert_eq!(doc.vfs_name, "분기 보고서.gdoc.json");
     }
 
-    /// A row Drive reported no size for still lists, and reports the over-estimate
-    /// rather than 0 — under the guest's `direct_io` mount a 0 was measured to
-    /// clamp reads to nothing, so the file would list but never open.
+    /// A row Drive reported no size for still lists, with the placeholder rather
+    /// than 0 — under the guest's `direct_io` mount a 0 was measured to clamp reads
+    /// to nothing, and a search tool skips a file it is told is empty.
     #[test]
-    fn an_unknown_size_is_over_estimated_never_zero() {
+    fn an_unknown_size_is_a_placeholder_never_zero() {
         let mut row = file_row("mystery.bin", "id1", "application/octet-stream");
         row.as_object_mut().unwrap().remove("size");
         let c = child_from_file(&row).unwrap();
         assert_eq!(c.serves, Serves::Original);
         assert_eq!(entry_size(&c), CONVERSION_SENTINEL_SIZE);
-        // The estimate has to clear Google's own 10 MB export ceiling, or a big
-        // conversion would read short.
-        const _: () = assert!(CONVERSION_SENTINEL_SIZE > 10 * 1024 * 1024);
+        // Never 0 (that reads as empty), and at or under the content cache's
+        // per-object limit, so the first read of a document replaces the
+        // placeholder with its exact length for every later listing.
+        const _: () = assert!(CONVERSION_SENTINEL_SIZE > 0);
+        const _: () = assert!(CONVERSION_SENTINEL_SIZE <= 8 * 1024 * 1024);
     }
 
     #[test]
@@ -735,7 +887,7 @@ mod tests {
             "application/vnd.google-apps.document",
         ))
         .unwrap();
-        assert_eq!(native.vfs_name, "untitled.txt");
+        assert_eq!(native.vfs_name, "untitled.gdoc.json");
     }
 
     #[test]
@@ -885,11 +1037,11 @@ mod tests {
                 }
                 let mp = MountPath::new(&p);
                 let bytes = r.read_bytes(&mp, None).await.expect("read file");
-                if is_conversion(e) {
-                    // A conversion: the listing could only estimate its length,
-                    // so compare against what the read actually produced.
+                if is_native_json(e) {
+                    // A document's JSON: the listing could only estimate its
+                    // length, so just check the read produced something.
                     converted += 1;
-                    assert!(!bytes.is_empty(), "{p}: conversion produced nothing");
+                    assert!(!bytes.is_empty(), "{p}: native json was empty");
                 } else {
                     assert_eq!(e.size, bytes.len() as u64, "{p}: listed size vs read");
                     let st = r.stat(&mp).await.expect("stat");
@@ -963,7 +1115,7 @@ mod tests {
             // length the listing promised.
             if let Some(f) = entries
                 .iter()
-                .find(|e| e.kind == FileKind::File && !is_conversion(e) && e.size > 0)
+                .find(|e| e.kind == FileKind::File && !is_native_json(e) && e.size > 0)
             {
                 let mp = MountPath::new(format!("/{section}/{}", f.name));
                 let head = r
@@ -988,70 +1140,103 @@ mod tests {
             }
         }
     }
-    /// Live: a Docs-editors file is served as its converted text — the one path
-    /// where this mount produces bytes Drive itself does not store.
+    /// Live: a Docs-editors document is served as its own API's JSON, and a
+    /// spreadsheet's stays small — the grid it deliberately omits runs to hundreds
+    /// of megabytes.
     #[tokio::test]
     #[ignore = "requires GDRIVE_* env + network"]
-    async fn gdrive_live_text_conversions_are_readable() {
+    async fn gdrive_live_native_json_is_served() {
         let Some(cfg) = live_config() else {
             eprintln!("set GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REFRESH_TOKEN to run");
             return;
         };
         let r = GdriveResource::new(&cfg).unwrap();
 
-        let mut checked = 0usize;
+        let mut seen = 0usize;
         for section in [SHARED_WITH_ME_NAME, MY_DRIVE_NAME] {
             let entries = r
                 .readdir(&MountPath::new(format!("/{section}")))
                 .await
                 .expect("section readdir");
-            let converted: Vec<&DirEntry> = entries.iter().filter(|e| is_conversion(e)).collect();
-            eprintln!(
-                "{section}: {} entries, {} of them conversions",
-                entries.len(),
-                converted.len()
-            );
-            for e in converted.iter().take(2) {
-                // A conversion lists as an over-estimate — never 0, which would
-                // clamp reads to nothing under the guest's direct_io mount.
-                assert_eq!(e.size, CONVERSION_SENTINEL_SIZE, "{}", e.name);
+            for suffix in [".gsheet.json", ".gdoc.json", ".gslide.json"] {
+                let Some(e) = entries.iter().find(|e| e.name.ends_with(suffix)) else {
+                    continue;
+                };
                 let p = MountPath::new(format!("/{section}/{}", e.name));
-                // `stat` must NOT convert: asking for a size is what `ls -l` does,
-                // and a folder of documents would otherwise convert every one.
-                let t_stat = std::time::Instant::now();
-                let st = r.stat(&p).await.expect("stat conversion");
-                let stat_took = t_stat.elapsed();
-                assert_eq!(
-                    st.size, CONVERSION_SENTINEL_SIZE,
-                    "{}: stat estimates without converting",
-                    e.name
-                );
-                assert!(
-                    stat_took.as_millis() < 500,
-                    "{}: stat took {stat_took:?} — it converted",
-                    e.name
-                );
                 let t0 = std::time::Instant::now();
-                let bytes = r.read_bytes(&p, None).await.expect("read conversion");
-                let text = String::from_utf8_lossy(&bytes);
+                let bytes = r.read_bytes(&p, None).await.expect("read native json");
+                let v: Value = serde_json::from_slice(&bytes).expect("native json parses");
                 eprintln!(
-                    "  {} -> {} bytes in {:.2}s | {:?}",
+                    "  {} -> {} bytes in {:.2}s, top keys {:?}",
                     e.name,
                     bytes.len(),
                     t0.elapsed().as_secs_f64(),
-                    text.chars().take(60).collect::<String>()
+                    v.as_object().map(|o| o.keys().take(4).collect::<Vec<_>>())
                 );
-                assert!(!bytes.is_empty(), "{}: empty text", e.name);
-                // Real lines, not one escaped blob: this is a text file, which is
-                // the whole reason the conversion is served as a file.
-                assert!(!text.contains("\\n"), "{}: escaped newlines", e.name);
-                checked += 1;
+                // A spreadsheet carries its cells, unless its allocated grid is
+                // over the limit — then it says so instead of moving 200-349MB.
+                if suffix == ".gsheet.json" {
+                    assert!(v.get("sheets").is_some(), "workbook shape is present");
+                    // `includeGridData` would put cells under sheets[].data. Nothing
+                    // should be taking that route — it measured 189MB on this very
+                    // workbook.
+                    assert!(
+                        !v["sheets"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|s| s.get("data").is_some()),
+                        "{}: cells must come from values, not the allocated grid",
+                        e.name
+                    );
+                    let tabs = v["sheets"].as_array().cloned().unwrap_or_default();
+                    for t in &tabs {
+                        eprintln!(
+                            "    tab {:?}: {} rows{}",
+                            t.pointer("/properties/title").and_then(|x| x.as_str()),
+                            t["values"].as_array().map_or(0, |r| r.len()),
+                            if t.get("valuesOmitted").is_some() {
+                                " (values omitted)"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                    assert!(
+                        tabs.iter()
+                            .all(|t| t.get("values").is_some() || t.get("valuesOmitted").is_some()),
+                        "{}: every tab carries its values or says why not",
+                        e.name
+                    );
+                    // The point of carrying values at all: a cell's text is in the
+                    // bytes, so a reader searching the tree finds it. Cells holding a
+                    // line break are excluded on purpose — JSON escapes those to
+                    // `\n`, so a phrase spanning one is not literally in the file.
+                    let a_cell = tabs
+                        .iter()
+                        .flat_map(|t| t["values"].as_array().cloned().unwrap_or_default())
+                        .flat_map(|row| row.as_array().cloned().unwrap_or_default())
+                        .find_map(|c| {
+                            c.as_str()
+                                .filter(|s| {
+                                    s.trim().len() > 3 && !s.contains(['\n', '"', '\\'])
+                                })
+                                .map(str::to_string)
+                        })
+                        .expect("some cell holds plain text");
+                    eprintln!("    a cell reads {a_cell:?}");
+                    assert!(
+                        String::from_utf8_lossy(&bytes).contains(&a_cell),
+                        "a cell's text is greppable in the served bytes"
+                    );
+                }
+                seen += 1;
             }
-            if checked > 0 {
+            if seen > 0 {
                 break;
             }
         }
-        assert!(checked > 0, "no convertible document found to read");
+        assert!(seen > 0, "no native document found");
     }
 
     /// Live: an original is a real file, and a ranged read transfers only its
@@ -1075,7 +1260,7 @@ mod tests {
             // must never be needed for.
             let Some(big) = entries
                 .iter()
-                .filter(|e| e.kind == FileKind::File && !is_conversion(e) && e.size > 0)
+                .filter(|e| e.kind == FileKind::File && !is_native_json(e) && e.size > 0)
                 .max_by_key(|e| e.size)
             else {
                 continue;

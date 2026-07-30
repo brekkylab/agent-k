@@ -19,7 +19,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod accessor;
-mod cache;
+pub(crate) mod cache;
 pub mod error;
 pub mod path;
 pub mod resource;

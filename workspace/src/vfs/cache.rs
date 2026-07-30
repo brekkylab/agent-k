@@ -41,6 +41,9 @@ struct Entry {
     /// listing that knows a card describes a PDF must not lose that on the
     /// fast path.
     content_type: Option<String>,
+    /// See [`FileStat::size_is_estimate`] — carried so a `stat` after a `readdir`
+    /// still knows the length was only an upper bound.
+    size_is_estimate: bool,
 }
 
 #[derive(Default)]
@@ -117,6 +120,7 @@ impl IndexCache {
                     created: None,
                     etag: e.etag.clone(),
                     content_type: e.content_type.clone(),
+                    size_is_estimate: e.size_is_estimate,
                 })
             })
             .collect();
@@ -163,6 +167,10 @@ impl IndexCache {
                     ctime: e.ctime,
                     etag: e.etag.clone(),
                     content_type: e.content_type.clone(),
+                    // Carried, not dropped: a listing's estimate must still read as
+                    // an estimate through a later `stat`, or the handle that opens
+                    // off it never resolves the real length.
+                    size_is_estimate: e.size_is_estimate,
                 },
             );
         }
@@ -324,7 +332,26 @@ pub struct CachedResource {
     /// Whole-object content, LRU-bounded ([`CONTENT_CACHE_BUDGET`]); freshness by
     /// revalidation, not a TTL.
     content: Mutex<ContentCache>,
+    /// Lengths learned by having produced the bytes once, keyed by path and the
+    /// version they were measured against.
+    ///
+    /// The content cache would answer the same question, but it drops anything
+    /// over [`MAX_CONTENT_BYTES`] and evicts under pressure — and a provider that
+    /// sizes by rendering pays a full render per miss. `ls -l` asks once per entry,
+    /// so a miss there is not one fetch but one per file, every time. Keeping the
+    /// number (8 bytes) after the bytes are gone makes that cost land once.
+    sizes: Mutex<HashMap<String, (Version, u64)>>,
 }
+
+/// Concurrent renders while sizing one listing. A Drive document takes 1-2s to
+/// produce, so a folder of them is unusable serially; past this the provider's own
+/// rate limits, not latency, are the constraint.
+const SIZING_CONCURRENCY: usize = 8;
+
+/// Cap on [`CachedResource::sizes`]: one entry per path ever sized in this
+/// session. Cleared wholesale when exceeded — a learned length is an optimisation,
+/// so losing it costs a re-render, not correctness.
+const MAX_LEARNED_SIZES: usize = 50_000;
 
 impl CachedResource {
     pub fn new(inner: Arc<dyn Resource>) -> Self {
@@ -332,6 +359,7 @@ impl CachedResource {
             inner,
             cache: IndexCache::new(LISTING_TTL),
             content: Mutex::new(ContentCache::default()),
+            sizes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -365,18 +393,50 @@ impl CachedResource {
     /// render, e.g. Notion `page.json`): render once *through the content cache*
     /// so the size is known and a following read is a hit. Cheap on a cache hit;
     /// 0 if the render fails.
-    async fn resolve_size(&self, path: &MountPath, version: &Version) -> u64 {
+    async fn resolve_size(&self, path: &MountPath, version: &Version, fallback: u64) -> u64 {
         if let Some(bytes) = self.content_get(path.as_str(), version) {
             return bytes.len() as u64;
+        }
+        if let Some(n) = self.size_learned(path.as_str(), version) {
+            return n;
         }
         match self.inner.read_bytes(path, None).await {
             Ok(bytes) => {
                 let n = bytes.len() as u64;
+                self.size_learn(path.as_str(), version, n);
                 self.content_put(path.as_str(), version.clone(), bytes);
                 n
             }
-            Err(_) => 0,
+            // Sizing failed (network, permissions). The provider's own answer
+            // stands: for a render-on-read file that is 0, and for one that
+            // over-estimates it is the over-estimate — never a 0 that would read
+            // as "empty" and have search tools skip the file entirely.
+            Err(_) => fallback,
         }
+    }
+
+    /// A length measured earlier against this same version, if any.
+    fn size_learned(&self, key: &str, version: &Version) -> Option<u64> {
+        if !version.known() {
+            return None;
+        }
+        let sizes = self.sizes.lock().unwrap();
+        sizes
+            .get(key)
+            .filter(|(v, _)| v == version)
+            .map(|(_, n)| *n)
+    }
+
+    /// Record a length just produced, so a later `stat` need not produce it again.
+    fn size_learn(&self, key: &str, version: &Version, len: u64) {
+        if !version.known() {
+            return;
+        }
+        let mut sizes = self.sizes.lock().unwrap();
+        if sizes.len() >= MAX_LEARNED_SIZES {
+            sizes.clear();
+        }
+        sizes.insert(key.to_string(), (version.clone(), len));
     }
 }
 
@@ -481,23 +541,12 @@ impl Resource for CachedResource {
             && !path.is_root()
             && self.cache.is_listed(parent_of(path.as_str()))
             && self.cache.get(path.as_str()).is_none();
-        let mut entries = self.inner.readdir(path).await?;
-        // Eagerly size (and content-cache) files the backend listed as 0 because
-        // sizing needs a render (Notion page.json): render once here so the entry
-        // shows a real size AND a following read is a cache hit. This adds that
-        // render to the listing's latency — the trade for correct sizes up front.
-        for e in entries.iter_mut() {
-            if matches!(e.kind, FileKind::File) && e.size == 0 {
-                let child = child_path(path, &e.name);
-                // Take the version from the provider's own stat, not the listing
-                // DirEntry (which may omit mtime, e.g. Notion `page.json`): the
-                // content cached here must be validated against the same token a
-                // later read computes, or the read misses and re-renders.
-                if let Ok(st) = self.inner.stat(&child).await {
-                    e.size = self.resolve_size(&child, &Version::of(&st)).await;
-                }
-            }
-        }
+        let entries = self.inner.readdir(path).await?;
+        // No sizing pass here. A listing that renders every unsized file to learn
+        // its length spends that on `find` and `ls` too, which never read the
+        // number — the FUSE forwarder parses `name` and `is_dir` out of a listing
+        // and drops the rest. Callers that do want lengths ask for them
+        // (`WorkspaceFs::read_dir`), and a `stat` resolves one file on demand.
         self.cache.set_dir(path.as_str(), &entries);
         if discovered {
             self.cache.invalidate_dir(parent_of(path.as_str()));
@@ -517,6 +566,10 @@ impl Resource for CachedResource {
                     ..Default::default()
                 });
             }
+            // A file whose cached length is only an upper bound: fall through and
+            // resolve it, or every `stat` after a `readdir` would repeat the
+            // listing's guess as if it were the length.
+            Some(e) if e.size_is_estimate && self.inner.resolve_size_on_stat() => {}
             // A file with a known (>0) size: serve it (with the cached times so
             // `ls -l` shows real times, not the epoch — R2).
             Some(e) if e.size > 0 => {
@@ -531,6 +584,7 @@ impl Resource for CachedResource {
                     // silently disabled the pin on the PROPFIND-then-GET path.
                     etag: e.etag.clone(),
                     content_type: e.content_type.clone(),
+                    size_is_estimate: e.size_is_estimate,
                     ..Default::default()
                 });
             }
@@ -563,19 +617,27 @@ impl Resource for CachedResource {
         {
             return Ok(FileStat {
                 size: bytes.len() as u64,
+                size_is_estimate: false,
                 ..st
             });
         }
-        // A file the backend can't cheaply size (render-on-read, e.g. Notion
-        // page.json) reports 0 — resolve its real length via the content cache so
-        // stat/HEAD/PROPFIND are correct and a following read is a hit. Providers
-        // whose per-file render is expensive opt out (see
-        // `Resource::resolve_size_on_stat`): for them 0 stands, and the read that
-        // actually wants the bytes pays for them.
-        if matches!(st.kind, FileKind::File) && st.size == 0 && self.inner.resolve_size_on_stat() {
+        // A file the backend can't cheaply size answers with a placeholder: 0 when
+        // it has no idea (Notion `page.json`), an upper bound when a zero would be
+        // read as "empty" (a Drive document). Either way the number is not the
+        // file's length, so resolve it by producing the bytes once — `ls -l`, HEAD
+        // and PROPFIND all read this. A provider whose render is too expensive to
+        // spend on a listing opts out (see `Resource::resolve_size_on_stat`) and
+        // its placeholder stands until a read pays for the truth.
+        let unsized_file = st.size == 0 || st.size_is_estimate;
+        if matches!(st.kind, FileKind::File) && unsized_file && self.inner.resolve_size_on_stat() {
             let version = Version::of(&st);
-            let size = self.resolve_size(path, &version).await;
-            return Ok(FileStat { size, ..st });
+            let size = self.resolve_size(path, &version, st.size).await;
+            let resolved = size != st.size || !st.size_is_estimate;
+            return Ok(FileStat {
+                size,
+                size_is_estimate: st.size_is_estimate && !resolved,
+                ..st
+            });
         }
         Ok(st)
     }
@@ -884,6 +946,7 @@ mod tests {
                     created: None,
                     etag: Some("\"abc123\"".into()),
                     content_type: None,
+                    size_is_estimate: false,
                 }])
             }
             async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
@@ -992,6 +1055,7 @@ mod tests {
             created: None,
             etag: None,
             content_type: None,
+            size_is_estimate: false,
         }
     }
 
@@ -1124,6 +1188,7 @@ mod tests {
                 created: None,
                 etag: None,
                 content_type: Some("application/pdf".to_string()),
+                size_is_estimate: false,
             }],
         );
         // The stat fast path reads the cached `Entry`…
@@ -1132,6 +1197,50 @@ mod tests {
         // …and a re-listing reconstructs `DirEntry` from the same store.
         let listed = c.list_dir_entries("/").expect("listing cached");
         assert_eq!(listed[0].content_type.as_deref(), Some("application/pdf"));
+    }
+
+    /// An estimated size has to survive `readdir` -> `stat`, because that is the
+    /// order every reader uses: list a directory, then open something in it. Lose
+    /// the flag and the sentinel size becomes a claim of fact, so the handle skips
+    /// resolving and hands out a length that is 20x the file (measured against a
+    /// real Drive: every document reported 64MB).
+    #[test]
+    fn an_estimated_size_stays_an_estimate_through_the_cache() {
+        let c = IndexCache::new(Duration::from_secs(600));
+        c.set_dir(
+            "/",
+            &[
+                DirEntry {
+                    name: "doc.gdoc.json".to_string(),
+                    kind: FileKind::File,
+                    size: 64 << 20,
+                    mtime: None,
+                    atime: None,
+                    ctime: None,
+                    created: None,
+                    etag: None,
+                    content_type: None,
+                    size_is_estimate: true,
+                },
+                DirEntry {
+                    name: "real.pdf".to_string(),
+                    kind: FileKind::File,
+                    size: 400,
+                    mtime: None,
+                    atime: None,
+                    ctime: None,
+                    created: None,
+                    etag: None,
+                    content_type: None,
+                    size_is_estimate: false,
+                },
+            ],
+        );
+        assert!(c.get("/doc.gdoc.json").unwrap().size_is_estimate);
+        assert!(!c.get("/real.pdf").unwrap().size_is_estimate);
+        let listed = c.list_dir_entries("/").unwrap();
+        assert!(listed[0].size_is_estimate);
+        assert!(!listed[1].size_is_estimate);
     }
 
     // R2: the stat fast-path reads mtime from the cached Entry, which is
@@ -1154,6 +1263,7 @@ mod tests {
                 created: None,
                 etag: None,
                 content_type: None,
+                size_is_estimate: false,
             }],
         );
         // fast-path source: get() returns the stored mtime (not None/epoch).

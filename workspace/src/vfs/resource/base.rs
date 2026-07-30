@@ -41,6 +41,9 @@ pub struct DirEntry {
     /// Google's own document types carry no extension at all. `None` = nothing
     /// better than the name to go on.
     pub content_type: Option<String>,
+    /// See [`FileStat::size_is_estimate`]. Carried from the listing so the value
+    /// survives `readdir` → cache → `stat`.
+    pub size_is_estimate: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -65,6 +68,12 @@ pub struct FileStat {
     pub version: Option<String>,
     /// See [`DirEntry::content_type`].
     pub content_type: Option<String>,
+    /// `size` is an upper bound, not the real length: the provider cannot know it
+    /// without producing the content (a Drive document conversion). Listings and
+    /// `stat` keep the estimate — sizing every row would fetch every row — but a
+    /// consumer that must be exact, like a WebDAV `GET` filling in
+    /// `Content-Length`, resolves it when the file is opened.
+    pub size_is_estimate: bool,
 }
 
 /// A mounted provider. One instance owns one set of credentials, so the same

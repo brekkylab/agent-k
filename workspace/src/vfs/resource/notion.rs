@@ -511,6 +511,7 @@ fn dir(name: &str) -> DirEntry {
         created: None,
         etag: None,
         content_type: None,
+        size_is_estimate: false,
     }
 }
 
@@ -531,6 +532,7 @@ fn dir_t(
         created: None,
         etag: None,
         content_type: None,
+        size_is_estimate: false,
     }
 }
 
@@ -553,6 +555,7 @@ fn file(name: &str, size: u64) -> DirEntry {
         created: None,
         etag: None,
         content_type: None,
+        size_is_estimate: false,
     }
 }
 

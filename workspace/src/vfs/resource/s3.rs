@@ -146,6 +146,7 @@ impl Resource for S3Resource {
                     created: None,
                     etag: None,
                     content_type: None,
+                    size_is_estimate: false,
                 });
             }
         }
@@ -169,6 +170,7 @@ impl Resource for S3Resource {
                     // stat can pin itself to it (`If-Match`).
                     etag: obj.e_tag.clone(),
                     content_type: None,
+                    size_is_estimate: false,
                 });
             }
         }
@@ -198,6 +200,7 @@ impl Resource for S3Resource {
                 version: meta.version.clone(),
                 // The key is the truth (and carries its own extension).
                 content_type: None,
+                size_is_estimate: false,
             }),
             Err(OsError::NotFound { .. }) => {
                 let res = self
