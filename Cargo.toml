@@ -12,7 +12,7 @@ exclude = [
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "53039e7905c2e43aba85af04433379df2407140c", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "0767a0872e665a9a505589b8d2b498269453fe9a", features = ["sandbox"] }
 
 # Patched fuser (branch feat/macfuse-abi): on macOS, upstream fuser emits macFUSE
 # wire structs (extra crtime/flags in fuse_attr, minor pinned to 19) that a Linux
