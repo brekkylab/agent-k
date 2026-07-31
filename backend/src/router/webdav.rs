@@ -232,20 +232,14 @@ impl DavFileSystem for DavFs {
         })
     }
 
-    fn get_prop<'a>(&'a self, path: &'a DavPath, prop: DavProp) -> FsFuture<'a, Vec<u8>> {
-        Box::pin(async move {
-            if prop.name != SUBJECT_TYPE_PROP || prop.namespace.as_deref() != Some(PROP_NAMESPACE) {
-                return Err(FsError::NotFound);
-            }
-            let meta = self
-                .0
-                .metadata(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)?;
-            meta.content_type
-                .map(String::into_bytes)
-                .ok_or(FsError::NotFound)
-        })
+    /// Declines, always.
+    ///
+    /// A named `PROPFIND` for this property is already answered by `get_props`, which
+    /// `handle_props` appends on top of whatever the per-property loop produced
+    /// (`handle_props.rs:1226`). Answering here as well emits the element twice in one
+    /// `<D:prop>`; declining leaves exactly one.
+    fn get_prop<'a>(&'a self, _path: &'a DavPath, _prop: DavProp) -> FsFuture<'a, Vec<u8>> {
+        Box::pin(async move { Err(FsError::NotFound) })
     }
 
     fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
@@ -404,18 +398,65 @@ const SUBJECT_TYPE_PROP: &str = "subject-content-type";
 const PROP_NAMESPACE: &str = "urn:agent-k:workspace";
 const PROP_PREFIX: &str = "W";
 
+/// The property as dav-server wants it: `xml` holds the **whole element**, not the
+/// value. `davprop_to_element` parses this field back with `Element::parse2`, so a
+/// bare mime string fails to parse — the value reaches the client empty and every
+/// node logs an error. `DavProp::new` builds the right shape but interpolates the
+/// value unescaped, and a Drive `mimeType` is whatever the uploader set: one
+/// ampersand loses the property the same way. So build it here, escaped.
 fn subject_type_prop(value: Option<String>) -> DavProp {
     DavProp {
         name: SUBJECT_TYPE_PROP.to_string(),
         prefix: Some(PROP_PREFIX.to_string()),
         namespace: Some(PROP_NAMESPACE.to_string()),
-        xml: value.map(String::into_bytes),
+        xml: value.map(|v| subject_type_element(&v).into_bytes()),
     }
+}
+
+/// `<W:subject-content-type xmlns:W="…">application/pdf</W:subject-content-type>`.
+fn subject_type_element(value: &str) -> String {
+    let escaped = value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    format!(
+        "<{PROP_PREFIX}:{SUBJECT_TYPE_PROP} xmlns:{PROP_PREFIX}=\"{PROP_NAMESPACE}\">\
+         {escaped}</{PROP_PREFIX}:{SUBJECT_TYPE_PROP}>"
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_wid;
+    use super::{PROP_NAMESPACE, SUBJECT_TYPE_PROP, parse_wid, subject_type_element};
+
+    /// dav-server parses this field back as an element, so the value alone is not a
+    /// property: it logs an error and ships an empty one. And it interpolates without
+    /// escaping, while a Drive `mimeType` is whatever the uploader typed — one
+    /// ampersand made the property vanish the same way.
+    #[test]
+    fn the_subject_type_property_is_a_whole_escaped_element() {
+        let xml = subject_type_element("application/vnd.google-apps.spreadsheet");
+        assert!(xml.starts_with(&format!("<W:{SUBJECT_TYPE_PROP} ")), "{xml}");
+        assert!(xml.contains(&format!("xmlns:W=\"{PROP_NAMESPACE}\"")), "{xml}");
+        assert!(
+            xml.ends_with(&format!(
+                ">application/vnd.google-apps.spreadsheet</W:{SUBJECT_TYPE_PROP}>"
+            )),
+            "{xml}"
+        );
+
+        let escaped = subject_type_element("application/x-tar&gzip");
+        assert!(escaped.contains("x-tar&amp;gzip"), "{escaped}");
+        assert!(
+            !escaped.contains("x-tar&gzip"),
+            "a bare ampersand fails the parse: {escaped}"
+        );
+        for bad in ['<', '>'] {
+            let out = subject_type_element(&format!("text/{bad}plain"));
+            assert!(!out.contains(&format!("/{bad}plain")), "{out}");
+        }
+    }
+
 
     #[test]
     fn parse_wid_requires_canonical_form() {
