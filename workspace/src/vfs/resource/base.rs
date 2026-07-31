@@ -174,17 +174,20 @@ pub trait Resource: Send + Sync {
         true
     }
 
-    /// Whether a `stat` may *read* a file to learn a size the listing reported as
-    /// 0 (see [`FileStat::size`]).
+    /// Whether a `stat` may *produce* a file to learn a length the listing could only
+    /// guess at (a 0 or a placeholder — see [`FileStat::size`] and
+    /// [`FileStat::size_is_estimate`]).
     ///
-    /// `true` (the default) keeps `stat`/`HEAD`/`PROPFIND` exact for providers
-    /// that render on read: Notion's `page.json` is one file per page directory,
-    /// so one render per `ls -l` is a fair trade for a correct length.
+    /// `true` (the default) keeps `stat`/`HEAD`/`PROPFIND` exact for providers that
+    /// render on read: Notion's `page.json` is one file per page directory, so one
+    /// render per `ls -l` is a fair trade for a correct length.
     ///
-    /// `false` is for providers where that trade inverts. Google Drive serves one
-    /// converted document *per file*, and each conversion takes seconds — so
-    /// `ls -l` in a folder of documents would convert every one of them just to
-    /// print their sizes. Such a provider reports 0 and lets the read fill it in.
+    /// `false` is for providers where that trade inverts. Drive serves a document per
+    /// file and each takes seconds to build, so `ls -l` in a folder of them would build
+    /// every one to print a number. Such a provider's listing stands as it is, and the
+    /// length becomes exact when something reads the file. Which placeholder it uses is
+    /// its own choice: Notion reports 0, Drive reports an upper bound marked
+    /// `size_is_estimate`, because a 0 reads as "empty" and search tools skip those.
     fn resolve_size_on_stat(&self) -> bool {
         true
     }
