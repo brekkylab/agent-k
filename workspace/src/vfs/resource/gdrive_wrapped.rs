@@ -104,6 +104,16 @@ async fn start_inner(
     blobs: HashMap<String, Vec<u8>>,
     document_pad: Option<usize>,
 ) -> Mock {
+    start_full(listing, blobs, document_pad, None).await
+}
+
+/// `drives_status` answers `/drives` with that status instead of a listing.
+async fn start_full(
+    listing: Value,
+    blobs: HashMap<String, Vec<u8>>,
+    document_pad: Option<usize>,
+    drives_status: Option<u16>,
+) -> Mock {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -111,14 +121,16 @@ async fn start_inner(
     let (log, written, blobs) = (seen.clone(), body_bytes.clone(), Arc::new(blobs));
     let listing = Arc::new(listing);
     let document_pad = Arc::new(document_pad);
+    let drives_status = Arc::new(drives_status);
     tokio::spawn(async move {
         while let Ok((mut sock, _)) = listener.accept().await {
-            let (log, written, blobs, listing, document_pad) = (
+            let (log, written, blobs, listing, document_pad, drives_status) = (
                 log.clone(),
                 written.clone(),
                 blobs.clone(),
                 listing.clone(),
                 document_pad.clone(),
+                drives_status.clone(),
             );
             tokio::spawn(async move {
                 let mut buf = Vec::new();
@@ -208,6 +220,11 @@ async fn start_inner(
                             .into_bytes(),
                         None,
                     )
+                } else if path.ends_with("/drives") {
+                    match *drives_status {
+                        Some(st) => reply(st, br#"{"error":"scripted"}"#.to_vec(), None),
+                        None => reply(200, json!({"drives": []}).to_string().into_bytes(), None),
+                    }
                 } else if path.ends_with("/drive/v3/files") {
                     reply(
                         200,
@@ -430,5 +447,62 @@ async fn an_oversized_document_stops_being_read() {
         "the server should have been cut off early, but wrote {} MB of {} MB",
         sent / (1 << 20),
         PAD / (1 << 20)
+    );
+}
+
+/// A shared-drive listing that fails must not become "this account has none", cached.
+///
+/// The call is best-effort, so its failure was swallowed: the root came back with two
+/// sections, nothing said why, and the reduced root was cached for the listing TTL, so
+/// a retry inside five minutes made no attempt at all. It also sat on the full retry
+/// ladder, which put half a minute of backoff in front of the first `ls` of a mount.
+#[tokio::test]
+async fn a_failed_shared_drive_listing_is_not_cached_as_an_answer() {
+    let mock = start_full(
+        json!([row("a.txt", "F1", "text/plain", Some("3"))]),
+        HashMap::new(),
+        None,
+        Some(500),
+    )
+    .await;
+    let fs = mounted(&mock.config());
+    let root = MountPath::new("/");
+
+    let t0 = std::time::Instant::now();
+    let first = fs.readdir(&root).await.unwrap();
+    let elapsed = t0.elapsed();
+    let drives_attempts = |m: &Mock| {
+        m.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.target.contains("/drives"))
+            .count()
+    };
+    assert_eq!(
+        first.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
+        vec!["My Drive".to_string(), "Shared with me".to_string()]
+    );
+    assert_eq!(
+        drives_attempts(&mock),
+        1,
+        "one attempt: a best-effort listing does not walk the retry ladder"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the first listing of a mount must not sit through backoff: {elapsed:?}"
+    );
+
+    // The reduced root is not kept by the provider, so a fresh mount tries again
+    // rather than inheriting the failure. Within one mount the wrapper's own listing
+    // cache still answers for its TTL — that layer has no per-listing way to say "this
+    // one is incomplete", which is what it would take to recover sooner.
+    let fresh = mounted(&mock.config());
+    mock.reset();
+    let _ = fresh.readdir(&root).await.unwrap();
+    assert_eq!(
+        drives_attempts(&mock),
+        1,
+        "a new mount asks again instead of inheriting a degraded root"
     );
 }

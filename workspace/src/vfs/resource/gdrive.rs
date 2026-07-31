@@ -253,7 +253,7 @@ impl GdriveResource {
     /// The mount root's virtual sections: `My Drive`, `Shared with me`, and
     /// (best-effort — needs scope; accounts without any list none) each shared
     /// drive as its own top-level directory.
-    async fn root_sections(&self) -> Vec<Child> {
+    async fn root_sections(&self) -> (Vec<Child>, bool) {
         let section = |name: &str, id: &str, kind: GKind, drive_id: Option<String>| Child {
             vfs_name: name.to_string(),
             id: id.to_string(),
@@ -270,7 +270,16 @@ impl GdriveResource {
             section(MY_DRIVE_NAME, MY_DRIVE_ID, GKind::Folder, None),
             section(SHARED_WITH_ME_NAME, SHARED_WITH_ME_ID, GKind::Folder, None),
         ];
-        if let Ok(drives) = self.accessor.list_shared_drives().await {
+        let listed = self.accessor.list_shared_drives().await;
+        // A failure here is indistinguishable from an account with no shared drives,
+        // so say so and let the caller keep the reduced root out of the cache: a
+        // listing cached for the TTL would hide them for minutes with nothing to
+        // explain their absence.
+        if let Err(e) = &listed {
+            tracing::warn!("gdrive: shared drives could not be listed, root omits them: {e:#}");
+        }
+        let complete = listed.is_ok();
+        if let Ok(drives) = listed {
             let mut existing: HashSet<String> =
                 children.iter().map(|c| c.vfs_name.clone()).collect();
             for d in &drives {
@@ -289,7 +298,7 @@ impl GdriveResource {
                 }
             }
         }
-        children
+        (children, complete)
     }
 
     /// List a directory's immediate children (cached). The root is virtual (see
@@ -303,8 +312,11 @@ impl GdriveResource {
                 return Ok(children.clone());
             }
         }
+        let mut complete = true;
         let mut children = if folder == "/" {
-            self.root_sections().await
+            let (sections, ok) = self.root_sections().await;
+            complete = ok;
+            sections
         } else {
             let (folder_id, drive_id) = self.folder_id_of(folder).await?;
             let files = if folder_id == SHARED_WITH_ME_ID {
@@ -331,10 +343,12 @@ impl GdriveResource {
         disambiguate(&mut children);
 
         let children = Arc::new(children);
-        self.dir_cache
-            .lock()
-            .await
-            .insert(folder.to_string(), (Instant::now(), children.clone()));
+        if complete {
+            self.dir_cache
+                .lock()
+                .await
+                .insert(folder.to_string(), (Instant::now(), children.clone()));
+        }
         Ok(children)
     }
 

@@ -655,7 +655,12 @@ impl GdriveAccessor {
         Ok(bytes)
     }
 
-    /// Shared drives visible to the account (best-effort; needs scope).
+    /// Shared drives visible to the account.
+    ///
+    /// Deliberately off the retry ladder. The caller treats a failure as "this account
+    /// has none", so walking five backoffs makes the first `ls` of a mount block for
+    /// half a minute to produce an answer that is then discarded. One attempt, and the
+    /// caller decides what to do with a failure.
     pub async fn list_shared_drives(&self) -> anyhow::Result<Vec<Value>> {
         let mut drives = Vec::new();
         let mut page_token: Option<String> = None;
@@ -674,7 +679,12 @@ impl GdriveAccessor {
             }
             let url =
                 reqwest::Url::parse_with_params(&format!("{}/drives", self.urls.drive), &params)?;
-            let v = self.get_json(url).await?;
+            let v: Value = self
+                .send_retrying(|t| self.client.get(url.clone()).bearer_auth(t), 0)
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
             if let Some(arr) = v.get("drives").and_then(|d| d.as_array()) {
                 drives.extend(arr.iter().cloned());
             }
