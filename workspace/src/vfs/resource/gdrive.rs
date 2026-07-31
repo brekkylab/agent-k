@@ -384,36 +384,7 @@ impl GdriveResource {
                 return pretty(&v);
             }
         };
-        let mut ranges = batch
-            .get("valueRanges")
-            .and_then(|r| r.as_array())
-            .cloned()
-            .unwrap_or_default()
-            .into_iter();
-        let mut budget = GRID_BYTES_BUDGET;
-        for tab in v
-            .get_mut("sheets")
-            .and_then(|s| s.as_array_mut())
-            .into_iter()
-            .flatten()
-        {
-            let Some(range) = ranges.next() else { break };
-            let Some(obj) = tab.as_object_mut() else {
-                continue;
-            };
-            let values = range.get("values").cloned().unwrap_or(Value::Array(vec![]));
-            let cost = served_len(&values);
-            if cost > budget {
-                obj.insert(
-                    "valuesOmitted".into(),
-                    serde_json::json!({ "bytes": cost, "remainingBudget": budget }),
-                );
-                budget = 0;
-                continue;
-            }
-            budget -= cost;
-            obj.insert("values".into(), values);
-        }
+        fold_values(&mut v, &batch, &titles);
         pretty(&v)
     }
 
@@ -758,6 +729,105 @@ fn child_from_file(f: &Value) -> Option<Child> {
         serves,
         size,
     })
+}
+
+/// Attach each tab's values to the tab they belong to.
+///
+/// Paired by sheet title, not by position. `valueRanges` comes back in request order,
+/// but the request is built from a *filtered and truncated* view of `sheets` — a sheet
+/// with no title cannot be addressed and a workbook past [`MAX_TABS`] is cut off — so
+/// walking the two in step hands one tab another's cells and shifts every tab after
+/// it. `valueRanges[].range` names its own sheet, which removes the guesswork.
+///
+/// A tab that ends up with no values says why: it was never requested, nothing came
+/// back for it, or its cells did not fit the budget. The budget is spent tab by tab
+/// and an oversized one does not consume the remainder — a 20-byte tab after a large
+/// one still fits.
+fn fold_values(workbook: &mut Value, batch: &Value, requested: &[String]) {
+    let mut by_title: HashMap<String, Value> = HashMap::new();
+    for vr in batch
+        .get("valueRanges")
+        .and_then(|r| r.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(title) = vr.get("range").and_then(|r| r.as_str()).map(range_title) else {
+            continue;
+        };
+        let values = vr.get("values").cloned().unwrap_or(Value::Array(vec![]));
+        by_title.insert(title, values);
+    }
+    let asked: HashSet<&str> = requested.iter().map(String::as_str).collect();
+
+    let mut budget = GRID_BYTES_BUDGET;
+    for tab in workbook
+        .get_mut("sheets")
+        .and_then(|s| s.as_array_mut())
+        .into_iter()
+        .flatten()
+    {
+        let title = tab
+            .pointer("/properties/title")
+            .and_then(|t| t.as_str())
+            .map(str::to_string);
+        let Some(obj) = tab.as_object_mut() else {
+            continue;
+        };
+        let note = |reason: &str| serde_json::json!({ "reason": reason });
+        let Some(title) = title else {
+            obj.insert(
+                "valuesOmitted".into(),
+                note("this sheet has no title, so its cells cannot be addressed"),
+            );
+            continue;
+        };
+        if !asked.contains(title.as_str()) {
+            obj.insert(
+                "valuesOmitted".into(),
+                serde_json::json!({
+                    "reason": "past the tab cap, so its values were never requested",
+                    "tabCap": MAX_TABS,
+                }),
+            );
+            continue;
+        }
+        let Some(values) = by_title.get(&title) else {
+            obj.insert(
+                "valuesOmitted".into(),
+                note("the values request returned nothing for this sheet"),
+            );
+            continue;
+        };
+        let cost = served_len(values);
+        if cost > budget {
+            obj.insert(
+                "valuesOmitted".into(),
+                serde_json::json!({
+                    "reason": "over the size budget",
+                    "bytes": cost,
+                    "budgetLeft": budget,
+                }),
+            );
+            continue;
+        }
+        budget -= cost;
+        obj.insert("values".into(), values.clone());
+    }
+}
+
+/// The sheet a returned A1 range belongs to: `'메인화면'!A1:Z968` -> `메인화면`.
+///
+/// The title is everything before the last `!`, unquoted — a quoted title may itself
+/// contain `!`, and a literal quote inside one arrives doubled.
+fn range_title(range: &str) -> String {
+    let sheet = match range.rsplit_once('!') {
+        Some((sheet, _)) => sheet,
+        None => range,
+    };
+    match sheet.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        Some(inner) => inner.replace("''", "'"),
+        None => sheet.to_string(),
+    }
 }
 
 /// Pretty-printed JSON with a trailing newline — the form every document is served
@@ -1255,6 +1325,128 @@ mod tests {
                 .or_else(|| row.get("name").and_then(|n| n.as_str()).map(str::to_string));
             assert!(name.is_some(), "a hit always has a name to report");
         }
+    }
+
+    fn workbook(titles: &[Option<&str>]) -> Value {
+        serde_json::json!({
+            "sheets": titles
+                .iter()
+                .map(|t| match t {
+                    Some(t) => serde_json::json!({ "properties": { "title": t } }),
+                    None => serde_json::json!({ "properties": {} }),
+                })
+                .collect::<Vec<_>>()
+        })
+    }
+
+    fn batch(pairs: &[(&str, &str)]) -> Value {
+        serde_json::json!({
+            "valueRanges": pairs
+                .iter()
+                .map(|(range, cell)| serde_json::json!({
+                    "range": range,
+                    "values": [[cell]],
+                }))
+                .collect::<Vec<_>>()
+        })
+    }
+
+    fn values_of(wb: &Value, i: usize) -> Option<String> {
+        wb["sheets"][i]["values"][0][0].as_str().map(str::to_string)
+    }
+
+    fn omitted_reason(wb: &Value, i: usize) -> Option<String> {
+        wb["sheets"][i]["valuesOmitted"]["reason"]
+            .as_str()
+            .map(str::to_string)
+    }
+
+    /// Values are paired by the sheet they name, not by their position in the reply.
+    /// A sheet the request had to skip — one with no title — used to consume the next
+    /// sheet's values and shift the rest, which is the same wrong-cells outcome
+    /// `quote_a1` exists to prevent, reached from the other side.
+    #[test]
+    fn a_skipped_sheet_does_not_shift_everyone_elses_values() {
+        let mut wb = workbook(&[Some("Alpha"), None, Some("Gamma")]);
+        // The request only asked for the titled sheets.
+        let asked = vec!["Alpha".to_string(), "Gamma".to_string()];
+        fold_values(
+            &mut wb,
+            &batch(&[("Alpha!A1", "ALPHA-CELL"), ("Gamma!A1", "GAMMA-CELL")]),
+            &asked,
+        );
+        assert_eq!(values_of(&wb, 0).as_deref(), Some("ALPHA-CELL"));
+        assert_eq!(values_of(&wb, 2).as_deref(), Some("GAMMA-CELL"));
+        assert_eq!(values_of(&wb, 1), None, "the titleless sheet gets nothing");
+        assert!(
+            omitted_reason(&wb, 1).is_some_and(|r| r.contains("no title")),
+            "and says why"
+        );
+    }
+
+    /// Past the cap no request was made, so the tail has no values — and used to have
+    /// no explanation either, the one silent omission in this file.
+    #[test]
+    fn a_tab_past_the_cap_says_it_was_never_asked_for() {
+        let titles: Vec<String> = (0..MAX_TABS + 2).map(|i| format!("T{i}")).collect();
+        let mut wb = workbook(
+            &titles
+                .iter()
+                .map(|t| Some(t.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        let asked = titles[..MAX_TABS].to_vec();
+        let pairs: Vec<(String, String)> = asked
+            .iter()
+            .map(|t| (format!("{t}!A1"), format!("{t}-CELL")))
+            .collect();
+        let refs: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(r, c)| (r.as_str(), c.as_str()))
+            .collect();
+        fold_values(&mut wb, &batch(&refs), &asked);
+
+        assert_eq!(values_of(&wb, 0).as_deref(), Some("T0-CELL"));
+        for i in MAX_TABS..MAX_TABS + 2 {
+            assert_eq!(values_of(&wb, i), None);
+            assert!(
+                omitted_reason(&wb, i).is_some_and(|r| r.contains("tab cap")),
+                "tab {i} must not be silently empty"
+            );
+        }
+    }
+
+    /// One oversized tab used to zero the budget, so every later tab was dropped
+    /// however small. The budget is spent tab by tab, which is what the constant says.
+    #[test]
+    fn an_oversized_tab_does_not_spend_the_rest_of_the_budget() {
+        let mut wb = workbook(&[Some("small1"), Some("huge"), Some("small2")]);
+        let huge = "x".repeat(GRID_BYTES_BUDGET as usize + 1);
+        let mut b = batch(&[("small1!A1", "a"), ("small2!A1", "b")]);
+        b["valueRanges"]
+            .as_array_mut()
+            .unwrap()
+            .insert(1, serde_json::json!({ "range": "huge!A1", "values": [[huge]] }));
+        fold_values(&mut wb, &b, &["small1", "huge", "small2"].map(String::from));
+
+        assert_eq!(values_of(&wb, 0).as_deref(), Some("a"));
+        assert!(omitted_reason(&wb, 1).is_some_and(|r| r.contains("budget")));
+        assert_eq!(
+            values_of(&wb, 2).as_deref(),
+            Some("b"),
+            "a small tab after a large one still fits"
+        );
+    }
+
+    /// The reply names its sheet in A1 notation, which is what the pairing reads.
+    #[test]
+    fn a_returned_range_names_its_sheet() {
+        assert_eq!(range_title("Sheet1!A1:Z1000"), "Sheet1");
+        assert_eq!(range_title("'메인화면'!A1:Z968"), "메인화면");
+        // A quoted title can hold the characters that would otherwise confuse this.
+        assert_eq!(range_title("'Sheet1!B2'!A1:Z10"), "Sheet1!B2");
+        assert_eq!(range_title("'it''s'!A1"), "it's");
+        assert_eq!(range_title("Sheet1"), "Sheet1");
     }
 
     #[test]
