@@ -57,7 +57,6 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-stream",
- "async-trait",
  "axum",
  "axum-extra",
  "bytes",
@@ -91,7 +90,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "workspace",
 ]
 
 [[package]]
@@ -156,7 +154,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=5c11bdbef46a3f2ca573948d74b627d3183ee9fd#5c11bdbef46a3f2ca573948d74b627d3183ee9fd"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=ec1e2b09dac32796ab166cfeaf12edc18a32278d#ec1e2b09dac32796ab166cfeaf12edc18a32278d"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1313,7 +1311,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cortex"
 version = "0.1.0"
-source = "git+https://github.com/brekkylab/cortex.git?rev=d32c0d6ef54873f0f9420a0d974810487339ecfb#d32c0d6ef54873f0f9420a0d974810487339ecfb"
+source = "git+https://github.com/brekkylab/cortex.git?rev=4bcf90e98e560b81615f170d7ba4001f9773c00e#4bcf90e98e560b81615f170d7ba4001f9773c00e"
 dependencies = [
  "cc",
  "chrono",
@@ -7737,28 +7735,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "workspace"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "chrono",
- "dotenvy",
- "futures",
- "futures-util",
- "object_store",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]

@@ -2,11 +2,12 @@
 //!
 //! Membership is a set of references under `/files/knowledge`: each `*.ref` file
 //! holds the unified-tree path of a target (a local file, a mounted object, or a
-//! directory). Writing / deleting a reference goes through
-//! [`WorkspaceFs`](::workspace::WorkspaceFs), whose `/files/knowledge` hook spawns
-//! a resync — so these routes never touch the resyncer directly except for the
-//! explicit `resync`.
+//! directory). Writing / deleting a reference goes through the workspace's cortex
+//! [`Workspace`](cortex::Workspace), whose `files/knowledge` hook spawns a resync
+//! — so these routes never touch the resyncer directly except for the explicit
+//! `resync`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -14,13 +15,10 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use bytes::Bytes;
-use futures_util::StreamExt as _;
+use cortex::{CortexError, FileHandle, Mountable, OpenOptions, Workspace};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use ::workspace::{FsError as WsFsError, OpenOptions, WorkspaceFs};
 
 use crate::auth::AuthUser;
 use crate::state::{AppState, KNOWLEDGE_ROOT, KnowledgeRef, REF_SUFFIX};
@@ -46,6 +44,12 @@ pub struct RefListResponse {
     pub items: Vec<RefResponse>,
 }
 
+/// A workspace-relative path (leading slash) as a cortex mount path (no leading
+/// slash — cortex treats a request path as relative to the workspace root).
+fn cx(path: &str) -> PathBuf {
+    PathBuf::from(path.trim_start_matches('/'))
+}
+
 /// `POST /workspaces/{wid}/knowledge/refs` — reference a target into knowledge.
 pub(super) async fn create_ref(
     State(state): State<Arc<AppState>>,
@@ -63,22 +67,11 @@ pub(super) async fn create_ref(
         ));
     }
 
-    let fs = state
+    let ws = state
         .workspaces
-        .get_fs(wid)
+        .cortex_workspace(wid)
         .await
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
-
-    match fs.metadata(&target).await {
-        Ok(_) => {}
-        Err(WsFsError::NotFound) => return Err(err(StatusCode::NOT_FOUND, "target not found")),
-        Err(_) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
-    }
-
-    match fs.create_dir(KNOWLEDGE_ROOT).await {
-        Ok(()) | Err(WsFsError::Exists) => {}
-        Err(_) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
-    }
 
     let name = ref_name_for(&target);
     let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
@@ -86,9 +79,40 @@ pub(super) async fn create_ref(
         path: target.clone(),
     }
     .to_bytes();
-    write_ref(&fs, &ref_path, body)
+
+    // cortex's `Mountable` API is synchronous — do the stat/mkdir/write on a
+    // blocking thread. Writing the `.ref` fires the workspace's knowledge hook,
+    // which spawns the resync.
+    let outcome = {
+        let ws = ws.clone();
+        let target = target.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), RefWriteError> {
+            match ws.stat(&cx(&target)) {
+                Ok(_) => {}
+                Err(CortexError::NotFound) => return Err(RefWriteError::TargetMissing),
+                Err(_) => return Err(RefWriteError::Internal),
+            }
+            match ws.mkdir(&cx(KNOWLEDGE_ROOT)) {
+                Ok(()) | Err(CortexError::AlreadyExists) => {}
+                Err(_) => return Err(RefWriteError::Internal),
+            }
+            write_ref(&ws, &ref_path, &body).map_err(|_| RefWriteError::Internal)
+        })
         .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "failed to write reference"))?;
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?
+    };
+    match outcome {
+        Ok(()) => {}
+        Err(RefWriteError::TargetMissing) => {
+            return Err(err(StatusCode::NOT_FOUND, "target not found"));
+        }
+        Err(RefWriteError::Internal) => {
+            return Err(err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to write reference",
+            ));
+        }
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -106,36 +130,41 @@ pub(super) async fn list_refs(
     Path(wid): Path<Uuid>,
 ) -> Result<Json<RefListResponse>, ApiError> {
     require_owned_workspace(&state, &auth, wid).await?;
-    let fs = state
+    let ws = state
         .workspaces
-        .get_fs(wid)
+        .cortex_workspace(wid)
         .await
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
 
-    let mut items = Vec::new();
-    match fs.read_dir(KNOWLEDGE_ROOT).await {
-        Ok(mut stream) => {
-            while let Some(entry) = stream.next().await {
-                let Ok(entry) = entry else { continue };
-                let name = String::from_utf8_lossy(&entry.name()).into_owned();
-                if !name.ends_with(REF_SUFFIX) {
-                    continue;
-                }
-                let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
-                let Ok(bytes) = read_all(&fs, &ref_path).await else {
-                    continue;
-                };
-                if let Ok(r) = serde_json::from_slice::<KnowledgeRef>(&bytes) {
-                    items.push(RefResponse {
-                        name,
-                        target_path: r.path,
-                    });
-                }
+    let items = tokio::task::spawn_blocking(move || -> Result<Vec<RefResponse>, ()> {
+        let mut items = Vec::new();
+        let entries = match ws.list(&cx(KNOWLEDGE_ROOT)) {
+            Ok(e) => e,
+            Err(CortexError::NotFound) => return Ok(items),
+            Err(_) => return Err(()),
+        };
+        for entry in entries {
+            let name = entry.name;
+            if !name.ends_with(REF_SUFFIX) {
+                continue;
+            }
+            let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
+            let Ok(bytes) = read_all(&ws, &ref_path) else {
+                continue;
+            };
+            if let Ok(r) = serde_json::from_slice::<KnowledgeRef>(&bytes) {
+                items.push(RefResponse {
+                    name,
+                    target_path: r.path,
+                });
             }
         }
-        Err(WsFsError::NotFound) => {}
-        Err(_) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
-    }
+        Ok(items)
+    })
+    .await
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?
+    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
+
     Ok(Json(RefListResponse { items }))
 }
 
@@ -149,14 +178,18 @@ pub(super) async fn delete_ref(
     if name.contains('/') || name.contains("..") || !name.ends_with(REF_SUFFIX) {
         return Err(err(StatusCode::BAD_REQUEST, "invalid reference name"));
     }
-    let fs = state
+    let ws = state
         .workspaces
-        .get_fs(wid)
+        .cortex_workspace(wid)
         .await
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
-    match fs.remove_file(&format!("{KNOWLEDGE_ROOT}/{name}")).await {
+    let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
+    let res = tokio::task::spawn_blocking(move || ws.unlink(&cx(&ref_path)))
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
+    match res {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
-        Err(WsFsError::NotFound) => Err(err(StatusCode::NOT_FOUND, "reference not found")),
+        Err(CortexError::NotFound) => Err(err(StatusCode::NOT_FOUND, "reference not found")),
         Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
     }
 }
@@ -170,6 +203,13 @@ pub(super) async fn resync(
     require_owned_workspace(&state, &auth, wid).await?;
     state.workspaces.resyncer().spawn_resync(wid);
     Ok(StatusCode::ACCEPTED)
+}
+
+/// Why a `.ref` write couldn't complete: the target doesn't exist (→ 404) vs. a
+/// filesystem failure (→ 500).
+enum RefWriteError {
+    TargetMissing,
+    Internal,
 }
 
 /// Validate + normalise a reference target: an absolute unified-tree path of
@@ -209,39 +249,36 @@ fn ref_name_for(target: &str) -> String {
     format!("{slug}-{}{REF_SUFFIX}", &suffix[..8])
 }
 
-async fn write_ref(fs: &WorkspaceFs, ref_path: &str, body: Vec<u8>) -> Result<(), WsFsError> {
-    let mut file = fs
-        .open(
-            ref_path,
-            OpenOptions {
-                write: true,
-                create: true,
-                truncate: true,
-                ..Default::default()
-            },
-        )
-        .await?;
-    file.write_bytes(Bytes::from(body)).await?;
-    file.flush().await
+/// Write `body` to `ref_path`, truncating. Synchronous (cortex's `Mountable`
+/// API is sync); callers wrap it in
+/// [`spawn_blocking`](tokio::task::spawn_blocking).
+fn write_ref(ws: &Workspace, ref_path: &str, body: &[u8]) -> anyhow::Result<()> {
+    let (handle, _) = ws.open(
+        &cx(ref_path),
+        OpenOptions {
+            write: true,
+            create: true,
+            truncate: true,
+            ..Default::default()
+        },
+    )?;
+    handle.write_all_at(body, 0)?;
+    handle.flush()?;
+    Ok(())
 }
 
-async fn read_all(fs: &WorkspaceFs, path: &str) -> Result<Vec<u8>, WsFsError> {
-    let mut file = fs
-        .open(
-            path,
-            OpenOptions {
-                read: true,
-                ..Default::default()
-            },
-        )
-        .await?;
-    let mut out = Vec::new();
-    loop {
-        let chunk = file.read_bytes(256 * 1024).await?;
-        if chunk.is_empty() {
-            break;
-        }
-        out.extend_from_slice(&chunk);
+/// Read an entire file into memory. Synchronous (see [`write_ref`]).
+fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
+    let (handle, stat) = ws.open(
+        &cx(path),
+        OpenOptions {
+            read: true,
+            ..Default::default()
+        },
+    )?;
+    let mut out = vec![0u8; stat.size as usize];
+    if stat.size > 0 {
+        handle.read_exact_at(&mut out, 0)?;
     }
     Ok(out)
 }

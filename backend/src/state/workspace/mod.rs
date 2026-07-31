@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use ::workspace::{FsConfig, FsEvent, FsHook, WorkspaceFs};
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
@@ -66,22 +64,17 @@ impl Workspace {
 /// Workspace persistence plus the per-workspace filesystem.
 ///
 /// Holds the SQLite pool (for the [`Workspace`] rows) and the `data_root` (for
-/// the on-disk file trees). Hands out a [`WorkspaceFs`] per workspace via
-/// [`Self::get_fs`]; that handle is the single entry point for *all* filesystem
-/// operations on a workspace and performs the workspace's side-processing
-/// (currently `knowledge/` ingestion) itself. The WebDAV layer wraps a
-/// [`WorkspaceFs`] rather than touching the disk directly.
+/// the on-disk file trees). Hands out a cortex [`Workspace`](cortex::Workspace)
+/// per workspace via [`Self::cortex_workspace`] — the unified tree (local
+/// `files/` + provider mounts) served identically over WebDAV and to the
+/// sandbox guest, with the `knowledge/` resync side-processing attached as a
+/// hook.
 pub struct WorkspacesState {
     db: SqlitePool,
     data_root: PathBuf,
-    /// Per-workspace assembled [`WorkspaceFs`], cached so provider clients and
-    /// their metadata `CachedResource` survive across requests instead of being
-    /// rebuilt each [`Self::get_fs`]. Cloning shares the mounts' `Arc<Resource>`,
-    /// so cache hits reuse the same caches. Evicted on mount change or removal.
-    fs_cache: Mutex<HashMap<Uuid, WorkspaceFs>>,
-    /// Knowledge resync engine, shared into every [`WorkspaceFs`] this hands out
-    /// (so `/files/knowledge` writes trigger a resync) and reused by the router
-    /// and periodic sweep.
+    /// Knowledge resync engine, attached as a hook to every
+    /// [`Workspace`](cortex::Workspace) this hands out (so `files/knowledge`
+    /// writes trigger a resync) and reused by the router and periodic sweep.
     resyncer: Resyncer,
 }
 
@@ -91,31 +84,8 @@ impl WorkspacesState {
         Self {
             db,
             data_root,
-            fs_cache: Mutex::new(HashMap::new()),
             resyncer,
         }
-    }
-
-    /// The workspace's assembled [`WorkspaceFs`], built once and cached (see
-    /// [`Self::fs_cache`]). The returned handle shares the cached mounts.
-    async fn fs_for(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
-        if let Some(fs) = self.fs_cache.lock().unwrap().get(&wid).cloned() {
-            return Ok(fs);
-        }
-        // Build outside the lock; a concurrent miss builds twice, first wins.
-        let built = self.build_fs(wid).await?;
-        Ok(self
-            .fs_cache
-            .lock()
-            .unwrap()
-            .entry(wid)
-            .or_insert(built)
-            .clone())
-    }
-
-    /// Evict `wid`'s cached [`WorkspaceFs`] so the next [`Self::get_fs`] rebuilds it.
-    pub(super) fn invalidate_fs(&self, wid: Uuid) {
-        self.fs_cache.lock().unwrap().remove(&wid);
     }
 
     /// The workspace knowledge resyncer.
@@ -183,7 +153,6 @@ impl WorkspacesState {
     /// are handled by the database's foreign keys.
     pub async fn remove(&self, id: Uuid) -> StateResult<Workspace> {
         let existing = self.get(id).await?.ok_or(StateError::NotFound)?;
-        self.invalidate_fs(id);
         self.remove_files(id).await?;
         sqlx::query("DELETE FROM workspaces WHERE id = ?")
             .bind(id.to_string())
@@ -231,15 +200,6 @@ impl WorkspacesState {
         Ok(())
     }
 
-    /// A filesystem handle scoped to workspace `wid`'s file root, with the
-    /// workspace's external-provider mounts attached (paths under a mount prefix
-    /// route to the provider; everything else stays local).
-    pub async fn get_fs(&self, wid: Uuid) -> StateResult<WorkspaceFs> {
-        // Cached assembly (local `/files` + providers); the hook is per-call.
-        let fs = self.fs_for(wid).await?;
-        Ok(fs.with_hook(knowledge_hook(wid, Some(self.resyncer.clone()))))
-    }
-
     /// The workspace as a cortex [`Workspace`](cortex::Workspace): the canonical
     /// unified tree (local `files/` + provider mounts) this backend serves over
     /// WebDAV and hands to the sandbox guest. The knowledge resync hook is
@@ -247,11 +207,19 @@ impl WorkspacesState {
     /// (guest writes cross a process boundary and can't fire it — see
     /// [`session`](crate::state::session)).
     pub(crate) async fn cortex_workspace(&self, wid: Uuid) -> StateResult<Arc<cortex::Workspace>> {
-        let vfs = build_workspace_vfs(&self.db, wid).await?;
-        let spec = cortex_workspace_spec(&self.data_root, wid, vfs);
-        let ws = cortex::Workspace::from_spec(&spec)
-            .map_err(|e| StateError::InvalidData(format!("cortex workspace: {e}")))?
-            .with_hook(cortex_knowledge_hook(wid, Some(self.resyncer.clone())));
+        let mounts = build_workspace_vfs(&self.db, wid).await?;
+        let data_root = self.data_root.clone();
+        // A provider volume builds its own client — S3's constructs a runtime and
+        // `block_on`s — so assemble off the async runtime; doing it on a worker
+        // thread panics with "runtime within a runtime".
+        let ws = tokio::task::spawn_blocking(move || {
+            let spec = cortex_workspace_spec(&data_root, wid, mounts);
+            cortex::Workspace::from_spec(&spec)
+        })
+        .await
+        .map_err(|e| StateError::InvalidData(format!("cortex workspace build: {e}")))?
+        .map_err(|e| StateError::InvalidData(format!("cortex workspace: {e}")))?
+        .with_hook(cortex_knowledge_hook(wid, Some(self.resyncer.clone())));
         Ok(Arc::new(ws))
     }
 
@@ -268,45 +236,16 @@ impl WorkspacesState {
     }
 }
 
-/// The change hook attached to every [`WorkspaceFs`] this backend builds: it
-/// runs the `knowledge/` side-processing (today just logging; ingestion/indexing
-/// lands later) and ignores everything else.
-struct KnowledgeHook {
-    /// The workspace this hook is bound to — the crate is workspace-agnostic, so
-    /// the backend carries the DB identity here rather than in `WorkspaceFs`.
-    wid: Uuid,
-    /// Resync trigger. `None` for the guest-serving handle (the session run loop
-    /// builds it without one), so guest writes don't auto-resync.
-    resyncer: Option<Resyncer>,
-}
-
-impl FsHook for KnowledgeHook {
-    fn on_change(&self, event: FsEvent<'_>) {
-        let touched = match event {
-            FsEvent::Created(p) | FsEvent::Modified(p) | FsEvent::Removed(p) => {
-                super::knowledge::is_under_knowledge(p)
-            }
-        };
-        if touched {
-            if let Some(r) = &self.resyncer {
-                r.spawn_resync(self.wid);
-            }
-        }
-    }
-}
-
-fn knowledge_hook(wid: Uuid, resyncer: Option<Resyncer>) -> Option<Arc<dyn FsHook>> {
-    Some(Arc::new(KnowledgeHook { wid, resyncer }))
-}
-
-/// The cortex-side twin of [`KnowledgeHook`]: same `knowledge/` classification
-/// and resync trigger, implementing [`cortex::FsHook`] so it can attach to a
-/// cortex [`Workspace`](cortex::Workspace). Both hooks share
-/// [`is_under_knowledge`](super::knowledge::is_under_knowledge), so the
-/// WorkspaceFs and cortex paths classify writes identically. Retire alongside
-/// [`KnowledgeHook`] once WorkspaceFs is gone.
+/// The change hook attached to every cortex [`Workspace`](cortex::Workspace)
+/// this backend builds: it runs the `knowledge/` resync side-processing and
+/// ignores everything else. Classification lives in
+/// [`is_under_knowledge`](super::knowledge::is_under_knowledge).
 struct CortexKnowledgeHook {
+    /// The workspace this hook is bound to — cortex is workspace-agnostic, so the
+    /// backend carries the DB identity here.
     wid: Uuid,
+    /// Resync trigger. `None` for a read-only handle (the resyncer builds its own
+    /// hookless workspace), so it doesn't re-trigger itself.
     resyncer: Option<Resyncer>,
 }
 
@@ -334,16 +273,15 @@ fn cortex_knowledge_hook(
 
 /// Assemble the canonical cortex [`WorkspaceSpec`](cortex::WorkspaceSpec) for
 /// `wid`: the local file root mounted at `files` plus every configured provider
-/// at its prefix. The cortex counterpart of [`workspace_fs`] — one spec, served
-/// identically to the sandbox guest (virtio-fs) and this backend's WebDAV.
-/// Standalone (takes `data_root` + a prebuilt `vfs`) so the session run loop can
-/// build it without a [`WorkspacesState`], mirroring [`workspace_fs`]. The
+/// at its prefix. One spec, served identically to the sandbox guest (virtio-fs)
+/// and this backend's WebDAV. Standalone (takes `data_root` + prebuilt `mounts`)
+/// so the session run loop can build it without a [`WorkspacesState`]. The
 /// `workspaces/{wid}/files` layout mirrors [`WorkspacesState::get_root`]; keep
-/// the three in step.
+/// the two in step.
 pub(crate) fn cortex_workspace_spec(
     data_root: &std::path::Path,
     wid: Uuid,
-    vfs: FsConfig,
+    mounts: Vec<MountSpec>,
 ) -> cortex::WorkspaceSpec {
     let root = data_root
         .join("workspaces")
@@ -351,49 +289,17 @@ pub(crate) fn cortex_workspace_spec(
         .join("files");
     let mut ws =
         cortex::WorkspaceSpec::default().mount("files", cortex::VolumeSpec::Local { host: root });
-    for m in vfs.mounts {
+    for m in mounts {
         let prefix = m.prefix.trim_matches('/').to_string();
+        // The stored config *is* the cortex config (see [`ProviderConfig`]), so
+        // it maps straight onto the volume with no field copying.
         let volume = match m.provider {
-            ::workspace::ProviderConfig::S3(c) => cortex::VolumeSpec::S3(cortex::S3Config {
-                bucket: c.bucket,
-                region: c.region,
-                access_key_id: c.access_key_id,
-                secret_access_key: c.secret_access_key,
-                endpoint: c.endpoint,
-                key_prefix: c.key_prefix,
-            }),
-            ::workspace::ProviderConfig::Notion(c) => {
-                cortex::VolumeSpec::Notion(cortex::NotionConfig { api_key: c.api_key })
-            }
+            ProviderConfig::S3(c) => cortex::VolumeSpec::S3(c),
+            ProviderConfig::Notion(c) => cortex::VolumeSpec::Notion(c),
         };
         ws = ws.mount(prefix, volume);
     }
     ws
-}
-
-/// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`
-/// attached. The filesystem-layer counterpart of
-/// [`build_workspace_vfs`](mount::build_workspace_vfs): where that assembles the
-/// provider mounts, this wraps them together with the local file root into the
-/// unified tree. Standalone (takes `data_root` + a prebuilt `vfs`) so the
-/// session run loop — which holds only the pool + data root — can mount the
-/// unified workspace into a sandbox guest without a [`WorkspacesState`].
-///
-/// The `workspaces/{wid}/files` layout mirrors
-/// [`WorkspacesState::get_root`]; keep the two in step.
-pub(crate) fn workspace_fs(
-    data_root: &std::path::Path,
-    wid: Uuid,
-    mut config: FsConfig,
-) -> StateResult<WorkspaceFs> {
-    let root = data_root
-        .join("workspaces")
-        .join(wid.to_string())
-        .join("files");
-    config.local_root = Some(root);
-    let fs = WorkspaceFs::from_config(config)
-        .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
-    Ok(fs.with_hook(knowledge_hook(wid, None)))
 }
 
 #[cfg(test)]

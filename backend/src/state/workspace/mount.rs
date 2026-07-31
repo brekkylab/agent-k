@@ -1,22 +1,40 @@
 //! Persistence for a workspace's external-provider mounts.
 //!
 //! Each [`WorkspaceMount`] binds a virtual top-level prefix (e.g. `/s3-prod`)
-//! to a [`ProviderConfig`] carrying that mount's credentials. Rows are loaded
-//! and assembled into a [`WorkspaceFs`] by [`WorkspacesState::build_fs`], which
-//! [`WorkspacesState::get_fs`](super::WorkspacesState::get_fs) injects into the
-//! per-workspace filesystem so mount prefixes route to the provider.
+//! to a [`ProviderConfig`] carrying that mount's credentials. Rows are loaded by
+//! [`build_workspace_vfs`] into [`MountSpec`]s that
+//! [`cortex_workspace_spec`](super::cortex_workspace_spec) folds into the
+//! workspace's unified cortex tree so mount prefixes route to the provider.
 
 use chrono::{DateTime, Utc};
+use cortex::{NotionConfig, S3Config};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
 use uuid::Uuid;
 
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
-use ::workspace::{
-    FsConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config, WorkspaceFs,
-};
 
 const SELECT_COLUMNS: &str = "id, workspace_id, prefix, provider, config, created_at, updated_at";
+
+/// Local files mount prefix — the workspace's own on-disk file root. Reserved:
+/// a provider mount can't claim it.
+pub const LOCAL_MOUNT: &str = "/files";
+
+/// A workspace mount's provider kind plus its credentials. Wraps cortex's own
+/// config types (the VFS layer owns the provider-config shape), so a stored
+/// config maps straight onto a [`cortex::VolumeSpec`] with no field copying.
+#[derive(Clone)]
+pub enum ProviderConfig {
+    S3(S3Config),
+    Notion(NotionConfig),
+}
+
+/// One assembled mount: a virtual top-level prefix bound to a provider config.
+#[derive(Clone)]
+pub struct MountSpec {
+    pub prefix: String,
+    pub provider: ProviderConfig,
+}
 
 /// A configured external-provider mount for a workspace.
 #[derive(Clone)]
@@ -151,8 +169,6 @@ impl WorkspacesState {
         .execute(&self.db)
         .await
         .map_err(map_mount_sqlx_error)?;
-        // Mounts changed → rebuild the fs on next access.
-        self.invalidate_fs(mount.workspace_id);
         Ok(mount)
     }
 
@@ -163,28 +179,20 @@ impl WorkspacesState {
             .bind(id.to_string())
             .execute(&self.db)
             .await?;
-        self.invalidate_fs(existing.workspace_id);
         Ok(existing)
-    }
-
-    /// Build the workspace's filesystem: the local `/files` mount plus any
-    /// configured provider mounts.
-    pub(super) async fn build_fs(&self, workspace_id: Uuid) -> StateResult<WorkspaceFs> {
-        let mut config = build_workspace_vfs(&self.db, workspace_id).await?;
-        config.local_root = Some(self.get_root(workspace_id));
-        WorkspaceFs::from_config(config)
-            .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))
     }
 }
 
-/// Load a workspace's provider mounts into an [`FsConfig`], with `local_root`
-/// left unset — the caller fills it, since only it knows the on-disk file root.
-/// Standalone (takes the pool) so both [`WorkspacesState::build_fs`] and the
-/// session run loop (which only holds the pool) can build it.
+/// Load a workspace's provider mounts as [`MountSpec`]s (the local `/files`
+/// mount is added separately by
+/// [`cortex_workspace_spec`](super::cortex_workspace_spec), which alone knows
+/// the on-disk file root). Standalone (takes the pool) so both
+/// [`WorkspacesState`] and the session run loop (which only holds the pool) can
+/// build it.
 pub(crate) async fn build_workspace_vfs(
     db: &SqlitePool,
     workspace_id: Uuid,
-) -> StateResult<FsConfig> {
+) -> StateResult<Vec<MountSpec>> {
     let rows = sqlx::query(&format!(
         "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC"
     ))
@@ -195,16 +203,13 @@ pub(crate) async fn build_workspace_vfs(
         .iter()
         .map(WorkspaceMount::from_row)
         .collect::<StateResult<Vec<_>>>()?;
-    Ok(FsConfig {
-        local_root: None,
-        mounts: mounts
-            .into_iter()
-            .map(|m| MountSpec {
-                prefix: m.prefix,
-                provider: m.provider,
-            })
-            .collect(),
-    })
+    Ok(mounts
+        .into_iter()
+        .map(|m| MountSpec {
+            prefix: m.prefix,
+            provider: m.provider,
+        })
+        .collect())
 }
 
 /// Map a SQLite UNIQUE violation on `(workspace_id, prefix)` to a typed error so
@@ -226,7 +231,7 @@ fn map_mount_sqlx_error(e: sqlx::Error) -> StateError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::workspace::S3Config;
+    use cortex::S3Config;
 
     /// Fresh in-memory DB with a seeded user + workspace; returns the state and
     /// the workspace id.
@@ -298,15 +303,15 @@ mod tests {
             _ => panic!("expected S3"),
         }
 
-        // build_fs assembles the mount (no network — just client construction),
-        // alongside the always-present local `/files` mount.
-        let vfs = state.build_fs(wid).await.unwrap();
-        let mut names = vfs.mount_names();
-        names.sort();
-        assert_eq!(names, vec!["files".to_string(), "s3-prod".to_string()]);
+        // build_workspace_vfs surfaces the provider mount (the local `/files`
+        // mount is added later, by cortex_workspace_spec).
+        let mounts = build_workspace_vfs(&state.db, wid).await.unwrap();
+        let prefixes: Vec<&str> = mounts.iter().map(|m| m.prefix.as_str()).collect();
+        assert_eq!(prefixes, vec!["/s3-prod"]);
 
-        // get_fs builds a filesystem with the mount attached.
-        assert!(state.get_fs(wid).await.is_ok());
+        // cortex_workspace assembles the unified tree (local files + the mount;
+        // no network — just client construction).
+        assert!(state.cortex_workspace(wid).await.is_ok());
 
         // A duplicate prefix conflicts.
         let dup = WorkspaceMount::new(wid, "/s3-prod".into(), s3_provider());
@@ -315,13 +320,11 @@ mod tests {
             Err(StateError::UniqueViolation(_))
         ));
 
-        // Removal drops it; with no provider mounts, the VFS still has local `/files`.
+        // Removal drops it; the workspace still assembles (local `/files` only).
         state.remove_mount(created.id).await.unwrap();
         assert!(state.list_mounts(wid).await.unwrap().is_empty());
-        assert_eq!(
-            state.build_fs(wid).await.unwrap().mount_names(),
-            vec!["files".to_string()]
-        );
+        assert!(build_workspace_vfs(&state.db, wid).await.unwrap().is_empty());
+        assert!(state.cortex_workspace(wid).await.is_ok());
         assert!(matches!(
             state.remove_mount(created.id).await,
             Err(StateError::NotFound)
@@ -347,31 +350,5 @@ mod tests {
             state.create_mount(reserved).await,
             Err(StateError::InvalidData(_))
         ));
-    }
-
-    /// A mount create/remove must evict the cached `WorkspaceFs` so the next
-    /// `get_fs` reflects the change (a stale cache would keep listing a removed
-    /// mount). Checked via the root mount-name list (no network).
-    #[tokio::test]
-    async fn get_fs_reflects_mount_changes() {
-        let (state, _tmp, wid) = fresh_state().await;
-
-        let created = state
-            .create_mount(WorkspaceMount::new(wid, "s3-prod".into(), s3_provider()))
-            .await
-            .unwrap();
-        let fs = state.get_fs(wid).await.unwrap();
-        assert!(
-            fs.mount_names().iter().any(|n| n == "s3-prod"),
-            "mount should appear after create"
-        );
-
-        // Removing must evict the cache, or get_fs still lists it.
-        state.remove_mount(created.id).await.unwrap();
-        let fs = state.get_fs(wid).await.unwrap();
-        assert!(
-            !fs.mount_names().iter().any(|n| n == "s3-prod"),
-            "mount must be gone after remove (cache invalidated)"
-        );
     }
 }
