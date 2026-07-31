@@ -96,6 +96,45 @@ const JITTER_MAX_MS: u64 = 1000;
 /// chunked read from re-rendering it.
 const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Whether a 403 body names a limit that clears by waiting.
+///
+/// Drive answers a per-user or per-project rate limit with 403 and a `reason` — a 429
+/// is only one of the shapes it uses. The other 403s (`insufficientFilePermissions`,
+/// `dailyLimitExceeded`) do not clear by retrying, so they stay terminal.
+fn is_rate_limit(body: &str) -> bool {
+    const RETRYABLE: [&str; 3] = [
+        "rateLimitExceeded",
+        "userRateLimitExceeded",
+        "sharingRateLimitExceeded",
+    ];
+    let reasons: Vec<String> = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| {
+            Some(
+                v.pointer("/error/errors")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|e| e.get("reason")?.as_str().map(str::to_string))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+    if !reasons.is_empty() {
+        return reasons.iter().any(|r| RETRYABLE.contains(&r.as_str()));
+    }
+    // No parseable `errors[]`: fall back to the text, so a shape we have not seen
+    // still lands on the ladder rather than failing a wait-and-retry condition.
+    RETRYABLE.iter().any(|r| body.contains(r))
+}
+
+/// The first `n` characters of `s`, cut on a character boundary.
+fn first_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
+}
+
 /// Read a response body, refusing at `limit` rather than after it.
 ///
 /// The obvious guard — check `Content-Length`, then buffer — never fires here: none of
@@ -381,6 +420,22 @@ impl GdriveAccessor {
                 token = self.token().await?;
                 refreshed = true;
                 continue;
+            }
+            // Drive reports a per-user rate limit as 403 with a `reason`, not as 429, so
+            // the status alone classifies it as terminal and the caller gives up on a
+            // condition that clears by waiting. The reason is in the body, and reading
+            // the body consumes the response — which is fine, because a 403 this loop
+            // does not retry is a failure either way, and saying why beats handing back
+            // a response whose only content is the explanation.
+            if status == reqwest::StatusCode::FORBIDDEN {
+                let body = resp.text().await.unwrap_or_default();
+                if is_rate_limit(&body) && retries < max_retries {
+                    let wait = backoff_delay(retries);
+                    retries += 1;
+                    tokio::time::sleep(wait).await;
+                    continue;
+                }
+                anyhow::bail!("gdrive 403: {}", first_chars(&body, 300));
             }
             let retryable =
                 status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
@@ -779,6 +834,43 @@ mod tests {
         assert_eq!(escape_q("it's here"), "it\\'s here");
         assert_eq!(escape_q("a\\b"), "a\\\\b");
         assert_eq!(escape_q("'"), "\\'");
+    }
+
+    /// Drive uses 403 for a limit that clears by waiting, which the status alone reads
+    /// as terminal — measured in review: a 403 `rateLimitExceeded` gave up after one
+    /// attempt while a 429 walked the whole ladder.
+    #[test]
+    fn a_403_that_clears_by_waiting_is_told_apart_from_one_that_does_not() {
+        let body = |reason: &str| {
+            serde_json::json!({
+                "error": { "code": 403, "errors": [{ "reason": reason, "message": "x" }] }
+            })
+            .to_string()
+        };
+        for reason in [
+            "rateLimitExceeded",
+            "userRateLimitExceeded",
+            "sharingRateLimitExceeded",
+        ] {
+            assert!(is_rate_limit(&body(reason)), "{reason} clears by waiting");
+        }
+        for reason in [
+            "insufficientFilePermissions",
+            "dailyLimitExceeded",
+            "appNotAuthorizedToFile",
+        ] {
+            assert!(!is_rate_limit(&body(reason)), "{reason} does not");
+        }
+        // A shape with no parseable `errors[]` still lands on the ladder if it says so.
+        assert!(is_rate_limit("Rate Limit Exceeded: userRateLimitExceeded"));
+        assert!(!is_rate_limit("<html>403 Forbidden</html>"));
+        assert!(!is_rate_limit(""));
+    }
+
+    #[test]
+    fn an_error_body_is_cut_on_a_character_boundary() {
+        assert_eq!(first_chars("한글 오류 메시지", 4), "한글 오");
+        assert_eq!(first_chars("short", 300), "short");
     }
 
     #[test]
