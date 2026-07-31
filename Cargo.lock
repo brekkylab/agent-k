@@ -155,7 +155,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=43d2a8227f53118137f3319094398549f465275f#43d2a8227f53118137f3319094398549f465275f"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=42a80bfc572dcab28fe089282b3ec60cc5782e76#42a80bfc572dcab28fe089282b3ec60cc5782e76"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1312,11 +1312,13 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cortex"
 version = "0.1.0"
-source = "git+https://github.com/brekkylab/cortex.git?rev=d884272013abcaa4c48f1cda5f66a9f9752d0403#d884272013abcaa4c48f1cda5f66a9f9752d0403"
+source = "git+https://github.com/brekkylab/cortex.git?rev=da4ee5b663c69b715d4ade5f7740f45912811110#da4ee5b663c69b715d4ade5f7740f45912811110"
 dependencies = [
+ "cc",
  "libc",
  "msb_krun",
  "object_store",
+ "pkg-config",
  "serde",
  "tempfile",
  "tokio",
