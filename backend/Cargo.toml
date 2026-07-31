@@ -12,6 +12,7 @@ agent-k = { workspace = true }
 aide = { version = "0.15", features = ["axum", "axum-json", "axum-query", "axum-extra", "macros", "redoc", "swagger", "scalar"] }
 ailoy = { workspace = true }
 anyhow = "1"
+cortex = { workspace = true }
 argon2 = { version = "0.5", features = ["std"] }
 async-stream = "0.3"
 axum = { version = "0.8", features = ["multipart"] }
