@@ -128,30 +128,37 @@ own sidebar:
   Shared with me/         # everything shared to this account
   <shared drive>/         # each shared drive, when the account has any
 
-  Folders are directories, files are files: `cat`, `head`, `cp` and `grep` work on
-  the real bytes. Forms, Maps and Drawings have no readable form; they aren't listed.
+  Folders are directories, files are files: `cat`, `head` and `grep` read the real
+  bytes, `cp` copies out of the mount. Two files of one name are numbered before the
+  extension (`report (2).pdf`).
 
   Docs, Sheets and Slides hold no bytes of their own, so each appears as its own
   API's JSON — the only form that carries everything about it:
     <name>.gdoc.json    paragraphs, styles, tables, the character indices an edit
                         addresses
-    <name>.gsheet.json  tabs, named ranges, charts, and each tab's cell values
-                        under sheets[].values (or sheets[].valuesOmitted when a
-                        tab is past the size budget)
+    <name>.gsheet.json  tabs, named ranges, charts, and each tab's cell values under
+                        sheets[].values (sheets[].valuesOmitted past the size budget)
     <name>.gslide.json  pages, shapes, transforms, speaker notes
   Their text is split across style runs: search words, not phrases, and `-A`/`-B`
-  shows JSON siblings rather than the next lines of the document.
+  shows JSON siblings rather than the document's next lines. Every other
+  Google-native type (Forms, Drawings, Maps, Apps Script) is not listed at all.
 
-  A PDF, pptx, xlsx or docx keeps its text compressed and font-encoded, so
-  grepping it finds nothing. Ask Drive's index instead — it read those files when
-  they were uploaded, scanned pages included (write the phrase to the control path,
-  then read the same path back for one JSON line per hit):
-    echo 'quarterly revenue' > .cmd/search
+  A PDF, pptx, xlsx or docx keeps its text compressed and font-encoded, so grepping
+  it finds nothing — and `grep` abandons any file whose first buffer looks binary, so
+  archives never match either. Drive's own index did read inside them, scanned pages
+  included:
+    echo 'quarterly revenue' > .cmd/search    # then read .cmd/search back
+  One JSON line per hit — name, id, mimeType, size — and a line carrying an
+  `unlisted` note has no path here: open it in Drive instead.
 
-  Remote mount, so every read costs network: prefer `head`/`grep` over `cat` (a
-  70MB file moves 70MB), narrow a search with a glob filter, and expect an unread
-  document to list a placeholder size (8MB) until something reads it. Read-only:
-  no writes, no rm, no mkdir.";
+  Every read costs network:
+  - a real file reads by the window: `head` moves what it asks for, `cat` of a 70MB
+    file moves 70MB. A glob filter never opens the files it excludes
+  - a document has no windows: any read produces the whole JSON (a second or two,
+    then cached), and until then its listed size is a placeholder — `ls -l` and
+    `find -size` are wrong about an unread one
+  - a listing is cached 5 minutes, so a change just made in Drive may not show yet
+  Read-only apart from the control path: no rm, no mkdir, no writing files.";
 
 /// Whether Drive holds real bytes for this row. The Docs-editors types (and
 /// Forms, Maps, Drawings) do not — `alt=media` answers 403 for them.
@@ -545,10 +552,10 @@ impl Resource for GdriveResource {
     /// answer to a PDF's contents, which no read of the mount can give.
     ///
     /// The body is the phrase, plain text. One JSON line per hit, so a reader can
-    /// pipe it into anything: `{"name","id","mimeType","size","modifiedTime","listed"}`.
-    /// `listed: false` marks a hit this mount has no entry for — a Form or a Drawing,
-    /// which no read can render — so the index's answer is reported rather than
-    /// quietly dropped.
+    /// pipe it into anything: `{"name","id","mimeType","size","modifiedTime"}`, plus an
+    /// `unlisted` explanation on a hit this mount has no entry for (a Form, a Drawing —
+    /// nothing can render them). Reporting those beats dropping them: the index found
+    /// the phrase, and an answer of silence would read as an absence.
     async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
         if name != "search" {
             return Err(ResourceError::Unsupported);
@@ -569,10 +576,12 @@ impl Resource for GdriveResource {
         let mut out = Vec::new();
         for f in &hits {
             // A hit the mount has no entry for (a Form, a Map, a Drawing) is still a
-            // hit: dropping it would answer "not found" for a file the index found,
-            // and the id is enough to open it in Drive. Say it isn't listed instead.
+            // hit: dropping it would answer "not found" for a file the index found.
+            // Report it with the reason attached — a reader meets these lines on their
+            // own, so the line has to explain itself rather than rely on a flag whose
+            // meaning lives elsewhere.
             let child = child_from_file(f);
-            let line = serde_json::json!({
+            let mut line = serde_json::json!({
                 "name": child
                     .as_ref()
                     .map(|c| c.vfs_name.clone())
@@ -583,8 +592,19 @@ impl Resource for GdriveResource {
                 "mimeType": f.get("mimeType"),
                 "size": f.get("size"),
                 "modifiedTime": f.get("modifiedTime"),
-                "listed": child.is_some(),
             });
+            if child.is_none()
+                && let Some(obj) = line.as_object_mut()
+            {
+                obj.insert(
+                    "unlisted".into(),
+                    Value::String(
+                        "this type has no readable form, so it is not in the tree: \
+                         no path to read, open it in Drive by id"
+                            .into(),
+                    ),
+                );
+            }
             out.extend_from_slice(&serde_json::to_vec(&line)?);
             out.push(b'\n');
         }
@@ -1213,8 +1233,8 @@ mod tests {
             child_from_file(&form).is_none(),
             "a Form has no entry in the tree"
         );
-        // The command's shaping of a hit keeps the name and id either way; the flag is
-        // what tells them apart.
+        // The command's shaping of a hit keeps the name and id either way; the note is
+        // what tells them apart, and it says why in the line itself.
         let served = file_row("보고서.pdf", "p1", "application/pdf");
         for (row, listed) in [(&form, false), (&served, true)] {
             let child = child_from_file(row);
