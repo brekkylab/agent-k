@@ -1309,7 +1309,7 @@ mod tests {
         ));
         for empty in ["", "   ", "\n"] {
             assert!(
-                matches!(r.command("search", empty.as_bytes()).await, Err(_)),
+                r.command("search", empty.as_bytes()).await.is_err(),
                 "an empty phrase must not become a search"
             );
         }
@@ -1434,12 +1434,7 @@ mod tests {
     #[test]
     fn a_tab_past_the_cap_says_it_was_never_asked_for() {
         let titles: Vec<String> = (0..MAX_TABS + 2).map(|i| format!("T{i}")).collect();
-        let mut wb = workbook(
-            &titles
-                .iter()
-                .map(|t| Some(t.as_str()))
-                .collect::<Vec<_>>(),
-        );
+        let mut wb = workbook(&titles.iter().map(|t| Some(t.as_str())).collect::<Vec<_>>());
         let asked = titles[..MAX_TABS].to_vec();
         let pairs: Vec<(String, String)> = asked
             .iter()
@@ -1468,10 +1463,10 @@ mod tests {
         let mut wb = workbook(&[Some("small1"), Some("huge"), Some("small2")]);
         let huge = "x".repeat(GRID_BYTES_BUDGET as usize + 1);
         let mut b = batch(&[("small1!A1", "a"), ("small2!A1", "b")]);
-        b["valueRanges"]
-            .as_array_mut()
-            .unwrap()
-            .insert(1, serde_json::json!({ "range": "huge!A1", "values": [[huge]] }));
+        b["valueRanges"].as_array_mut().unwrap().insert(
+            1,
+            serde_json::json!({ "range": "huge!A1", "values": [[huge]] }),
+        );
         fold_values(&mut wb, &b, &["small1", "huge", "small2"].map(String::from));
 
         assert_eq!(values_of(&wb, 0).as_deref(), Some("a"));

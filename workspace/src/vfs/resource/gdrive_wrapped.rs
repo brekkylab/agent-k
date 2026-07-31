@@ -156,7 +156,9 @@ async fn start_full(
                     .collect();
                 // Drain an announced body (the token POST) so the client isn't left
                 // writing into a socket nobody reads.
-                if let Some(cl) = header(&headers, "content-length").and_then(|v| v.parse::<usize>().ok()) {
+                if let Some(cl) =
+                    header(&headers, "content-length").and_then(|v| v.parse::<usize>().ok())
+                {
                     while buf.len() < head_end + cl {
                         match sock.read(&mut tmp).await {
                             Ok(0) | Err(_) => break,
@@ -235,9 +237,13 @@ async fn start_full(
                     let id = path.rsplit('/').next().unwrap_or("").to_string();
                     let blob = blobs.get(&id).cloned().unwrap_or_default();
                     match range.as_deref().and_then(parse_range) {
-                        Some((start, _)) if start >= blob.len() as u64 => reply(416, Vec::new(), None),
+                        Some((start, _)) if start >= blob.len() as u64 => {
+                            reply(416, Vec::new(), None)
+                        }
                         Some((start, end)) => {
-                            let last = end.unwrap_or(blob.len() as u64 - 1).min(blob.len() as u64 - 1);
+                            let last = end
+                                .unwrap_or(blob.len() as u64 - 1)
+                                .min(blob.len() as u64 - 1);
                             let window = blob[start as usize..=last as usize].to_vec();
                             let cr = format!("Content-Range: bytes {start}-{last}/{}", blob.len());
                             reply(206, window, Some(cr))
@@ -400,13 +406,20 @@ async fn a_document_is_built_once_and_served_from_the_cache() {
     // The mock has no Docs endpoint, so a read fails — what matters is that the
     // listing already refused to call the placeholder a length, which is what keeps
     // `whole_or_small` from treating it as a small, cacheable object.
-    let st = fs.stat(&MountPath::new("/My Drive/notes.gdoc.json")).await.unwrap();
+    let st = fs
+        .stat(&MountPath::new("/My Drive/notes.gdoc.json"))
+        .await
+        .unwrap();
     assert!(st.serves_whole, "a document has no windows");
     assert!(st.size_is_estimate, "and no known length until it is built");
     assert!(
-        fs.read_bytes_pinned(&MountPath::new("/My Drive/notes.gdoc.json"), Some(0..CHUNK), &st)
-            .await
-            .is_err(),
+        fs.read_bytes_pinned(
+            &MountPath::new("/My Drive/notes.gdoc.json"),
+            Some(0..CHUNK),
+            &st
+        )
+        .await
+        .is_err(),
         "the mock serves no document API"
     );
 }
@@ -525,9 +538,16 @@ async fn an_empty_window_does_not_fetch_the_object() {
     let st = fs.stat(&file).await.unwrap();
 
     mock.reset();
-    let got = fs.read_bytes_pinned(&file, Some(1024..1024), &st).await.unwrap();
+    let got = fs
+        .read_bytes_pinned(&file, Some(1024..1024), &st)
+        .await
+        .unwrap();
     assert!(got.is_empty());
-    assert_eq!(mock.media_ranges(), Vec::<Option<String>>::new(), "no request at all");
+    assert_eq!(
+        mock.media_ranges(),
+        Vec::<Option<String>>::new(),
+        "no request at all"
+    );
     assert_eq!(mock.bytes_sent(), 0);
 }
 
@@ -555,7 +575,10 @@ async fn a_listing_cache_does_not_grow_without_bound() {
     // life of the mount — two survive, because resolving `/Shared with me` re-lists the
     // root on the way to it, and both of those are fresh.
     inner.age_listings_for_test().await;
-    let _ = fs.readdir(&MountPath::new("/Shared with me")).await.unwrap();
+    let _ = fs
+        .readdir(&MountPath::new("/Shared with me"))
+        .await
+        .unwrap();
     assert_eq!(
         inner.listings_retained().await,
         2,

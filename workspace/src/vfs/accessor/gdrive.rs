@@ -85,7 +85,6 @@ const MAX_RETRIES: u32 = 5;
 const MAX_BACKOFF: Duration = Duration::from_secs(16);
 const JITTER_MAX_MS: u64 = 1000;
 
-
 /// Ceiling on one document's JSON.
 ///
 /// A document has no ranges: a read of any part of it produces the whole thing, so
@@ -556,16 +555,27 @@ impl GdriveAccessor {
     /// byte, 0.68s. The alternative — reading the object to find out how long it is
     /// — is the thing every other guard here exists to avoid.
     pub async fn probe_len(&self, id: &str) -> anyhow::Result<u64> {
-        let url = format!("{}/files/{id}?alt=media&supportsAllDrives=true", self.urls.drive);
+        let url = format!(
+            "{}/files/{id}?alt=media&supportsAllDrives=true",
+            self.urls.drive
+        );
         let resp = self
-            .send_with_refresh(|t| self.client.get(&url).bearer_auth(t).header("Range", "bytes=0-0"))
+            .send_with_refresh(|t| {
+                self.client
+                    .get(&url)
+                    .bearer_auth(t)
+                    .header("Range", "bytes=0-0")
+            })
             .await?
             .error_for_status()?;
         let total = resp
             .headers()
             .get(reqwest::header::CONTENT_RANGE)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.rsplit_once('/').map(|(_, total)| total.trim().to_string()))
+            .and_then(|v| {
+                v.rsplit_once('/')
+                    .map(|(_, total)| total.trim().to_string())
+            })
             .ok_or_else(|| anyhow::anyhow!("gdrive probe {id}: no Content-Range in a 206"))?;
         total
             .parse::<u64>()
@@ -809,12 +819,11 @@ mod tests {
     #[test]
     fn a_document_that_can_be_produced_can_be_cached() {
         const CONTENT_CACHE_BUDGET: u64 = 128 << 20;
-        assert!(
-            MAX_DOCUMENT_BYTES <= CONTENT_CACHE_BUDGET,
-            "a producible document must fit the cache"
-        );
+        // Compile-time: the two limits are a pair, and a later edit to either has to
+        // keep them one.
+        const _: () = assert!(MAX_DOCUMENT_BYTES <= CONTENT_CACHE_BUDGET);
         // And far above anything measured: 3.4MB was the largest real document.
-        assert!(MAX_DOCUMENT_BYTES >= 16 << 20);
+        const _: () = assert!(MAX_DOCUMENT_BYTES >= 16 << 20);
     }
 
     /// A tab is named by a person but read as A1 notation, where a name that looks

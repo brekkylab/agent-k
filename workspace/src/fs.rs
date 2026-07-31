@@ -496,20 +496,15 @@ impl WorkspaceFs {
                 .filter(|(_, e)| e.size_is_estimate)
                 .map(|(i, _)| i)
                 .collect();
-            let paths: Vec<MountPath> = at
-                .iter()
-                .map(|&i| vpath.child(&entries[i].name))
-                .collect();
+            let paths: Vec<MountPath> = at.iter().map(|&i| vpath.child(&entries[i].name)).collect();
             // `stat` is what resolves a placeholder (the provider renders once and
             // the cache keeps both bytes and length), so driving it per child is
             // also what warms the reads that follow.
             let sized = futures::StreamExt::collect::<Vec<_>>(futures::StreamExt::buffered(
-                stream::iter(
-                    paths.into_iter().map(|p| {
-                        let resource = resource.clone();
-                        async move { resource.stat(&p).await.ok() }
-                    }),
-                ),
+                stream::iter(paths.into_iter().map(|p| {
+                    let resource = resource.clone();
+                    async move { resource.stat(&p).await.ok() }
+                })),
                 LISTING_SIZE_CONCURRENCY,
             ))
             .await;

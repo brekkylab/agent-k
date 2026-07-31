@@ -436,8 +436,14 @@ mod tests {
     #[test]
     fn the_subject_type_property_is_a_whole_escaped_element() {
         let xml = subject_type_element("application/vnd.google-apps.spreadsheet");
-        assert!(xml.starts_with(&format!("<W:{SUBJECT_TYPE_PROP} ")), "{xml}");
-        assert!(xml.contains(&format!("xmlns:W=\"{PROP_NAMESPACE}\"")), "{xml}");
+        assert!(
+            xml.starts_with(&format!("<W:{SUBJECT_TYPE_PROP} ")),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(&format!("xmlns:W=\"{PROP_NAMESPACE}\"")),
+            "{xml}"
+        );
         assert!(
             xml.ends_with(&format!(
                 ">application/vnd.google-apps.spreadsheet</W:{SUBJECT_TYPE_PROP}>"
@@ -456,7 +462,6 @@ mod tests {
             assert!(!out.contains(&format!("/{bad}plain")), "{out}");
         }
     }
-
 
     #[test]
     fn parse_wid_requires_canonical_form() {
