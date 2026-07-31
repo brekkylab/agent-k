@@ -240,6 +240,21 @@ impl WorkspacesState {
         Ok(fs.with_hook(knowledge_hook(wid, Some(self.resyncer.clone()))))
     }
 
+    /// The workspace as a cortex [`Workspace`](cortex::Workspace): the canonical
+    /// unified tree (local `files/` + provider mounts) this backend serves over
+    /// WebDAV and hands to the sandbox guest. The knowledge resync hook is
+    /// attached, so `files/knowledge/` writes made over WebDAV trigger a resync
+    /// (guest writes cross a process boundary and can't fire it — see
+    /// [`session`](crate::state::session)).
+    pub(crate) async fn cortex_workspace(&self, wid: Uuid) -> StateResult<Arc<cortex::Workspace>> {
+        let vfs = build_workspace_vfs(&self.db, wid).await?;
+        let spec = cortex_workspace_spec(&self.data_root, wid, vfs);
+        let ws = cortex::Workspace::from_spec(&spec)
+            .map_err(|e| StateError::InvalidData(format!("cortex workspace: {e}")))?
+            .with_hook(cortex_knowledge_hook(wid, Some(self.resyncer.clone())));
+        Ok(Arc::new(ws))
+    }
+
     /// Absolute on-disk path of workspace `wid`'s file root
     /// (`data_root/workspaces/{wid}/files`).
     fn get_root(&self, wid: Uuid) -> PathBuf {
@@ -282,6 +297,78 @@ impl FsHook for KnowledgeHook {
 
 fn knowledge_hook(wid: Uuid, resyncer: Option<Resyncer>) -> Option<Arc<dyn FsHook>> {
     Some(Arc::new(KnowledgeHook { wid, resyncer }))
+}
+
+/// The cortex-side twin of [`KnowledgeHook`]: same `knowledge/` classification
+/// and resync trigger, implementing [`cortex::FsHook`] so it can attach to a
+/// cortex [`Workspace`](cortex::Workspace). Both hooks share
+/// [`is_under_knowledge`](super::knowledge::is_under_knowledge), so the
+/// WorkspaceFs and cortex paths classify writes identically. Retire alongside
+/// [`KnowledgeHook`] once WorkspaceFs is gone.
+struct CortexKnowledgeHook {
+    wid: Uuid,
+    resyncer: Option<Resyncer>,
+}
+
+impl cortex::FsHook for CortexKnowledgeHook {
+    fn on_change(&self, event: cortex::FsEvent<'_>) {
+        let touched = match event {
+            cortex::FsEvent::Created(p)
+            | cortex::FsEvent::Modified(p)
+            | cortex::FsEvent::Removed(p) => super::knowledge::is_under_knowledge(p),
+        };
+        if touched {
+            if let Some(r) = &self.resyncer {
+                r.spawn_resync(self.wid);
+            }
+        }
+    }
+}
+
+fn cortex_knowledge_hook(
+    wid: Uuid,
+    resyncer: Option<Resyncer>,
+) -> Option<Arc<dyn cortex::FsHook>> {
+    Some(Arc::new(CortexKnowledgeHook { wid, resyncer }))
+}
+
+/// Assemble the canonical cortex [`WorkspaceSpec`](cortex::WorkspaceSpec) for
+/// `wid`: the local file root mounted at `files` plus every configured provider
+/// at its prefix. The cortex counterpart of [`workspace_fs`] — one spec, served
+/// identically to the sandbox guest (virtio-fs) and this backend's WebDAV.
+/// Standalone (takes `data_root` + a prebuilt `vfs`) so the session run loop can
+/// build it without a [`WorkspacesState`], mirroring [`workspace_fs`]. The
+/// `workspaces/{wid}/files` layout mirrors [`WorkspacesState::get_root`]; keep
+/// the three in step.
+pub(crate) fn cortex_workspace_spec(
+    data_root: &std::path::Path,
+    wid: Uuid,
+    vfs: FsConfig,
+) -> cortex::WorkspaceSpec {
+    let root = data_root
+        .join("workspaces")
+        .join(wid.to_string())
+        .join("files");
+    let mut ws =
+        cortex::WorkspaceSpec::default().mount("files", cortex::VolumeSpec::Local { host: root });
+    for m in vfs.mounts {
+        let prefix = m.prefix.trim_matches('/').to_string();
+        let volume = match m.provider {
+            ::workspace::ProviderConfig::S3(c) => cortex::VolumeSpec::S3(cortex::S3Config {
+                bucket: c.bucket,
+                region: c.region,
+                access_key_id: c.access_key_id,
+                secret_access_key: c.secret_access_key,
+                endpoint: c.endpoint,
+                key_prefix: c.key_prefix,
+            }),
+            ::workspace::ProviderConfig::Notion(c) => {
+                cortex::VolumeSpec::Notion(cortex::NotionConfig { api_key: c.api_key })
+            }
+        };
+        ws = ws.mount(prefix, volume);
+    }
+    ws
 }
 
 /// Build a [`WorkspaceFs`] for `wid` rooted under `data_root`, with `vfs`

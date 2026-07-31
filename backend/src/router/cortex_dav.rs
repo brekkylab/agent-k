@@ -2,24 +2,18 @@
 //! [`DavFileSystem`], so agent-k serves the *same* unified tree over WebDAV that
 //! it hands the sandbox — one `Workspace`, two frontends.
 //!
-// The adapter is verified (see tests) but not yet spliced into the live WebDAV
-// route (that swap replaces `WorkspaceFs` and must carry the `/files/knowledge`
-// hook over, which is the deferred knowledge-migration step). Until then it is
-// unused outside tests.
-#![allow(dead_code)]
-//!
 //! cortex's `Mountable` API is synchronous (it is driven by FUSE/virtio-fs
 //! worker threads elsewhere), while `DavFileSystem` is async. Each op therefore
 //! runs on [`spawn_blocking`](tokio::task::spawn_blocking); the workspace is
 //! shared as an `Arc` (cortex provides `impl Mountable for Arc<T>`), and open
 //! files hold an `Arc<dyn FileHandle>` whose positioned I/O is `&self`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cortex::{CortexError, DirentKind, FileExt, FileHandle, Mountable, OpenOptions as CxOpenOptions,
+use cortex::{CortexError, DirentKind, FileHandle, Mountable, OpenOptions as CxOpenOptions,
     Stat, Workspace};
 use dav_server::davpath::DavPath;
 use dav_server::fs::{

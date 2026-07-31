@@ -6,7 +6,6 @@ use std::{
 
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
-    cortex::{S3Config as CortexS3Config, VolumeSpec, WorkspaceSpec},
     message::{FinishReason, Message, Part, Role},
     runenv::Sandbox,
 };
@@ -415,23 +414,13 @@ impl SessionsState {
                     // session's writable state (upper disk) lives.
                     let sandbox = Sandbox::new(dir.join("upper.img"))
                         .map_err(|e| anyhow::anyhow!("sandbox init: {e}"))?;
-                    // One workspace: each provider mounts at its prefix under the
-                    // guest's /mnt/workspace root.
-                    let mut ws = WorkspaceSpec::default();
-                    for m in &vfs.mounts {
-                        if let ::workspace::ProviderConfig::S3(cfg) = &m.provider {
-                            let prefix = m.prefix.trim_matches('/');
-                            let spec = VolumeSpec::S3(CortexS3Config {
-                                bucket: cfg.bucket.clone(),
-                                region: cfg.region.clone(),
-                                access_key_id: cfg.access_key_id.clone(),
-                                secret_access_key: cfg.secret_access_key.clone(),
-                                endpoint: cfg.endpoint.clone(),
-                                key_prefix: cfg.key_prefix.clone(),
-                            });
-                            ws = ws.mount(prefix, spec);
-                        }
-                    }
+                    // The canonical unified spec — local `files/` plus every
+                    // provider mount — the same tree served over WebDAV
+                    // (see [`crate::state::cortex_workspace_spec`]), mounted at
+                    // the guest's /mnt/workspace root. No hook here: guest writes
+                    // cross the sandbox process boundary, so knowledge resync is
+                    // driven from the WebDAV side only.
+                    let ws = crate::state::cortex_workspace_spec(&data_root, workspace_id, vfs);
                     let sandbox = sandbox.with_workspace("/mnt/workspace", ws);
                     Some(Arc::new(sandbox))
                 } else {
