@@ -44,6 +44,10 @@ pub struct DirEntry {
     /// See [`FileStat::size_is_estimate`]. Carried from the listing so the value
     /// survives `readdir` → cache → `stat`.
     pub size_is_estimate: bool,
+    /// See [`FileStat::serves_whole`]. Carried for the same reason: the metadata cache
+    /// answers a `stat` after a `readdir` from this row, and the read strategy inverts
+    /// on this flag.
+    pub serves_whole: bool,
 }
 
 #[derive(Clone, Debug, Default)]

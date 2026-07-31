@@ -160,6 +160,7 @@ impl Resource for LocalResource {
                         etag: None,
                         content_type: None,
                         size_is_estimate: false,
+                        serves_whole: false,
                     }
                 }
                 Err(_) => DirEntry {
@@ -173,6 +174,7 @@ impl Resource for LocalResource {
                     etag: None,
                     content_type: None,
                     size_is_estimate: false,
+                    serves_whole: false,
                 },
             };
             out.push(entry);

@@ -147,6 +147,7 @@ impl Resource for S3Resource {
                     etag: None,
                     content_type: None,
                     size_is_estimate: false,
+                    serves_whole: false,
                 });
             }
         }
@@ -171,6 +172,7 @@ impl Resource for S3Resource {
                     etag: obj.e_tag.clone(),
                     content_type: None,
                     size_is_estimate: false,
+                    serves_whole: false,
                 });
             }
         }

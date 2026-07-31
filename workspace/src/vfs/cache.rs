@@ -50,6 +50,11 @@ struct Entry {
     /// See [`FileStat::size_is_estimate`] — carried so a `stat` after a `readdir`
     /// still knows the length was only an upper bound.
     size_is_estimate: bool,
+    /// See [`FileStat::serves_whole`] — carried so the flag survives a listing. The
+    /// read strategy inverts on it by an order of magnitude, and rebuilding the stat
+    /// from `Default` here silently answered `false` for a node the provider calls
+    /// whole-only.
+    serves_whole: bool,
 }
 
 #[derive(Default)]
@@ -127,6 +132,7 @@ impl IndexCache {
                     etag: e.etag.clone(),
                     content_type: e.content_type.clone(),
                     size_is_estimate: e.size_is_estimate,
+                    serves_whole: e.serves_whole,
                 })
             })
             .collect();
@@ -177,6 +183,7 @@ impl IndexCache {
                     // an estimate through a later `stat`, or the handle that opens
                     // off it never resolves the real length.
                     size_is_estimate: e.size_is_estimate,
+                    serves_whole: e.serves_whole,
                 },
             );
         }
@@ -620,6 +627,7 @@ impl Resource for CachedResource {
                     etag: e.etag.clone(),
                     content_type: e.content_type.clone(),
                     size_is_estimate: e.size_is_estimate,
+                    serves_whole: e.serves_whole,
                     ..Default::default()
                 });
             }
@@ -984,6 +992,7 @@ mod tests {
                     etag: Some("\"abc123\"".into()),
                     content_type: None,
                     size_is_estimate: false,
+                    serves_whole: false,
                 }])
             }
             async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
@@ -1093,6 +1102,7 @@ mod tests {
             etag: None,
             content_type: None,
             size_is_estimate: false,
+            serves_whole: false,
         }
     }
 
@@ -1226,6 +1236,7 @@ mod tests {
                 etag: None,
                 content_type: Some("application/pdf".to_string()),
                 size_is_estimate: false,
+                serves_whole: false,
             }],
         );
         // The stat fast path reads the cached `Entry`…
@@ -1440,6 +1451,35 @@ mod tests {
         }
     }
 
+    /// `serves_whole` has to survive the same trip. The stat fast path rebuilds a
+    /// `FileStat` from the cached row, so a flag that is not carried there answers
+    /// `false` for a node the provider calls whole-only — and the read strategy
+    /// inverts on it by an order of magnitude. Nothing tripped it while every
+    /// whole-only node also reported 0 or an estimate, which made "those always
+    /// coincide" an invariant the code relied on and no provider stated.
+    #[test]
+    fn whole_only_survives_readdir_then_stat() {
+        let c = IndexCache::new(Duration::from_secs(600));
+        c.set_dir(
+            "/",
+            &[DirEntry {
+                name: "page.json".to_string(),
+                kind: FileKind::File,
+                size: 400,
+                mtime: None,
+                atime: None,
+                ctime: None,
+                created: None,
+                etag: None,
+                content_type: None,
+                size_is_estimate: false,
+                serves_whole: true,
+            }],
+        );
+        assert!(c.get("/page.json").unwrap().serves_whole);
+        assert!(c.list_dir_entries("/").unwrap()[0].serves_whole);
+    }
+
     /// An estimated size has to survive `readdir` -> `stat`, because that is the
     /// order every reader uses: list a directory, then open something in it. Lose
     /// the flag and the sentinel size becomes a claim of fact, so the handle skips
@@ -1462,6 +1502,7 @@ mod tests {
                     etag: None,
                     content_type: None,
                     size_is_estimate: true,
+                    serves_whole: false,
                 },
                 DirEntry {
                     name: "real.pdf".to_string(),
@@ -1474,6 +1515,7 @@ mod tests {
                     etag: None,
                     content_type: None,
                     size_is_estimate: false,
+                    serves_whole: false,
                 },
             ],
         );
@@ -1505,6 +1547,7 @@ mod tests {
                 etag: None,
                 content_type: None,
                 size_is_estimate: false,
+                serves_whole: false,
             }],
         );
         // fast-path source: get() returns the stored mtime (not None/epoch).

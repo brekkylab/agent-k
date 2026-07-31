@@ -890,6 +890,7 @@ mod tests {
                     etag: None,
                     content_type: None,
                     size_is_estimate: false,
+                    serves_whole: false,
                 }])
             } else {
                 Err(ResourceError::NotFound)
@@ -1239,6 +1240,7 @@ mod tests {
                     kind: FileKind::File,
                     size: 64 << 20,
                     size_is_estimate: true,
+                    serves_whole: false,
                     mtime: Some(std::time::UNIX_EPOCH),
                     atime: None,
                     ctime: None,
@@ -1252,6 +1254,7 @@ mod tests {
                     kind: FileKind::File,
                     size: 64 << 20,
                     size_is_estimate: true,
+                    serves_whole: false,
                     mtime: Some(std::time::UNIX_EPOCH),
                     ..Default::default()
                 })
@@ -1323,6 +1326,7 @@ mod tests {
                     // An upper bound, far above the 9 bytes a read returns.
                     size: if self.estimate { 64 << 20 } else { 9 },
                     size_is_estimate: self.estimate,
+                    serves_whole: false,
                     ..Default::default()
                 })
             }

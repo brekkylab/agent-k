@@ -691,6 +691,7 @@ fn dir_entry_for(c: &Child) -> DirEntry {
         etag: None,
         content_type: c.mime_type.clone(),
         size_is_estimate: is_estimate(c),
+        serves_whole: matches!(c.serves, Serves::Native(_)),
     }
 }
 

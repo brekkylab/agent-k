@@ -518,6 +518,7 @@ fn dir(name: &str) -> DirEntry {
         etag: None,
         content_type: None,
         size_is_estimate: false,
+        serves_whole: false,
     }
 }
 
@@ -539,6 +540,7 @@ fn dir_t(
         etag: None,
         content_type: None,
         size_is_estimate: false,
+        serves_whole: false,
     }
 }
 
@@ -562,6 +564,11 @@ fn file(name: &str, size: u64) -> DirEntry {
         etag: None,
         content_type: None,
         size_is_estimate: false,
+        // The only file here is `page.json`, rendered whole from the API: a range buys
+        // nothing, so a chunked read has to keep what the first chunk built. `stat`
+        // says the same; saying it in the listing too is what carries it through the
+        // metadata cache.
+        serves_whole: true,
     }
 }
 
