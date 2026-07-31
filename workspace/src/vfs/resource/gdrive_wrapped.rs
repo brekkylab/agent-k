@@ -506,3 +506,27 @@ async fn a_failed_shared_drive_listing_is_not_cached_as_an_answer() {
         "a new mount asks again instead of inheriting a degraded root"
     );
 }
+
+/// A zero-length window asks the server for nothing.
+///
+/// It used to fall through to the arm that sends no `Range` at all, so `read_bytes(0)`
+/// pulled the whole object and returned none of it — 20 MB to answer with an empty
+/// vector.
+#[tokio::test]
+async fn an_empty_window_does_not_fetch_the_object() {
+    const REAL: usize = 20 * 1024 * 1024;
+    let mock = start(
+        json!([row("big.pdf", "P1", "application/pdf", Some("20971520"))]),
+        HashMap::from([("P1".to_string(), vec![b'a'; REAL])]),
+    )
+    .await;
+    let fs = mounted(&mock.config());
+    let file = MountPath::new("/My Drive/big.pdf");
+    let st = fs.stat(&file).await.unwrap();
+
+    mock.reset();
+    let got = fs.read_bytes_pinned(&file, Some(1024..1024), &st).await.unwrap();
+    assert!(got.is_empty());
+    assert_eq!(mock.media_ranges(), Vec::<Option<String>>::new(), "no request at all");
+    assert_eq!(mock.bytes_sent(), 0);
+}

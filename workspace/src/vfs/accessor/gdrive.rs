@@ -600,6 +600,12 @@ impl GdriveAccessor {
         id: &str,
         range: Option<std::ops::Range<u64>>,
     ) -> anyhow::Result<Vec<u8>> {
+        // An empty window is not a request. It used to fall through to the arm that
+        // sends no `Range` at all, so `File::read_bytes(0)` pulled the whole object and
+        // returned none of it — 20 MB to answer with an empty vector.
+        if matches!(&range, Some(r) if r.end <= r.start) {
+            return Ok(Vec::new());
+        }
         let url = format!(
             "{}/files/{id}?alt=media&supportsAllDrives=true",
             self.urls.drive
