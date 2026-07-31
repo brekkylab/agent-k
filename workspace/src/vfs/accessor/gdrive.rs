@@ -86,6 +86,13 @@ const MAX_BACKOFF: Duration = Duration::from_secs(16);
 const JITTER_MAX_MS: u64 = 1000;
 
 
+/// Escape a phrase for a single-quoted Drive `q` term: a bare `'` would close the
+/// string and a bare `\` would escape the wrong character, so both are doubled up.
+/// Without this, searching for a name with an apostrophe is a 400, not a miss.
+fn escape_q(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
 /// Exponential backoff with jitter for retry `n` (0-based), per Google's API
 /// guidance: `min(2^n s + rand(0..=1000ms), maximum_backoff)`.
 fn backoff_delay(n: u32) -> Duration {
@@ -428,9 +435,23 @@ impl GdriveAccessor {
             .await
     }
 
+    /// Files whose *contents* match `phrase`, via Drive's own index
+    /// (`q=fullText contains`).
+    ///
+    /// The one thing the mount cannot answer for itself. A PDF, pptx or docx keeps
+    /// its text compressed and font-encoded, so reading the bytes finds nothing —
+    /// measured on a 33 MB PDF that plainly contains a phrase: zero matches, even
+    /// after inflating every stream in it. Google extracted that text when the file
+    /// was uploaded, and this asks the index it built: no bytes move, and it reaches
+    /// scanned pages and archive members too.
+    pub async fn search_fulltext(&self, phrase: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
+        let q = format!("fullText contains '{}' and trashed=false", escape_q(phrase));
+        self.list_files_q(&q, None, limit).await
+    }
+
     /// A blob file's bytes (`files.get?alt=media`), or just one window of them.
-    /// A native Google doc has no bytes and 403s here; it goes through
-    /// [`Self::export`] instead.
+    /// A Docs-editors document has no bytes and 403s here; it is served as its own
+    /// API's JSON instead (see [`Self::document_json`] and friends).
     ///
     /// The range is what makes serving originals affordable. A filesystem read
     /// arrives in chunks, and a search tool reads only the head of a file before
@@ -612,6 +633,16 @@ mod tests {
             .collect();
         assert_eq!(got, vec!["한 장/정리", "'Sheet 1'!A1:D9"]);
         assert!(url.query().unwrap().contains("%2F"), "{url}");
+    }
+
+    /// A phrase is pasted into a single-quoted `q` term, so a quote in it would end
+    /// the string and turn a search into a 400. Drive's own docs specify `\'`.
+    #[test]
+    fn a_quote_in_a_phrase_cannot_break_the_query() {
+        assert_eq!(escape_q("quarterly revenue"), "quarterly revenue");
+        assert_eq!(escape_q("it's here"), "it\\'s here");
+        assert_eq!(escape_q("a\\b"), "a\\\\b");
+        assert_eq!(escape_q("'"), "\\'");
     }
 
     #[test]

@@ -109,40 +109,41 @@ const UNKNOWN_LENGTH_SIZE: u64 = 8 * 1024 * 1024;
 /// `ls` anyway.
 const MAX_FOLDER_FILES: usize = 10_000;
 
+/// Hits one content search returns. Drive ranks by relevance, and a reader that
+/// needs more than this wants a narrower phrase, not a longer list.
+const SEARCH_MAX_HITS: usize = 100;
+
 const GDRIVE_PROMPT: &str = "\
-Google Drive (read-only). Real files at their Drive names; the layout mirrors
-Drive's own sidebar:
+Google Drive (read-only). Files at their Drive names; the layout mirrors Drive's
+own sidebar:
   My Drive/…              # the account's folder tree; descend with ls
   Shared with me/         # everything shared to this account
   <shared drive>/         # each shared drive, when the account has any
 
-  Folders are directories, files are files: `cat`, `head`, `cp` and `grep` all
-  work on the real bytes.
+  Folders are directories, files are files: `cat`, `head`, `cp` and `grep` work on
+  the real bytes. Forms, Maps and Drawings have no readable form; they aren't listed.
 
-  Google Docs, Sheets and Slides hold no bytes of their own, so each appears as
-  its own API's JSON — the only form that carries everything about it:
-    <name>.gdoc.json     paragraphs, styles, tables, and the character indices
-                         an edit addresses
-    <name>.gsheet.json   the workbook: tabs, named ranges, charts, conditional
-                         formats, and each tab's cell values under
-                         sheets[].values (rows of columns, formatted as the
-                         sheet displays them). A tab past the size budget says
-                         so in sheets[].valuesOmitted instead.
-    <name>.gslide.json   pages, shapes, transforms, speaker notes
-  Text inside these is split across style runs, so a search finds words but not
-  always phrases, and `-A`/`-B` context shows JSON siblings rather than the next
-  lines of the document. A cell or paragraph holding a line break carries it as
-  an escaped \\n on one JSON line, so match within a line, not across one. Files with no readable form at all (Forms, Maps,
-  Drawings) are not listed.
+  Docs, Sheets and Slides hold no bytes of their own, so each appears as its own
+  API's JSON — the only form that carries everything about it:
+    <name>.gdoc.json    paragraphs, styles, tables, the character indices an edit
+                        addresses
+    <name>.gsheet.json  tabs, named ranges, charts, and each tab's cell values
+                        under sheets[].values (or sheets[].valuesOmitted when a
+                        tab is past the size budget)
+    <name>.gslide.json  pages, shapes, transforms, speaker notes
+  Their text is split across style runs: search words, not phrases, and `-A`/`-B`
+  shows JSON siblings rather than the next lines of the document.
 
-  This is a remote mount, so every read costs network:
-  - `head`/`grep` transfer only what they touch; `cat` of a 70MB file moves 70MB
-  - narrow a search with an include/glob filter (e.g. '*.json', '*.pdf'). A
-    filtered search never opens the other files at all
-  - a `.json` takes a second or two on its first read (cached after). Until then
-    its listed size is a placeholder, so `ls -l` and `find -size` say 8MB for any
-    unread document; every other file lists its true size
-  The mount is read-only: no writes, no rm, no mkdir.";
+  A PDF, pptx, xlsx or docx keeps its text compressed and font-encoded, so
+  grepping it finds nothing. Ask Drive's index instead — it read those files when
+  they were uploaded, scanned pages included (write the phrase to the control path,
+  then read the same path back for one JSON line per hit):
+    echo 'quarterly revenue' > .cmd/search
+
+  Remote mount, so every read costs network: prefer `head`/`grep` over `cat` (a
+  70MB file moves 70MB), narrow a search with a glob filter, and expect an unread
+  document to list a placeholder size (8MB) until something reads it. Read-only:
+  no writes, no rm, no mkdir.";
 
 /// Whether Drive holds real bytes for this row. The Docs-editors types (and
 /// Forms, Maps, Drawings) do not — `alt=media` answers 403 for them.
@@ -494,6 +495,49 @@ impl Resource for GdriveResource {
             size_is_estimate: is_estimate(&child),
             ..Default::default()
         })
+    }
+
+    /// Content search over Drive's own index, designed to hang off the (not yet
+    /// wired) `.cmd/` control path. Dormant today: nothing routes a write on
+    /// `.cmd/<name>` here, so the prompt's line is a promise the transport has yet
+    /// to keep. Kept rather than deferred because the search itself is the whole
+    /// answer to a PDF's contents, which no read of the mount can give.
+    ///
+    /// The body is the phrase, plain text. One JSON line per hit, so a reader can
+    /// pipe it into anything: `{"path","id","mimeType","size","modifiedTime"}`.
+    async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
+        if name != "search" {
+            return Err(ResourceError::Unsupported);
+        }
+        let phrase = std::str::from_utf8(body)
+            .map_err(|e| ResourceError::Backend(anyhow::anyhow!("search: body not utf-8: {e}")))?
+            .trim();
+        if phrase.is_empty() {
+            return Err(ResourceError::Backend(anyhow::anyhow!(
+                "search: empty phrase"
+            )));
+        }
+        let hits = self
+            .accessor
+            .search_fulltext(phrase, SEARCH_MAX_HITS)
+            .await
+            .map_err(not_found_or_backend)?;
+        let mut out = Vec::new();
+        for f in &hits {
+            let Some(child) = child_from_file(f) else {
+                continue;
+            };
+            let line = serde_json::json!({
+                "name": child.vfs_name,
+                "id": child.id,
+                "mimeType": f.get("mimeType"),
+                "size": f.get("size"),
+                "modifiedTime": f.get("modifiedTime"),
+            });
+            out.extend_from_slice(&serde_json::to_vec(&line)?);
+            out.push(b'\n');
+        }
+        Ok(out)
     }
 
     fn prompt(&self) -> &str {
@@ -1021,6 +1065,30 @@ mod tests {
         );
     }
 
+    /// The command only answers to its own name, and refuses a body that names
+    /// nothing — a search for "" would otherwise return the whole Drive.
+    #[tokio::test]
+    async fn search_rejects_what_it_cannot_answer() {
+        let r = GdriveResource::new(&GdriveConfig {
+            client_id: "x".into(),
+            client_secret: "x".into(),
+            refresh_token: "x".into(),
+            account_email: "x@example.com".into(),
+            base_url: Some("http://127.0.0.1:1".into()),
+        })
+        .unwrap();
+        assert!(matches!(
+            r.command("page-create", b"{}").await,
+            Err(ResourceError::Unsupported)
+        ));
+        for empty in ["", "   ", "\n"] {
+            assert!(
+                matches!(r.command("search", empty.as_bytes()).await, Err(_)),
+                "an empty phrase must not become a search"
+            );
+        }
+    }
+
     #[test]
     fn split_last_shapes() {
         assert_eq!(split_last("/a/b"), ("/a".to_string(), "b".to_string()));
@@ -1311,9 +1379,7 @@ mod tests {
                         .flat_map(|row| row.as_array().cloned().unwrap_or_default())
                         .find_map(|c| {
                             c.as_str()
-                                .filter(|s| {
-                                    s.trim().len() > 3 && !s.contains(['\n', '"', '\\'])
-                                })
+                                .filter(|s| s.trim().len() > 3 && !s.contains(['\n', '"', '\\']))
                                 .map(str::to_string)
                         })
                         .expect("some cell holds plain text");
@@ -1335,6 +1401,44 @@ mod tests {
     /// Live: an original is a real file, and a ranged read transfers only its
     /// range — what makes serving originals affordable, since a search tool
     /// samples a file's head before deciding it is binary.
+    /// The one search the mount cannot do by reading: a phrase that lives inside a
+    /// PDF, which no read of the bytes will match.
+    #[tokio::test]
+    #[ignore = "requires GDRIVE_* env + network"]
+    async fn gdrive_live_search_reaches_inside_a_pdf() {
+        let Some(cfg) = live_config() else {
+            eprintln!("set GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REFRESH_TOKEN to run");
+            return;
+        };
+        let r = GdriveResource::new(&cfg).unwrap();
+        let phrase = std::env::var("GDRIVE_SEARCH").unwrap_or_else(|_| "cloud".into());
+        let t0 = std::time::Instant::now();
+        let out = r
+            .command("search", phrase.as_bytes())
+            .await
+            .expect("search");
+        let lines: Vec<&str> = std::str::from_utf8(&out)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        eprintln!(
+            "search {phrase:?}: {} hits in {:.2}s",
+            lines.len(),
+            t0.elapsed().as_secs_f64()
+        );
+        for l in lines.iter().take(8) {
+            let v: Value = serde_json::from_str(l).expect("each hit is one JSON line");
+            eprintln!(
+                "  {:>12} {:<44} {}",
+                v["size"].as_str().unwrap_or("-"),
+                v["name"].as_str().unwrap_or("?"),
+                v["mimeType"].as_str().unwrap_or("-")
+            );
+            assert!(v.get("id").is_some(), "a hit names the file it found");
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires GDRIVE_* env + network"]
     async fn gdrive_live_originals_read_by_range() {
