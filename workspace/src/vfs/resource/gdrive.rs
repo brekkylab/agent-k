@@ -112,6 +112,9 @@ const MAX_TABS: usize = 64;
 /// [`GdriveResource::resolve_size_on_stat`].
 const UNKNOWN_LENGTH_SIZE: u64 = 8 * 1024 * 1024;
 
+/// Cap on remembered probe results — one per file ever sized in this mount.
+const MAX_PROBED_LENGTHS: usize = 50_000;
+
 /// Safety ceiling on one folder's listing (10 pages). Beyond this the listing
 /// truncates (the accessor logs it) — a >10k-child folder is pathological to
 /// `ls` anyway.
@@ -344,10 +347,13 @@ impl GdriveResource {
 
         let children = Arc::new(children);
         if complete {
-            self.dir_cache
-                .lock()
-                .await
-                .insert(folder.to_string(), (Instant::now(), children.clone()));
+            let mut cache = self.dir_cache.lock().await;
+            // Drop what has aged out before adding to it. Nothing else ever removed an
+            // entry, so a listing stayed for the life of the mount long after its TTL
+            // made it unusable — one entry per folder ever visited, and the corpus has
+            // a folder that lists 10,000 of them.
+            cache.retain(|_, (at, _)| at.elapsed() < DIR_TTL);
+            cache.insert(folder.to_string(), (Instant::now(), children.clone()));
         }
         Ok(children)
     }
@@ -411,13 +417,37 @@ impl GdriveResource {
         }
         match self.accessor.probe_len(id).await {
             Ok(n) => {
-                self.probed.lock().await.insert(id.to_string(), n);
+                let mut probed = self.probed.lock().await;
+                // A learned length is an optimisation, so losing one costs a request
+                // rather than correctness — which is what lets this be a flat cap
+                // instead of bookkeeping.
+                if probed.len() >= MAX_PROBED_LENGTHS {
+                    probed.clear();
+                }
+                probed.insert(id.to_string(), n);
                 Some(n)
             }
             Err(e) => {
                 tracing::debug!("gdrive: probing {id} for its length failed: {e:#}");
                 None
             }
+        }
+    }
+
+    /// How many listings are retained. Tests only: growth here is invisible from
+    /// outside, which is how it went unbounded.
+    #[cfg(test)]
+    pub(crate) async fn listings_retained(&self) -> usize {
+        self.dir_cache.lock().await.len()
+    }
+
+    /// Age every retained listing past its TTL. Tests only.
+    #[cfg(test)]
+    pub(crate) async fn age_listings_for_test(&self) {
+        let mut cache = self.dir_cache.lock().await;
+        let stale = Instant::now() - DIR_TTL - Duration::from_secs(1);
+        for (at, _) in cache.values_mut() {
+            *at = stale;
         }
     }
 

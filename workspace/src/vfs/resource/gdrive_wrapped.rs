@@ -530,3 +530,35 @@ async fn an_empty_window_does_not_fetch_the_object() {
     assert_eq!(mock.media_ranges(), Vec::<Option<String>>::new(), "no request at all");
     assert_eq!(mock.bytes_sent(), 0);
 }
+
+/// The provider's own caches are high-water marks unless something prunes them.
+///
+/// Nothing did: one listing per folder ever visited, held for the life of the mount
+/// long after its TTL made it unusable, and the corpus has a folder that lists 10,000
+/// entries. The wrapper above bounds both of its equivalents.
+#[tokio::test]
+async fn a_listing_cache_does_not_grow_without_bound() {
+    let mock = start(
+        json!([row("a.txt", "F1", "text/plain", Some("3"))]),
+        HashMap::new(),
+    )
+    .await;
+    let inner = Arc::new(GdriveResource::new(&mock.config()).unwrap());
+    let fs = CachedResource::new(inner.clone());
+
+    // The root plus one folder listing.
+    let _ = fs.readdir(&MountPath::new("/")).await.unwrap();
+    let _ = fs.readdir(&MountPath::new("/My Drive")).await.unwrap();
+    assert!(inner.listings_retained().await >= 2);
+
+    // Age them out. The next listing drops what expired instead of keeping it for the
+    // life of the mount — two survive, because resolving `/Shared with me` re-lists the
+    // root on the way to it, and both of those are fresh.
+    inner.age_listings_for_test().await;
+    let _ = fs.readdir(&MountPath::new("/Shared with me")).await.unwrap();
+    assert_eq!(
+        inner.listings_retained().await,
+        2,
+        "expired listings are dropped, the fresh ones kept"
+    );
+}
