@@ -16,7 +16,7 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_k::knowledge_base::{FileType, PdfEngine, SharedStore, Store};
-use cortex::{CortexError, DirentKind, Mountable, OpenOptions, Workspace};
+use cortex::{CortexError, DirentKind, FileExt, Mountable, OpenOptions, Workspace};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -160,26 +160,15 @@ impl Resyncer {
     /// [`coalesce`] (or [`forget`](Self::forget)).
     async fn reconcile(&self, wid: Uuid, ws_index: &WsIndex) -> anyhow::Result<()> {
         // A hookless read view of the unified tree (local `files/` + providers):
-        // no resync hook, so reads made here can't re-trigger a reconcile. Built
-        // off the async runtime — a provider volume constructs its own client
-        // (S3's builds a runtime and `block_on`s), which panics on a worker
-        // thread. cortex's `Mountable` API is synchronous too, so enumeration and
-        // each read also run on a blocking thread.
+        // no resync hook, so reads made here can't re-trigger a reconcile.
+        // `from_spec` builds the provider clients synchronously; the async
+        // `Mountable` ops are awaited directly on this runtime.
         let mounts = build_workspace_vfs(&self.db, wid).await?;
-        let data_root = self.data_root.clone();
-        let ws = {
-            let ws = tokio::task::spawn_blocking(move || {
-                let spec = cortex_workspace_spec(&data_root, wid, mounts);
-                Workspace::from_spec(&spec)
-            })
-            .await?
-            .map_err(|e| anyhow::anyhow!("cortex workspace: {e:?}"))?;
-            Arc::new(ws)
-        };
-        let targets = {
-            let ws = ws.clone();
-            tokio::task::spawn_blocking(move || collect_targets(&ws, MAX_FILE_BYTES)).await??
-        };
+        let spec = cortex_workspace_spec(&self.data_root, wid, mounts);
+        let ws = Arc::new(
+            Workspace::from_spec(&spec).map_err(|e| anyhow::anyhow!("cortex workspace: {e:?}"))?,
+        );
+        let targets = collect_targets(&ws, MAX_FILE_BYTES).await?;
         let member_count = targets.len();
         if member_count == 0 && !self.store_root(wid).join("index").exists() {
             return Ok(());
@@ -197,11 +186,7 @@ impl Resyncer {
         let mut batch: Vec<(Vec<u8>, FileType)> = Vec::new();
         let mut batch_bytes = 0usize;
         for (path, ft) in targets {
-            let read = {
-                let ws = ws.clone();
-                let p = path.clone();
-                tokio::task::spawn_blocking(move || read_all(&ws, &p)).await?
-            };
+            let read = read_all(&ws, &path).await;
             match read {
                 Ok(bytes) => {
                     let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes);
@@ -331,10 +316,8 @@ async fn ingest_batch(
     Ok(())
 }
 
-/// Read an entire file into memory via the unified tree. Synchronous (cortex's
-/// `Mountable` API is sync); callers on an async runtime wrap it in
-/// [`spawn_blocking`](tokio::task::spawn_blocking).
-fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
+/// Read an entire file into memory via the unified tree.
+async fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
     let (handle, stat) = ws
         .open(
             &cx(path),
@@ -343,22 +326,26 @@ fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
                 ..Default::default()
             },
         )
+        .await
         .map_err(|e| anyhow::anyhow!("open {path}: {e:?}"))?;
     let mut out = vec![0u8; stat.size as usize];
     if stat.size > 0 {
         handle
             .read_exact_at(&mut out, 0)
+            .await
             .map_err(|e| anyhow::anyhow!("read {path}: {e}"))?;
     }
     Ok(out)
 }
 
 /// Walk `/files/knowledge`, resolve each `*.ref` to its target(s), and return the
-/// indexable files' paths + types — without reading their bytes. Synchronous
-/// (see [`read_all`]).
-fn collect_targets(ws: &Workspace, max_file_bytes: u64) -> anyhow::Result<Vec<(String, FileType)>> {
+/// indexable files' paths + types — without reading their bytes.
+async fn collect_targets(
+    ws: &Workspace,
+    max_file_bytes: u64,
+) -> anyhow::Result<Vec<(String, FileType)>> {
     let mut out = Vec::new();
-    let entries = match ws.list(&cx(KNOWLEDGE_ROOT)) {
+    let entries = match ws.list(&cx(KNOWLEDGE_ROOT)).await {
         Ok(e) => e,
         Err(CortexError::NotFound) => return Ok(out),
         Err(e) => anyhow::bail!("read {KNOWLEDGE_ROOT}: {e:?}"),
@@ -369,7 +356,7 @@ fn collect_targets(ws: &Workspace, max_file_bytes: u64) -> anyhow::Result<Vec<(S
             continue;
         }
         let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
-        let bytes = match read_all(ws, &ref_path) {
+        let bytes = match read_all(ws, &ref_path).await {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!("skipping unreadable reference {ref_path}: {e:?}");
@@ -387,7 +374,7 @@ fn collect_targets(ws: &Workspace, max_file_bytes: u64) -> anyhow::Result<Vec<(S
             tracing::warn!("skipping unsafe/self reference target {target}");
             continue;
         }
-        add_target(ws, &target, max_file_bytes, &mut out)?;
+        add_target(ws, &target, max_file_bytes, &mut out).await?;
     }
     // A directory ref overlapping a file ref (or two refs to the same target) can
     // enumerate the same path twice; keep the first so a path is indexed once.
@@ -398,13 +385,13 @@ fn collect_targets(ws: &Workspace, max_file_bytes: u64) -> anyhow::Result<Vec<(S
 
 /// Enumerate a target into `out`: a file contributes itself, a directory its
 /// indexable descendants. Oversized and missing targets are skipped.
-fn add_target(
+async fn add_target(
     ws: &Workspace,
     target: &str,
     max_file_bytes: u64,
     out: &mut Vec<(String, FileType)>,
 ) -> anyhow::Result<()> {
-    let meta = match ws.stat(&cx(target)) {
+    let meta = match ws.stat(&cx(target)).await {
         Ok(m) => m,
         Err(CortexError::NotFound | CortexError::PermissionDenied) => {
             tracing::warn!("skipping unresolvable target {target}");
@@ -428,6 +415,7 @@ fn add_target(
     while let Some(dir) = stack.pop() {
         let entries = ws
             .list(&cx(&dir))
+            .await
             .map_err(|e| anyhow::anyhow!("read {dir}: {e:?}"))?;
         for entry in entries {
             let child = format!("{dir}/{}", entry.name);
@@ -438,7 +426,7 @@ fn add_target(
                 // fall back to a stat call (a local passthrough may omit it).
                 let len = match entry.stat {
                     Some(s) => s.size,
-                    None => ws.stat(&cx(&child)).map(|s| s.size).unwrap_or(0),
+                    None => ws.stat(&cx(&child)).await.map(|s| s.size).unwrap_or(0),
                 };
                 if len > max_file_bytes {
                     tracing::warn!("skipping oversized target {child} ({len} bytes)");
@@ -662,8 +650,8 @@ mod tests {
     /// Enumeration gathers local files, a directory's descendants, and a file on
     /// a second mount — skipping non-`.ref`, self-references, missing targets,
     /// and non-indexable extensions — and the paths resolve to real bytes.
-    #[test]
-    fn collects_local_dir_and_mount_targets() {
+    #[tokio::test]
+    async fn collects_local_dir_and_mount_targets() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let mock = tempfile::tempdir().unwrap();
@@ -683,7 +671,7 @@ mod tests {
 
         let ws = ws_with_mock(root, mock_root);
 
-        let targets = collect_targets(&ws, u64::MAX).unwrap();
+        let targets = collect_targets(&ws, u64::MAX).await.unwrap();
         let mut paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         paths.sort();
         assert_eq!(
@@ -697,7 +685,7 @@ mod tests {
 
         let mut bodies = Vec::new();
         for (p, _) in &targets {
-            bodies.push(read_all(&ws, p).unwrap());
+            bodies.push(read_all(&ws, p).await.unwrap());
         }
         bodies.sort();
         assert_eq!(
@@ -708,8 +696,8 @@ mod tests {
 
     /// A directory ref and an explicit file ref covering the same path enumerate
     /// it once.
-    #[test]
-    fn dedups_overlapping_targets() {
+    #[tokio::test]
+    async fn dedups_overlapping_targets() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write(root, "docs/a.md", b"A");
@@ -717,14 +705,14 @@ mod tests {
         write_ref(root, "file.ref", "/files/docs/a.md");
         let ws = local_ws(root);
 
-        let targets = collect_targets(&ws, u64::MAX).unwrap();
+        let targets = collect_targets(&ws, u64::MAX).await.unwrap();
         let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(paths, vec!["/files/docs/a.md".to_string()]);
     }
 
     /// A target larger than the per-file cap is skipped, smaller ones kept.
-    #[test]
-    fn oversized_target_is_skipped() {
+    #[tokio::test]
+    async fn oversized_target_is_skipped() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write(root, "docs/small.md", b"tiny");
@@ -733,15 +721,15 @@ mod tests {
         write_ref(root, "big.ref", "/files/docs/big.md");
         let ws = local_ws(root);
 
-        let targets = collect_targets(&ws, 10).unwrap();
+        let targets = collect_targets(&ws, 10).await.unwrap();
         let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(paths, vec!["/files/docs/small.md".to_string()]);
     }
 
     /// A planted reference whose target escapes the root (`..`) or is relative is
     /// skipped, not resolved.
-    #[test]
-    fn skips_unsafe_ref_targets() {
+    #[tokio::test]
+    async fn skips_unsafe_ref_targets() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write_ref(root, "esc.ref", "/../outside.md");
@@ -750,17 +738,17 @@ mod tests {
         write_ref(root, "ok.ref", "/files/docs/ok.md");
         let ws = local_ws(root);
 
-        let targets = collect_targets(&ws, u64::MAX).unwrap();
+        let targets = collect_targets(&ws, u64::MAX).await.unwrap();
         let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(paths, vec!["/files/docs/ok.md".to_string()]);
     }
 
     /// A missing `/files/knowledge` directory yields no targets rather than erroring.
-    #[test]
-    fn absent_knowledge_dir_is_empty() {
+    #[tokio::test]
+    async fn absent_knowledge_dir_is_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = local_ws(tmp.path());
-        let targets = collect_targets(&ws, u64::MAX).unwrap();
+        let targets = collect_targets(&ws, u64::MAX).await.unwrap();
         assert!(targets.is_empty());
     }
 

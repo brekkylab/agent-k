@@ -15,7 +15,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use cortex::{CortexError, FileHandle, Mountable, OpenOptions, Workspace};
+use cortex::{CortexError, FileExt, FileHandle, Mountable, OpenOptions, Workspace};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -80,39 +80,25 @@ pub(super) async fn create_ref(
     }
     .to_bytes();
 
-    // cortex's `Mountable` API is synchronous — do the stat/mkdir/write on a
-    // blocking thread. Writing the `.ref` fires the workspace's knowledge hook,
-    // which spawns the resync.
-    let outcome = {
-        let ws = ws.clone();
-        let target = target.clone();
-        tokio::task::spawn_blocking(move || -> Result<(), RefWriteError> {
-            match ws.stat(&cx(&target)) {
-                Ok(_) => {}
-                Err(CortexError::NotFound) => return Err(RefWriteError::TargetMissing),
-                Err(_) => return Err(RefWriteError::Internal),
-            }
-            match ws.mkdir(&cx(KNOWLEDGE_ROOT)) {
-                Ok(()) | Err(CortexError::AlreadyExists) => {}
-                Err(_) => return Err(RefWriteError::Internal),
-            }
-            write_ref(&ws, &ref_path, &body).map_err(|_| RefWriteError::Internal)
-        })
-        .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?
-    };
-    match outcome {
-        Ok(()) => {}
-        Err(RefWriteError::TargetMissing) => {
-            return Err(err(StatusCode::NOT_FOUND, "target not found"));
-        }
-        Err(RefWriteError::Internal) => {
+    // Writing the `.ref` fires the workspace's knowledge hook, which spawns the
+    // resync. A missing target is a 404; anything else is a 500.
+    match ws.stat(&cx(&target)).await {
+        Ok(_) => {}
+        Err(CortexError::NotFound) => return Err(err(StatusCode::NOT_FOUND, "target not found")),
+        Err(_) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
+    }
+    match ws.mkdir(&cx(KNOWLEDGE_ROOT)).await {
+        Ok(()) | Err(CortexError::AlreadyExists) => {}
+        Err(_) => {
             return Err(err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to write reference",
             ));
         }
     }
+    write_ref(&ws, &ref_path, &body)
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "failed to write reference"))?;
 
     Ok((
         StatusCode::CREATED,
@@ -136,34 +122,28 @@ pub(super) async fn list_refs(
         .await
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
 
-    let items = tokio::task::spawn_blocking(move || -> Result<Vec<RefResponse>, ()> {
-        let mut items = Vec::new();
-        let entries = match ws.list(&cx(KNOWLEDGE_ROOT)) {
-            Ok(e) => e,
-            Err(CortexError::NotFound) => return Ok(items),
-            Err(_) => return Err(()),
-        };
-        for entry in entries {
-            let name = entry.name;
-            if !name.ends_with(REF_SUFFIX) {
-                continue;
-            }
-            let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
-            let Ok(bytes) = read_all(&ws, &ref_path) else {
-                continue;
-            };
-            if let Ok(r) = serde_json::from_slice::<KnowledgeRef>(&bytes) {
-                items.push(RefResponse {
-                    name,
-                    target_path: r.path,
-                });
-            }
+    let entries = match ws.list(&cx(KNOWLEDGE_ROOT)).await {
+        Ok(e) => e,
+        Err(CortexError::NotFound) => Vec::new(),
+        Err(_) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
+    };
+    let mut items = Vec::new();
+    for entry in entries {
+        let name = entry.name;
+        if !name.ends_with(REF_SUFFIX) {
+            continue;
         }
-        Ok(items)
-    })
-    .await
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?
-    .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
+        let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
+        let Ok(bytes) = read_all(&ws, &ref_path).await else {
+            continue;
+        };
+        if let Ok(r) = serde_json::from_slice::<KnowledgeRef>(&bytes) {
+            items.push(RefResponse {
+                name,
+                target_path: r.path,
+            });
+        }
+    }
 
     Ok(Json(RefListResponse { items }))
 }
@@ -184,10 +164,7 @@ pub(super) async fn delete_ref(
         .await
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
     let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
-    let res = tokio::task::spawn_blocking(move || ws.unlink(&cx(&ref_path)))
-        .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))?;
-    match res {
+    match ws.unlink(&cx(&ref_path)).await {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(CortexError::NotFound) => Err(err(StatusCode::NOT_FOUND, "reference not found")),
         Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "internal error")),
@@ -203,13 +180,6 @@ pub(super) async fn resync(
     require_owned_workspace(&state, &auth, wid).await?;
     state.workspaces.resyncer().spawn_resync(wid);
     Ok(StatusCode::ACCEPTED)
-}
-
-/// Why a `.ref` write couldn't complete: the target doesn't exist (→ 404) vs. a
-/// filesystem failure (→ 500).
-enum RefWriteError {
-    TargetMissing,
-    Internal,
 }
 
 /// Validate + normalise a reference target: an absolute unified-tree path of
@@ -249,36 +219,38 @@ fn ref_name_for(target: &str) -> String {
     format!("{slug}-{}{REF_SUFFIX}", &suffix[..8])
 }
 
-/// Write `body` to `ref_path`, truncating. Synchronous (cortex's `Mountable`
-/// API is sync); callers wrap it in
-/// [`spawn_blocking`](tokio::task::spawn_blocking).
-fn write_ref(ws: &Workspace, ref_path: &str, body: &[u8]) -> anyhow::Result<()> {
-    let (handle, _) = ws.open(
-        &cx(ref_path),
-        OpenOptions {
-            write: true,
-            create: true,
-            truncate: true,
-            ..Default::default()
-        },
-    )?;
-    handle.write_all_at(body, 0)?;
-    handle.flush()?;
+/// Write `body` to `ref_path`, truncating.
+async fn write_ref(ws: &Workspace, ref_path: &str, body: &[u8]) -> anyhow::Result<()> {
+    let (handle, _) = ws
+        .open(
+            &cx(ref_path),
+            OpenOptions {
+                write: true,
+                create: true,
+                truncate: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+    handle.write_all_at(body, 0).await?;
+    handle.flush().await?;
     Ok(())
 }
 
-/// Read an entire file into memory. Synchronous (see [`write_ref`]).
-fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
-    let (handle, stat) = ws.open(
-        &cx(path),
-        OpenOptions {
-            read: true,
-            ..Default::default()
-        },
-    )?;
+/// Read an entire file into memory.
+async fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
+    let (handle, stat) = ws
+        .open(
+            &cx(path),
+            OpenOptions {
+                read: true,
+                ..Default::default()
+            },
+        )
+        .await?;
     let mut out = vec![0u8; stat.size as usize];
     if stat.size > 0 {
-        handle.read_exact_at(&mut out, 0)?;
+        handle.read_exact_at(&mut out, 0).await?;
     }
     Ok(out)
 }

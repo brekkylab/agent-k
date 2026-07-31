@@ -2,19 +2,19 @@
 //! [`DavFileSystem`], so agent-k serves the *same* unified tree over WebDAV that
 //! it hands the sandbox — one `Workspace`, two frontends.
 //!
-//! cortex's `Mountable` API is synchronous (it is driven by FUSE/virtio-fs
-//! worker threads elsewhere), while `DavFileSystem` is async. Each op therefore
-//! runs on [`spawn_blocking`](tokio::task::spawn_blocking); the workspace is
-//! shared as an `Arc` (cortex provides `impl Mountable for Arc<T>`), and open
-//! files hold an `Arc<dyn FileHandle>` whose positioned I/O is `&self`.
+//! cortex's `Mountable`/`FileHandle` API is async, so each op is `.await`ed
+//! directly — no `spawn_blocking`. The workspace is shared as an `Arc` (cortex
+//! provides `impl Mountable for Arc<T>`), and open files hold an
+//! `Arc<dyn FileHandle>` whose positioned I/O takes `&self`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cortex::{CortexError, DirentKind, FileHandle, Mountable, OpenOptions as CxOpenOptions,
-    Stat, Workspace};
+use cortex::{
+    CortexError, DirentKind, FileHandle, Mountable, OpenOptions as CxOpenOptions, Stat, Workspace,
+};
 use dav_server::davpath::DavPath;
 use dav_server::fs::{
     DavDirEntry, DavFile, DavFileSystem, DavMetaData, FsError, FsFuture, FsResult, FsStream,
@@ -44,9 +44,9 @@ fn to_dav(e: CortexError) -> FsError {
     match e {
         CortexError::NotFound => FsError::NotFound,
         CortexError::AlreadyExists => FsError::Exists,
-        CortexError::ReadOnly
-        | CortexError::Unsupported
-        | CortexError::PermissionDenied => FsError::Forbidden,
+        CortexError::ReadOnly | CortexError::Unsupported | CortexError::PermissionDenied => {
+            FsError::Forbidden
+        }
         _ => FsError::GeneralFailure,
     }
 }
@@ -68,10 +68,7 @@ impl DavFileSystem for CortexDavFs {
                 create: options.create,
                 create_new: options.create_new,
             };
-            let (handle, stat) = tokio::task::spawn_blocking(move || ws.open(&p, opts))
-                .await
-                .map_err(|_| FsError::GeneralFailure)?
-                .map_err(to_dav)?;
+            let (handle, stat) = ws.open(&p, opts).await.map_err(to_dav)?;
             Ok(Box::new(CortexDavFile {
                 handle: Arc::from(handle),
                 cursor: AtomicU64::new(0),
@@ -88,14 +85,7 @@ impl DavFileSystem for CortexDavFs {
         let ws = self.ws.clone();
         let p = rel(path);
         Box::pin(async move {
-            let entries = {
-                let ws = ws.clone();
-                let p = p.clone();
-                tokio::task::spawn_blocking(move || ws.list(&p))
-                    .await
-                    .map_err(|_| FsError::GeneralFailure)?
-                    .map_err(to_dav)?
-            };
+            let entries = ws.list(&p).await.map_err(to_dav)?;
             let items: Vec<Box<dyn DavDirEntry>> = entries
                 .into_iter()
                 .map(|e| {
@@ -116,10 +106,7 @@ impl DavFileSystem for CortexDavFs {
         let ws = self.ws.clone();
         let p = rel(path);
         Box::pin(async move {
-            let stat = tokio::task::spawn_blocking(move || ws.stat(&p))
-                .await
-                .map_err(|_| FsError::GeneralFailure)?
-                .map_err(to_dav)?;
+            let stat = ws.stat(&p).await.map_err(to_dav)?;
             Ok(Box::new(CortexMeta(stat)) as Box<dyn DavMetaData>)
         })
     }
@@ -127,45 +114,25 @@ impl DavFileSystem for CortexDavFs {
     fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         let ws = self.ws.clone();
         let p = rel(path);
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || ws.mkdir(&p))
-                .await
-                .map_err(|_| FsError::GeneralFailure)?
-                .map_err(to_dav)
-        })
+        Box::pin(async move { ws.mkdir(&p).await.map_err(to_dav) })
     }
 
     fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         let ws = self.ws.clone();
         let p = rel(path);
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || ws.rmdir(&p))
-                .await
-                .map_err(|_| FsError::GeneralFailure)?
-                .map_err(to_dav)
-        })
+        Box::pin(async move { ws.rmdir(&p).await.map_err(to_dav) })
     }
 
     fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         let ws = self.ws.clone();
         let p = rel(path);
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || ws.unlink(&p))
-                .await
-                .map_err(|_| FsError::GeneralFailure)?
-                .map_err(to_dav)
-        })
+        Box::pin(async move { ws.unlink(&p).await.map_err(to_dav) })
     }
 
     fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
         let ws = self.ws.clone();
         let (f, t) = (rel(from), rel(to));
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || ws.rename(&f, &t))
-                .await
-                .map_err(|_| FsError::GeneralFailure)?
-                .map_err(to_dav)
-        })
+        Box::pin(async move { ws.rename(&f, &t).await.map_err(to_dav) })
     }
 
     // `copy` has no cortex primitive; WebDAV COPY is optional and left for later
@@ -204,9 +171,9 @@ impl DavFile for CortexDavFile {
         let offset = self.cursor.load(Ordering::Relaxed);
         Box::pin(async move {
             let n = buf.len() as u64;
-            tokio::task::spawn_blocking(move || handle.write_all_at(&buf, offset))
+            handle
+                .write_all_at(&buf, offset)
                 .await
-                .map_err(|_| FsError::GeneralFailure)?
                 .map_err(|_| FsError::GeneralFailure)?;
             self.cursor.fetch_add(n, Ordering::Relaxed);
             if offset + n > self.stat.size {
@@ -225,15 +192,13 @@ impl DavFile for CortexDavFile {
             if n == 0 {
                 return Ok(bytes::Bytes::new());
             }
-            let data = tokio::task::spawn_blocking(move || {
-                let mut buf = vec![0u8; n];
-                handle.read_exact_at(&mut buf, offset).map(|_| buf)
-            })
-            .await
-            .map_err(|_| FsError::GeneralFailure)?
-            .map_err(|_| FsError::GeneralFailure)?;
+            let mut buf = vec![0u8; n];
+            handle
+                .read_exact_at(&mut buf, offset)
+                .await
+                .map_err(|_| FsError::GeneralFailure)?;
             self.cursor.fetch_add(n as u64, Ordering::Relaxed);
-            Ok(bytes::Bytes::from(data))
+            Ok(bytes::Bytes::from(buf))
         })
     }
 
@@ -242,9 +207,7 @@ impl DavFile for CortexDavFile {
         let new = match pos {
             SeekFrom::Start(n) => n,
             SeekFrom::End(d) => (self.stat.size as i64 + d).max(0) as u64,
-            SeekFrom::Current(d) => {
-                (self.cursor.load(Ordering::Relaxed) as i64 + d).max(0) as u64
-            }
+            SeekFrom::Current(d) => (self.cursor.load(Ordering::Relaxed) as i64 + d).max(0) as u64,
         };
         self.cursor.store(new, Ordering::Relaxed);
         Box::pin(async move { Ok(new) })
@@ -252,12 +215,7 @@ impl DavFile for CortexDavFile {
 
     fn flush(&mut self) -> FsFuture<'_, ()> {
         let handle = self.handle.clone();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || handle.flush())
-                .await
-                .map_err(|_| FsError::GeneralFailure)?
-                .map_err(to_dav)
-        })
+        Box::pin(async move { handle.flush().await.map_err(to_dav) })
     }
 }
 
@@ -318,10 +276,7 @@ impl DavDirEntry for CortexDirEntry {
         let ws = self.ws.clone();
         let p = self.path.clone();
         Box::pin(async move {
-            let stat = tokio::task::spawn_blocking(move || ws.stat(&p))
-                .await
-                .map_err(|_| FsError::GeneralFailure)?
-                .map_err(to_dav)?;
+            let stat = ws.stat(&p).await.map_err(to_dav)?;
             Ok(Box::new(CortexMeta(stat)) as Box<dyn DavMetaData>)
         })
     }
@@ -344,8 +299,8 @@ mod tests {
         fs::create_dir_all(dir.join("files")).unwrap();
         fs::write(dir.join("files/hello.txt"), b"world").unwrap();
 
-        let spec = WorkspaceSpec::default()
-            .mount("files", VolumeSpec::Local { host: dir.join("files") });
+        let spec =
+            WorkspaceSpec::default().mount("files", VolumeSpec::Local { host: dir.join("files") });
         let davfs = CortexDavFs::new(Arc::new(Workspace::from_spec(&spec).unwrap()));
 
         // metadata + read of an existing file.

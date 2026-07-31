@@ -208,18 +208,12 @@ impl WorkspacesState {
     /// [`session`](crate::state::session)).
     pub(crate) async fn cortex_workspace(&self, wid: Uuid) -> StateResult<Arc<cortex::Workspace>> {
         let mounts = build_workspace_vfs(&self.db, wid).await?;
-        let data_root = self.data_root.clone();
-        // A provider volume builds its own client — S3's constructs a runtime and
-        // `block_on`s — so assemble off the async runtime; doing it on a worker
-        // thread panics with "runtime within a runtime".
-        let ws = tokio::task::spawn_blocking(move || {
-            let spec = cortex_workspace_spec(&data_root, wid, mounts);
-            cortex::Workspace::from_spec(&spec)
-        })
-        .await
-        .map_err(|e| StateError::InvalidData(format!("cortex workspace build: {e}")))?
-        .map_err(|e| StateError::InvalidData(format!("cortex workspace: {e}")))?
-        .with_hook(cortex_knowledge_hook(wid, Some(self.resyncer.clone())));
+        let spec = cortex_workspace_spec(&self.data_root, wid, mounts);
+        // `from_spec` just builds the provider clients (synchronous); the async
+        // `Mountable` ops run later on this request's runtime.
+        let ws = cortex::Workspace::from_spec(&spec)
+            .map_err(|e| StateError::InvalidData(format!("cortex workspace: {e}")))?
+            .with_hook(cortex_knowledge_hook(wid, Some(self.resyncer.clone())));
         Ok(Arc::new(ws))
     }
 

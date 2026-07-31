@@ -11,9 +11,9 @@ exclude = [
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "ec1e2b09dac32796ab166cfeaf12edc18a32278d", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "d586abe3cb13885706802e4dfa0f4491d086466d", features = ["sandbox"] }
 # Direct cortex dep so agent-k defines the canonical `Workspace`/`WorkspaceSpec`
 # it hands to the ailoy sandbox and serves from its own WebDAV. Same rev ailoy
 # pins, so the `WorkspaceSpec` type unifies across the boundary. VFS providers
 # only — no VM/FUSE binding (WebDAV is pure Mountable).
-cortex = { git = "https://github.com/brekkylab/cortex.git", rev = "4bcf90e98e560b81615f170d7ba4001f9773c00e", features = ["s3", "notion"] }
+cortex = { git = "https://github.com/brekkylab/cortex.git", rev = "595e4c3bd7561953b6a8474743e1bfcb12b3e3cc", features = ["s3", "notion"] }
