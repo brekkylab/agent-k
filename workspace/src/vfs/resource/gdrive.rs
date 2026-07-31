@@ -387,7 +387,7 @@ impl GdriveResource {
                 continue;
             };
             let values = range.get("values").cloned().unwrap_or(Value::Array(vec![]));
-            let cost = json_len(&values);
+            let cost = served_len(&values);
             if cost > budget {
                 obj.insert(
                     "valuesOmitted".into(),
@@ -733,9 +733,13 @@ fn tab_titles(workbook: &Value) -> Vec<String> {
         .collect()
 }
 
-/// How many bytes `v` would serialize to, counted without building them: a tab's
-/// values can run to megabytes, and this only decides whether they fit the budget.
-fn json_len(v: &Value) -> u64 {
+/// How many bytes `v` will add to the served file, counted without building them.
+///
+/// Pretty-printed, because that is the form the file is served in: a values array is
+/// rows of columns of short strings, and indenting one puts every cell on its own
+/// line. Measured on a 200x20 grid, that is 1.66x the compact form — so a budget
+/// checked against compact bytes admits a file half again as large as it allows.
+fn served_len(v: &Value) -> u64 {
     struct Counting(u64);
     impl std::io::Write for Counting {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -747,7 +751,9 @@ fn json_len(v: &Value) -> u64 {
         }
     }
     let mut c = Counting(0);
-    serde_json::to_writer(&mut c, v).map(|()| c.0).unwrap_or(0)
+    serde_json::to_writer_pretty(&mut c, v)
+        .map(|()| c.0)
+        .unwrap_or(0)
 }
 
 fn time_field(f: &Value, key: &str) -> Option<std::time::SystemTime> {
@@ -1144,6 +1150,30 @@ mod tests {
                 "an empty phrase must not become a search"
             );
         }
+    }
+
+    /// The budget bounds the file that gets served, so it has to be measured in the
+    /// form that gets served: indenting a grid of short cells costs half again its
+    /// compact size (1.66x measured here), and a budget checked against the compact
+    /// form quietly allows that much more.
+    #[test]
+    fn a_tabs_cost_is_measured_as_it_will_be_written() {
+        let values: Value = serde_json::json!(
+            (0..200)
+                .map(|r| (0..20).map(|c| format!("{r}-{c}")).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+        let compact = serde_json::to_vec(&values).unwrap().len() as u64;
+        let served = served_len(&values);
+        assert_eq!(
+            served,
+            serde_json::to_vec_pretty(&values).unwrap().len() as u64,
+            "counted, not estimated"
+        );
+        assert!(
+            served * 2 > compact * 3,
+            "indenting a grid costs at least half again: {compact} -> {served}"
+        );
     }
 
     #[test]

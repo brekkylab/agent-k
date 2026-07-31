@@ -96,6 +96,19 @@ const JITTER_MAX_MS: u64 = 1000;
 /// chunked read from re-rendering it.
 const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 
+/// A tab name as an A1 range: quoted, with any literal quote doubled.
+///
+/// A bare name mostly works and then abruptly doesn't. Measured against a real
+/// spreadsheet: `ranges=메인화면` answered `'메인화면'!A1:Z968`, while `ranges=A1`
+/// answered `'메인화면'!A1` — the *first* sheet's cell, not a sheet of that name, and
+/// `B2` and `A:A` the same way. So a tab named like a cell reference returns someone
+/// else's cells, which the caller then attaches to the wrong tab. Quoting is what A1
+/// notation specifies for a name, and the same measurement shows it changes nothing
+/// for the ordinary ones.
+fn quote_a1(tab: &str) -> String {
+    format!("'{}'", tab.replace('\'', "''"))
+}
+
 /// Escape a phrase for a single-quoted Drive `q` term: a bare `'` would close the
 /// string and a bare `\` would escape the wrong character, so both are doubled up.
 /// Without this, searching for a name with an apostrophe is a 400, not a miss.
@@ -559,13 +572,14 @@ impl GdriveAccessor {
     ///
     /// Values are formatted as the sheet displays them, so what a reader greps is
     /// what a person sees in the cell.
-    pub async fn sheet_values_batch(&self, id: &str, ranges: &[String]) -> anyhow::Result<Value> {
+    pub async fn sheet_values_batch(&self, id: &str, tabs: &[String]) -> anyhow::Result<Value> {
+        let quoted: Vec<String> = tabs.iter().map(|t| quote_a1(t)).collect();
         let mut params: Vec<(&str, &str)> = vec![
             ("majorDimension", "ROWS"),
             ("valueRenderOption", "FORMATTED_VALUE"),
             ("dateTimeRenderOption", "FORMATTED_STRING"),
         ];
-        params.extend(ranges.iter().map(|r| ("ranges", r.as_str())));
+        params.extend(quoted.iter().map(|r| ("ranges", r.as_str())));
         let url = reqwest::Url::parse_with_params(
             &format!("{}/spreadsheets/{id}/values:batchGet", self.urls.sheets),
             &params,
@@ -574,7 +588,22 @@ impl GdriveAccessor {
             .send_with_refresh(|t| self.client.get(url.clone()).bearer_auth(t))
             .await?
             .error_for_status()?;
-        Ok(resp.json().await?)
+        // Bounded before parsing, like a document: the tree parsed from this costs
+        // several times its bytes, and the budget that decides how much of it is kept
+        // is applied after the parse — too late to protect anything.
+        if let Some(len) = resp.content_length()
+            && len > MAX_DOCUMENT_BYTES
+        {
+            anyhow::bail!("spreadsheet values are {len} bytes, over the {MAX_DOCUMENT_BYTES} limit");
+        }
+        let raw = resp.bytes().await?;
+        if raw.len() as u64 > MAX_DOCUMENT_BYTES {
+            anyhow::bail!(
+                "spreadsheet values are {} bytes, over the {MAX_DOCUMENT_BYTES} limit",
+                raw.len()
+            );
+        }
+        Ok(serde_json::from_slice(&raw)?)
     }
 
     /// GET a JSON API response, pretty-printed so the bytes read as lines rather
@@ -704,6 +733,21 @@ mod tests {
         );
         // And far above anything measured: 3.4MB was the largest real document.
         assert!(MAX_DOCUMENT_BYTES >= 16 << 20);
+    }
+
+    /// A tab is named by a person but read as A1 notation, where a name that looks
+    /// like a cell reference *is* one (measured: `ranges=A1` returned the first
+    /// sheet's A1 cell, not the sheet named `A1`).
+    #[test]
+    fn a_tab_name_is_quoted_so_it_stays_a_name() {
+        assert_eq!(quote_a1("메인화면"), "'메인화면'");
+        assert_eq!(quote_a1("1. 낚시 스킬+매크로"), "'1. 낚시 스킬+매크로'");
+        // Unquoted, each of these addresses cells instead of a sheet.
+        assert_eq!(quote_a1("A1"), "'A1'");
+        assert_eq!(quote_a1("A:A"), "'A:A'");
+        assert_eq!(quote_a1("Sheet1!B2"), "'Sheet1!B2'");
+        // A quote in the name closes the quoting unless doubled.
+        assert_eq!(quote_a1("it's"), "'it''s'");
     }
 
     /// A phrase is pasted into a single-quoted `q` term, so a quote in it would end
