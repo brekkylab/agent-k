@@ -176,9 +176,19 @@ async fn run_bundle(
         child.wait_with_output().await
     };
 
-    let output = match tokio::time::timeout(timeout, run).await {
+    // `run` owns the child, and `kill_process_group` below needs it to still be
+    // owned: a reaped pid can be reused, and killpg would then signal an
+    // unrelated group. Pinning it to a named local is what makes that hold
+    // visibly. Passing the future to `timeout` directly also works today, but
+    // only because a temporary in a match scrutinee outlives the arms — an
+    // invisible rule that binding the result with `let` first would quietly
+    // remove.
+    let mut run = std::pin::pin!(run);
+    let output = match tokio::time::timeout(timeout, &mut run).await {
         Ok(result) => result?,
         Err(_) => {
+            // `run` is in scope here, so the child has not been dropped or
+            // reaped and `pid` still names its process group.
             kill_process_group(pid);
             anyhow::bail!("run_docling timed out after {timeout:?}; parser killed");
         }
@@ -197,9 +207,11 @@ async fn run_bundle(
 #[cfg(unix)]
 fn kill_process_group(pid: Option<u32>) {
     if let Some(pid) = pid {
-        // SAFETY: `killpg` on a pid we spawned into its own group. A stale pid
-        // returns ESRCH rather than signalling an unrelated process, because the
-        // group leader id is not reused while we hold the child handle.
+        // SAFETY: `killpg` on a pid we spawned into its own group, called while
+        // the caller still owns the child handle (see `run_bundle`), so the pid
+        // has not been reaped and cannot yet name another process's group. A
+        // group that has already exited returns ESRCH, which is the outcome we
+        // want anyway.
         unsafe {
             libc::killpg(pid as libc::pid_t, libc::SIGKILL);
         }
