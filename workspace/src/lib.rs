@@ -1,12 +1,12 @@
 //! Standalone workspace filesystem.
 //!
 //! A provider VFS (S3 / Notion) plus the unified [`WorkspaceFs`], which presents
-//! a workspace's local files and its provider mounts as one tree, exposed to the
-//! backend as a [`ForwardFs`] to serve to an in-guest FUSE client.
+//! a workspace's local files and its provider mounts as one tree.
 //!
 //! Framework-free: no database, HTTP framework, or sandbox VM. The backend wraps
-//! this with persistence (mount config), a WebDAV adapter, and sandbox-session
-//! wiring, and injects a [`KnowledgeHook`] for `knowledge/` side-processing.
+//! this with persistence (mount config) and a WebDAV adapter, and injects a
+//! [`KnowledgeHook`] for `knowledge/` side-processing. The workspace tree is
+//! served into agent sandboxes over cortex virtio-fs, not from here.
 
 mod fs;
 mod hook;
@@ -17,7 +17,7 @@ pub use fs::{
 };
 pub use hook::{FsEvent, FsHook};
 pub use vfs::{
-    DirEntry as ResourceDirEntry, FileKind, FileStat, ForwardFs, FsConfig, FwdEntry, FwdStat,
-    LOCAL_MOUNT, LocalResource, Mount, MountPath, MountSpec, NotionConfig, NotionResource,
-    ProviderConfig, Resource, ResourceError, ResourceResult, S3Config, S3Resource, TunnelServer,
+    DirEntry as ResourceDirEntry, FileKind, FileStat, FsConfig, LOCAL_MOUNT, LocalResource, Mount,
+    MountPath, MountSpec, NotionConfig, NotionResource, ProviderConfig, Resource, ResourceError,
+    ResourceResult, S3Config, S3Resource,
 };

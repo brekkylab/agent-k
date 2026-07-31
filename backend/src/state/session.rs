@@ -6,8 +6,9 @@ use std::{
 
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
+    cortex::{S3Config as CortexS3Config, VolumeSpec},
     message::{FinishReason, Message, Part, Role},
-    runenv::{Machine as _, Sandbox, SandboxNetwork, VolumeMount},
+    runenv::Sandbox,
 };
 use chrono::{DateTime, Utc};
 use futures_util::{FutureExt as _, StreamExt as _};
@@ -226,8 +227,8 @@ impl SessionsState {
     /// `data_root/{session_id}/sandbox.tar.zst`; sessions without a sandbox
     /// touch no disk state outside the database. The `runenv` column tracks
     /// whether the archive exists so readers don't need to probe disk.
-    pub async fn insert(&self, mut item: Session, runenv: Option<Sandbox>) -> StateResult<()> {
-        item.runenv = runenv.is_some();
+    pub async fn insert(&self, mut item: Session, has_runenv: bool) -> StateResult<()> {
+        item.runenv = has_runenv;
 
         sqlx::query(
             "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at) \
@@ -244,19 +245,8 @@ impl SessionsState {
         .execute(&self.db)
         .await?;
 
-        if let Some(mut runenv) = runenv {
-            let dir = self.data_root.join("sessions").join(item.id.to_string());
-            tokio::fs::create_dir_all(&dir).await?;
-            runenv
-                .stop()
-                .await
-                .map_err(|e| StateError::Sandbox(format!("{e:#}")))?;
-            runenv
-                .archive(dir.join("sandbox.tar.zst"))
-                .await
-                .map_err(|e| StateError::Sandbox(format!("{e:#}")))?;
-        }
-
+        // The session's filesystem state lives in its per-session upper disk
+        // (created lazily on first run); nothing to archive here.
         Ok(())
     }
 
@@ -389,7 +379,6 @@ impl SessionsState {
         tokio::spawn(async move {
             let session_key = id.to_string();
             let dir = data_root.join("sessions").join(&session_key);
-            let archive_path = dir.join("sandbox.tar.zst");
             let channel = message_channel(id);
 
             // Ok(bool) is "was the run stopped?" — it picks the terminal
@@ -414,60 +403,36 @@ impl SessionsState {
                 let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
                 let has_runenv: bool = row.get("runenv");
 
-                // The workspace's external-provider sources. Each is served into
-                // the guest as a cortex-backed virtio-fs mount, resolved in the
-                // sandbox process via the fs-backend registry (no host-side FUSE
-                // tunnel). Providers cortex doesn't serve yet (e.g. Notion) are
-                // skipped.
+                // Build the ephemeral krun sandbox for this session (if it uses
+                // one), mounting each workspace provider as a cortex volume under
+                // /mnt/workspace/<prefix>. Each tool-call boots a fresh microVM;
+                // filesystem state persists in the session's upper disk. Providers
+                // cortex doesn't serve yet (e.g. Notion) are skipped.
                 let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
-                let fs_mounts: Vec<VolumeMount> = vfs
-                    .mounts
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, m)| match &m.provider {
-                        ::workspace::ProviderConfig::S3(cfg) => {
-                            let params = serde_json::to_string(cfg).ok()?;
+                let runenv: Option<Arc<Sandbox>> = if has_runenv {
+                    tokio::fs::create_dir_all(&dir).await?;
+                    // ailoy owns rootfs/kernel; agent-k only picks where this
+                    // session's writable state (upper disk) lives.
+                    let mut sandbox = Sandbox::new(dir.join("upper.img"))
+                        .map_err(|e| anyhow::anyhow!("sandbox init: {e}"))?;
+                    for m in &vfs.mounts {
+                        if let ::workspace::ProviderConfig::S3(cfg) = &m.provider {
                             let prefix = m.prefix.trim_matches('/');
-                            Some(VolumeMount::FsBackend {
-                                tag: format!("wsfs{i}"),
-                                guest: format!("/mnt/workspace/{prefix}"),
-                                backend_type: "cortex-s3".to_string(),
-                                params,
-                            })
+                            let spec = VolumeSpec::S3(CortexS3Config {
+                                bucket: cfg.bucket.clone(),
+                                region: cfg.region.clone(),
+                                access_key_id: cfg.access_key_id.clone(),
+                                secret_access_key: cfg.secret_access_key.clone(),
+                                endpoint: cfg.endpoint.clone(),
+                                key_prefix: cfg.key_prefix.clone(),
+                            });
+                            sandbox = sandbox.mount(format!("/mnt/workspace/{prefix}"), spec);
                         }
-                        _ => None,
-                    })
-                    .collect();
-
-                let runenv = if has_runenv {
-                    if !tokio::fs::try_exists(&archive_path).await? {
-                        anyhow::bail!(
-                            "session {id} marked as having a runenv but archive is missing at {}",
-                            archive_path.display()
-                        );
                     }
-                    // Restore the snapshot with the cortex-backed sources attached
-                    // at boot. The archive doesn't carry the network policy, so
-                    // re-apply it on restore.
-                    let sandbox = Sandbox::try_from_archive_with_network_and_mounts(
-                        &archive_path,
-                        SandboxNetwork::Public,
-                        &fs_mounts,
-                    )
-                    .await?;
-                    Some(Arc::new(Mutex::new(sandbox)))
+                    Some(Arc::new(sandbox))
                 } else {
                     None
                 };
-
-                // Start the sandbox before the agent runs. cortex-backed sources
-                // are attached at boot and auto-mounted by agentd under
-                // /mnt/workspace/<source> (via MSB_DIR_MOUNTS). Requires MSB_PATH
-                // to point at a binary that registered the cortex fs-backends
-                // (cortex's `msb_cortex`); otherwise `build_vm` rejects the mount.
-                if let Some(r) = &runenv {
-                    r.lock().await.start().await?;
-                }
 
                 let rows = sqlx::query(
                     "SELECT seq, content FROM messages WHERE session_id = ? ORDER BY seq ASC",
@@ -764,21 +729,10 @@ impl SessionsState {
                 }
                 .await;
 
-                if let Some(runenv) = runenv {
-                    let mut sandbox = runenv.lock().await;
-                    let archive: anyhow::Result<()> = async {
-                        sandbox.stop().await?;
-                        if tokio::fs::try_exists(&archive_path).await? {
-                            tokio::fs::remove_file(&archive_path).await?;
-                        }
-                        sandbox.archive(&archive_path).await?;
-                        Ok(())
-                    }
-                    .await;
-                    if let Err(e) = archive {
-                        tracing::error!(session = %id, "sandbox archive failed: {e:#}");
-                    }
-                }
+                // Nothing to archive: the session's filesystem state persists in
+                // its upper disk. `runenv` drops here — each tool-call booted its
+                // own ephemeral microVM.
+                drop(runenv);
 
                 drive
             }

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
 use ailoy::agent::AgentSpec;
-use ailoy::runenv::{SandboxBuilder, SandboxNetwork};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -169,30 +168,12 @@ pub(super) async fn create_session(
     if let Some(t) = payload.title {
         session = session.with_title(t);
     }
-    // Build a sandbox (runenv) when requested. The agent then runs in a VM and
-    // reads the workspace — local files plus the external mounts — as one FUSE
-    // tree at /mnt/workspace (see `SessionsState::run`). Coworker image + host
-    // egress so the in-guest forwarder can reach the host forward server.
-    // `insert` stops + archives it; each run restores it (with host egress).
-    let runenv = if payload.runenv.unwrap_or(false) {
-        let sandbox = SandboxBuilder::new()
-            .image("brekkylab/agent-k-libreoffice:latest")
-            .cpus(8)
-            .memory_mib(1024)
-            .network(SandboxNetwork::Public)
-            .build()
-            .await
-            .map_err(|e| {
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("sandbox build failed: {e:#}"),
-                )
-            })?;
-        Some(sandbox)
-    } else {
-        None
-    };
-    state.sessions.insert(session.clone(), runenv).await?;
+    // Whether this session runs in a sandbox. The ephemeral krun sandbox itself
+    // is built lazily per run (see `SessionsState::run`), mounting the workspace
+    // providers as cortex volumes under /mnt/workspace; state persists in the
+    // session's upper disk. Here we only record the flag.
+    let has_runenv = payload.runenv.unwrap_or(false);
+    state.sessions.insert(session.clone(), has_runenv).await?;
     Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
 }
 

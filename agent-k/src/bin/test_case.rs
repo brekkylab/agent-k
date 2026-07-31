@@ -21,7 +21,6 @@ use ailoy::{
     message::{Message, Part, Role},
 };
 use futures::StreamExt;
-use tokio::sync::Mutex;
 
 #[path = "test_case/cases/mod.rs"]
 mod cases;
@@ -72,8 +71,17 @@ enum InputSource {
     Tty(io::BufReader<std::fs::File>),
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // MUST be first: a re-invoked sandbox child boots the microVM here and
+    // never returns. Do it before creating the tokio runtime.
+    ailoy::runenv::boot_if_requested();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -155,17 +163,21 @@ async fn main() -> anyhow::Result<()> {
     let mut agent = match agent_kind {
         AgentKind::Coworker => {
             let spec = get_coworker_agent_spec(agent_kind.name(), agent_model, !no_skill);
-            let runenv = Arc::new(Mutex::new(
-                get_coworker_agent_runenv(DATA_DIR, SHARED_DATA_DIR, ARTIFACT_DIR).await?,
-            ));
+            let runenv = Arc::new(get_coworker_agent_runenv(
+                DATA_DIR,
+                SHARED_DATA_DIR,
+                ARTIFACT_DIR,
+                "./test/sandbox-upper.img",
+            )?);
             let state = AgentState::new().with_runenv(runenv);
             Agent::try_with_state(spec, state)?
         }
         AgentKind::DeepResearch => {
             let spec = get_deep_research_agent_spec(agent_kind.name(), agent_model);
-            let runenv = Arc::new(Mutex::new(
-                get_deep_research_agent_runenv(ARTIFACT_DIR).await?,
-            ));
+            let runenv = Arc::new(get_deep_research_agent_runenv(
+                ARTIFACT_DIR,
+                "./test/sandbox-upper.img",
+            )?);
             let state = AgentState::new().with_runenv(runenv);
             Agent::try_with_state(spec, state)?
         }

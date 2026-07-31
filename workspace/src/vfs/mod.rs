@@ -21,7 +21,6 @@ mod cache;
 pub mod error;
 pub mod path;
 pub mod resource;
-pub mod sandbox;
 
 mod mount;
 
@@ -33,4 +32,3 @@ pub use path::MountPath;
 pub use resource::{
     DirEntry, FileKind, FileStat, LocalResource, NotionResource, Resource, S3Resource,
 };
-pub use sandbox::{ForwardFs, FwdEntry, FwdStat, TunnelServer};

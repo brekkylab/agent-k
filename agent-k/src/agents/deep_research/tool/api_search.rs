@@ -133,11 +133,12 @@ async fn brave_search(
         });
     };
 
+    let count = max_results.to_string();
     let resp = match client
         .get(BRAVE_API_BASE)
+        .query(&[("q", query), ("count", count.as_str())])
         .header("X-Subscription-Token", api_key)
         .header("Accept", "application/json")
-        .query(&[("q", query), ("count", &max_results.to_string())])
         .send()
         .await
     {

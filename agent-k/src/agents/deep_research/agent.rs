@@ -2,7 +2,8 @@ use std::path::Path;
 
 use ailoy::{
     agent::AgentSpec,
-    runenv::{Sandbox, SandboxBuilder, VolumeMount},
+    cortex::VolumeSpec,
+    runenv::{Sandbox, SandboxNetwork},
     tool::get_tool_providers_mut,
 };
 
@@ -103,20 +104,18 @@ pub fn get_deep_research_agent_spec(
 
 /// `artifacts_dir` is bind-mounted into the sandbox at `/workspace/artifacts`,
 /// which is where the prompt instructs the model to write its outputs.
-pub async fn get_deep_research_agent_runenv(
+pub fn get_deep_research_agent_runenv(
     artifacts_dir: impl AsRef<Path>,
+    upper: impl Into<std::path::PathBuf>,
 ) -> anyhow::Result<Sandbox> {
-    SandboxBuilder::new()
-        .image("brekkylab/agent-k:latest")
-        .cpus(8)
-        .memory_mib(1024)
-        .workdir("/workspace")
-        .env([("HOME".to_string(), "/workspace".to_string())])
-        .mount(VolumeMount::Bind {
-            host: artifacts_dir.as_ref().to_path_buf(),
-            guest: "/workspace/artifacts".to_string(),
-            readonly: false,
-        })
-        .build()
-        .await
+    // Reaching the internet for user scripts requires public egress; the
+    // default posture is HostOnly.
+    Ok(Sandbox::new(upper)?
+        .with_network(SandboxNetwork::Public)
+        .mount(
+            "/workspace/artifacts",
+            VolumeSpec::Local {
+                host: artifacts_dir.as_ref().to_path_buf(),
+            },
+        ))
 }

@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use ailoy::{
     agent::AgentSpec,
-    runenv::{FileEntry, Sandbox, SandboxBuilder, VolumeMount},
+    cortex::VolumeSpec,
+    runenv::{FileEntry, Sandbox, SandboxNetwork},
 };
 
 const XLSX_SKILL_DIR: &str = "/root/skills/xlsx";
@@ -145,30 +146,35 @@ pub fn get_coworker_agent_spec(
     spec
 }
 
-pub async fn get_coworker_agent_runenv(
+/// Build the coworker sandbox: an ephemeral microVM whose persistent state
+/// lives in `upper`, with the three host directories mounted as cortex
+/// passthrough volumes.
+pub fn get_coworker_agent_runenv(
     input_dir: impl AsRef<Path>,
     shared_data_dir: impl AsRef<Path>,
     artifacts_dir: impl AsRef<Path>,
+    upper: impl Into<PathBuf>,
 ) -> anyhow::Result<Sandbox> {
-    SandboxBuilder::new()
-        .image("brekkylab/agent-k-libreoffice:latest")
-        .cpus(8)
-        .memory_mib(1024)
-        .mount(VolumeMount::Bind {
-            host: input_dir.as_ref().to_path_buf(),
-            guest: GUEST_ATTACHED_DIR.to_string(),
-            readonly: false,
-        })
-        .mount(VolumeMount::Bind {
-            host: shared_data_dir.as_ref().to_path_buf(),
-            guest: GUEST_SHARED_DIR.to_string(),
-            readonly: true,
-        })
-        .mount(VolumeMount::Bind {
-            host: artifacts_dir.as_ref().to_path_buf(),
-            guest: GUEST_ARTIFACTS_DIR.to_string(),
-            readonly: false,
-        })
-        .build()
-        .await
+    Ok(Sandbox::new(upper)?
+        // The coworker installs packages and runs scripts that reach the
+        // internet, so it needs public egress (default is HostOnly).
+        .with_network(SandboxNetwork::Public)
+        .mount(
+            GUEST_ATTACHED_DIR,
+            VolumeSpec::Local {
+                host: input_dir.as_ref().to_path_buf(),
+            },
+        )
+        .mount(
+            GUEST_SHARED_DIR,
+            VolumeSpec::Local {
+                host: shared_data_dir.as_ref().to_path_buf(),
+            },
+        )
+        .mount(
+            GUEST_ARTIFACTS_DIR,
+            VolumeSpec::Local {
+                host: artifacts_dir.as_ref().to_path_buf(),
+            },
+        ))
 }

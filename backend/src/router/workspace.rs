@@ -274,7 +274,7 @@ mod tests {
 
         let session = Session::new(alice.id, AgentSpec::new("anthropic/claude-sonnet-4-5"));
         let sid = session.id;
-        state.sessions.insert(session, None).await.unwrap();
+        state.sessions.insert(session, false).await.unwrap();
 
         let (fstatus, Json(fbody)) =
             require_owned_session(&state, &bob, sid).await.unwrap_err();
