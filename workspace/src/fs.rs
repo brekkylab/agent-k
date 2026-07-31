@@ -337,15 +337,6 @@ pub struct WorkspaceFs {
     hook: Option<Arc<dyn FsHook>>,
 }
 
-/// A child path under `dir`, without the `//` a root join would produce.
-fn child_of(dir: &MountPath, name: &str) -> MountPath {
-    if dir.is_root() {
-        MountPath::new(format!("/{name}"))
-    } else {
-        MountPath::new(format!("{}/{}", dir.as_str(), name))
-    }
-}
-
 /// Concurrent renders while sizing one listing (see
 /// [`WorkspaceFs::read_dir`]). A Drive document takes 1-2s to produce, so a folder
 /// of them is unusable serially; past this the provider's rate limits, not latency,
@@ -495,7 +486,10 @@ impl WorkspaceFs {
         }
         let (resource, vpath) = self.route(rel_path).ok_or(FsError::NotFound)?;
         let mut entries = resource.readdir(&vpath).await.map_err(FsError::from)?;
-        if with_sizes {
+        // Only worth a pass if the provider will actually answer: one that declines
+        // (Drive, whose answer is a document render) returns the same placeholder,
+        // and asking anyway is a stat per entry for a number that cannot change.
+        if with_sizes && resource.resolve_size_on_stat() {
             let at: Vec<usize> = entries
                 .iter()
                 .enumerate()
@@ -504,7 +498,7 @@ impl WorkspaceFs {
                 .collect();
             let paths: Vec<MountPath> = at
                 .iter()
-                .map(|&i| child_of(&vpath, &entries[i].name))
+                .map(|&i| vpath.child(&entries[i].name))
                 .collect();
             // `stat` is what resolves a placeholder (the provider renders once and
             // the cache keeps both bytes and length), so driving it per child is

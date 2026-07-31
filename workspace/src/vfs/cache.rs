@@ -23,6 +23,12 @@ use crate::vfs::{
 /// (unlike file content), so they fall back to a short expiry.
 const LISTING_TTL: Duration = Duration::from_secs(300);
 
+/// The listing TTL, for a provider that keeps its own listing cache and must expire
+/// it on the same schedule (see gdrive's `DIR_TTL`).
+pub(crate) fn listing_ttl() -> Duration {
+    LISTING_TTL
+}
+
 #[derive(Clone)]
 struct Entry {
     is_dir: bool,
@@ -473,15 +479,6 @@ impl CachedResource {
 /// chunk.
 fn whole_or_small(st: &FileStat) -> bool {
     st.serves_whole || st.size == 0 || (!st.size_is_estimate && st.size <= MAX_CONTENT_BYTES)
-}
-
-/// A child path under `dir` (handles the root so the result has no `//`).
-fn child_path(dir: &MountPath, name: &str) -> MountPath {
-    if dir.is_root() {
-        MountPath::new(format!("/{name}"))
-    } else {
-        MountPath::new(format!("{}/{}", dir.as_str(), name))
-    }
 }
 
 /// Slice `data` by an optional byte range (clamped to bounds); `None` = all.

@@ -70,9 +70,17 @@ fn native_kind(mime: &str) -> Option<(NativeApi, &'static str)> {
         .map(|(_, api, suffix)| (*api, *suffix))
 }
 
-/// Per-directory listing TTL. A listing is one `files.list`, so a short TTL
-/// keeps `ls` fresh; path resolution walks parent listings and rides this cache.
-const DIR_TTL: Duration = Duration::from_secs(60);
+/// Per-directory listing TTL, matching the metadata cache's own listing TTL.
+///
+/// This cache is not the freshness policy — the wrapper above it is, and it does the
+/// expiring, invalidating and negative caching. This one exists because a path has to
+/// become a Drive id before anything can be read, and that means walking parent
+/// listings. Holding a *different* number here bought nothing and cost two things: a
+/// read whose parent listing had expired here but not there re-fetched it (an extra
+/// `files.list` per file, on any traversal outrunning the shorter TTL), and for the
+/// span between the two numbers `ls` answered from one snapshot while reads resolved
+/// against another.
+const DIR_TTL: Duration = Duration::from_secs(300);
 /// Ceiling on the cell values one spreadsheet's JSON will carry, spent tab by tab
 /// in the workbook's own order until it runs out.
 ///
@@ -537,7 +545,10 @@ impl Resource for GdriveResource {
     /// answer to a PDF's contents, which no read of the mount can give.
     ///
     /// The body is the phrase, plain text. One JSON line per hit, so a reader can
-    /// pipe it into anything: `{"path","id","mimeType","size","modifiedTime"}`.
+    /// pipe it into anything: `{"name","id","mimeType","size","modifiedTime","listed"}`.
+    /// `listed: false` marks a hit this mount has no entry for — a Form or a Drawing,
+    /// which no read can render — so the index's answer is reported rather than
+    /// quietly dropped.
     async fn command(&self, name: &str, body: &[u8]) -> ResourceResult<Vec<u8>> {
         if name != "search" {
             return Err(ResourceError::Unsupported);
@@ -557,15 +568,22 @@ impl Resource for GdriveResource {
             .map_err(not_found_or_backend)?;
         let mut out = Vec::new();
         for f in &hits {
-            let Some(child) = child_from_file(f) else {
-                continue;
-            };
+            // A hit the mount has no entry for (a Form, a Map, a Drawing) is still a
+            // hit: dropping it would answer "not found" for a file the index found,
+            // and the id is enough to open it in Drive. Say it isn't listed instead.
+            let child = child_from_file(f);
             let line = serde_json::json!({
-                "name": child.vfs_name,
-                "id": child.id,
+                "name": child
+                    .as_ref()
+                    .map(|c| c.vfs_name.clone())
+                    .or_else(|| f.get("name").and_then(|n| n.as_str()).map(str::to_string)),
+                "id": child.as_ref().map(|c| c.id.clone()).or_else(|| {
+                    f.get("id").and_then(|i| i.as_str()).map(str::to_string)
+                }),
                 "mimeType": f.get("mimeType"),
                 "size": f.get("size"),
                 "modifiedTime": f.get("modifiedTime"),
+                "listed": child.is_some(),
             });
             out.extend_from_slice(&serde_json::to_vec(&line)?);
             out.push(b'\n');
@@ -1174,6 +1192,39 @@ mod tests {
             served * 2 > compact * 3,
             "indenting a grid costs at least half again: {compact} -> {served}"
         );
+    }
+
+    /// The two listing caches have to expire together: a read resolves its path
+    /// through this one, and a `readdir` answers from the wrapper's. Different
+    /// numbers meant re-fetching a listing the wrapper still held, and a window
+    /// where the two disagreed about what a folder contained.
+    #[test]
+    fn the_listing_ttl_matches_the_cache_above_it() {
+        assert_eq!(DIR_TTL, crate::vfs::cache::listing_ttl());
+    }
+
+    /// A search reports what the index found, including the types this mount cannot
+    /// serve — a Form has no readable form, but "the phrase is in this Form" is still
+    /// the answer to the question.
+    #[tokio::test]
+    async fn a_search_hit_the_mount_cannot_serve_is_still_reported() {
+        let form = file_row("설문지", "f1", "application/vnd.google-apps.form");
+        assert!(
+            child_from_file(&form).is_none(),
+            "a Form has no entry in the tree"
+        );
+        // The command's shaping of a hit keeps the name and id either way; the flag is
+        // what tells them apart.
+        let served = file_row("보고서.pdf", "p1", "application/pdf");
+        for (row, listed) in [(&form, false), (&served, true)] {
+            let child = child_from_file(row);
+            assert_eq!(child.is_some(), listed);
+            let name = child
+                .as_ref()
+                .map(|c| c.vfs_name.clone())
+                .or_else(|| row.get("name").and_then(|n| n.as_str()).map(str::to_string));
+            assert!(name.is_some(), "a hit always has a name to report");
+        }
     }
 
     #[test]
