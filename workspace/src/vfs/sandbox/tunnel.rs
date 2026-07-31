@@ -52,6 +52,12 @@ const RELAY_BUF: usize = 2 * 1024 * 1024;
 /// serial direct_io on S3, and no worse on Notion (the workspace VFS resolves
 /// render-on-read sizes, so page-cache reads are never clamped short).
 const MAX_READAHEAD: u32 = 8 * 1024 * 1024;
+/// How long a connection may take to present its token. Every connection costs
+/// a thread, so a client that connects and then says nothing would otherwise
+/// hold one for the life of the process. Generous for the only legitimate
+/// client: the guest pump writes its token as the first thing it does after
+/// connecting, over a loopback socket.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Host-side raw-FUSE tunnel server. Bound to an ephemeral loopback port; the
 /// guest pump connects, sends a one-line token, then streams raw FUSE bytes.
@@ -193,13 +199,26 @@ fn serve_conn(
 ) -> anyhow::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_nodelay(true).ok();
-    if !token_matches(&token, &read_token_line(&mut stream)?) {
-        // Warn rather than debug: the only client that should ever reach this
-        // port is the guest pump, which is handed the token directly, so a
-        // rejection means something else is dialing it.
+
+    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
+    // Warn rather than debug throughout the handshake: the only client that
+    // should ever reach this port is the guest pump, which is handed the token
+    // directly, so anything that fails here is something else dialing it.
+    let presented = match read_token_line(&mut stream) {
+        Ok(line) => line,
+        Err(e) => {
+            tracing::warn!("vfs tunnel: handshake from {peer} did not complete: {e}");
+            return Err(e.into());
+        }
+    };
+    if !token_matches(&token, &presented) {
         tracing::warn!("vfs tunnel: rejected connection from {peer}: bad token");
         anyhow::bail!("bad token");
     }
+    // Clear it before the relay below. A mounted tunnel is request-driven and
+    // legitimately idles between requests, and the clone taken for the read
+    // direction shares this socket's options.
+    stream.set_read_timeout(None)?;
 
     // socketpair: fuse_fd -> fuser, shim_fd -> our relay.
     let mut fds = [0i32; 2];
@@ -543,7 +562,7 @@ mod host_engine_test {
 
     use async_trait::async_trait;
 
-    use super::{TunnelServer, token_matches};
+    use super::{HANDSHAKE_TIMEOUT, TunnelServer, token_matches};
     use crate::vfs::sandbox::{ForwardFs, FwdEntry, FwdStat};
 
     struct FakeFs;
@@ -686,6 +705,28 @@ mod host_engine_test {
         assert!(
             c.read_exact(&mut hdr).is_err(),
             "a bad token must not get a FUSE reply"
+        );
+    }
+
+    /// A client that connects and then says nothing must be let go rather than
+    /// holding its thread. Observed from the client side: the server drops the
+    /// connection, so the read returns EOF. Without the deadline the read would
+    /// instead block until the client\'s own timeout, which is what fails here.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_silent_client_is_let_go() {
+        let fs: Arc<dyn ForwardFs> = Arc::new(FakeFs);
+        let srv = TunnelServer::spawn(fs, tokio::runtime::Handle::current()).expect("spawn server");
+
+        let mut c = TcpStream::connect(("127.0.0.1", srv.port())).expect("connect");
+        // Comfortably past the server\'s own deadline, so a client-side timeout
+        // here means the server never imposed one.
+        c.set_read_timeout(Some(HANDSHAKE_TIMEOUT * 4)).unwrap();
+
+        let mut b = [0u8; 1];
+        let n = c.read(&mut b);
+        assert!(
+            matches!(n, Ok(0)),
+            "the server must close a connection that never presents a token, got {n:?}"
         );
     }
 
