@@ -419,6 +419,13 @@ impl SessionsState {
                 // the guest below so the agent reads them as files.
                 let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
 
+                if has_runenv && !tokio::fs::try_exists(&archive_path).await? {
+                    anyhow::bail!(
+                        "session {id} marked as having a runenv but archive is missing at {}",
+                        archive_path.display()
+                    );
+                }
+
                 // A runenv always runs an in-guest FUSE pump for the unified
                 // workspace mount, and it reaches the host tunnel server via
                 // host.microsandbox.internal. The server has to exist first: its
@@ -426,6 +433,9 @@ impl SessionsState {
                 // fixed at creation and re-applied on every restore — has to name
                 // that port for the guest to reach it at all. So start the server,
                 // then restore the sandbox granting its port, then attach.
+                //
+                // Held for the whole run: dropping this tears the mount down, so
+                // it is declared before `runenv` and outlives it.
                 let vfs_tunnel = if has_runenv {
                     let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(
                         crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
@@ -440,12 +450,6 @@ impl SessionsState {
 
                 let runenv = match &vfs_tunnel {
                     Some(srv) => {
-                        if !tokio::fs::try_exists(&archive_path).await? {
-                            anyhow::bail!(
-                                "session {id} marked as having a runenv but archive is missing at {}",
-                                archive_path.display()
-                            );
-                        }
                         // The archive carries no network policy, so re-apply it
                         // here. Only the tunnel port is granted on the host: the
                         // guest has no business reaching anything else the host
@@ -463,22 +467,14 @@ impl SessionsState {
                 // Mount the unified workspace tree into the guest before the
                 // agent runs — local files under `files/` plus the provider
                 // mounts as siblings, the browser-WebDAV view served over FUSE
-                // at /mnt/workspace. The tunnel server is held for the whole run;
-                // dropping it (at the end of this scope) tears the mount down.
-                let _vfs_forward = match (&runenv, &vfs_tunnel) {
-                    (Some(r), Some(srv)) => {
-                        let mut sandbox = r.lock().await;
-                        let console = sandbox.start().await?;
-                        crate::sandbox_tunnel::attach_vfs_tunnel_in_guest(
-                            console,
-                            srv,
-                            "/mnt/workspace",
-                        )
+                // at /mnt/workspace. What keeps the mount up is `vfs_tunnel`
+                // above, not anything bound here.
+                if let (Some(r), Some(srv)) = (&runenv, &vfs_tunnel) {
+                    let mut sandbox = r.lock().await;
+                    let console = sandbox.start().await?;
+                    crate::sandbox_tunnel::attach_vfs_tunnel_in_guest(console, srv, "/mnt/workspace")
                         .await?;
-                        vfs_tunnel.as_ref()
-                    }
-                    _ => None,
-                };
+                }
 
                 let rows = sqlx::query(
                     "SELECT seq, content FROM messages WHERE session_id = ? ORDER BY seq ASC",
