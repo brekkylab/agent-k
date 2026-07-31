@@ -538,6 +538,9 @@ impl Resource for GdriveResource {
             mtime: child.mtime,
             created: child.created,
             content_type: child.mime_type.clone(),
+            // A probe that answered turned the placeholder into a length; one that
+            // failed leaves it a placeholder, and saying so is what keeps a reader
+            // from trusting it.
             size_is_estimate: size.is_none() && is_estimate(&child),
             // A document comes from its own API, which has no notion of a range.
             serves_whole: matches!(child.serves, Serves::Native(_)),
@@ -676,14 +679,21 @@ fn dir_entry_for(c: &Child) -> DirEntry {
     }
 }
 
-/// Whether this entry's size is a placeholder rather than a length: true for a
-/// document, whose JSON nobody has measured until it is produced.
+/// Whether this entry's size is a placeholder rather than a length.
 ///
-/// Deliberately false for a file Drive reported no size for, even though that also
-/// gets the placeholder: resolving it would mean downloading the object — possibly
-/// gigabytes — to answer a `stat`.
+/// True for a document, whose JSON nobody has measured until it is produced, and
+/// true for a file Drive listed without a `size` — the row this once called exact,
+/// on the reasoning that resolving it meant downloading the object. `probe_len`
+/// retired that reasoning: the length is one ranged byte away.
+///
+/// Calling it exact was not a cosmetic error. The listing's placeholder is served
+/// verbatim by the metadata cache's stat fast path, so `probe_len` never ran for any
+/// caller that lists before it reads — which is all of them — and the read strategy
+/// read 8 MiB as a known length at or under the cacheable limit, fetching the whole
+/// object once per window and then discarding it. Measured through the wrapper
+/// production installs: four 256 KiB windows of a 20 MB file moved 80 MB.
 fn is_estimate(c: &Child) -> bool {
-    matches!(c.serves, Serves::Native(_))
+    matches!(c.serves, Serves::Native(_)) || c.size.is_none()
 }
 
 /// Map an accessor error to [`ResourceError`]: an upstream HTTP 404 (a file id

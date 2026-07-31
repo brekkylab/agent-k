@@ -1,5 +1,7 @@
 mod base;
 mod gdrive;
+#[cfg(test)]
+mod gdrive_wrapped;
 mod gmail;
 mod gmail_sync;
 mod local;
