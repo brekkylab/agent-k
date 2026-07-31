@@ -96,6 +96,28 @@ const JITTER_MAX_MS: u64 = 1000;
 /// chunked read from re-rendering it.
 const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Read a response body, refusing at `limit` rather than after it.
+///
+/// The obvious guard — check `Content-Length`, then buffer — never fires here: none of
+/// these endpoints declares a length (measured on Docs, Slides, `spreadsheets.get` and
+/// `values:batchGet`: no `Content-Length`, no `Transfer-Encoding`, just an HTTP/2
+/// stream), so the only check that ran was the one after the whole body had already
+/// been allocated. Reading frame by frame makes the limit mean what it says.
+async fn body_within(
+    mut resp: reqwest::Response,
+    limit: u64,
+    what: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        if out.len() as u64 + chunk.len() as u64 > limit {
+            anyhow::bail!("{what} is over the {limit} byte limit for a whole-document read");
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
 /// A tab name as an A1 range: quoted, with any literal quote doubled.
 ///
 /// A bare name mostly works and then abruptly doesn't. Measured against a real
@@ -334,6 +356,20 @@ impl GdriveAccessor {
         &self,
         build: impl Fn(&str) -> reqwest::RequestBuilder,
     ) -> anyhow::Result<reqwest::Response> {
+        self.send_retrying(build, MAX_RETRIES).await
+    }
+
+    /// As [`Self::send_with_refresh`], with a caller-chosen retry ceiling.
+    ///
+    /// The full ladder is right for a call whose answer the caller needs, and wrong
+    /// for one whose failure it shrugs off: the shared-drive listing is best-effort,
+    /// and walking five backoffs made the first `ls` of a mount block 33 seconds to
+    /// produce a result that was then discarded.
+    async fn send_retrying(
+        &self,
+        build: impl Fn(&str) -> reqwest::RequestBuilder,
+        max_retries: u32,
+    ) -> anyhow::Result<reqwest::Response> {
         let mut token = self.token().await?;
         let mut refreshed = false;
         let mut retries = 0u32;
@@ -348,7 +384,7 @@ impl GdriveAccessor {
             }
             let retryable =
                 status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
-            if retryable && retries < MAX_RETRIES {
+            if retryable && retries < max_retries {
                 // An explicit Retry-After wins (capped so the caller isn't
                 // blocked too long); otherwise exponential backoff with jitter.
                 let wait = match retry_after(&resp) {
@@ -588,21 +624,10 @@ impl GdriveAccessor {
             .send_with_refresh(|t| self.client.get(url.clone()).bearer_auth(t))
             .await?
             .error_for_status()?;
-        // Bounded before parsing, like a document: the tree parsed from this costs
-        // several times its bytes, and the budget that decides how much of it is kept
-        // is applied after the parse — too late to protect anything.
-        if let Some(len) = resp.content_length()
-            && len > MAX_DOCUMENT_BYTES
-        {
-            anyhow::bail!("spreadsheet values are {len} bytes, over the {MAX_DOCUMENT_BYTES} limit");
-        }
-        let raw = resp.bytes().await?;
-        if raw.len() as u64 > MAX_DOCUMENT_BYTES {
-            anyhow::bail!(
-                "spreadsheet values are {} bytes, over the {MAX_DOCUMENT_BYTES} limit",
-                raw.len()
-            );
-        }
+        // Bounded while reading, not after: the tree parsed from this costs several
+        // times its bytes, and the budget that decides how much of it is kept applies
+        // after the parse — too late to protect anything.
+        let raw = body_within(resp, MAX_DOCUMENT_BYTES, "spreadsheet values").await?;
         Ok(serde_json::from_slice(&raw)?)
     }
 
@@ -615,28 +640,14 @@ impl GdriveAccessor {
     /// its size), and the indented copy written back out — and where the only honest
     /// limit can live: a reader cannot ask for part of a document, so serving one is
     /// all-or-nothing, and past some size the answer has to be "no" rather than a
-    /// gigabyte of allocations per read.
+    /// gigabyte of allocations per read. Enforced while the body is read (see
+    /// [`body_within`]) — these endpoints declare no length to check beforehand.
     async fn get_pretty(&self, url: &str) -> anyhow::Result<Vec<u8>> {
         let resp = self
             .send_with_refresh(|t| self.client.get(url).bearer_auth(t))
             .await?
             .error_for_status()?;
-        if let Some(len) = resp.content_length()
-            && len > MAX_DOCUMENT_BYTES
-        {
-            anyhow::bail!(
-                "document is {len} bytes, over the {MAX_DOCUMENT_BYTES} limit for a \
-                 whole-document read"
-            );
-        }
-        let raw = resp.bytes().await?;
-        if raw.len() as u64 > MAX_DOCUMENT_BYTES {
-            anyhow::bail!(
-                "document is {} bytes, over the {MAX_DOCUMENT_BYTES} limit for a \
-                 whole-document read",
-                raw.len()
-            );
-        }
+        let raw = body_within(resp, MAX_DOCUMENT_BYTES, "document").await?;
         let v: Value = serde_json::from_slice(&raw)?;
         drop(raw);
         let mut bytes = serde_json::to_vec_pretty(&v)?;

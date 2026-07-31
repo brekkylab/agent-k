@@ -83,18 +83,43 @@ fn parse_range(h: &str) -> Option<(u64, Option<u64>)> {
     Some((s.parse().ok()?, e.parse().ok()))
 }
 
+/// Serve a token, one folder listing, and one blob with `Range` support. A document
+/// route answers with `pad` bytes of JSON and no `Content-Length`, the way the real
+/// Docs API does.
+async fn start_with_document(
+    listing: Value,
+    blobs: HashMap<String, Vec<u8>>,
+    document_pad: Option<usize>,
+) -> Mock {
+    start_inner(listing, blobs, document_pad).await
+}
+
 /// Serve a token, one folder listing, and one blob with `Range` support.
 async fn start(listing: Value, blobs: HashMap<String, Vec<u8>>) -> Mock {
+    start_inner(listing, blobs, None).await
+}
+
+async fn start_inner(
+    listing: Value,
+    blobs: HashMap<String, Vec<u8>>,
+    document_pad: Option<usize>,
+) -> Mock {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
     let body_bytes = Arc::new(Mutex::new(0u64));
     let (log, written, blobs) = (seen.clone(), body_bytes.clone(), Arc::new(blobs));
     let listing = Arc::new(listing);
+    let document_pad = Arc::new(document_pad);
     tokio::spawn(async move {
         while let Ok((mut sock, _)) = listener.accept().await {
-            let (log, written, blobs, listing) =
-                (log.clone(), written.clone(), blobs.clone(), listing.clone());
+            let (log, written, blobs, listing, document_pad) = (
+                log.clone(),
+                written.clone(),
+                blobs.clone(),
+                listing.clone(),
+                document_pad.clone(),
+            );
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 let mut tmp = [0u8; 4096];
@@ -150,6 +175,31 @@ async fn start(listing: Value, blobs: HashMap<String, Vec<u8>>) -> Mock {
                     (out, body.len() as u64)
                 };
 
+                // A document, streamed without a length: what the Docs API does.
+                if let Some(pad) = *document_pad
+                    && path.contains("/documents/")
+                {
+                    let body = json!({ "body": "x".repeat(pad) }).to_string().into_bytes();
+                    let head = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                                 Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                        .to_vec();
+                    let _ = sock.write_all(&head).await;
+                    let mut sent = 0u64;
+                    for c in body.chunks(64 * 1024) {
+                        let framed = format!("{:x}\r\n", c.len()).into_bytes();
+                        if sock.write_all(&framed).await.is_err()
+                            || sock.write_all(c).await.is_err()
+                            || sock.write_all(b"\r\n").await.is_err()
+                        {
+                            break;
+                        }
+                        sent += c.len() as u64;
+                    }
+                    let _ = sock.write_all(b"0\r\n\r\n").await;
+                    *written.lock().unwrap() += sent;
+                    let _ = sock.shutdown().await;
+                    return;
+                }
                 let (out, body_len) = if method == "POST" && path.ends_with("/oauth2/token") {
                     reply(
                         200,
@@ -341,5 +391,44 @@ async fn a_document_is_built_once_and_served_from_the_cache() {
             .await
             .is_err(),
         "the mock serves no document API"
+    );
+}
+
+/// A document over the ceiling must stop being read, not be read and then refused.
+///
+/// None of these endpoints declares a length — Docs, Slides and Sheets all answer as
+/// an HTTP/2 stream — so a guard that checks `Content-Length` first and buffers second
+/// never fires, and the memory it exists to bound is already spent by the time it
+/// looks. Measured here by counting what the server managed to write.
+#[tokio::test]
+async fn an_oversized_document_stops_being_read() {
+    const PAD: usize = 96 * 1024 * 1024; // over the 64 MiB document ceiling
+    let mock = start_with_document(
+        json!([row(
+            "huge",
+            "D1",
+            "application/vnd.google-apps.document",
+            None
+        )]),
+        HashMap::new(),
+        Some(PAD),
+    )
+    .await;
+    let fs = mounted(&mock.config());
+    let path = MountPath::new("/My Drive/huge.gdoc.json");
+    let st = fs.stat(&path).await.unwrap();
+
+    assert!(
+        fs.read_bytes_pinned(&path, Some(0..256 * 1024), &st)
+            .await
+            .is_err(),
+        "a document past the ceiling is refused"
+    );
+    let sent = mock.bytes_sent();
+    assert!(
+        sent < PAD as u64 / 2,
+        "the server should have been cut off early, but wrote {} MB of {} MB",
+        sent / (1 << 20),
+        PAD / (1 << 20)
     );
 }
