@@ -89,6 +89,8 @@ fn stat_of(m: &std::fs::Metadata) -> FileStat {
         // exactly as good as anything this layer could add.
         content_type: None,
         size_is_estimate: false,
+        // A local file is a file: a range is a seek.
+        serves_whole: false,
     }
 }
 

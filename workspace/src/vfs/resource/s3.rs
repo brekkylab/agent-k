@@ -201,6 +201,7 @@ impl Resource for S3Resource {
                 // The key is the truth (and carries its own extension).
                 content_type: None,
                 size_is_estimate: false,
+                serves_whole: false,
             }),
             Err(OsError::NotFound { .. }) => {
                 let res = self

@@ -216,6 +216,10 @@ type CachedListing = (Instant, Arc<Vec<Child>>);
 
 pub struct GdriveResource {
     accessor: GdriveAccessor,
+    /// Lengths learned by probing (file id → bytes), for the rows Drive listed
+    /// without a `size`. One probe per file per session: `stat` is asked once per
+    /// entry after every listing, and a probe is a request.
+    probed: Mutex<HashMap<String, u64>>,
     /// Per-directory listing cache (folder path → children). Path resolution walks
     /// parent listings, so one cached listing answers readdir, stat and the lookup
     /// a read starts with; fetching the bytes themselves still costs a request.
@@ -226,6 +230,7 @@ impl GdriveResource {
     pub fn new(config: &GdriveConfig) -> anyhow::Result<Self> {
         Ok(Self {
             accessor: GdriveAccessor::new(config)?,
+            probed: Mutex::new(HashMap::new()),
             dir_cache: Mutex::new(HashMap::new()),
         })
     }
@@ -397,6 +402,25 @@ impl GdriveResource {
         pretty(&v)
     }
 
+    /// The probed length of `id`, remembered so the kernel's per-entry `getattr`
+    /// storm costs one request, not one per stat. `None` when the probe fails —
+    /// the placeholder stands rather than a wrong number.
+    async fn probed_len(&self, id: &str) -> Option<u64> {
+        if let Some(n) = self.probed.lock().await.get(id) {
+            return Some(*n);
+        }
+        match self.accessor.probe_len(id).await {
+            Ok(n) => {
+                self.probed.lock().await.insert(id.to_string(), n);
+                Some(n)
+            }
+            Err(e) => {
+                tracing::debug!("gdrive: probing {id} for its length failed: {e:#}");
+                None
+            }
+        }
+    }
+
     /// Resolve any path (file or folder) to its child entry via its parent dir.
     async fn resolve(&self, path: &str) -> ResourceResult<Child> {
         let (parent, name) = split_last(path);
@@ -482,17 +506,26 @@ impl Resource for GdriveResource {
             });
         }
         let child = self.resolve(path.as_str()).await?;
+        // A file Drive listed without a size: learn the real one from one ranged
+        // response header rather than leaving the placeholder, which would make
+        // `ls -l` lie and a WebDAV `GET` truncate the body at 8 MB.
+        let size = match (&child.serves, child.size) {
+            (Serves::Original, None) => self.probed_len(&child.id).await,
+            _ => None,
+        };
         Ok(FileStat {
             kind: if child.kind.is_dir() {
                 FileKind::Dir
             } else {
                 FileKind::File
             },
-            size: entry_size(&child),
+            size: size.unwrap_or_else(|| entry_size(&child)),
             mtime: child.mtime,
             created: child.created,
             content_type: child.mime_type.clone(),
-            size_is_estimate: is_estimate(&child),
+            size_is_estimate: size.is_none() && is_estimate(&child),
+            // A document comes from its own API, which has no notion of a range.
+            serves_whole: matches!(child.serves, Serves::Native(_)),
             ..Default::default()
         })
     }
@@ -968,6 +1001,30 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(doc.vfs_name, "분기 보고서.gdoc.json");
+    }
+
+    /// What a `stat` claims about a node decides how a read of it is fetched, so the
+    /// two flags have to line up with what the entry actually is.
+    #[test]
+    fn a_document_says_it_has_no_ranges_and_a_file_says_it_has() {
+        let doc = child_from_file(&file_row(
+            "가이드",
+            "d1",
+            "application/vnd.google-apps.document",
+        ))
+        .unwrap();
+        assert!(matches!(doc.serves, Serves::Native(_)));
+        assert!(is_estimate(&doc), "its length is unknown until rendered");
+
+        let pdf = child_from_file(&file_row("보고서.pdf", "p1", "application/pdf")).unwrap();
+        assert!(matches!(pdf.serves, Serves::Original));
+        assert!(!is_estimate(&pdf), "Drive gave the length in the listing");
+
+        let mut row = file_row("mystery.bin", "m1", "application/octet-stream");
+        row.as_object_mut().unwrap().remove("size");
+        let unsized_file = child_from_file(&row).unwrap();
+        assert!(matches!(unsized_file.serves, Serves::Original));
+        assert_eq!(unsized_file.size, None, "the length has to be asked for");
     }
 
     /// A row Drive reported no size for still lists, with the placeholder rather

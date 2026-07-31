@@ -74,6 +74,22 @@ pub struct FileStat {
     /// consumer that must be exact, like a WebDAV `GET` filling in
     /// `Content-Length`, resolves it when the file is opened.
     pub size_is_estimate: bool,
+    /// Whether asking for *part* of this node is the same work as asking for all of
+    /// it: `true` for one the backend builds on request (a Google Doc, a Notion
+    /// page), where `head -c 100` builds the whole document and returns a hundred
+    /// bytes of it.
+    ///
+    /// The read strategy inverts on this. A ranged node that misses the cache
+    /// re-reads one window, so only small ones are worth keeping; a whole-only node
+    /// re-builds everything, so it is fetched whole and kept up to the entire budget
+    /// — without that, a 10 MB document read in 256 KB chunks builds itself forty
+    /// times.
+    ///
+    /// Independent of [`Self::size_is_estimate`]: a file whose length Drive never
+    /// reported is unsized but still ranged, and reading its placeholder as grounds
+    /// to fetch everything turned a 256 KB read of a 2 GB object into a 2 GB
+    /// download.
+    pub serves_whole: bool,
 }
 
 /// A mounted provider. One instance owns one set of credentials, so the same

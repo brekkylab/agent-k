@@ -173,6 +173,12 @@ impl Resource for NotionResource {
                     size: 0,
                     mtime: page_time(&page, "last_edited_time"),
                     ctime: page_time(&page, "created_time"),
+                    // `read_bytes` renders the page and then slices: a range buys
+                    // nothing here, so a chunked read is only affordable if the first
+                    // chunk keeps the whole rendering. Saying so is what lets the
+                    // content cache hold a page bigger than its ranged-object limit
+                    // instead of re-rendering it once per chunk.
+                    serves_whole: is_json,
                     ..Default::default()
                 })
             }

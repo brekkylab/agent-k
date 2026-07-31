@@ -367,13 +367,36 @@ impl CachedResource {
         self.content.lock().unwrap().get(key, version)
     }
 
-    fn content_put(&self, key: &str, version: Version, bytes: Vec<u8>) {
-        if version.known() && bytes.len() as u64 <= MAX_CONTENT_BYTES {
-            self.content
-                .lock()
-                .unwrap()
-                .put(key, version, bytes, CONTENT_CACHE_BUDGET);
+    /// Keep `bytes` for `key` if they are worth keeping.
+    ///
+    /// A ranged node over [`MAX_CONTENT_BYTES`] is not: missing the cache costs it
+    /// one window, so the budget is better spent on smaller objects.
+    ///
+    /// A node the provider can only produce entire (`whole` — a rendered document)
+    /// is kept up to the whole cache budget, because refusing it is not a saving.
+    /// Measured on a 70 MB render read 256KB at a time: 282 renders and 19.7 GB moved
+    /// to deliver 70 MB, since every chunk missed and re-rendered. The provider is the
+    /// one that bounds this — it refuses to produce a document larger than the cache
+    /// can hold, so the two limits meet rather than leaving a cliff between them.
+    fn content_put(&self, key: &str, version: Version, bytes: Vec<u8>, whole: bool) {
+        if !version.known() {
+            return;
         }
+        let len = bytes.len() as u64;
+        if !whole && len > MAX_CONTENT_BYTES {
+            return;
+        }
+        if len > CONTENT_CACHE_BUDGET {
+            // Nothing should produce one this big: a provider that can only serve a
+            // node whole caps what it will produce (gdrive's MAX_DOCUMENT_BYTES),
+            // precisely so the result fits here.
+            tracing::warn!("content cache: {key} is {len} bytes, larger than the whole budget");
+            return;
+        }
+        self.content
+            .lock()
+            .unwrap()
+            .put(key, version, bytes, CONTENT_CACHE_BUDGET);
     }
 
     fn content_drop(&self, key: &str) {
@@ -388,7 +411,13 @@ impl CachedResource {
     /// render, e.g. Notion `page.json`): render once *through the content cache*
     /// so the size is known and a following read is a hit. Cheap on a cache hit;
     /// 0 if the render fails.
-    async fn resolve_size(&self, path: &MountPath, version: &Version, fallback: u64) -> u64 {
+    async fn resolve_size(
+        &self,
+        path: &MountPath,
+        version: &Version,
+        fallback: u64,
+        whole: bool,
+    ) -> u64 {
         if let Some(bytes) = self.content_get(path.as_str(), version) {
             return bytes.len() as u64;
         }
@@ -399,7 +428,7 @@ impl CachedResource {
             Ok(bytes) => {
                 let n = bytes.len() as u64;
                 self.size_learn(path.as_str(), version, n);
-                self.content_put(path.as_str(), version.clone(), bytes);
+                self.content_put(path.as_str(), version.clone(), bytes, whole);
                 n
             }
             // Sizing failed (network, permissions). The provider's own answer
@@ -433,6 +462,17 @@ impl CachedResource {
         }
         sizes.insert(key.to_string(), (version.clone(), len));
     }
+}
+
+/// Whether a read of this node should pull the whole object rather than a range.
+///
+/// True when a range buys nothing (the provider renders the whole node, or reports
+/// no size at all) or when the object is small enough to keep. An *estimated* size
+/// is not a size: a file whose length the backend didn't report still ranges, and
+/// treating its placeholder as "small" would download the whole object once per
+/// chunk.
+fn whole_or_small(st: &FileStat) -> bool {
+    st.serves_whole || st.size == 0 || (!st.size_is_estimate && st.size <= MAX_CONTENT_BYTES)
 }
 
 /// A child path under `dir` (handles the root so the result has no `//`).
@@ -470,14 +510,15 @@ impl Resource for CachedResource {
         if let Some(full) = self.content_get(key, &version) {
             return Ok(slice(&full, &range));
         }
-        // Miss: fetch + cache the whole object, unless it's a known-large object
-        // read with a range (served ranged, uncached). Providers that render the
-        // whole file regardless of range report size 0, so they still cache whole.
-        let fetch_full = range.is_none() || st.size == 0 || st.size <= MAX_CONTENT_BYTES;
+        // Miss: fetch + cache the whole object, unless the range can be served as a
+        // range. A node the provider produces whole (`serves_whole`) or one it
+        // couldn't size at all (0) has to come whole; everything else is ranged
+        // unless its *known* length fits the cache.
+        let fetch_full = range.is_none() || whole_or_small(&st);
         if fetch_full {
             let full = self.inner.read_bytes(path, None).await?;
             let out = slice(&full, &range);
-            self.content_put(key, version, full);
+            self.content_put(key, version, full, st.serves_whole);
             Ok(out)
         } else {
             self.inner.read_bytes(path, range).await
@@ -497,7 +538,7 @@ impl Resource for CachedResource {
         if let Some(full) = self.content_get(key, &version) {
             return Ok(slice(&full, &range));
         }
-        let fetch_full = range.is_none() || stat.size == 0 || stat.size <= MAX_CONTENT_BYTES;
+        let fetch_full = range.is_none() || whole_or_small(stat);
         if fetch_full {
             // Fetch pinned, not plain: on S3 this sends `If-Match(etag)`, so a
             // miss whose cached snapshot was evicted/replaced can't return newer
@@ -505,7 +546,7 @@ impl Resource for CachedResource {
             // mislabel the cache entry). A successful fetch matches the pin.
             let full = self.inner.read_bytes_pinned(path, None, stat).await?;
             let out = slice(&full, &range);
-            self.content_put(key, version, full);
+            self.content_put(key, version, full, stat.serves_whole);
             Ok(out)
         } else {
             // Large uncached object: read the range pinned to `stat` — S3 sends
@@ -561,10 +602,12 @@ impl Resource for CachedResource {
                     ..Default::default()
                 });
             }
-            // A file whose cached length is only an upper bound: fall through and
-            // resolve it, or every `stat` after a `readdir` would repeat the
-            // listing's guess as if it were the length.
-            Some(e) if e.size_is_estimate && self.inner.resolve_size_on_stat() => {}
+            // A file whose cached length is only an upper bound: fall through and ask
+            // the provider, which may be able to answer exactly and cheaply (Drive
+            // reads a file's true length out of one ranged response header). Serving
+            // the cached guess here would repeat the listing's placeholder as if it
+            // were the length — and hand a chunked read the wrong fetch strategy.
+            Some(e) if e.size_is_estimate => {}
             // A file with a known (>0) size: serve it (with the cached times so
             // `ls -l` shows real times, not the epoch — R2).
             Some(e) if e.size > 0 => {
@@ -626,7 +669,9 @@ impl Resource for CachedResource {
         let unsized_file = st.size == 0 || st.size_is_estimate;
         if matches!(st.kind, FileKind::File) && unsized_file && self.inner.resolve_size_on_stat() {
             let version = Version::of(&st);
-            let size = self.resolve_size(path, &version, st.size).await;
+            let size = self
+                .resolve_size(path, &version, st.size, st.serves_whole)
+                .await;
             let resolved = size != st.size || !st.size_is_estimate;
             return Ok(FileStat {
                 size,
@@ -1192,6 +1237,210 @@ mod tests {
         // …and a re-listing reconstructs `DirEntry` from the same store.
         let listed = c.list_dir_entries("/").expect("listing cached");
         assert_eq!(listed[0].content_type.as_deref(), Some("application/pdf"));
+    }
+
+    /// Does a chunked read of a range-less node really cost one full fetch per
+    /// chunk? Counted, not reasoned about: a 10MB document read 256KB at a time.
+    #[tokio::test]
+    async fn a_chunked_read_of_an_uncacheable_whole_node_refetches_per_chunk() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Renderer {
+            len: usize,
+            fetches: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl Resource for Renderer {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                range: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                // Renders the whole thing whatever was asked for — an API with no
+                // range concept — and reports how many times it had to.
+                self.fetches.fetch_add(1, Ordering::SeqCst);
+                let all = vec![b'x'; self.len];
+                Ok(match range {
+                    Some(r) => {
+                        let (s, e) = (r.start as usize, (r.end as usize).min(all.len()));
+                        all[s.min(all.len())..e].to_vec()
+                    }
+                    None => all,
+                })
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+                Ok(Vec::new())
+            }
+            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+                Ok(FileStat {
+                    kind: FileKind::File,
+                    size: 8 << 20,
+                    size_is_estimate: true,
+                    serves_whole: true,
+                    mtime: Some(std::time::UNIX_EPOCH),
+                    ..Default::default()
+                })
+            }
+        }
+
+        for (len, label) in [
+            (4 << 20, "4MB"),
+            (10 << 20, "10MB (over the ranged ceiling)"),
+            (100 << 20, "100MB (over the whole cache budget)"),
+        ] {
+            let fetches = Arc::new(AtomicUsize::new(0));
+            let c = CachedResource::new(Arc::new(Renderer {
+                len,
+                fetches: fetches.clone(),
+            }));
+            let p = MountPath::new("/doc.json");
+            let st = c.stat(&p).await.unwrap();
+            let chunk = 256 * 1024u64;
+            let mut off = 0u64;
+            let mut got = 0usize;
+            loop {
+                let b = c
+                    .read_bytes_pinned(&p, Some(off..off + chunk), &st)
+                    .await
+                    .unwrap();
+                if b.is_empty() {
+                    break;
+                }
+                got += b.len();
+                off += b.len() as u64;
+            }
+            let n = fetches.load(Ordering::SeqCst);
+            eprintln!(
+                "{label}: {} chunks read, {n} full renders, {} MB moved",
+                got / (256 * 1024),
+                n * len / (1 << 20)
+            );
+            assert_eq!(got, len, "the whole file still reads");
+            // Rendered once and kept: reading a file costs the file. Before the
+            // whole-node rule, the 10MB case took 42 renders and moved 420MB, because
+            // the 8MB cache limit refused a node whose miss costs everything.
+            assert_eq!(
+                n,
+                1,
+                "{label}: {n} renders for {} chunks",
+                got / (256 * 1024)
+            );
+        }
+    }
+
+    struct NullResource;
+    #[async_trait]
+    impl Resource for NullResource {
+        async fn read_bytes(
+            &self,
+            _p: &MountPath,
+            _r: Option<Range<u64>>,
+        ) -> ResourceResult<Vec<u8>> {
+            Err(ResourceError::Unsupported)
+        }
+        async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+            Err(ResourceError::Unsupported)
+        }
+        async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+            Ok(Vec::new())
+        }
+        async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+            Err(ResourceError::NotFound)
+        }
+    }
+
+    /// The provider decides which rule applies to it, and the two rules differ by an
+    /// order of magnitude — so a provider that renders whole and forgets to say so
+    /// gets its render thrown away and rebuilt per chunk. Pin the rule to the flag,
+    /// not to the size.
+    #[test]
+    fn a_whole_only_render_is_kept_where_a_ranged_object_would_not_be() {
+        let big = (MAX_CONTENT_BYTES + 1) as usize;
+        let v = Version::Time(std::time::UNIX_EPOCH);
+
+        let ranged = CachedResource::new(Arc::new(NullResource));
+        ranged.content_put("/big.zip", v.clone(), vec![0u8; big], false);
+        assert!(
+            ranged.content_get("/big.zip", &v).is_none(),
+            "a ranged object over the limit: a miss costs one window, so don't hold it"
+        );
+
+        let whole = CachedResource::new(Arc::new(NullResource));
+        whole.content_put("/page.json", v.clone(), vec![0u8; big], true);
+        assert!(
+            whole.content_get("/page.json", &v).is_some(),
+            "a whole-only render over the same limit: a miss costs everything"
+        );
+    }
+
+    /// Nothing is kept that the budget cannot hold — not even a whole-only node. The
+    /// provider is what keeps that from mattering: it refuses to produce a document
+    /// larger than this, so the two limits meet instead of leaving a size that is
+    /// produced and then re-produced per chunk.
+    #[test]
+    fn the_cache_refuses_what_it_cannot_hold() {
+        let c = CachedResource::new(Arc::new(NullResource));
+        let v = Version::Tag("t".into());
+        c.content_put("/small", v.clone(), vec![0u8; 1024], true);
+        assert!(c.content_get("/small", &v).is_some());
+
+        c.content_put(
+            "/huge",
+            v.clone(),
+            vec![0u8; (CONTENT_CACHE_BUDGET + 1) as usize],
+            true,
+        );
+        assert!(
+            c.content_get("/huge", &v).is_none(),
+            "over the budget: refused rather than evicting everything for it"
+        );
+        assert!(
+            c.content_get("/small", &v).is_some(),
+            "and the refusal did not disturb what was already held"
+        );
+    }
+
+    /// A file whose length the backend never reported must still be read a range at
+    /// a time. Its placeholder size looks small, and treating "small" as "cacheable"
+    /// downloaded the whole object once per chunk — 256KB of a 2GB file cost 2GB,
+    /// forty times over.
+    #[test]
+    fn a_placeholder_size_does_not_make_a_read_fetch_everything() {
+        let unsized_file = FileStat {
+            kind: FileKind::File,
+            size: 8 << 20,
+            size_is_estimate: true,
+            serves_whole: false,
+            ..Default::default()
+        };
+        assert!(
+            !whole_or_small(&unsized_file),
+            "an estimate is not a length: read the range"
+        );
+
+        // A document, though, has no range to read: the whole thing or nothing.
+        let document = FileStat {
+            serves_whole: true,
+            ..unsized_file.clone()
+        };
+        assert!(
+            whole_or_small(&document),
+            "fetch it whole so the first chunk caches the rest"
+        );
+
+        // And a real length still decides by the cache's limit.
+        for (size, want) in [(8u64 << 20, true), ((8 << 20) + 1, false)] {
+            let known = FileStat {
+                size,
+                size_is_estimate: false,
+                serves_whole: false,
+                ..Default::default()
+            };
+            assert_eq!(whole_or_small(&known), want, "size {size}");
+        }
     }
 
     /// An estimated size has to survive `readdir` -> `stat`, because that is the

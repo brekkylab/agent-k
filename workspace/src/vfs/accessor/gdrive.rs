@@ -86,6 +86,16 @@ const MAX_BACKOFF: Duration = Duration::from_secs(16);
 const JITTER_MAX_MS: u64 = 1000;
 
 
+/// Ceiling on one document's JSON.
+///
+/// A document has no ranges: a read of any part of it produces the whole thing, so
+/// its size sets the memory a single read costs — body, parsed tree, indented output.
+/// 64 MiB against a measured worst case of 3.4 MB leaves room for documents far
+/// larger than any in a real account while keeping one read's footprint bounded, and
+/// it keeps every produced document inside the content cache, which is what stops a
+/// chunked read from re-rendering it.
+const MAX_DOCUMENT_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Escape a phrase for a single-quoted Drive `q` term: a bare `'` would close the
 /// string and a bare `\` would escape the wrong character, so both are doubled up.
 /// Without this, searching for a name with an apostrophe is a 400, not a miss.
@@ -435,6 +445,29 @@ impl GdriveAccessor {
             .await
     }
 
+    /// A file's exact length, without downloading it: ask for one byte and read the
+    /// total out of `Content-Range` (`bytes 0-0/119265498`).
+    ///
+    /// For the rare row Drive lists without a `size`. Measured on a 119 MB PDF: one
+    /// byte, 0.68s. The alternative — reading the object to find out how long it is
+    /// — is the thing every other guard here exists to avoid.
+    pub async fn probe_len(&self, id: &str) -> anyhow::Result<u64> {
+        let url = format!("{}/files/{id}?alt=media&supportsAllDrives=true", self.urls.drive);
+        let resp = self
+            .send_with_refresh(|t| self.client.get(&url).bearer_auth(t).header("Range", "bytes=0-0"))
+            .await?
+            .error_for_status()?;
+        let total = resp
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit_once('/').map(|(_, total)| total.trim().to_string()))
+            .ok_or_else(|| anyhow::anyhow!("gdrive probe {id}: no Content-Range in a 206"))?;
+        total
+            .parse::<u64>()
+            .map_err(|e| anyhow::anyhow!("gdrive probe {id}: bad total {total:?}: {e}"))
+    }
+
     /// Files whose *contents* match `phrase`, via Drive's own index
     /// (`q=fullText contains`).
     ///
@@ -547,12 +580,36 @@ impl GdriveAccessor {
     /// GET a JSON API response, pretty-printed so the bytes read as lines rather
     /// than one long string — the difference between a file a reader can scan and
     /// one it can only parse.
+    ///
+    /// Refuses a response over [`MAX_DOCUMENT_BYTES`]. This is where a document's
+    /// memory is spent — the raw body, the `Value` tree parsed from it (several times
+    /// its size), and the indented copy written back out — and where the only honest
+    /// limit can live: a reader cannot ask for part of a document, so serving one is
+    /// all-or-nothing, and past some size the answer has to be "no" rather than a
+    /// gigabyte of allocations per read.
     async fn get_pretty(&self, url: &str) -> anyhow::Result<Vec<u8>> {
         let resp = self
             .send_with_refresh(|t| self.client.get(url).bearer_auth(t))
             .await?
             .error_for_status()?;
-        let v: Value = resp.json().await?;
+        if let Some(len) = resp.content_length()
+            && len > MAX_DOCUMENT_BYTES
+        {
+            anyhow::bail!(
+                "document is {len} bytes, over the {MAX_DOCUMENT_BYTES} limit for a \
+                 whole-document read"
+            );
+        }
+        let raw = resp.bytes().await?;
+        if raw.len() as u64 > MAX_DOCUMENT_BYTES {
+            anyhow::bail!(
+                "document is {} bytes, over the {MAX_DOCUMENT_BYTES} limit for a \
+                 whole-document read",
+                raw.len()
+            );
+        }
+        let v: Value = serde_json::from_slice(&raw)?;
+        drop(raw);
         let mut bytes = serde_json::to_vec_pretty(&v)?;
         bytes.push(b'\n');
         Ok(bytes)
@@ -633,6 +690,20 @@ mod tests {
             .collect();
         assert_eq!(got, vec!["한 장/정리", "'Sheet 1'!A1:D9"]);
         assert!(url.query().unwrap().contains("%2F"), "{url}");
+    }
+
+    /// The document ceiling and the content cache's budget have to meet: a document
+    /// the provider will produce must be one the cache can keep, or a chunked read of
+    /// it re-renders per chunk.
+    #[test]
+    fn a_document_that_can_be_produced_can_be_cached() {
+        const CONTENT_CACHE_BUDGET: u64 = 128 << 20;
+        assert!(
+            MAX_DOCUMENT_BYTES <= CONTENT_CACHE_BUDGET,
+            "a producible document must fit the cache"
+        );
+        // And far above anything measured: 3.4MB was the largest real document.
+        assert!(MAX_DOCUMENT_BYTES >= 16 << 20);
     }
 
     /// A phrase is pasted into a single-quoted `q` term, so a quote in it would end
