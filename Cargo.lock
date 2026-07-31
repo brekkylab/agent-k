@@ -155,7 +155,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=9e8867609a59828985d6435e5a8c4559bc423d83#9e8867609a59828985d6435e5a8c4559bc423d83"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=5c11bdbef46a3f2ca573948d74b627d3183ee9fd#5c11bdbef46a3f2ca573948d74b627d3183ee9fd"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1315,13 +1315,17 @@ version = "0.1.0"
 source = "git+https://github.com/brekkylab/cortex.git?rev=d32c0d6ef54873f0f9420a0d974810487339ecfb#d32c0d6ef54873f0f9420a0d974810487339ecfb"
 dependencies = [
  "cc",
+ "chrono",
  "libc",
  "msb_krun",
  "object_store",
  "pkg-config",
+ "reqwest 0.12.28",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

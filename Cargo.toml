@@ -12,4 +12,4 @@ exclude = [
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "9e8867609a59828985d6435e5a8c4559bc423d83", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "5c11bdbef46a3f2ca573948d74b627d3183ee9fd", features = ["sandbox"] }
