@@ -6,7 +6,7 @@ use std::{
 
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
-    cortex::{S3Config as CortexS3Config, VolumeSpec},
+    cortex::{S3Config as CortexS3Config, VolumeSpec, WorkspaceSpec},
     message::{FinishReason, Message, Part, Role},
     runenv::Sandbox,
 };
@@ -413,8 +413,11 @@ impl SessionsState {
                     tokio::fs::create_dir_all(&dir).await?;
                     // ailoy owns rootfs/kernel; agent-k only picks where this
                     // session's writable state (upper disk) lives.
-                    let mut sandbox = Sandbox::new(dir.join("upper.img"))
+                    let sandbox = Sandbox::new(dir.join("upper.img"))
                         .map_err(|e| anyhow::anyhow!("sandbox init: {e}"))?;
+                    // One workspace: each provider mounts at its prefix under the
+                    // guest's /mnt/workspace root.
+                    let mut ws = WorkspaceSpec::default();
                     for m in &vfs.mounts {
                         if let ::workspace::ProviderConfig::S3(cfg) = &m.provider {
                             let prefix = m.prefix.trim_matches('/');
@@ -426,9 +429,10 @@ impl SessionsState {
                                 endpoint: cfg.endpoint.clone(),
                                 key_prefix: cfg.key_prefix.clone(),
                             });
-                            sandbox = sandbox.mount(format!("/mnt/workspace/{prefix}"), spec);
+                            ws = ws.mount(prefix, spec);
                         }
                     }
+                    let sandbox = sandbox.with_workspace("/mnt/workspace", ws);
                     Some(Arc::new(sandbox))
                 } else {
                     None

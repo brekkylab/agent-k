@@ -155,7 +155,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=42a80bfc572dcab28fe089282b3ec60cc5782e76#42a80bfc572dcab28fe089282b3ec60cc5782e76"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=9e8867609a59828985d6435e5a8c4559bc423d83#9e8867609a59828985d6435e5a8c4559bc423d83"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1312,7 +1312,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cortex"
 version = "0.1.0"
-source = "git+https://github.com/brekkylab/cortex.git?rev=da4ee5b663c69b715d4ade5f7740f45912811110#da4ee5b663c69b715d4ade5f7740f45912811110"
+source = "git+https://github.com/brekkylab/cortex.git?rev=d32c0d6ef54873f0f9420a0d974810487339ecfb#d32c0d6ef54873f0f9420a0d974810487339ecfb"
 dependencies = [
  "cc",
  "libc",

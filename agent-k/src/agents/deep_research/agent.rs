@@ -2,7 +2,7 @@ use std::path::Path;
 
 use ailoy::{
     agent::AgentSpec,
-    cortex::VolumeSpec,
+    cortex::{VolumeSpec, WorkspaceSpec},
     runenv::{Sandbox, SandboxNetwork},
     tool::get_tool_providers_mut,
 };
@@ -109,13 +109,15 @@ pub fn get_deep_research_agent_runenv(
     upper: impl Into<std::path::PathBuf>,
 ) -> anyhow::Result<Sandbox> {
     // Reaching the internet for user scripts requires public egress; the
-    // default posture is HostOnly.
+    // default posture is HostOnly. `artifacts` mounts under `/workspace`, so the
+    // guest path stays `/workspace/artifacts`.
+    let workspace = WorkspaceSpec::default().mount(
+        "artifacts",
+        VolumeSpec::Local {
+            host: artifacts_dir.as_ref().to_path_buf(),
+        },
+    );
     Ok(Sandbox::new(upper)?
         .with_network(SandboxNetwork::Public)
-        .mount(
-            "/workspace/artifacts",
-            VolumeSpec::Local {
-                host: artifacts_dir.as_ref().to_path_buf(),
-            },
-        ))
+        .with_workspace("/workspace", workspace))
 }
