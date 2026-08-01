@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getDocument, type PDFDocumentProxy } from 'pdfjs-dist';
 import { EventBus, PDFPageView } from 'pdfjs-dist/web/pdf_viewer.mjs';
 import 'pdfjs-dist/web/pdf_viewer.css';
@@ -8,17 +9,23 @@ import { ZoomControls } from './ZoomControls';
 
 interface Props { objectUrl: string }
 
+// `pdfDoc`, not `document`: naming the state after the proxy would shadow the
+// DOM global for the whole component body, so any later DOM call inside these
+// two functions would silently resolve to a PDF document instead.
 export function PdfView({ objectUrl }: Props) {
+  const { t } = useTranslation('common');
   const stageRef = useRef<HTMLDivElement>(null);
-  const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
+  const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [numPages, setNumPages] = useState(0);
+  const [failed, setFailed] = useState(false);
   const [fitWidth, setFitWidth] = useState(760);
   const zoom = useZoom();
   useWheelZoom(stageRef, zoom);
 
   useEffect(() => {
-    setDocument(null);
+    setPdfDoc(null);
     setNumPages(0);
+    setFailed(false);
 
     const loadingTask = getDocument({ url: objectUrl });
     let disposed = false;
@@ -26,11 +33,14 @@ export function PdfView({ objectUrl }: Props) {
     void loadingTask.promise
       .then((loaded) => {
         if (disposed) return;
-        setDocument(loaded);
+        setPdfDoc(loaded);
         setNumPages(loaded.numPages);
       })
       .catch((error: unknown) => {
-        if (!disposed) console.error('Failed to load PDF preview', error);
+        if (disposed) return;
+        console.error('Failed to load PDF preview', error);
+        // Without this the stage stays empty, which reads as a blank PDF.
+        setFailed(true);
       });
 
     return () => {
@@ -53,48 +63,60 @@ export function PdfView({ objectUrl }: Props) {
   return (
     <>
       <div className="cw-preview-stage cw-preview-pdf" ref={stageRef} onDoubleClick={zoom.toggle}>
-        <div className="cw-preview-content cw-preview-pdf-doc pdfViewer">
-          {document && Array.from({ length: numPages }, (_, i) => (
-            <PdfPage
-              key={i}
-              document={document}
-              pageNumber={i + 1}
-              width={fitWidth * zoom.scale}
-            />
-          ))}
-        </div>
+        {failed ? (
+          <div className="cw-preview-pdf-error" role="alert">
+            <div className="cw-preview-fallback-title">{t('preview.error_title')}</div>
+            <div className="cw-preview-fallback-body">{t('preview.error_body')}</div>
+          </div>
+        ) : (
+          <div className="cw-preview-content cw-preview-pdf-doc pdfViewer">
+            {pdfDoc && Array.from({ length: numPages }, (_, i) => (
+              <PdfPage
+                key={i}
+                pdfDoc={pdfDoc}
+                pageNumber={i + 1}
+                width={fitWidth * zoom.scale}
+              />
+            ))}
+          </div>
+        )}
       </div>
-      <ZoomControls
-        scale={zoom.scale}
-        onZoomIn={zoom.zoomIn}
-        onZoomOut={zoom.zoomOut}
-        onReset={zoom.reset}
-        canZoomIn={zoom.canZoomIn}
-        canZoomOut={zoom.canZoomOut}
-      />
+      {!failed && (
+        <ZoomControls
+          scale={zoom.scale}
+          onZoomIn={zoom.zoomIn}
+          onZoomOut={zoom.zoomOut}
+          onReset={zoom.reset}
+          canZoomIn={zoom.canZoomIn}
+          canZoomOut={zoom.canZoomOut}
+        />
+      )}
     </>
   );
 }
 
 function PdfPage({
-  document,
+  pdfDoc,
   pageNumber,
   width,
 }: {
-  document: PDFDocumentProxy;
+  pdfDoc: PDFDocumentProxy;
   pageNumber: number;
   width: number;
 }) {
+  const { t } = useTranslation('common');
   const containerRef = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
+    setFailed(false);
     const abort = new AbortController();
     let pageView: PDFPageView | undefined;
 
-    void document
+    void pdfDoc
       .getPage(pageNumber)
       .then(async (page) => {
         if (abort.signal.aborted) return;
@@ -112,7 +134,11 @@ function PdfPage({
         await pageView.draw();
       })
       .catch((error: unknown) => {
-        if (!abort.signal.aborted) console.error(`Failed to render PDF page ${pageNumber}`, error);
+        if (abort.signal.aborted) return;
+        console.error(`Failed to render PDF page ${pageNumber}`, error);
+        // One bad page leaves a gap in an otherwise fine document; label it
+        // rather than letting it read as a blank page.
+        setFailed(true);
       });
 
     return () => {
@@ -120,7 +146,15 @@ function PdfPage({
       pageView?.destroy();
       container.replaceChildren();
     };
-  }, [document, pageNumber, width]);
+  }, [pdfDoc, pageNumber, width]);
 
-  return <div className="cw-pdfjs-page" ref={containerRef} />;
+  // The ref'd node is owned by PDF.js — the effect's cleanup calls
+  // replaceChildren() on it, so React must not render children there. Keep the
+  // error label as a sibling under a wrapper React owns.
+  return (
+    <div className="cw-pdfjs-page">
+      <div ref={containerRef} />
+      {failed && <div className="cw-pdfjs-page-error">{t('preview.error_title')}</div>}
+    </div>
+  );
 }

@@ -249,7 +249,11 @@
 
 .cw-preview-pdf { flex-direction: column; }
 .cw-preview-pdf-doc { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.cw-pdfjs-page > .page { box-shadow: 0 4px 16px rgb(0 0 0 / 0.4); }
+/* Descendant, not child: PDF.js owns an inner container node so React can keep
+   the per-page error label as a sibling. */
+.cw-pdfjs-page .page { box-shadow: 0 4px 16px rgb(0 0 0 / 0.4); }
+.cw-pdfjs-page-error { padding: 24px; color: var(--cw-fg-3); font-size: var(--cw-text-xs); text-align: center; }
+.cw-preview-pdf-error { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
 
 /* Floating zoom pill, bottom-center. */
 .cw-zoom-controls {

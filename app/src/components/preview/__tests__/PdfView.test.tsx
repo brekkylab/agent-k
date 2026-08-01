@@ -1,6 +1,8 @@
 /** @vitest-environment jsdom */
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
 const mocks = vi.hoisted(() => {
   const destroyLoadingTask = vi.fn();
@@ -64,5 +66,36 @@ describe('PdfView', () => {
     unmount();
     expect(mocks.destroyLoadingTask).toHaveBeenCalledOnce();
     expect(mocks.destroyPage).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows an error instead of an empty stage when the document fails to load', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.getDocument.mockImplementationOnce(() => ({
+      promise: Promise.reject(new Error('corrupt pdf')),
+      destroy: mocks.destroyLoadingTask,
+    }));
+
+    render(<PdfView objectUrl="blob:broken" />);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.getByText('preview.error_title')).toBeTruthy();
+    // Zoom controls are meaningless with nothing rendered.
+    expect(screen.queryByLabelText('preview.zoom_in')).toBeNull();
+    expect(logged).toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
+  it('labels a single failed page without discarding the rest of the document', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.getPage.mockImplementationOnce(() => Promise.reject(new Error('bad page')));
+
+    render(<PdfView objectUrl="blob:pdf" />);
+
+    await waitFor(() => expect(screen.getByText('preview.error_title')).toBeTruthy());
+    // The document itself loaded, so the surviving page still draws.
+    expect(mocks.draw).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(logged).toHaveBeenCalled();
+    logged.mockRestore();
   });
 });
