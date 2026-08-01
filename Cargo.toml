@@ -10,6 +10,12 @@ exclude = [
     "./backend-v1",
 ]
 
+[workspace.package]
+# Matches the highest MSRV in the resolved graph (the Ailoy pin below). Declared
+# on our own packages so an unsupported toolchain names agent-k rather than only
+# a transitive git dependency. Keep in sync with rust-toolchain.toml.
+rust-version = "1.95.0"
+
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
 ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "0767a0872e665a9a505589b8d2b498269453fe9a", features = ["sandbox"] }

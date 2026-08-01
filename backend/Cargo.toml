@@ -6,6 +6,7 @@ path = "src/main.rs"
 name = "agent-k-backend"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 
 [dependencies]
 agent-k = { workspace = true }
