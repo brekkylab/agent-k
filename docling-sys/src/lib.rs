@@ -107,10 +107,12 @@ pub async fn convert_pdf_to_md(pdf_bytes: &[u8], options: &PdfOptions) -> anyhow
 
 /// Convert PDF bytes to Markdown, giving up after `timeout`.
 ///
-/// On expiry the parser process is killed rather than left behind: the command
-/// is spawned with `kill_on_drop`, and letting the timeout drop the future drops
-/// the child handle with it. Without that, a parse that never finishes leaves an
-/// orphan holding CPU and memory for the life of the host process.
+/// On expiry the parser is killed rather than left behind, and so is anything it
+/// started: the command gets its own process group and the timeout path SIGKILLs
+/// the group. `kill_on_drop` is the backstop for the direct child on any other
+/// path out. Without this a parse that never finishes leaves orphans holding CPU
+/// and memory for the life of the host process — docling shells out to OCR
+/// helpers, so killing only the process we spawned is not enough.
 pub async fn convert_pdf_to_md_within(
     pdf_bytes: &[u8],
     options: &PdfOptions,
@@ -176,19 +178,15 @@ async fn run_bundle(
         child.wait_with_output().await
     };
 
-    // `run` owns the child, and `kill_process_group` below needs it to still be
-    // owned: a reaped pid can be reused, and killpg would then signal an
-    // unrelated group. Pinning it to a named local is what makes that hold
-    // visibly. Passing the future to `timeout` directly also works today, but
-    // only because a temporary in a match scrutinee outlives the arms — an
-    // invisible rule that binding the result with `let` first would quietly
-    // remove.
+    // Pinned to a named local so `run` — and with it the child — is visibly
+    // still alive in the timeout arm below. Passing the future to `timeout`
+    // directly also works today, but only because a temporary in a match
+    // scrutinee outlives the arms, an invisible rule that binding the result
+    // with `let` first would quietly remove.
     let mut run = std::pin::pin!(run);
     let output = match tokio::time::timeout(timeout, &mut run).await {
         Ok(result) => result?,
         Err(_) => {
-            // `run` is in scope here, so the child has not been dropped or
-            // reaped and `pid` still names its process group.
             kill_process_group(pid);
             anyhow::bail!("run_docling timed out after {timeout:?}; parser killed");
         }
@@ -207,11 +205,16 @@ async fn run_bundle(
 #[cfg(unix)]
 fn kill_process_group(pid: Option<u32>) {
     if let Some(pid) = pid {
-        // SAFETY: `killpg` on a pid we spawned into its own group, called while
-        // the caller still owns the child handle (see `run_bundle`), so the pid
-        // has not been reaped and cannot yet name another process's group. A
-        // group that has already exited returns ESRCH, which is the outcome we
-        // want anyway.
+        // SAFETY: `killpg` on a pid we spawned into its own group, so `pid` is
+        // that group's id. What keeps it from naming an unrelated group is the
+        // kernel, not the caller: a pid stays reserved while it is in use as a
+        // process group id with live members, so it cannot be handed to a new
+        // process while there is still anything here to kill. Holding the child
+        // handle is NOT what guarantees this — `wait_with_output` is a join over
+        // `wait()` and the two pipe drains, so `wait()` can reap the parser as
+        // soon as it exits while a grandchild still holds the pipes open, which
+        // is exactly the OCR-helper case this kill exists for. A group that has
+        // already exited returns ESRCH, which is the outcome we want anyway.
         unsafe {
             libc::killpg(pid as libc::pid_t, libc::SIGKILL);
         }
