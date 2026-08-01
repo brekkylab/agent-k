@@ -25,7 +25,7 @@ use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fuser::{
     Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo,
@@ -52,11 +52,12 @@ const RELAY_BUF: usize = 2 * 1024 * 1024;
 /// serial direct_io on S3, and no worse on Notion (the workspace VFS resolves
 /// render-on-read sizes, so page-cache reads are never clamped short).
 const MAX_READAHEAD: u32 = 8 * 1024 * 1024;
-/// How long a connection may take to present its token. Every connection costs
-/// a thread, so a client that connects and then says nothing would otherwise
-/// hold one for the life of the process. Generous for the only legitimate
-/// client: the guest pump writes its token as the first thing it does after
-/// connecting, over a loopback socket.
+/// How long a connection may take to present its token, in total rather than
+/// per read. Every connection costs a thread, so a client that connects and then
+/// stalls — saying nothing, or dribbling bytes to keep a per-read timer alive —
+/// would otherwise hold one. Generous for the only legitimate client: the guest
+/// pump writes its token as the first thing it does after connecting, over a
+/// loopback socket.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Host-side raw-FUSE tunnel server. Bound to an ephemeral loopback port; the
@@ -144,10 +145,25 @@ fn token_matches(expected: &str, presented: &str) -> bool {
 
 /// Read the leading one-line token (bytes up to `\n`), one byte at a time so we
 /// never consume any following raw FUSE frame bytes.
-fn read_token_line(stream: &mut TcpStream) -> io::Result<String> {
+///
+/// `deadline` bounds the whole handshake, not each read. `set_read_timeout` sets
+/// `SO_RCVTIMEO`, which applies per `recv` call and so resets on every byte: a
+/// client dribbling one byte just under the timeout holds its thread for the
+/// line limit times the timeout rather than the timeout. Re-deriving the
+/// remaining budget before each byte is what makes the bound the one intended.
+fn read_token_line(stream: &mut TcpStream, deadline: Instant) -> io::Result<String> {
     let mut out = Vec::new();
     let mut b = [0u8; 1];
     loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            // Also the guard for `set_read_timeout`, which rejects a zero duration.
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "token handshake did not complete in time",
+            ));
+        }
+        stream.set_read_timeout(Some(remaining))?;
         stream.read_exact(&mut b)?;
         if b[0] == b'\n' {
             break;
@@ -200,11 +216,10 @@ fn serve_conn(
     stream.set_nonblocking(false)?;
     stream.set_nodelay(true).ok();
 
-    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
     // Warn rather than debug throughout the handshake: the only client that
     // should ever reach this port is the guest pump, which is handed the token
     // directly, so anything that fails here is something else dialing it.
-    let presented = match read_token_line(&mut stream) {
+    let presented = match read_token_line(&mut stream, Instant::now() + HANDSHAKE_TIMEOUT) {
         Ok(line) => line,
         Err(e) => {
             tracing::warn!("vfs tunnel: handshake from {peer} did not complete: {e}");
@@ -558,7 +573,8 @@ mod host_engine_test {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use async_trait::async_trait;
 
@@ -727,6 +743,41 @@ mod host_engine_test {
         assert!(
             matches!(n, Ok(0)),
             "the server must close a connection that never presents a token, got {n:?}"
+        );
+    }
+
+    /// A client that keeps sending, but never finishes the line, must also be
+    /// let go — and on the same budget as one that says nothing. This is the
+    /// case a per-read timeout misses: `SO_RCVTIMEO` restarts on every byte, so
+    /// dribbling under it once bought the line limit times the timeout.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dribbling_client_is_let_go_on_the_same_budget() {
+        let fs: Arc<dyn ForwardFs> = Arc::new(FakeFs);
+        let srv = TunnelServer::spawn(fs, tokio::runtime::Handle::current()).expect("spawn server");
+
+        let mut c = TcpStream::connect(("127.0.0.1", srv.port())).expect("connect");
+        c.set_read_timeout(Some(HANDSHAKE_TIMEOUT * 4)).unwrap();
+
+        // A byte every fifth of the budget, never a newline. Under a per-read
+        // timeout every one of these would refresh the timer.
+        let started = Instant::now();
+        let writer = thread::spawn(move || {
+            for _ in 0..40 {
+                if c.write_all(b"a").is_err() {
+                    break;
+                }
+                thread::sleep(HANDSHAKE_TIMEOUT / 5);
+            }
+            let mut b = [0u8; 1];
+            let _ = c.read(&mut b);
+        });
+        writer.join().expect("writer thread");
+
+        let held = started.elapsed();
+        assert!(
+            held < HANDSHAKE_TIMEOUT * 2,
+            "the deadline must bound the whole handshake, not each read: held {held:?} against a \
+             {HANDSHAKE_TIMEOUT:?} budget"
         );
     }
 
