@@ -424,7 +424,7 @@ async fn add_target(
             } else if let Some(ft) = FileType::from_path(Path::new(&entry.name)) {
                 // Prefer the in-list stat (an object store returns it for free);
                 // fall back to a stat call (a local passthrough may omit it).
-                let len = match entry.stat {
+                let len = match entry.stat() {
                     Some(s) => s.size,
                     None => ws.stat(&cx(&child)).await.map(|s| s.size).unwrap_or(0),
                 };

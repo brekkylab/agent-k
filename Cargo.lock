@@ -35,7 +35,7 @@ dependencies = [
  "kreuzberg",
  "log",
  "regex",
- "reqwest 0.13.4",
+ "reqwest",
  "serde",
  "serde_json",
  "strum 0.28.0",
@@ -154,7 +154,7 @@ dependencies = [
 [[package]]
 name = "ailoy"
 version = "0.3.0"
-source = "git+https://github.com/brekkylab/ailoy.git?rev=d586abe3cb13885706802e4dfa0f4491d086466d#d586abe3cb13885706802e4dfa0f4491d086466d"
+source = "git+https://github.com/brekkylab/ailoy.git?rev=8f12306d48eaca5cffcac93c092f8eceb50ceb09#8f12306d48eaca5cffcac93c092f8eceb50ceb09"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -180,7 +180,7 @@ dependencies = [
  "ordered-float",
  "parking_lot",
  "png",
- "reqwest 0.13.4",
+ "reqwest",
  "rustls",
  "schemars",
  "scraper",
@@ -1350,7 +1350,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cortex"
 version = "0.1.0"
-source = "git+https://github.com/brekkylab/cortex.git?rev=595e4c3bd7561953b6a8474743e1bfcb12b3e3cc#595e4c3bd7561953b6a8474743e1bfcb12b3e3cc"
+source = "git+https://github.com/brekkylab/cortex.git?rev=470d434d005e4d674d7dc56576e79ceb08f9fe36#470d434d005e4d674d7dc56576e79ceb08f9fe36"
 dependencies = [
  "async-trait",
  "cc",
@@ -1359,7 +1359,7 @@ dependencies = [
  "msb_krun",
  "object_store",
  "pkg-config",
- "reqwest 0.12.28",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -2771,7 +2771,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
 ]
 
 [[package]]
@@ -3759,7 +3758,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "miniz_oxide",
- "nix 0.30.1",
+ "nix",
  "page_size",
  "rustc_version",
  "tokio",
@@ -3841,7 +3840,7 @@ dependencies = [
  "msb_krun_hvf",
  "msb_krun_polly",
  "msb_krun_utils",
- "nix 0.30.1",
+ "nix",
  "rand 0.9.5",
  "tokio",
  "virtio-bindings",
@@ -3902,7 +3901,7 @@ dependencies = [
  "kvm-bindings",
  "libc",
  "log",
- "nix 0.30.1",
+ "nix",
  "vmm-sys-util",
  "windows-sys 0.61.2",
 ]
@@ -3929,7 +3928,7 @@ dependencies = [
  "msb_krun_kernel",
  "msb_krun_polly",
  "msb_krun_utils",
- "nix 0.30.1",
+ "nix",
  "vm-memory",
  "windows-sys 0.61.2",
  "zstd",
@@ -3984,18 +3983,6 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset",
-]
-
-[[package]]
-name = "nix"
-version = "0.31.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
-dependencies = [
- "bitflags 2.13.1",
- "cfg-if",
- "cfg_aliases",
- "libc",
 ]
 
 [[package]]
@@ -4169,12 +4156,11 @@ dependencies = [
  "hyper",
  "itertools 0.15.0",
  "md-5",
- "nix 0.31.3",
  "parking_lot",
  "percent-encoding",
  "quick-xml",
  "rand 0.10.2",
- "reqwest 0.13.4",
+ "reqwest",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -4183,10 +4169,8 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "walkdir",
  "wasm-bindgen-futures",
  "web-time",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4997,44 +4981,6 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
-
-[[package]]
-name = "reqwest"
-version = "0.12.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-core",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "js-sys",
- "log",
- "percent-encoding",
- "pin-project-lite",
- "quinn",
- "rustls",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tokio-rustls",
- "tower",
- "tower-http 0.6.11",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "webpki-roots",
-]
 
 [[package]]
 name = "reqwest"

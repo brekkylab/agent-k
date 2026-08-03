@@ -89,11 +89,14 @@ impl DavFileSystem for CortexDavFs {
             let items: Vec<Box<dyn DavDirEntry>> = entries
                 .into_iter()
                 .map(|e| {
+                    // Clone the in-list stat before moving `name` out of `e`
+                    // (cortex's `Dirent::stat()` borrows `e`).
+                    let stat = e.stat().cloned();
                     Box::new(CortexDirEntry {
                         ws: ws.clone(),
                         path: p.join(&e.name),
                         name: e.name,
-                        stat: e.stat,
+                        stat,
                     }) as Box<dyn DavDirEntry>
                 })
                 .collect();
