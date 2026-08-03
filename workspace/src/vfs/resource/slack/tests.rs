@@ -288,6 +288,72 @@ fn a_dm_is_named_after_the_other_person() {
     assert_eq!(conv_label(&ch, &names), "general");
 }
 
+// ---- message rendering ----------------------------------------------------
+
+fn one_name() -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert("U0456".to_string(), "kim jihoon".to_string());
+    m
+}
+
+/// A message carries only ids, which a reader cannot resolve line by line. The
+/// name is *added* rather than substituted: the id is the stable identity (a
+/// display name can change or repeat, and `users/<name>__<id>.json` is found by
+/// id), so both must survive.
+#[test]
+fn a_message_line_gains_a_name_and_keeps_its_id() {
+    let m = serde_json::json!({"user": "U0456", "text": "hi", "ts": "1.2"});
+    let line = message_line(&m, &one_name());
+    assert!(line.ends_with(b"\n"), "one JSON object per line");
+    let v: Value = serde_json::from_slice(&line).unwrap();
+    assert_eq!(v["user"], "U0456", "the id must survive");
+    assert_eq!(v["user_name"], "kim jihoon");
+    // Everything else passes through untouched.
+    assert_eq!(v["ts"], "1.2");
+}
+
+/// An id the member list doesn't cover gets no name at all — a wrong name is worse
+/// than a raw id.
+#[test]
+fn an_unresolvable_author_gets_no_name() {
+    let m = serde_json::json!({"user": "U9999", "text": "hi"});
+    let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
+    assert_eq!(v["user"], "U9999");
+    assert!(v.get("user_name").is_none(), "must not invent a name");
+    // A message with no author at all (some subtypes) is passed through.
+    let m = serde_json::json!({"subtype": "channel_join", "text": "x"});
+    let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
+    assert!(v.get("user_name").is_none());
+}
+
+/// A mention is `<@U0456>` in the raw text, which reads as noise. The body is what
+/// a person actually reads, so it is rewritten in place.
+#[test]
+fn mentions_in_the_body_become_names() {
+    let names = one_name();
+    assert_eq!(resolve_mentions("<@U0456> hi", &names), "@kim jihoon hi");
+    // Slack's labelled form.
+    assert_eq!(resolve_mentions("<@U0456|kim>!", &names), "@kim jihoon!");
+    // Several in one line, and text on both sides.
+    assert_eq!(
+        resolve_mentions("cc <@U0456> and <@U0456> ok", &names),
+        "cc @kim jihoon and @kim jihoon ok"
+    );
+    // Untouched: no mention, an unknown id, an unterminated token.
+    assert_eq!(resolve_mentions("plain text", &names), "plain text");
+    assert_eq!(resolve_mentions("<@U9999> hi", &names), "<@U9999> hi");
+    assert_eq!(resolve_mentions("a <@U0456 b", &names), "a <@U0456 b");
+    // A channel link is not a user mention and must not be mangled.
+    assert_eq!(
+        resolve_mentions("<#C123|general>", &names),
+        "<#C123|general>"
+    );
+    // And the rewrite reaches the serialized line.
+    let m = serde_json::json!({"user": "U0456", "text": "<@U0456> ping"});
+    let v: Value = serde_json::from_slice(&message_line(&m, &names)).unwrap();
+    assert_eq!(v["text"], "@kim jihoon ping");
+}
+
 /// `users.info` returns the same shape `users.list` does, so one resolved partner
 /// names its DM exactly as a listed member would.
 #[test]

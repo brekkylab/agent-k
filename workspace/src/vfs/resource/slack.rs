@@ -147,8 +147,19 @@ synthesized tree, not a mirror of anything Slack exposes:
   Entry names end in `__<id>`; the id is the part after the last `__`. Never
   construct a name — `ls` the parent first. Quote names with spaces.
 
-  Read a day with jq, e.g. `jq -r '.text' chat.jsonl`. Each line carries
-  {user, text, ts, thread_ts?, reply_count?, files?, reactions?}.
+  Read a day with jq, e.g. `jq -r '.user_name + \": \" + .text' chat.jsonl`. Each
+  line is Slack's own message object plus a `user_name` field, so it carries
+  {user, user_name, text, ts, thread_ts?, reply_count?, files?, reactions?}.
+  `user` is the Slack id and `user_name` its display name; mentions in `text` are
+  already rendered as `@name`. An id nobody could resolve keeps its raw form and
+  gets no `user_name`.
+
+  Lines with a `subtype` (channel_join, channel_purpose, …) are Slack's own event
+  notices, not things people said — filter them out when summarizing a
+  conversation: `jq 'select(.subtype == null)' chat.jsonl`.
+
+  Most of a line's bytes are `blocks` (a structural copy of `text`) and file
+  metadata, so select the fields you need instead of reading whole lines.
 
   Threads are separate on purpose. chat.jsonl holds only the messages that start
   a thread (plus standalone ones) and costs ONE request; each root that has
@@ -513,6 +524,10 @@ impl SlackResource {
             }
             Err(e) => return Err(backend(e)),
         };
+        // Names for the ids in each message (see `message_line`). Cached for the
+        // whole mount, so this costs no request of its own; a failure to fetch
+        // them leaves ids as they are rather than failing the day.
+        let names = self.user_names().await.unwrap_or_default();
 
         let mut chat = Vec::new();
         let mut threads = Vec::new();
@@ -528,8 +543,7 @@ impl SlackResource {
                 continue;
             }
             newest = Some(newest.map_or(ts, |n: f64| n.max(ts)));
-            chat.extend_from_slice(&serde_json::to_vec(m).unwrap_or_default());
-            chat.push(b'\n');
+            chat.extend_from_slice(&message_line(m, &names));
             // Only a root with replies gets a thread file; an empty `threads/`
             // then truthfully means no discussion started that day.
             let replies = m.get("reply_count").and_then(Value::as_u64).unwrap_or(0);
@@ -587,11 +601,11 @@ impl SlackResource {
             }
             Err(e) => return Err(backend(e)),
         };
+        let names = self.user_names().await.unwrap_or_default();
         let mut jsonl = Vec::new();
         let mut files = Vec::new();
         for m in &msgs {
-            jsonl.extend_from_slice(&serde_json::to_vec(m).unwrap_or_default());
-            jsonl.push(b'\n');
+            jsonl.extend_from_slice(&message_line(m, &names));
             // Skip the root's own attachments: the day's `files/` already lists
             // those (it came from `conversations.history`, which returns roots),
             // and listing them twice would make the same file look like two.
@@ -1161,6 +1175,73 @@ fn display_name(u: &Value) -> &str {
 
 fn user_filename(u: &Value, id: &str) -> String {
     format!("{}__{id}.json", sanitize(display_name(u)))
+}
+
+/// Serialize one message as a `.jsonl` line, with the ids a reader cannot resolve
+/// on its own turned into names.
+///
+/// Slack puts only ids in a message: the author is `"user": "U0BM…"` and a mention
+/// in the body is `<@U0BM…>`. Both are unreadable as they stand — resolving them
+/// would mean the reader cross-referencing `users/` per line, and the mention text
+/// would stay opaque even then. The member list is already in hand (it names the
+/// DMs), so this fills them in at zero extra cost:
+///
+/// - `user_name` is **added** alongside `user`. Added rather than substituted
+///   because the id is the stable identity — a display name can change or repeat,
+///   and `users/<name>__<id>.json` is still found by id.
+/// - `<@U0BM…>` in `text` becomes `@name`, since that is the part a person reads.
+///
+/// An id the member list doesn't cover is left exactly as it was: a wrong name is
+/// worse than a raw id.
+fn message_line(m: &Value, names: &HashMap<String, String>) -> Vec<u8> {
+    let mut m = m.clone();
+    if let Some(obj) = m.as_object_mut() {
+        if let Some(name) = obj
+            .get("user")
+            .and_then(Value::as_str)
+            .and_then(|u| names.get(u))
+        {
+            obj.insert("user_name".into(), Value::String(name.clone()));
+        }
+        if let Some(text) = obj.get("text").and_then(Value::as_str) {
+            let resolved = resolve_mentions(text, names);
+            obj.insert("text".into(), Value::String(resolved));
+        }
+    }
+    let mut line = serde_json::to_vec(&m).unwrap_or_default();
+    line.push(b'\n');
+    line
+}
+
+/// Replace `<@U0BM…>` mentions with `@name`. Slack's own form also allows a label
+/// (`<@U0BM…|name>`), which is handled by taking everything up to `|` or `>`.
+/// Anything not resolvable is left untouched.
+fn resolve_mentions(text: &str, names: &HashMap<String, String>) -> String {
+    // Cheap bail-out: most messages carry no mention at all.
+    if !text.contains("<@") {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<@") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('>') else {
+            // Unterminated: the rest is literal text.
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let inner = &after[..end];
+        let id = inner.split('|').next().unwrap_or(inner);
+        match names.get(id) {
+            Some(name) => out.push_str(&format!("@{name}")),
+            // Unknown id: keep the original token rather than invent a name.
+            None => out.push_str(&rest[start..start + 2 + end + 1]),
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A `files/` entry from a message's `files[]` element. `None` when Slack gave no
