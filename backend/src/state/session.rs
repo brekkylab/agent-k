@@ -903,23 +903,12 @@ impl SessionsState {
             .ok_or(StateError::NotFound)?;
         let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
         let has_runenv: bool = row.get("runenv");
-
-        let dir = self.data_root.join("sessions").join(&session_key);
-        let archive_path = dir.join("sandbox.tar.zst");
-        let runenv = if has_runenv {
-            if !tokio::fs::try_exists(&archive_path).await? {
-                return Err(StateError::Sandbox(format!(
-                    "session {id} marked as having a runenv but archive is missing"
-                )));
-            }
-            Some(Arc::new(Mutex::new(
-                Sandbox::try_from_archive(&archive_path)
-                    .await
-                    .map_err(|e| StateError::Sandbox(format!("{e:#}")))?,
-            )))
-        } else {
-            None
-        };
+        // Automation runenv is intentionally unsupported for now.
+        if has_runenv {
+            return Err(StateError::Sandbox(format!(
+                "session {id}: drive_prompt does not support runenv sessions"
+            )));
+        }
 
         // A (re-)claimed run re-runs its one prompt on a fresh session: wipe rows
         // a prior attempt or pre-claim POST left, so history is just the prompt below.
@@ -929,10 +918,7 @@ impl SessionsState {
             .await?;
 
         let mut next_seq: i64 = 0;
-        let mut agent_state = AgentState::new();
-        if let Some(ref r) = runenv {
-            agent_state = agent_state.with_runenv(r.clone());
-        }
+        let agent_state = AgentState::new();
         let mut agent = Agent::try_with_state(spec, agent_state)
             .map_err(|e| StateError::InvalidData(format!("agent init: {e:#}")))?;
 
@@ -962,22 +948,6 @@ impl SessionsState {
             Ok(())
         }
         .await;
-
-        if let Some(runenv) = runenv {
-            let mut sandbox = runenv.lock().await;
-            let archive: anyhow::Result<()> = async {
-                sandbox.stop().await?;
-                if tokio::fs::try_exists(&archive_path).await? {
-                    tokio::fs::remove_file(&archive_path).await?;
-                }
-                sandbox.archive(&archive_path).await?;
-                Ok(())
-            }
-            .await;
-            if let Err(e) = archive {
-                tracing::error!(session = %id, "sandbox archive failed: {e:#}");
-            }
-        }
 
         drive
     }
