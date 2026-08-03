@@ -9,6 +9,12 @@ exclude = [
     "./backend-v1",
 ]
 
+[workspace.package]
+# Matches the highest MSRV in the resolved graph (the Ailoy pin below). Declared
+# on our own packages so an unsupported toolchain names agent-k rather than only
+# a transitive git dependency. Keep in sync with rust-toolchain.toml.
+rust-version = "1.95.0"
+
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
 ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "d586abe3cb13885706802e4dfa0f4491d086466d", features = ["sandbox"] }
@@ -17,3 +23,24 @@ ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "d586abe3cb13885
 # pins, so the `WorkspaceSpec` type unifies across the boundary. VFS providers
 # only — no VM/FUSE binding (WebDAV is pure Mountable).
 cortex = { git = "https://github.com/brekkylab/cortex.git", rev = "595e4c3bd7561953b6a8474743e1bfcb12b3e3cc", features = ["s3", "notion"] }
+
+# NB: the raw-FUSE tunnel (and its `[patch.crates-io] fuser = feat/macfuse-abi`
+# override) is gone — the sandbox is served over cortex virtio-fs now, and
+# cortex's host-FUSE binding wants upstream fuser's native macFUSE ABI, not the
+# Linux-on-macOS layout that patch forced.
+
+# microsandbox 0.6.7 computes a sparse-sha256 integrity digest over the upper
+# layer's full logical size (default 4 GiB) on snapshot create, save, and load.
+# The backend archives a session's sandbox on shutdown and restores it on
+# resume, so a dev-profile backend pays that hashing at unoptimized-sha2 speed
+# (~130 MB/s, ~32 s per pass) on every archive/restore. Optimizing just the
+# hash crates restores hardware-speed hashing (~2.6 GB/s). ailoy carries the
+# same override, but Cargo applies profile overrides only from the workspace
+# root of the build, so it has to be repeated here. Release builds already
+# hash at full speed and are unaffected.
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.digest]
+opt-level = 3
+[profile.dev.package.block-buffer]
+opt-level = 3

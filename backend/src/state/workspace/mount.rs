@@ -14,8 +14,6 @@ use uuid::Uuid;
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
 
-const SELECT_COLUMNS: &str = "id, workspace_id, prefix, provider, config, created_at, updated_at";
-
 /// Local files mount prefix — the workspace's own on-disk file root. Reserved:
 /// a provider mount can't claim it.
 pub const LOCAL_MOUNT: &str = "/files";
@@ -128,9 +126,10 @@ fn normalize_prefix(prefix: &str) -> StateResult<String> {
 impl WorkspacesState {
     /// Every mount configured for `workspace_id`, ordered by prefix.
     pub async fn list_mounts(&self, workspace_id: Uuid) -> StateResult<Vec<WorkspaceMount>> {
-        let rows = sqlx::query(&format!(
-            "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC"
-        ))
+        let rows = sqlx::query(
+            "SELECT id, workspace_id, prefix, provider, config, created_at, updated_at \
+             FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC",
+        )
         .bind(workspace_id.to_string())
         .fetch_all(&self.db)
         .await?;
@@ -139,9 +138,10 @@ impl WorkspacesState {
 
     /// A single mount by id, or `None`.
     pub async fn get_mount(&self, id: Uuid) -> StateResult<Option<WorkspaceMount>> {
-        let row = sqlx::query(&format!(
-            "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE id = ?"
-        ))
+        let row = sqlx::query(
+            "SELECT id, workspace_id, prefix, provider, config, created_at, updated_at \
+             FROM workspace_mounts WHERE id = ?",
+        )
         .bind(id.to_string())
         .fetch_optional(&self.db)
         .await?;
@@ -193,9 +193,10 @@ pub(crate) async fn build_workspace_vfs(
     db: &SqlitePool,
     workspace_id: Uuid,
 ) -> StateResult<Vec<MountSpec>> {
-    let rows = sqlx::query(&format!(
-        "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC"
-    ))
+    let rows = sqlx::query(
+        "SELECT id, workspace_id, prefix, provider, config, created_at, updated_at \
+         FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC",
+    )
     .bind(workspace_id.to_string())
     .fetch_all(db)
     .await?;
@@ -215,15 +216,14 @@ pub(crate) async fn build_workspace_vfs(
 /// Map a SQLite UNIQUE violation on `(workspace_id, prefix)` to a typed error so
 /// the router can answer `409 Conflict`. Everything else passes through.
 fn map_mount_sqlx_error(e: sqlx::Error) -> StateError {
-    if let sqlx::Error::Database(ref db_err) = e {
-        if db_err
+    if let sqlx::Error::Database(ref db_err) = e
+        && (db_err
             .code()
             .map(|c| c == "2067" || c == "1555")
             .unwrap_or(false)
-            || db_err.message().contains("UNIQUE")
-        {
-            return StateError::UniqueViolation("workspace_mounts.prefix".to_string());
-        }
+            || db_err.message().contains("UNIQUE"))
+    {
+        return StateError::UniqueViolation("workspace_mounts.prefix".to_string());
     }
     StateError::Sqlx(e)
 }

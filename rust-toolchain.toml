@@ -1,0 +1,15 @@
+# The Ailoy pin (workspace Cargo.toml) requires rustc 1.95.0 and sqlx 0.9
+# requires 1.94.0, so an older toolchain fails at resolve time before anything
+# compiles. This file names the stable release the workspace is verified on.
+#
+# `targets` is not optional: rustup installs targets per toolchain, so a freshly
+# pinned toolchain starts without the musl std that backend/build.rs needs to
+# cross-compile the in-guest VFS tunnel pump. That path degrades silently — the
+# sub-build fails, build.rs writes a zero-byte stub, and the only signal is a
+# cargo:warning — leaving in-VM mounts unavailable at runtime. Listing both
+# arches covers Apple Silicon / aarch64 Linux hosts and x86_64 hosts, since
+# build.rs derives the guest target from the build's own arch.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+targets = ["aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"]

@@ -250,10 +250,10 @@ impl cortex::FsHook for CortexKnowledgeHook {
             | cortex::FsEvent::Modified(p)
             | cortex::FsEvent::Removed(p) => super::knowledge::is_under_knowledge(p),
         };
-        if touched {
-            if let Some(r) = &self.resyncer {
-                r.spawn_resync(self.wid);
-            }
+        if touched
+            && let Some(r) = &self.resyncer
+        {
+            r.spawn_resync(self.wid);
         }
     }
 }

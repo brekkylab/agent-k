@@ -215,12 +215,12 @@ fn parse_term(tokens: &[Token], pos: &mut usize) -> Result<f64, String> {
 // right-associative
 fn parse_power(tokens: &[Token], pos: &mut usize) -> Result<f64, String> {
     let base = parse_atom(tokens, pos)?;
-    if *pos < tokens.len() {
-        if let Token::Op('^') = &tokens[*pos] {
-            *pos += 1;
-            let exp = parse_power(tokens, pos)?;
-            return Ok(base.powf(exp));
-        }
+    if *pos < tokens.len()
+        && let Token::Op('^') = &tokens[*pos]
+    {
+        *pos += 1;
+        let exp = parse_power(tokens, pos)?;
+        return Ok(base.powf(exp));
     }
     Ok(base)
 }
