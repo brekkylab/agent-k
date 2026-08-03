@@ -223,7 +223,15 @@ pub(super) async fn delete_session(
     Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    require_owned_session(&state, &auth, id).await?;
+    let session = require_owned_session(&state, &auth, id).await?;
+    // Automation-run sessions are audit records, removed only with their run
+    // (DELETE /automation-runs/{id}), never directly.
+    if session.origin == SessionOrigin::Automation {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "cannot delete an automation session; delete its run instead",
+        ));
+    }
     state.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

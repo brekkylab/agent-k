@@ -564,6 +564,25 @@ pub(super) async fn get_run(
     Ok(Json(run.into()))
 }
 
+/// Delete a run and its audit trail. Removing the run's session cascades the run
+/// row and its logs in one atomic DELETE; a non-terminal run is refused (409) so
+/// this can't race the worker mid-drive — cancel it first.
+pub(super) async fn delete_run(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(run_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let run = require_owned_run(&state, &auth, run_id).await?;
+    if matches!(run.status, RunStatus::Queued | RunStatus::Running) {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "run is not terminal; cancel it before deleting",
+        ));
+    }
+    state.delete_session(run.session_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// `POST /automation-runs/{id}/cancel`
 pub(super) async fn cancel_run(
     State(state): State<Arc<AppState>>,

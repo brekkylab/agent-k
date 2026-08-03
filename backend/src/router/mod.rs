@@ -137,7 +137,10 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/automation-runs",
             get(automation::list_runs).post(automation::create_run),
         )
-        .api_route("/automation-runs/{run_id}", get(automation::get_run))
+        .api_route(
+            "/automation-runs/{run_id}",
+            get(automation::get_run).delete(automation::delete_run),
+        )
         .api_route(
             "/automation-runs/{run_id}/cancel",
             post(automation::cancel_run),

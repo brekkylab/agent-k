@@ -1561,6 +1561,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deleting_run_session_cascades_run_and_logs() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool.clone());
+        let a = state
+            .create_automation(wid, "j".into(), None, "p".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        let run = state.create_scheduled_run(&a, Utc::now(), "manual").await.unwrap();
+
+        // Deleting the run's session (how delete_run tears a run down) cascades
+        // the run row and its logs atomically.
+        sqlx::query("DELETE FROM sessions WHERE id = ?")
+            .bind(run.session_id.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(state.get_run(run.id).await.unwrap().is_none());
+        let logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM automation_run_logs WHERE run_id = ?")
+            .bind(run.id.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(logs, 0);
+    }
+
+    #[tokio::test]
     async fn reap_requeues_expired_lease() {
         let pool = fresh_db().await;
         let (uid, wid) = seed(&pool).await;
