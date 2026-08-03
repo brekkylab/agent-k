@@ -738,6 +738,7 @@ impl AutomationsState {
         let sql = format!(
             "SELECT {TRIGGER_COLS} FROM automation_triggers \
              WHERE kind = 'cron' AND enabled = 1 AND next_fire_at IS NOT NULL AND next_fire_at <= ? \
+               AND automation_id IN (SELECT id FROM automations WHERE enabled = 1) \
              ORDER BY next_fire_at ASC"
         );
         let rows = sqlx::query(&sql)
@@ -759,14 +760,40 @@ impl AutomationsState {
         scheduled_for: DateTime<Utc>,
         triggered_payload: Option<&serde_json::Value>,
     ) -> StateResult<Option<AutomationRun>> {
+        let mut tx = self.db.begin().await?;
+        match self
+            .insert_run_in(&mut tx, spec, scheduled_for, triggered_payload)
+            .await?
+        {
+            Some(run) => {
+                tx.commit().await?;
+                Ok(Some(run))
+            }
+            // Disabled: roll back to undo the session insert too.
+            None => {
+                tx.rollback().await?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Insert the session + queued run (+ triggered/queued logs) on a caller
+    /// transaction, so a cron fire can advance `next_fire_at` in the same tx.
+    /// `Ok(None)` = the automation is disabled and no run was created; the caller
+    /// rolls the tx back, undoing the session insert (and any advance it carries).
+    async fn insert_run_in(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        spec: NewRun,
+        scheduled_for: DateTime<Utc>,
+        triggered_payload: Option<&serde_json::Value>,
+    ) -> StateResult<Option<AutomationRun>> {
         let now = Self::now();
         let scheduled_s = scheduled_for.to_rfc3339();
         let agent_spec = build_spec(&spec.agent_type, spec.model.as_deref());
         let spec_json = serde_json::to_string(&agent_spec)?;
         let session_id = Uuid::new_v4();
         let run_id = Uuid::new_v4();
-
-        let mut tx = self.db.begin().await?;
 
         // Session for this run (no runenv/sandbox — automation runs are simple).
         sqlx::query(
@@ -779,7 +806,7 @@ impl AutomationsState {
         .bind(&spec_json)
         .bind(&now)
         .bind(&now)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
         // Run row. Automation-linked runs are gated on the automation still being
@@ -804,7 +831,7 @@ impl AutomationsState {
             .bind(&now)
             .bind(&now)
             .bind(aid.to_string())
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?
         } else {
             sqlx::query(&format!(
@@ -821,18 +848,18 @@ impl AutomationsState {
             .bind(spec.previous_run_id.map(|u| u.to_string()))
             .bind(&now)
             .bind(&now)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?
         };
 
         if res.rows_affected() == 0 {
-            tx.rollback().await?;
+            // Automation disabled: no run. The caller rolls the tx back, which also
+            // undoes the session insert above (and any next_fire_at advance).
             return Ok(None);
         }
 
-        Self::insert_log(&mut tx, run_id, RunLogKind::Triggered, triggered_payload, &now).await?;
-        Self::insert_log(&mut tx, run_id, RunLogKind::Queued, None, &now).await?;
-        tx.commit().await?;
+        Self::insert_log(tx, run_id, RunLogKind::Triggered, triggered_payload, &now).await?;
+        Self::insert_log(tx, run_id, RunLogKind::Queued, None, &now).await?;
 
         Ok(Some(AutomationRun {
             id: run_id,
@@ -900,7 +927,11 @@ impl AutomationsState {
             .ok_or_else(|| StateError::InvalidData("failed to create run".into()))
     }
 
-    /// Cron fire: create a run and advance the trigger's `next_fire_at` in one tx.
+    /// Cron fire: advance `next_fire_at` and insert the run in one tx, so a crash
+    /// rolls back both and the next tick retries cleanly (no missed run, no
+    /// duplicate). A disabled automation (a rare disable-vs-fire race — the due
+    /// scan already excludes disabled ones) rolls back: the tick never happened.
+    /// `Ok(None)` = the automation is disabled.
     pub async fn fire_cron_trigger(
         &self,
         automation: &Automation,
@@ -909,22 +940,31 @@ impl AutomationsState {
         next_fire_at: DateTime<Utc>,
         triggered_payload: &serde_json::Value,
     ) -> StateResult<Option<AutomationRun>> {
-        let run = self
-            .insert_run_with_session(
-                NewRun::from_automation(automation, Some(trigger_id), None),
-                scheduled_for,
-                Some(triggered_payload),
-            )
-            .await?;
-        // Advance next_fire_at regardless of whether the run was created (a
-        // disabled automation still shouldn't re-fire the same instant forever).
+        let mut tx = self.db.begin().await?;
         sqlx::query("UPDATE automation_triggers SET next_fire_at = ?, updated_at = ? WHERE id = ?")
             .bind(next_fire_at.to_rfc3339())
             .bind(Self::now())
             .bind(trigger_id.to_string())
-            .execute(&self.db)
+            .execute(&mut *tx)
             .await?;
-        Ok(run)
+        match self
+            .insert_run_in(
+                &mut tx,
+                NewRun::from_automation(automation, Some(trigger_id), None),
+                scheduled_for,
+                Some(triggered_payload),
+            )
+            .await?
+        {
+            Some(run) => {
+                tx.commit().await?;
+                Ok(Some(run))
+            }
+            None => {
+                tx.rollback().await?;
+                Ok(None)
+            }
+        }
     }
 
     pub async fn get_run(&self, id: Uuid) -> StateResult<Option<AutomationRun>> {
@@ -1462,6 +1502,42 @@ mod tests {
             .map(|e| e.kind)
             .collect();
         assert_eq!(kinds, vec![RunLogKind::Triggered, RunLogKind::Queued]);
+    }
+
+    #[tokio::test]
+    async fn cron_fire_advances_and_gates_on_enabled() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool);
+        let a = state
+            .create_automation(wid, "job".into(), None, "do it".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        let due = Utc::now();
+        let next = due + chrono::Duration::minutes(5);
+        let spec = TriggerSpec::Cron { expr: "*/5 * * * *".into(), tz: None };
+        let t = state.create_trigger(a.id, &spec, true, Some(due), None).await.unwrap();
+        let payload = serde_json::json!({ "source": "cron" });
+
+        // Enabled: run created and next_fire_at advanced, atomically in one tx.
+        assert!(state.fire_cron_trigger(&a, t.id, due, next, &payload).await.unwrap().is_some());
+        assert_eq!(state.list_runs(a.id).await.unwrap().len(), 1);
+        let advanced = state.get_trigger(t.id).await.unwrap().unwrap().next_fire_at;
+        assert!(advanced.unwrap() > due, "next_fire_at should have advanced");
+
+        // Disabled (rare fire-vs-disable race): no run, and the advance rolls back.
+        let next2 = next + chrono::Duration::minutes(5);
+        state
+            .update_automation(a.id, None, None, None, None, None, Some(false))
+            .await
+            .unwrap();
+        assert!(state.fire_cron_trigger(&a, t.id, next, next2, &payload).await.unwrap().is_none());
+        assert_eq!(state.list_runs(a.id).await.unwrap().len(), 1);
+        assert_eq!(
+            state.get_trigger(t.id).await.unwrap().unwrap().next_fire_at,
+            advanced,
+            "disabled fire must roll back the advance"
+        );
     }
 
     #[tokio::test]
