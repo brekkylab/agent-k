@@ -70,7 +70,13 @@ pub async fn run() -> std::io::Result<()> {
     let google_oauth = crate::state::GoogleOAuth {
         client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
         client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok(),
-        base_url: std::env::var("GOOGLE_API_BASE_URL").ok(),
+        // One host fronting every Google service is the shape a mock deployment
+        // takes; a service that needs its own origin gets one of the per-service
+        // knobs instead.
+        origins: match std::env::var("GOOGLE_API_BASE_URL") {
+            Ok(host) if !host.trim().is_empty() => ::workspace::Origins::behind(host.trim()),
+            _ => Default::default(),
+        },
     };
 
     let app_state = Arc::new(

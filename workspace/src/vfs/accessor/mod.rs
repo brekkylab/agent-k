@@ -8,6 +8,8 @@ mod gmail;
 mod notion;
 mod s3;
 
-pub use gmail::{GmailAccessor, GmailConfig, GmailExchange, encode_b64url, exchange_gmail_code};
+pub use gmail::{
+    GmailAccessor, GmailConfig, GmailExchange, Origins, encode_b64url, exchange_gmail_code,
+};
 pub use notion::{NotionAccessor, NotionConfig};
 pub use s3::{S3Accessor, S3Config};

@@ -349,7 +349,7 @@ mod tests {
                 client_secret: "s".into(),
                 refresh_token: "r".into(),
                 account_email: email.into(),
-                base_url: None,
+                origins: Default::default(),
                 index_cap: None,
             })
         };

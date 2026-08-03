@@ -117,7 +117,7 @@ impl ProviderSpec {
                     client_secret,
                     &code,
                     &redirect_uri,
-                    oauth.base_url.as_deref(),
+                    &oauth.origins,
                 )
                 .await
                 .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gmail oauth: {e}")))?;
@@ -129,7 +129,7 @@ impl ProviderSpec {
                     index_cap,
                     // Deployment-level override (mock/gateway), inherited from
                     // backend config — never from the request.
-                    base_url: oauth.base_url.clone(),
+                    origins: oauth.origins.clone(),
                 })
             }
         })
