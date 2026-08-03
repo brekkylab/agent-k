@@ -873,18 +873,15 @@ impl SessionsState {
             None
         };
 
-        let rows =
-            sqlx::query("SELECT content FROM messages WHERE session_id = ? ORDER BY seq ASC")
-                .bind(&session_key)
-                .fetch_all(&self.db)
-                .await?;
-        let history: Vec<Message> = rows
-            .iter()
-            .map(|r| serde_json::from_str::<Message>(&r.get::<String, _>("content")))
-            .collect::<Result<_, _>>()?;
+        // A (re-)claimed run re-runs its one prompt on a fresh session: wipe rows
+        // a prior attempt or pre-claim POST left, so history is just the prompt below.
+        sqlx::query("DELETE FROM messages WHERE session_id = ?")
+            .bind(&session_key)
+            .execute(&self.db)
+            .await?;
 
-        let mut next_seq = history.len() as i64;
-        let mut agent_state = AgentState::new().with_history(history);
+        let mut next_seq: i64 = 0;
+        let mut agent_state = AgentState::new();
         if let Some(ref r) = runenv {
             agent_state = agent_state.with_runenv(r.clone());
         }

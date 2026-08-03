@@ -6,8 +6,8 @@
 //! requeued it) it cancels the in-flight agent. A housekeeper periodically
 //! requeues expired-lease rows. A cron ticker fires due cron triggers.
 //!
-//! Single-prompt note: there is no per-step cursor, so a re-claimed run simply
-//! re-runs its one prompt on the (message-less) session — no replay/orphan.
+//! Single-prompt note: there is no per-step cursor, so a re-claimed run clears
+//! the session and re-runs its one prompt on it — no replay/orphan.
 
 use std::{
     sync::{
