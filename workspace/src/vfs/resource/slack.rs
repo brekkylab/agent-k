@@ -147,6 +147,13 @@ synthesized tree, not a mirror of anything Slack exposes:
   Entry names end in `__<id>`; the id is the part after the last `__`. Never
   construct a name — `ls` the parent first. Quote names with spaces.
 
+  A `users/*.json` profile carries {id, name, real_name, profile{…}, tz, is_bot,
+  is_admin, deleted, …}. `profile.email` is there when the install granted the
+  email scope, and it is the one field that identifies the same person in another
+  mount (a Gmail thread, a document's owner) — match on it rather than on a
+  display name, which can repeat or change. A `ts` in this mount is a unix
+  timestamp; `tz` says what local time that was for that member.
+
   Read a day with jq, e.g. `jq -r '.user_name + \": \" + .text' chat.jsonl`. Each
   line is Slack's own message object plus a `user_name` field, so it carries
   {user, user_name, text, ts, thread_ts?, reply_count?, files?, reactions?}.

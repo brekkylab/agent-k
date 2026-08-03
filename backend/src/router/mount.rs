@@ -62,9 +62,15 @@ pub enum ProviderSpec {
     /// im:history        im:read          DMs
     /// mpim:history      mpim:read        group DMs
     /// users:read                         member profiles
+    /// users:read.email                   their email addresses
     /// files:read                         attachment bytes
     /// search:read                        search (user-only; bots cannot search)
     /// ```
+    ///
+    /// `users:read.email` is what puts `profile.email` in a `users/*.json`, which
+    /// is the only field that ties a Slack member to the same person in another
+    /// mount (a Gmail thread, a document's owner). Without it the profile still
+    /// serves, minus that field.
     ///
     /// Bot scopes are not needed. A bot-only install still mounts, but it sees
     /// only the conversations the bot itself was invited to, has an empty `dms/`,

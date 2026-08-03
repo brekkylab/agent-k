@@ -514,6 +514,11 @@ impl SlackAccessor {
     /// Workspace members (`users.list`), bots/deleted/Slackbot included — the
     /// resource decides what to list, and a message's author may well be a bot
     /// whose profile the reader wants to resolve.
+    ///
+    /// One call answers both naming and the `users/` profiles: the response
+    /// carries each member's full profile, not just their id. `profile.email` is
+    /// among those fields only when the install granted `users:read.email`;
+    /// Slack simply omits it otherwise, so nothing here has to ask.
     pub async fn list_users(&self) -> anyhow::Result<Vec<Value>> {
         self.paginate("users.list", &[], "members").await
     }
