@@ -2,23 +2,25 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use super::gmail::{OAUTH_ORIGIN, Origins};
 use tokio::sync::Mutex;
 
-const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const DRIVE_API_BASE: &str = "https://www.googleapis.com/drive/v3";
-/// The Docs-editors types live behind their own APIs, on their own hosts. Drive
-/// can only *export* them; their structure (paragraph indices, formulas, slide
-/// geometry) exists nowhere else.
-const DOCS_API_BASE: &str = "https://docs.googleapis.com/v1";
-const SHEETS_API_BASE: &str = "https://sheets.googleapis.com/v4";
-const SLIDES_API_BASE: &str = "https://slides.googleapis.com/v1";
+/// The origin each service lives on, without the version suffix this code appends —
+/// see [`Origins`], which overrides these one at a time.
+const DRIVE_ORIGIN: &str = "https://www.googleapis.com/drive";
+/// The Docs-editors types live behind their own APIs, on their own hosts. Drive can
+/// only *export* them; their structure (paragraph indices, formulas, slide geometry)
+/// exists nowhere else.
+const DOCS_ORIGIN: &str = "https://docs.googleapis.com";
+const SHEETS_ORIGIN: &str = "https://sheets.googleapis.com";
+const SLIDES_ORIGIN: &str = "https://slides.googleapis.com";
 
 /// Every host this accessor talks to, resolved once from a config.
 ///
-/// `base_url` points them all at one origin, keeping each service's own prefix —
-/// the enterprise-mock/gateway layout (`{base}/drive/v3`, `{base}/docs/v1`,
-/// `{base}/sheets/v4`, `{base}/slides/v1`) — so a test deployment needs no
-/// per-API knob.
+/// Each is an origin from [`Origins`] plus the version suffix the official API uses,
+/// so nothing here encodes any one deployment's path layout: point `Origins::drive` at
+/// a gateway and `/v3` still follows, exactly as it does against Google.
 #[derive(Clone)]
 struct Endpoints {
     drive: String,
@@ -28,25 +30,13 @@ struct Endpoints {
     slides: String,
 }
 
-fn endpoints(base_url: Option<&str>) -> Endpoints {
-    match base_url {
-        Some(b) => {
-            let b = b.trim_end_matches('/');
-            Endpoints {
-                drive: format!("{b}/drive/v3"),
-                token: format!("{b}/oauth2/token"),
-                docs: format!("{b}/docs/v1"),
-                sheets: format!("{b}/sheets/v4"),
-                slides: format!("{b}/slides/v1"),
-            }
-        }
-        None => Endpoints {
-            drive: DRIVE_API_BASE.to_string(),
-            token: OAUTH_TOKEN_URL.to_string(),
-            docs: DOCS_API_BASE.to_string(),
-            sheets: SHEETS_API_BASE.to_string(),
-            slides: SLIDES_API_BASE.to_string(),
-        },
+fn endpoints(o: &Origins) -> Endpoints {
+    Endpoints {
+        drive: format!("{}/v3", Origins::origin(&o.drive, DRIVE_ORIGIN)),
+        token: format!("{}/token", Origins::origin(&o.oauth, OAUTH_ORIGIN)),
+        docs: format!("{}/v1", Origins::origin(&o.docs, DOCS_ORIGIN)),
+        sheets: format!("{}/v4", Origins::origin(&o.sheets, SHEETS_ORIGIN)),
+        slides: format!("{}/v1", Origins::origin(&o.slides, SLIDES_ORIGIN)),
     }
 }
 
@@ -207,17 +197,17 @@ pub struct GdriveExchange {
 /// Exchange an OAuth authorization `code` for a refresh token (confidential
 /// client, server-side). Run at mount-create so the browser never handles the
 /// client secret. Google only returns a refresh token when the consent used
-/// `access_type=offline` + `prompt=consent`. `base_url` overrides the Google
-/// hosts (mock/gateway deployments — see [`GdriveConfig::base_url`]); `None` =
+/// `access_type=offline` + `prompt=consent`. `origins` overrides the Google hosts
+/// (mock/gateway deployments — see [`GdriveConfig::origins`]); default =
 /// production.
 pub async fn exchange_gdrive_code(
     client_id: &str,
     client_secret: &str,
     code: &str,
     redirect_uri: &str,
-    base_url: Option<&str>,
+    origins: &Origins,
 ) -> anyhow::Result<GdriveExchange> {
-    let urls = endpoints(base_url);
+    let urls = endpoints(origins);
     // Bounded: this runs inside the create_mount HTTP handler, and a bare
     // reqwest client has NO default timeout — a hung upstream would hang the
     // mount creation indefinitely.
@@ -303,14 +293,12 @@ pub struct GdriveConfig {
     /// (a refresh token changes each consent; the email doesn't); shown in
     /// mount info so the UI can tell mounts apart.
     pub account_email: String,
-    /// Alternative API origin (an enterprise mock or gateway): requests go to
-    /// `{base_url}/drive/v3` and `{base_url}/oauth2/token` instead of the real
-    /// Google hosts. `None` = production Google. Deployment-level only — the
-    /// token URL receives the app's client secret, so this must never be
-    /// user-suppliable: it is NOT part of the mount-create API; the backend
+    /// Where to reach each Google service, when not production Google (an enterprise
+    /// mock or a gateway). Deployment-level only — the token endpoint receives the
+    /// app's client secret, so this is NOT part of the mount-create API; the backend
     /// injects it from its own config.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Origins::is_default")]
+    pub origins: Origins,
 }
 
 /// Holds Google OAuth credentials (one refresh token) and a cached access
@@ -320,7 +308,7 @@ pub struct GdriveConfig {
 pub struct GdriveAccessor {
     client: reqwest::Client,
     config: GdriveConfig,
-    /// Every API host, resolved once from [`GdriveConfig::base_url`].
+    /// Every API host, resolved once from [`GdriveConfig::origins`].
     urls: Endpoints,
     /// Cached OAuth access token + its expiry. Refreshed proactively before
     /// expiry and on a 401 (see [`Self::send_with_refresh`]).
@@ -329,7 +317,7 @@ pub struct GdriveAccessor {
 
 impl GdriveAccessor {
     pub fn new(config: &GdriveConfig) -> anyhow::Result<Self> {
-        let urls = endpoints(config.base_url.as_deref());
+        let urls = endpoints(&config.origins);
         Ok(Self {
             // Bound every request: a hung upstream call behind a filesystem op
             // would otherwise wedge the op (and any process touching the mount)
@@ -776,18 +764,28 @@ impl GdriveAccessor {
 mod tests {
     use super::*;
 
-    /// Four hosts in production, one origin when overridden — a test deployment
-    /// must not need a knob per API.
+    /// Five hosts in production, each overridable on its own, and the version suffix
+    /// is the official one either way — so nothing here depends on how a particular
+    /// deployment lays out its paths.
     #[test]
-    fn endpoints_default_to_google_and_rebase_on_base_url() {
-        let e = endpoints(None);
+    fn each_service_keeps_its_official_path_under_any_origin() {
+        let e = endpoints(&Origins::default());
         assert_eq!(e.drive, "https://www.googleapis.com/drive/v3");
         assert_eq!(e.token, "https://oauth2.googleapis.com/token");
         assert_eq!(e.docs, "https://docs.googleapis.com/v1");
         assert_eq!(e.sheets, "https://sheets.googleapis.com/v4");
         assert_eq!(e.slides, "https://slides.googleapis.com/v1");
-        // A trailing slash on the override is tolerated.
-        let e = endpoints(Some("http://localhost:8000/"));
+
+        // One service moves, the rest stay on Google.
+        let e = endpoints(&Origins {
+            sheets: Some("http://localhost:9000/sheets-api/".into()),
+            ..Default::default()
+        });
+        assert_eq!(e.sheets, "http://localhost:9000/sheets-api/v4");
+        assert_eq!(e.docs, "https://docs.googleapis.com/v1");
+
+        // `behind` covers one host serving all of them; trailing slash tolerated.
+        let e = endpoints(&Origins::behind("http://localhost:8000/"));
         assert_eq!(e.drive, "http://localhost:8000/drive/v3");
         assert_eq!(e.token, "http://localhost:8000/oauth2/token");
         assert_eq!(e.docs, "http://localhost:8000/docs/v1");

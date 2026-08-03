@@ -354,7 +354,7 @@ mod tests {
                 client_secret: "s".into(),
                 refresh_token: "r".into(),
                 account_email: email.into(),
-                base_url: None,
+                origins: Default::default(),
                 index_cap: None,
             })
         };
@@ -401,7 +401,7 @@ mod tests {
             client_secret: "cs".into(),
             refresh_token: "rt".into(),
             account_email: "user@example.com".into(),
-            base_url: None,
+            origins: Default::default(),
         });
         state
             .create_mount(WorkspaceMount::new(wid, "gdrive".into(), provider))

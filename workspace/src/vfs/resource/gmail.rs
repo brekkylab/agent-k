@@ -1183,7 +1183,10 @@ mod tests {
             client_secret: std::env::var("GMAIL_CLIENT_SECRET").ok()?,
             refresh_token: std::env::var("GMAIL_REFRESH_TOKEN").ok()?,
             account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
-            base_url: std::env::var("GMAIL_BASE_URL").ok(),
+            origins: match std::env::var("GMAIL_BASE_URL") {
+                Ok(host) => crate::vfs::accessor::Origins::behind(&host),
+                Err(_) => Default::default(),
+            },
             index_cap: std::env::var("GMAIL_INDEX_CAP")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -1203,7 +1206,7 @@ mod tests {
                 client_secret: "sec".into(),
                 refresh_token: "tok".into(),
                 account_email: "t@example.com".into(),
-                base_url: None,
+                origins: Default::default(),
                 index_cap: None,
             },
             None,

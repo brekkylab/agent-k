@@ -20,7 +20,8 @@ pub use vfs::{
     DirEntry as ResourceDirEntry, FileKind, FileStat, ForwardFs, FsConfig, FwdEntry, FwdStat,
     GdriveConfig, GdriveExchange, GdriveResource, GmailConfig, GmailExchange, GmailResource,
     GmailSyncDelta, GmailSyncState, LOCAL_MOUNT, LocalResource, Mount, MountPath, MountSpec,
-    NotionConfig, NotionResource, ProviderConfig, Resource, ResourceError, ResourceResult,
-    S3Config, S3Resource, TunnelServer, account_mirror_dir, exchange_gdrive_code,
-    exchange_gmail_code, mirror_tree, sync_gmail_incremental, sync_gmail_mirror,
+    NotionConfig, NotionResource, Origins, ProviderConfig, Resource, ResourceError,
+    ResourceResult, S3Config, S3Resource, TunnelServer, account_mirror_dir,
+    exchange_gdrive_code, exchange_gmail_code, mirror_tree, sync_gmail_incremental,
+    sync_gmail_mirror,
 };

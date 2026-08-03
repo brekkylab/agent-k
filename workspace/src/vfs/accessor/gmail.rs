@@ -7,19 +7,88 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const GMAIL_API_BASE: &str = "https://gmail.googleapis.com/gmail/v1";
+/// The origin each Google service lives on, without the version suffix this code
+/// appends. Overriding one replaces the origin and nothing else, so a mock answers
+/// the same paths the real API does.
+pub(crate) const OAUTH_ORIGIN: &str = "https://oauth2.googleapis.com";
+const GMAIL_ORIGIN: &str = "https://gmail.googleapis.com/gmail";
 
-/// `(api_base, token_url)` for a config: the real Google hosts by default, or
-/// both rooted at `base_url` when set — the enterprise-mock/gateway layout
-/// (`{base}/gmail/v1`, `{base}/oauth2/token`).
-fn endpoints(base_url: Option<&str>) -> (String, String) {
-    match base_url {
-        Some(b) => {
-            let b = b.trim_end_matches('/');
-            (format!("{b}/gmail/v1"), format!("{b}/oauth2/token"))
+/// `(api_base, token_url)` for a config.
+///
+/// Per-service overrides, because Google gives each service its own host and no
+/// single origin can stand in for all of them. A deployment that fronts them behind
+/// one host points each override at its own path — for enterprise-mock,
+/// `…/gmail` and `…/oauth2` — and the version suffix stays what the official API
+/// uses, so the same code addresses a mock and production alike. Guessing the
+/// intermediate path here instead (`{base}/gmail/v1`) hard-codes one mock's layout
+/// and works nowhere else.
+fn endpoints(o: &Origins) -> (String, String) {
+    (
+        format!("{}/v1", Origins::origin(&o.gmail, GMAIL_ORIGIN)),
+        format!("{}/token", Origins::origin(&o.oauth, OAUTH_ORIGIN)),
+    )
+}
+
+/// Where to reach each Google service. `None` = the real host.
+///
+/// Google gives every service its own host, and no single origin stands in for all of
+/// them, so each is overridable on its own. Whatever is set here is an *origin*: this
+/// code appends only the suffix the official API uses, so the same paths address a
+/// mock and production alike.
+///
+/// Deployment-level only: the token endpoint receives the app's client secret, so
+/// none of this may be user-suppliable.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Origins {
+    /// Serves `gmail/v1` (`{gmail}/v1/users/…`), with batch one level above it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gmail: Option<String>,
+    /// Serves the OAuth token endpoint (`{oauth}/token`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<String>,
+    /// Serves `drive/v3` (`{drive}/v3/files`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<String>,
+    /// Serves the Docs API (`{docs}/v1/documents/…`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
+    /// Serves the Sheets API (`{sheets}/v4/spreadsheets/…`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheets: Option<String>,
+    /// Serves the Slides API (`{slides}/v1/presentations/…`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slides: Option<String>,
+}
+
+impl Origins {
+    /// Whether nothing is overridden, so the field can stay out of a serialized
+    /// config.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Every service behind one host, laid out the way Google's own paths read:
+    /// `{host}/gmail`, `{host}/oauth2`, `{host}/drive` and so on. A convenience for a
+    /// deployment that fronts all of them, not a substitute for the per-service knobs.
+    pub fn behind(host: &str) -> Self {
+        let h = host.trim_end_matches('/');
+        let at = |service: &str| Some(format!("{h}/{service}"));
+        Self {
+            gmail: at("gmail"),
+            oauth: at("oauth2"),
+            drive: at("drive"),
+            docs: at("docs"),
+            sheets: at("sheets"),
+            slides: at("slides"),
         }
-        None => (GMAIL_API_BASE.to_string(), OAUTH_TOKEN_URL.to_string()),
+    }
+
+    /// `over` if set, else `default`, without a trailing slash.
+    pub(crate) fn origin(over: &Option<String>, default: &str) -> String {
+        over.as_deref()
+            .unwrap_or(default)
+            .trim_end_matches('/')
+            .to_string()
     }
 }
 
@@ -138,17 +207,16 @@ pub struct GmailExchange {
 /// Exchange an OAuth authorization `code` for a refresh token (confidential
 /// client, server-side). Run at mount-create so the browser never handles the
 /// client secret. Google only returns a refresh token when the consent used
-/// `access_type=offline` + `prompt=consent`. `base_url` overrides the Google
-/// hosts (mock/gateway deployments — see [`GmailConfig::base_url`]); `None` =
-/// production.
+/// `access_type=offline` + `prompt=consent`. `origins` overrides the Google hosts
+/// (mock/gateway deployments — see [`GmailConfig::origins`]); default = production.
 pub async fn exchange_gmail_code(
     client_id: &str,
     client_secret: &str,
     code: &str,
     redirect_uri: &str,
-    base_url: Option<&str>,
+    origins: &Origins,
 ) -> anyhow::Result<GmailExchange> {
-    let (api_base, token_url) = endpoints(base_url);
+    let (api_base, token_url) = endpoints(origins);
     // Bounded: this runs inside the create_mount HTTP handler, and a bare
     // reqwest client has NO default timeout — a hung upstream would hang the
     // mount creation indefinitely.
@@ -237,14 +305,12 @@ pub struct GmailConfig {
     /// default) mirrors every message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_cap: Option<usize>,
-    /// Alternative API origin (an enterprise mock or gateway): requests go to
-    /// `{base_url}/gmail/v1` and `{base_url}/oauth2/token` instead of the real
-    /// Google hosts. `None` = production Google. Deployment-level only — the
-    /// token URL receives the app's client secret, so this must never be
-    /// user-suppliable: it is NOT part of the mount-create API; the backend
+    /// Where to reach each Google service, when not production Google (an enterprise
+    /// mock or a gateway). Deployment-level only — the token endpoint receives the
+    /// app's client secret, so this is NOT part of the mount-create API; the backend
     /// injects it from its own config.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Origins::is_default")]
+    pub origins: Origins,
 }
 
 /// Holds Google OAuth credentials (one refresh token) and a cached access
@@ -261,11 +327,21 @@ pub struct GmailAccessor {
     /// Cached OAuth access token + its expiry. Refreshed proactively before
     /// expiry and on a 401 (see [`Self::send_with_refresh`]).
     access_token: Mutex<Option<(String, Instant)>>,
+    /// The gmail service's origin, without the version: `/batch/gmail/v1` lives
+    /// beside `gmail/v1` rather than under it.
+    gmail_origin: String,
 }
 
 impl GmailAccessor {
     pub fn new(config: &GmailConfig) -> anyhow::Result<Self> {
-        let (api_base, token_url) = endpoints(config.base_url.as_deref());
+        let (api_base, token_url) = endpoints(&config.origins);
+        let gmail_origin = config
+            .origins
+            .gmail
+            .as_deref()
+            .unwrap_or(GMAIL_ORIGIN)
+            .trim_end_matches('/')
+            .to_string();
         Ok(Self {
             // Bound every request: a hung upstream call run behind the FUSE
             // forward server would otherwise wedge the guest FUSE op (and any
@@ -278,6 +354,7 @@ impl GmailAccessor {
             config: config.clone(),
             api_base,
             token_url,
+            gmail_origin,
             access_token: Mutex::new(None),
         })
     }
@@ -635,10 +712,13 @@ impl GmailAccessor {
         body.push_str(&format!("--{BOUNDARY}--\r\n"));
 
         // Batch lives at the API origin (…/batch/gmail/v1), not under /gmail/v1.
+        // `/batch/gmail/v1` hangs off the same origin as `gmail/v1`, one level up from
+        // it — derived here rather than by trimming `api_base`, which stops being a
+        // reliable way to recover the origin once each service has its own.
         let origin = self
-            .api_base
-            .strip_suffix("/gmail/v1")
-            .unwrap_or(&self.api_base);
+            .gmail_origin
+            .strip_suffix("/gmail")
+            .unwrap_or(&self.gmail_origin);
         let url = format!("{origin}/batch/gmail/v1");
         let content_type = format!("multipart/mixed; boundary={BOUNDARY}");
 
@@ -764,21 +844,28 @@ mod tests {
         assert_eq!(msgs[0]["payload"]["headers"][0]["value"], "a{b}c");
     }
 
+    /// Each service is reached on its own origin, and an override replaces exactly
+    /// that origin: the version suffix stays whatever the official API uses, so the
+    /// same paths address a mock and production alike.
     #[test]
-    fn endpoints_default_to_google_and_reroot_on_base_url() {
-        let (api, tok) = endpoints(None);
+    fn each_service_keeps_its_official_path_under_any_origin() {
+        let (api, tok) = endpoints(&Origins::default());
         assert_eq!(api, "https://gmail.googleapis.com/gmail/v1");
         assert_eq!(tok, "https://oauth2.googleapis.com/token");
-        // A base_url reroots both (mock/gateway layout); trailing '/' tolerated.
-        let (api, tok) = endpoints(Some("https://enterprise-mock.brekkylab.com/"));
+
+        // One override leaves the other alone.
+        let (api, tok) = endpoints(&Origins {
+            gmail: Some("https://gw.example.com/gmail/".into()),
+            ..Default::default()
+        });
+        assert_eq!(api, "https://gw.example.com/gmail/v1");
+        assert_eq!(tok, "https://oauth2.googleapis.com/token");
+
+        // `behind` is the convenience for one host serving all of them, laid out the
+        // way Google's own paths read.
+        let (api, tok) = endpoints(&Origins::behind("https://enterprise-mock.brekkylab.com/"));
         assert_eq!(api, "https://enterprise-mock.brekkylab.com/gmail/v1");
         assert_eq!(tok, "https://enterprise-mock.brekkylab.com/oauth2/token");
-        // The batch origin derives from api_base by stripping /gmail/v1, so a
-        // rerooted base keeps batch under the same origin.
-        assert_eq!(
-            api.strip_suffix("/gmail/v1").unwrap(),
-            "https://enterprise-mock.brekkylab.com"
-        );
     }
 
     #[test]

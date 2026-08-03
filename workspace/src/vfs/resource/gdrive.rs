@@ -1300,7 +1300,7 @@ mod tests {
             client_secret: "x".into(),
             refresh_token: "x".into(),
             account_email: "x@example.com".into(),
-            base_url: Some("http://127.0.0.1:1".into()),
+            origins: crate::vfs::accessor::Origins::behind("http://127.0.0.1:1"),
         })
         .unwrap();
         assert!(matches!(
@@ -1513,7 +1513,7 @@ mod tests {
             refresh_token: std::env::var("GDRIVE_MOCK_TOKEN")
                 .unwrap_or_else(|_| "admin-service-token".into()),
             account_email: "mock@example.com".into(),
-            base_url: Some(std::env::var("GDRIVE_BASE_URL").ok()?),
+            origins: crate::vfs::accessor::Origins::behind(&std::env::var("GDRIVE_BASE_URL").ok()?),
         })
     }
 
@@ -1637,7 +1637,7 @@ mod tests {
             client_secret: std::env::var("GDRIVE_CLIENT_SECRET").ok()?,
             refresh_token: std::env::var("GDRIVE_REFRESH_TOKEN").ok()?,
             account_email: std::env::var("GDRIVE_EMAIL").unwrap_or_else(|_| "live-test".into()),
-            base_url: None,
+            origins: Default::default(),
         })
     }
 

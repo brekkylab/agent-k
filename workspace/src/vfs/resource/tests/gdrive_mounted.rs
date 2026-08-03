@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::vfs::{
-    accessor::GdriveConfig,
+    accessor::{GdriveConfig, Origins},
     cache::CachedResource,
     path::MountPath,
     resource::{GdriveResource, Resource},
@@ -42,7 +42,7 @@ impl Mock {
             client_secret: "cs".into(),
             refresh_token: "rt".into(),
             account_email: "u@example.com".into(),
-            base_url: Some(self.addr.clone()),
+            origins: Origins::behind(&self.addr),
         }
     }
 
