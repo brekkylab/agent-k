@@ -13,7 +13,8 @@ use uuid::Uuid;
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
 use ::workspace::{
-    FsConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config, WorkspaceFs,
+    FsConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config, SlackConfig,
+    WorkspaceFs,
 };
 
 const SELECT_COLUMNS: &str = "id, workspace_id, prefix, provider, config, created_at, updated_at";
@@ -71,6 +72,7 @@ impl WorkspaceMount {
         Ok(match &self.provider {
             ProviderConfig::S3(c) => ("s3", serde_json::to_string(c)?),
             ProviderConfig::Notion(c) => ("notion", serde_json::to_string(c)?),
+            ProviderConfig::Slack(c) => ("slack", serde_json::to_string(c)?),
         })
     }
 }
@@ -84,6 +86,9 @@ fn decode_provider(kind: &str, config_json: &str) -> StateResult<ProviderConfig>
         "notion" => Ok(ProviderConfig::Notion(
             serde_json::from_str::<NotionConfig>(config_json)?,
         )),
+        "slack" => Ok(ProviderConfig::Slack(serde_json::from_str::<SlackConfig>(
+            config_json,
+        )?)),
         other => Err(StateError::InvalidData(format!(
             "workspace_mounts.provider: unknown provider {other}"
         ))),
@@ -326,6 +331,104 @@ mod tests {
             state.remove_mount(created.id).await,
             Err(StateError::NotFound)
         ));
+    }
+
+    /// A slack mount round-trips through encode/decode (tokens + workspace
+    /// identity preserved) and builds into the VFS.
+    #[tokio::test]
+    async fn slack_mount_round_trips_and_builds() {
+        let (state, _tmp, wid) = fresh_state().await;
+        let provider = ProviderConfig::Slack(SlackConfig {
+            user_token: Some("xoxp-user".into()),
+            bot_token: Some("xoxb-bot".into()),
+            team_id: "T0123".into(),
+            team_name: "acme".into(),
+            base_url: None,
+        });
+        state
+            .create_mount(WorkspaceMount::new(wid, "slack".into(), provider))
+            .await
+            .unwrap();
+
+        let listed = state.list_mounts(wid).await.unwrap();
+        match &listed[0].provider {
+            ProviderConfig::Slack(c) => {
+                assert_eq!(c.user_token.as_deref(), Some("xoxp-user"));
+                assert_eq!(c.bot_token.as_deref(), Some("xoxb-bot"));
+                assert_eq!(c.team_name, "acme");
+                assert_eq!(c.team_id, "T0123");
+            }
+            _ => panic!("expected Slack"),
+        }
+
+        // Assembles alongside `/files` (no network — client construction only).
+        let vfs = state.build_fs(wid).await.unwrap();
+        let mut names = vfs.mount_names();
+        names.sort();
+        assert_eq!(names, vec!["files".to_string(), "slack".to_string()]);
+    }
+
+    /// Either token alone is a usable mount, and the absent one must round-trip as
+    /// `None` rather than an empty string — the API's `personal` flag keys off the
+    /// user token, and the accessor's fallback keys off the bot one.
+    #[tokio::test]
+    async fn slack_mount_with_one_token_round_trips_and_builds() {
+        for (user, bot) in [
+            // The intended shape: user scopes only, no bot at all.
+            (Some("xoxp-user"), None),
+            // A bot-only install still mounts (narrower tree, no DMs, no search).
+            (None, Some("xoxb-bot")),
+        ] {
+            let (state, _tmp, wid) = fresh_state().await;
+            state
+                .create_mount(WorkspaceMount::new(
+                    wid,
+                    "slack".into(),
+                    ProviderConfig::Slack(SlackConfig {
+                        user_token: user.map(String::from),
+                        bot_token: bot.map(String::from),
+                        team_id: "T1".into(),
+                        team_name: "acme".into(),
+                        base_url: None,
+                    }),
+                ))
+                .await
+                .unwrap();
+            match &state.list_mounts(wid).await.unwrap()[0].provider {
+                ProviderConfig::Slack(c) => {
+                    assert_eq!(c.user_token.as_deref(), user);
+                    assert_eq!(c.bot_token.as_deref(), bot);
+                }
+                _ => panic!("expected Slack"),
+            }
+            // One token is enough to construct the resource.
+            assert!(
+                state.build_fs(wid).await.is_ok(),
+                "user={user:?} bot={bot:?}"
+            );
+        }
+    }
+
+    /// A mount with neither token cannot serve anything — every call would 401 and
+    /// the tree would read as an empty workspace. Building it must fail loudly.
+    #[tokio::test]
+    async fn slack_mount_with_no_token_fails_to_build() {
+        let (state, _tmp, wid) = fresh_state().await;
+        state
+            .create_mount(WorkspaceMount::new(
+                wid,
+                "slack".into(),
+                ProviderConfig::Slack(SlackConfig {
+                    user_token: None,
+                    bot_token: None,
+                    team_id: "T1".into(),
+                    team_name: "acme".into(),
+                    base_url: None,
+                }),
+            ))
+            .await
+            .unwrap();
+        assert!(state.build_fs(wid).await.is_err());
     }
 
     #[tokio::test]

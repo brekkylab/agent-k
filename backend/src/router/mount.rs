@@ -20,11 +20,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ::workspace::{NotionConfig, ProviderConfig, S3Config};
+use ::workspace::{NotionConfig, ProviderConfig, S3Config, SlackConfig};
 
 use crate::{
     auth::AuthUser,
-    state::{AppState, WorkspaceMount},
+    state::{AppState, SlackOAuth, WorkspaceMount},
 };
 
 use super::{error::ApiError, error::err, workspace::require_owned_workspace};
@@ -50,11 +50,49 @@ pub enum ProviderSpec {
     Notion {
         api_key: String,
     },
+    /// Slack via OAuth (read-only mount).
+    ///
+    /// Request these as **user** scopes at consent, so the mount reads as the
+    /// installing user — a workspace is one person's own space, and what belongs
+    /// in it is the Slack they see in their own client:
+    ///
+    /// ```text
+    /// channels:history  channels:read    public channels
+    /// groups:history    groups:read      private channels
+    /// im:history        im:read          DMs
+    /// mpim:history      mpim:read        group DMs
+    /// users:read                         member profiles
+    /// files:read                         attachment bytes
+    /// search:read                        search (user-only; bots cannot search)
+    /// ```
+    ///
+    /// Bot scopes are not needed. A bot-only install still mounts, but it sees
+    /// only the conversations the bot itself was invited to, has an empty `dms/`,
+    /// and cannot search — the `personal` flag in [`ProviderInfo`] reports which
+    /// of the two a mount got. A conversation whose scope is missing lists as
+    /// empty rather than failing, so a narrower install still works.
+    ///
+    /// Do **not** enable token rotation on the app: the accessor holds no refresh
+    /// loop, so a rotating token would break the mount when it expires.
+    ///
+    /// The frontend runs the OAuth consent and sends only the authorization
+    /// `code` (+ the `redirect_uri` used at consent). The backend exchanges it
+    /// server-side with the app's config-held client credentials
+    /// ([`SlackOAuth`]) into the workspace's tokens, so the browser never
+    /// handles the client secret.
+    Slack {
+        code: String,
+        redirect_uri: String,
+    },
 }
 
-impl From<ProviderSpec> for ProviderConfig {
-    fn from(spec: ProviderSpec) -> Self {
-        match spec {
+impl ProviderSpec {
+    /// Resolve into a live [`ProviderConfig`]. S3/Notion carry their credentials
+    /// directly; Slack exchanges its authorization `code` for the workspace's
+    /// tokens server-side with the app's [`SlackOAuth`] client, so the browser
+    /// never handles the client secret.
+    async fn resolve(self, oauth: &SlackOAuth) -> Result<ProviderConfig, ApiError> {
+        Ok(match self {
             ProviderSpec::S3 {
                 bucket,
                 region,
@@ -71,7 +109,34 @@ impl From<ProviderSpec> for ProviderConfig {
                 key_prefix,
             }),
             ProviderSpec::Notion { api_key } => ProviderConfig::Notion(NotionConfig { api_key }),
-        }
+            ProviderSpec::Slack { code, redirect_uri } => {
+                let (client_id, client_secret) = oauth.credentials().ok_or_else(|| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        "Slack is not configured on this server \
+                         (SLACK_CLIENT_ID / SLACK_CLIENT_SECRET)",
+                    )
+                })?;
+                let exchanged = ::workspace::exchange_slack_code(
+                    client_id,
+                    client_secret,
+                    &code,
+                    &redirect_uri,
+                    oauth.base_url.as_deref(),
+                )
+                .await
+                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("slack oauth: {e}")))?;
+                ProviderConfig::Slack(SlackConfig {
+                    user_token: exchanged.user_token,
+                    bot_token: exchanged.bot_token,
+                    team_id: exchanged.team_id,
+                    team_name: exchanged.team_name,
+                    // Deployment-level override (mock/gateway), inherited from
+                    // backend config — never from the request.
+                    base_url: oauth.base_url.clone(),
+                })
+            }
+        })
     }
 }
 
@@ -89,6 +154,17 @@ pub enum ProviderInfo {
     },
     /// Notion carries only the API token, which is a secret — nothing to show.
     Notion {},
+    /// Slack: the tokens are secret, but the workspace this mount points at
+    /// (resolved at mount-create) is shown so the UI can tell mounts apart.
+    ///
+    /// `personal` is whether the mount reads as the installing user — their own
+    /// channels, DMs and search — rather than as a bot limited to its own
+    /// memberships. The UI needs it because the two produce visibly different
+    /// trees (a bot-only mount has an empty `dms/`), and a user who expected
+    /// their own Slack should be able to see which one they got. It is NOT a
+    /// scope report: whether `search:read` in particular was granted is not
+    /// visible in a token, so a search can still fail with `missing_scope`.
+    Slack { team_name: String, personal: bool },
 }
 
 impl From<&ProviderConfig> for ProviderInfo {
@@ -101,6 +177,10 @@ impl From<&ProviderConfig> for ProviderInfo {
                 key_prefix: c.key_prefix.clone(),
             },
             ProviderConfig::Notion(_) => ProviderInfo::Notion {},
+            ProviderConfig::Slack(c) => ProviderInfo::Slack {
+                team_name: c.team_name.clone(),
+                personal: c.user_token.as_deref().is_some_and(|t| !t.is_empty()),
+            },
         }
     }
 }
@@ -167,7 +247,8 @@ pub(super) async fn create_mount(
     Json(payload): Json<CreateMountRequest>,
 ) -> Result<(StatusCode, Json<MountResponse>), ApiError> {
     require_owned_workspace(&state, &auth, wid).await?;
-    let mount = WorkspaceMount::new(wid, payload.prefix, payload.provider.into());
+    let provider = payload.provider.resolve(&state.slack_oauth).await?;
+    let mount = WorkspaceMount::new(wid, payload.prefix, provider);
     let created = state.workspaces.create_mount(mount).await?;
     Ok((StatusCode::CREATED, Json(MountResponse::from(created))))
 }

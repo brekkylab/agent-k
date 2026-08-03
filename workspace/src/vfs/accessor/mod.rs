@@ -6,6 +6,10 @@
 
 mod notion;
 mod s3;
+mod slack;
 
 pub use notion::{NotionAccessor, NotionConfig};
 pub use s3::{S3Accessor, S3Config};
+pub use slack::{
+    SlackAccessor, SlackApiError, SlackConfig, SlackExchange, exchange_slack_code, is_read_denied,
+};

@@ -22,7 +22,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     auth::{JwtConfig, bootstrap_admin_if_needed},
-    state::AppState,
+    state::{AppState, SlackOAuth},
 };
 
 const DEFAULT_DB_PATH: &str = "sqlite://./data/agent-k.db";
@@ -65,8 +65,25 @@ pub async fn run() -> std::io::Result<()> {
         .unwrap_or(DEFAULT_JWT_EXPIRY_SECS);
     let jwt = JwtConfig::new(&jwt_secret, jwt_expiry_secs);
 
+    // The deployment's Slack app, for exchanging a mount's authorization code
+    // server-side. Absent = Slack mounts 400 at create; the rest of the app is
+    // unaffected. SLACK_API_BASE_URL reroutes every Slack call (mock/gateway) and
+    // is deployment config only — the exchange endpoint sees the client secret.
+    let slack_oauth = SlackOAuth {
+        client_id: std::env::var("SLACK_CLIENT_ID").ok().filter(|v| !v.is_empty()),
+        client_secret: std::env::var("SLACK_CLIENT_SECRET")
+            .ok()
+            .filter(|v| !v.is_empty()),
+        base_url: std::env::var("SLACK_API_BASE_URL")
+            .ok()
+            .filter(|v| !v.is_empty()),
+    };
+    if let Some(base) = &slack_oauth.base_url {
+        tracing::warn!("Slack API base URL overridden to {base} — not production Slack");
+    }
+
     let app_state = Arc::new(
-        AppState::new(&db_url, data_root, jwt)
+        AppState::new(&db_url, data_root, jwt, slack_oauth)
             .await
             .expect("failed to initialise app state"),
     );

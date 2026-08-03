@@ -103,9 +103,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let db_url = format!("sqlite://{}/test.db", tmp.path().display());
         let jwt = JwtConfig::new("test-secret", 3600);
-        let state = AppState::new(&db_url, tmp.path().to_path_buf(), jwt)
-            .await
-            .unwrap();
+        let state = AppState::new(
+            &db_url,
+            tmp.path().to_path_buf(),
+            jwt,
+            // No Slack app configured: these tests don't create mounts.
+            Default::default(),
+        )
+        .await
+        .unwrap();
         (state, tmp)
     }
 

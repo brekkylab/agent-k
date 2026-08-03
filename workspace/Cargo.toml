@@ -9,6 +9,7 @@ async-trait = "0.1.89"
 bytes = "1"
 chrono = { version = "0.4.42", features = ["serde", "clock"] }
 dotenvy = "0.15"
+fastrand = "2.4.1"
 futures = "0.3"
 futures-util = "0.3"
 # macos-no-mount: run the host FUSE engine (Session::from_fd) on a macOS host

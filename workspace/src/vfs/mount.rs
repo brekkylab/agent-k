@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::vfs::{
-    accessor::{NotionConfig, S3Config},
+    accessor::{NotionConfig, S3Config, SlackConfig},
     cache::CachedResource,
-    resource::{LocalResource, NotionResource, Resource, S3Resource},
+    resource::{LocalResource, NotionResource, Resource, S3Resource, SlackResource},
 };
 
 /// Reserved mount prefix for the workspace's local file tree. A provider mount
@@ -24,6 +24,7 @@ pub const LOCAL_MOUNT: &str = "/files";
 pub enum ProviderConfig {
     S3(S3Config),
     Notion(NotionConfig),
+    Slack(SlackConfig),
 }
 
 /// One mount spec: a virtual top-level prefix bound to a provider config. The
@@ -71,6 +72,7 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
         let provider: Arc<dyn Resource> = match spec.provider {
             ProviderConfig::S3(c) => Arc::new(S3Resource::new(&c)?),
             ProviderConfig::Notion(c) => Arc::new(NotionResource::new(&c)?),
+            ProviderConfig::Slack(c) => Arc::new(SlackResource::new(&c)?),
         };
         // Wrap every provider in the metadata index cache so `stat` after a
         // `readdir` (e.g. `ls -la`) is served from memory.

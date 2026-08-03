@@ -4,6 +4,15 @@
 pub struct MountPath(String);
 
 impl MountPath {
+    /// The path of `name` inside this directory, without the `//` a root join makes.
+    pub fn child(&self, name: &str) -> Self {
+        if self.is_root() {
+            Self::new(format!("/{name}"))
+        } else {
+            Self::new(format!("{}/{}", self.as_str(), name))
+        }
+    }
+
     pub fn new(s: impl AsRef<str>) -> Self {
         let s = s.as_ref();
         let trimmed = s.trim_end_matches('/');

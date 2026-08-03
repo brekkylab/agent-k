@@ -19,5 +19,6 @@ pub use hook::{FsEvent, FsHook};
 pub use vfs::{
     DirEntry as ResourceDirEntry, FileKind, FileStat, ForwardFs, FsConfig, FwdEntry, FwdStat,
     LOCAL_MOUNT, LocalResource, Mount, MountPath, MountSpec, NotionConfig, NotionResource,
-    ProviderConfig, Resource, ResourceError, ResourceResult, S3Config, S3Resource, TunnelServer,
+    ProviderConfig, Resource, ResourceError, ResourceResult, S3Config, S3Resource, SlackConfig,
+    SlackExchange, SlackResource, TunnelServer, exchange_slack_code,
 };

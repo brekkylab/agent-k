@@ -25,12 +25,13 @@ pub mod sandbox;
 
 mod mount;
 
-pub use accessor::{NotionConfig, S3Config};
+pub use accessor::{NotionConfig, S3Config, SlackConfig, SlackExchange, exchange_slack_code};
 pub use error::{ResourceError, ResourceResult};
 pub(crate) use mount::build_mounts;
 pub use mount::{FsConfig, LOCAL_MOUNT, Mount, MountSpec, ProviderConfig};
 pub use path::MountPath;
 pub use resource::{
     DirEntry, FileKind, FileStat, LocalResource, NotionResource, Resource, S3Resource,
+    SlackResource,
 };
 pub use sandbox::{ForwardFs, FwdEntry, FwdStat, TunnelServer};
