@@ -1,15 +1,13 @@
-//! Drive through the wrapper production installs.
+//! Drive behind the wrapper production installs.
 //!
-//! Every other test of this provider drives `GdriveResource` bare, but
-//! `build_mounts` always wraps it in [`CachedResource`], and the wrapper is where a
-//! listing feeds a `stat` and that `stat` picks a read's fetch strategy. A whole
-//! class of mistake only exists in that seam: a placeholder length that the provider
-//! would have resolved, served verbatim from the listing instead, turning a windowed
-//! read into a whole-object fetch per window.
+//! Drives `CachedResource::new(GdriveResource)` — the pair `build_mounts` assembles —
+//! against a mock of the Drive and Docs endpoints on a loopback socket, and counts what
+//! the server was asked for: the `Range` of every request and the bytes it handed over.
+//! Which is the only way to tell a window from a whole object, and so the only way to
+//! see the difference these tests exist to hold.
 //!
-//! So this drives the pair against a mock of the Drive endpoints on a loopback
-//! socket — no credentials, no new dependency — and counts what the server was asked
-//! for, which is the only way to see the difference.
+//! No credentials and no new dependency: the mock is a `tokio::net::TcpListener` and the
+//! provider is pointed at it with `base_url`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
