@@ -328,7 +328,7 @@ impl WorkspaceFs {
                 }
             }
         }
-        mounts.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+        mounts.sort_by_key(|mount| std::cmp::Reverse(mount.prefix.len()));
         Ok(Self {
             mounts: mounts.into(),
             hook: None,

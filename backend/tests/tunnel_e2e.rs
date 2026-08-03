@@ -39,14 +39,14 @@ fn s3_config_from_env() -> Option<S3Config> {
     })
 }
 
-/// Isolate microsandbox 0.5.5 state in a dedicated MSB_HOME (see the repo notes
-/// on the schema clash with a newer msb on the host).
+/// Isolate the pinned microsandbox state from other versions on the host.
 fn set_dedicated_msb_home() {
-    if std::env::var_os("MSB_HOME").is_none() {
-        if let Some(home) = std::env::var_os("HOME") {
-            let d = std::path::PathBuf::from(home).join(".microsandbox-agentk");
-            unsafe { std::env::set_var("MSB_HOME", &d) };
-        }
+    if std::env::var_os("MSB_HOME").is_none()
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let d = std::path::PathBuf::from(home).join(".microsandbox-agentk");
+        // SAFETY: called at test start before the microsandbox runtime spawns.
+        unsafe { std::env::set_var("MSB_HOME", &d) };
     }
 }
 

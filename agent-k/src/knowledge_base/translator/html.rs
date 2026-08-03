@@ -12,11 +12,13 @@ pub(super) fn translate_html(html_path: &Path, md_path: &Path) -> Result<()> {
     let html = fs::read_to_string(html_path)
         .with_context(|| format!("failed to read HTML file: {html_path:?}"))?;
 
-    let mut options = html_to_markdown_rs::ConversionOptions::default();
-    options.exclude_selectors = CHROME_STRIP_SELECTORS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+    let options = html_to_markdown_rs::ConversionOptions {
+        exclude_selectors: CHROME_STRIP_SELECTORS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        ..Default::default()
+    };
 
     let result = html_to_markdown_rs::convert(&html, Some(options))
         .map_err(|e| anyhow::anyhow!("html-to-markdown-rs: {e}"))?;

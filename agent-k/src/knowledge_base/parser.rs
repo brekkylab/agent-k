@@ -7,26 +7,26 @@ use super::helper::HelperAgent;
 /// heading. Returns `None` when neither is present — caller falls back to
 /// `TitleAgent`.
 fn extract_title(content: &str) -> Option<String> {
-    if content.starts_with("---") {
-        if let Some(end) = content[3..].find("\n---") {
-            let frontmatter = &content[3..end + 3];
-            for line in frontmatter.lines() {
-                if let Some(rest) = line.strip_prefix("title:") {
-                    let raw = rest.trim();
-                    let title = if let Some(inner) =
-                        raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\''))
-                    {
-                        inner.replace("''", "'")
-                    } else if let Some(inner) =
-                        raw.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
-                    {
-                        inner.to_string()
-                    } else {
-                        raw.to_string()
-                    };
-                    if !title.is_empty() {
-                        return Some(title);
-                    }
+    if let Some(stripped) = content.strip_prefix("---")
+        && let Some(end) = stripped.find("\n---")
+    {
+        let frontmatter = &stripped[..end];
+        for line in frontmatter.lines() {
+            if let Some(rest) = line.strip_prefix("title:") {
+                let raw = rest.trim();
+                let title = if let Some(inner) =
+                    raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\''))
+                {
+                    inner.replace("''", "'")
+                } else if let Some(inner) =
+                    raw.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+                {
+                    inner.to_string()
+                } else {
+                    raw.to_string()
+                };
+                if !title.is_empty() {
+                    return Some(title);
                 }
             }
         }

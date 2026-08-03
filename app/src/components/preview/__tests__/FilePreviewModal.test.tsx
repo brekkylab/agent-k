@@ -11,9 +11,8 @@ vi.mock('@/api/dirents', () => ({
   downloadFileByGlobalPath: (...a: unknown[]) => downloadFileByGlobalPath(...a),
 }));
 
-// PdfView statically imports react-pdf → pdfjs-dist, which calls DOMMatrix at
-// module-init time and crashes under jsdom (DOMMatrix is not defined). Stub it
-// so FilePreviewModal's module graph can load in the unit test.
+// PDF.js calls DOMMatrix at module-init time, which jsdom does not provide.
+// PdfView has its own focused test with the PDF.js boundary mocked.
 vi.mock('@/components/preview/PdfView', () => ({ PdfView: () => null }));
 
 import { FilePreviewModal } from '../../FilePreviewModal';
