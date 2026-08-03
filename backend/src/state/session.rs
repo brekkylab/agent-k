@@ -16,11 +16,40 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use super::{StateError, StateResult, parse_ts, parse_uuid};
 use crate::{
     agent_stream::{AgentStreamItem, MessageAssembler},
     event::{EventQueue, RunStatus, SessionEvent, message_channel},
 };
+
+/// Whether a session was created interactively by a user or by an automation
+/// run (worker-driven). Persisted in `sessions.origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOrigin {
+    User,
+    Automation,
+}
+
+impl SessionOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionOrigin::User => "user",
+            SessionOrigin::Automation => "automation",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(SessionOrigin::User),
+            "automation" => Some(SessionOrigin::Automation),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -40,6 +69,9 @@ pub struct Session {
     /// Whether this session has a backbone run environment
     pub runenv: bool,
 
+    /// User (interactive) vs automation (worker-driven). See [`SessionOrigin`].
+    pub origin: SessionOrigin,
+
     pub created_at: DateTime<Utc>,
 
     pub updated_at: DateTime<Utc>,
@@ -55,6 +87,7 @@ impl Session {
             title: None,
             spec,
             runenv: false,
+            origin: SessionOrigin::User,
             created_at: now,
             updated_at: now,
         }
@@ -93,6 +126,11 @@ impl Session {
             title: row.get("title"),
             spec,
             runenv: row.get("runenv"),
+            origin: {
+                let raw: String = row.get("origin");
+                SessionOrigin::from_str(&raw)
+                    .ok_or_else(|| StateError::InvalidData(format!("sessions.origin: {raw}")))?
+            },
             created_at: parse_ts(&row.get::<String, _>("created_at"), "sessions.created_at")?,
             updated_at: parse_ts(&row.get::<String, _>("updated_at"), "sessions.updated_at")?,
         })
@@ -172,12 +210,21 @@ impl SessionsState {
     }
 
     /// Every session in `workspace_id`, oldest first.
-    pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Session>> {
+    /// List a workspace's sessions, optionally filtered to one [`SessionOrigin`]
+    /// (e.g. `User` to hide automation-run sessions).
+    pub async fn list_by_workspace(
+        &self,
+        workspace_id: Uuid,
+        origin: Option<SessionOrigin>,
+    ) -> StateResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
-             FROM sessions WHERE workspace_id = ? ORDER BY created_at ASC",
+            "SELECT id, workspace_id, agent_id, title, spec, runenv, origin, created_at, updated_at \
+             FROM sessions WHERE workspace_id = ?1 \
+               AND (?2 IS NULL OR origin = ?2) \
+             ORDER BY created_at ASC",
         )
         .bind(workspace_id.to_string())
+        .bind(origin.map(|o| o.as_str()))
         .fetch_all(&self.db)
         .await?;
         rows.iter().map(Session::from_sqlite_row).collect()
@@ -212,7 +259,7 @@ impl SessionsState {
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
+            "SELECT id, workspace_id, agent_id, title, spec, runenv, origin, created_at, updated_at \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -230,8 +277,8 @@ impl SessionsState {
         item.runenv = runenv.is_some();
 
         sqlx::query(
-            "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, origin, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(item.id.to_string())
         .bind(item.workspace_id.to_string())
@@ -239,6 +286,7 @@ impl SessionsState {
         .bind(&item.title)
         .bind(serde_json::to_string(&item.spec)?)
         .bind(item.runenv)
+        .bind(item.origin.as_str())
         .bind(item.created_at.to_rfc3339())
         .bind(item.updated_at.to_rfc3339())
         .execute(&self.db)

@@ -1,3 +1,9 @@
+-- Sessions gain an origin tag: 'user' (interactive) vs 'automation' (created by
+-- an automation run). Automation sessions are worker-driven — the message API
+-- rejects user turns on them — and can be filtered out of the session list.
+ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'user';
+CREATE INDEX idx_sessions_workspace_origin ON sessions(workspace_id, origin, created_at);
+
 -- Automations: a named, workspace-scoped agent job. Single prompt (v1's
 -- multi-step `prompts` array is intentionally collapsed to one prompt here —
 -- there is no cross-step progress to track, so a re-claimed run just re-runs

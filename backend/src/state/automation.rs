@@ -796,9 +796,11 @@ impl AutomationsState {
         let run_id = Uuid::new_v4();
 
         // Session for this run (no runenv/sandbox — automation runs are simple).
+        // origin='automation' marks it worker-driven: the message API rejects
+        // user turns on it, and it can be filtered out of the session list.
         sqlx::query(
-            "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at) \
-             VALUES (?, ?, NULL, ?, ?, 0, ?, ?)",
+            "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, origin, created_at, updated_at) \
+             VALUES (?, ?, NULL, ?, ?, 0, 'automation', ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(spec.workspace_id.to_string())
@@ -1538,6 +1540,24 @@ mod tests {
             advanced,
             "disabled fire must roll back the advance"
         );
+    }
+
+    #[tokio::test]
+    async fn automation_run_session_tagged_automation_origin() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool.clone());
+        let a = state
+            .create_automation(wid, "j".into(), None, "p".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        let run = state.create_scheduled_run(&a, Utc::now(), "manual").await.unwrap();
+        let origin: String = sqlx::query_scalar("SELECT origin FROM sessions WHERE id = ?")
+            .bind(run.session_id.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(origin, "automation");
     }
 
     #[tokio::test]
