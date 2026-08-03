@@ -583,3 +583,65 @@ async fn a_listing_cache_does_not_grow_without_bound() {
         "expired listings are dropped, the fresh ones kept"
     );
 }
+
+/// Each service is reached at its own origin, and only its own.
+///
+/// A single `base_url` could not express this: it stood in for every host, with the
+/// intermediate path (`/drive`, `/sheets`) chosen by the client rather than the
+/// deployment, so a gateway serving one service somewhere else could not be pointed
+/// at. Two listeners here, on paths neither Google nor our own mock uses.
+#[tokio::test]
+async fn one_service_can_move_without_moving_the_others() {
+    let sheet = row(
+        "budget",
+        "S1",
+        "application/vnd.google-apps.spreadsheet",
+        None,
+    );
+    // Gateway A: Drive and the token endpoint, Drive on a path of its own choosing.
+    let a = start(json!([sheet]), HashMap::new()).await;
+    // Gateway B: Sheets only, on a different port.
+    let b = start(json!([]), HashMap::new()).await;
+
+    let fs = mounted(&GdriveConfig {
+        client_id: "cid".into(),
+        client_secret: "cs".into(),
+        refresh_token: "rt".into(),
+        account_email: "u@example.com".into(),
+        origins: Origins {
+            drive: Some(format!("{}/drive", a.addr)),
+            oauth: Some(format!("{}/oauth2", a.addr)),
+            sheets: Some(format!("{}/sheets", b.addr)),
+            ..Default::default()
+        },
+    });
+
+    let listed = fs.readdir(&MountPath::new("/My Drive")).await.unwrap();
+    assert_eq!(listed[0].name, "budget.gsheet.json");
+
+    // The listing came from A; the workbook has to come from B.
+    let path = MountPath::new("/My Drive/budget.gsheet.json");
+    let st = fs.stat(&path).await.unwrap();
+    let _ = fs.read_bytes_pinned(&path, None, &st).await;
+
+    let hit = |m: &Mock, needle: &str| {
+        m.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.target.contains(needle))
+            .count()
+    };
+    assert!(hit(&a, "/drive/v3/files") > 0, "A served the listing");
+    assert!(hit(&a, "/oauth2/token") > 0, "A served the token");
+    assert!(
+        hit(&b, "/sheets/v4/spreadsheets/S1") > 0,
+        "B served the workbook, so the override reached it"
+    );
+    assert_eq!(hit(&b, "/drive/v3"), 0, "and B was never asked for Drive");
+    assert_eq!(
+        hit(&a, "/sheets/v4"),
+        0,
+        "nor A for Sheets: one origin moving does not move the rest"
+    );
+}
