@@ -16,26 +16,32 @@ use super::{StateError, StateResult, parse_ts, parse_uuid};
 
 /// Identity passed to agent-k's spec builders (mirrors router/session.rs).
 const SESSION_AGENT_NAME: &str = "agent-k";
-const DEFAULT_MODEL_COWORKER: &str = "anthropic/claude-sonnet-4-5";
-const DEFAULT_MODEL_DEEP_RESEARCH: &str = "anthropic/claude-sonnet-4-5";
 
 /// Total attempts including the first; RETRY_BACKOFFS has MAX_ATTEMPTS-1 gaps.
 pub const MAX_ATTEMPTS: i64 = 3;
 
+/// Reject an `agent_type` that names no known preset, so a bad value fails at
+/// create/update rather than silently degrading to coworker at run time.
+fn validate_agent_type(agent_type: &str) -> StateResult<()> {
+    crate::model::AgentType::from_str(agent_type)
+        .map(|_| ())
+        .ok_or_else(|| StateError::InvalidData(format!("unknown agent_type: {agent_type}")))
+}
+
 /// Build a session [`AgentSpec`] from an automation's stored agent surface.
-/// Unknown `agent_type` falls back to the coworker preset.
+/// Resolves the model through the agent-type catalog chain (the same path as
+/// session creation), so an unpinned automation follows provider availability
+/// instead of a hard-coded default. `agent_type` is validated at create/update;
+/// an unknown value here still defaults to coworker.
 pub fn build_spec(agent_type: &str, model: Option<&str>) -> AgentSpec {
     use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
-    match agent_type {
-        "deep_research" => get_deep_research_agent_spec(
-            SESSION_AGENT_NAME,
-            model.unwrap_or(DEFAULT_MODEL_DEEP_RESEARCH),
-        ),
-        _ => get_coworker_agent_spec(
-            SESSION_AGENT_NAME,
-            model.unwrap_or(DEFAULT_MODEL_COWORKER),
-            true,
-        ),
+    use crate::model::{AgentType, resolve_model};
+
+    let agent = AgentType::from_str(agent_type).unwrap_or(AgentType::Coworker);
+    let model = resolve_model(Some(agent.as_str()), model);
+    match agent {
+        AgentType::DeepResearch => get_deep_research_agent_spec(SESSION_AGENT_NAME, &model),
+        AgentType::Coworker => get_coworker_agent_spec(SESSION_AGENT_NAME, &model, true),
     }
 }
 
@@ -467,6 +473,7 @@ impl AutomationsState {
         model: Option<String>,
         created_by: Uuid,
     ) -> StateResult<Automation> {
+        validate_agent_type(&agent_type)?;
         let id = Uuid::new_v4();
         let now = Self::now();
         sqlx::query(
@@ -540,6 +547,7 @@ impl AutomationsState {
         let description = description.unwrap_or(current.description);
         let prompt = prompt.unwrap_or(current.prompt);
         let agent_type = agent_type.unwrap_or(current.agent_type);
+        validate_agent_type(&agent_type)?;
         let model = model.unwrap_or(current.model);
         let enabled = enabled.unwrap_or(current.enabled);
         let now = Self::now();
