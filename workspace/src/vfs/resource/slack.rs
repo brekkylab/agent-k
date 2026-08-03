@@ -14,24 +14,24 @@
 //!   window fills `chat.jsonl`'s bytes, the `threads/` listing and the `files/`
 //!   listing together (see [`SlackResource::day`]), so walking into a date
 //!   directory and listing all three of its children is one request, not four.
-//! - **Replies live in their own files.** `conversations.history` returns thread
-//!   *roots* only; replies need one `conversations.replies` per thread. Inlining
-//!   them would make `cat chat.jsonl` cost `1 + N` calls — a 20-thread day is 21
-//!   minutes at one call per minute. Instead `chat.jsonl` holds roots (1 call,
-//!   with each root's own `reply_count`) and `threads/<ts>.jsonl` holds a thread
-//!   (1 call, only when read).
-//! - **So does a thread's own `files/`.** An attachment posted *inside* a thread is
-//!   invisible to `conversations.history`, so the day's `files/` cannot list it —
-//!   it belongs to `threads/<ts>/` instead, filled by the same call that serves
-//!   the thread. One flat day listing would have been friendlier to read, but it
-//!   would mean fetching every thread to list one directory.
+//! - **A thread is its own directory, shaped like a day.** `conversations.history`
+//!   returns thread *roots* only; replies need one `conversations.replies` per
+//!   thread. Inlining them would make `cat chat.jsonl` cost `1 + N` calls — a
+//!   20-thread day is 21 minutes at one call per minute. So a thread sits under
+//!   `threads/<root-ts>/` with the same two children a day has, filled by one call
+//!   when it is entered.
+//!
+//! That last point is why a day and a thread share one shape ([`Scope`]): both are
+//! a stretch of conversation, so both are `chat.jsonl` plus `files/`, and the tree
+//! needs one explanation rather than two. It also settles where an attachment
+//! posted *inside* a thread goes — invisible to `conversations.history`, it cannot
+//! be in the day's `files/`, and it belongs in the thread's.
 //!
 //! A consequence of synthesizing rather than mirroring: a `.jsonl` here is a file
-//! *this mount invents*, so Slack reports no length for it. `chat.jsonl` and the
-//! profiles are exact because their bytes are already in hand by the time they are
-//! listed; an unread thread is not, and is sized by estimate (see
-//! [`estimated_thread_size`]). An attachment, being a real object Slack stores, is
-//! exact from the listing.
+//! *this mount invents*, so Slack reports no length for it. Every one is listed at
+//! 0 and sized by the cache wrapper's render-once path — which is free, because
+//! entering the directory already fetched the bytes. An attachment, being a real
+//! object Slack stores, is exact from the listing.
 //!
 //! Read-only: the mount serves history, profiles and file bytes, and nothing
 //! posts.
@@ -91,43 +91,6 @@ const TTL: Duration = Duration::from_secs(300);
 /// reachable through search rather than by walking.
 const MAX_DAYS: i64 = 90;
 
-/// Bytes allowed per message when estimating an unread thread's size.
-///
-/// Measured on real threads: 437 and 724 bytes per message. A message's JSON is
-/// mostly metadata (`blocks`, `client_msg_id`, `files`, reactions) rather than
-/// text, so the figure is fairly stable — but a reply carrying a code block or an
-/// attachment's metadata runs larger, hence the margin over what was measured.
-const THREAD_BYTES_PER_MSG: u64 = 4096;
-/// Ceiling on the estimate, and the reason it stays cacheable: the content cache
-/// keeps objects up to 8 MiB, and a thread is whole-only (a ranged read still
-/// fetches all of it), so an estimate above this would push it out of the cache
-/// and re-fetch it once per chunk.
-const THREAD_SIZE_MAX: u64 = 8 << 20;
-
-/// Size reported for a thread nobody has read yet: an upper bound derived from
-/// the root's `reply_count`, which is the only measure of the thread a listing
-/// has.
-///
-/// It cannot be 0, and it cannot be exact. Not 0, because reads run under the
-/// guest's FUSE mount with `direct_io`, where a 0-length file clamps reads to
-/// nothing and a search tool skips a file it is told is empty — and because the
-/// cache wrapper eagerly renders anything listed at 0, which here means fetching
-/// every thread in the directory. Not exact, because a `.jsonl` file is something
-/// this mount *synthesizes*: Slack has no such object and reports no length for
-/// it, so the only way to know is to build it.
-///
-/// Over-estimating is the safe direction: a read returns the real bytes and then
-/// empty at EOF, so `cat` stops at the true end. Under-estimating would truncate.
-/// It remains an estimate — `ls -l` and `find -size` are wrong about an unread
-/// thread until something reads it, which the mount prompt says.
-fn estimated_thread_size(replies: u64) -> u64 {
-    // +1 for the root, which the thread file also carries.
-    replies
-        .saturating_add(1)
-        .saturating_mul(THREAD_BYTES_PER_MSG)
-        .min(THREAD_SIZE_MAX)
-}
-
 /// Hits one search returns. Slack ranks by relevance/recency, and a reader that
 /// needs more than this wants a narrower query, not a longer list.
 const SEARCH_MAX_HITS: usize = 100;
@@ -138,9 +101,10 @@ client: the channels they are in, their DMs, and group DMs. Organized by date as
 synthesized tree, not a mirror of anything Slack exposes:
   channels/<name>__<channel-id>/<yyyy-mm-dd>/
     chat.jsonl                       # that day's top-level messages, one JSON per line
-    threads/<root-ts>.jsonl          # one thread: its root plus every reply
-    threads/<root-ts>/               # files posted INSIDE that thread (often empty)
-    files/<name>__<file-id>.<ext>    # files posted outside a thread that day
+    files/<name>__<file-id>.<ext>    # files posted that day, outside a thread
+    threads/<root-ts>/               # one thread — same two children as a day:
+      chat.jsonl                     #   its root plus every reply
+      files/<name>__<file-id>.<ext>  #   files posted inside the thread
   dms/<user>__<dm-id>/<yyyy-mm-dd>/  # same shape, for direct messages
   users/<name>__<user-id>.json       # one profile per member
 
@@ -168,21 +132,19 @@ synthesized tree, not a mirror of anything Slack exposes:
   Most of a line's bytes are `blocks` (a structural copy of `text`) and file
   metadata, so select the fields you need instead of reading whole lines.
 
-  Threads are separate on purpose. chat.jsonl holds only the messages that start
-  a thread (plus standalone ones) and costs ONE request; each root that has
-  replies carries `reply_count`, and its replies live in threads/<its ts>.jsonl,
-  which costs one request when you read it. So: read chat.jsonl, pick the roots
-  worth expanding, open only those. `threads/` lists nothing when no thread
-  started that day. A thread file's listed size is an ESTIMATE until it is read
-  (guessed from reply_count), so `ls -l` and `find -size` are wrong about an
-  unread one; reading it makes the size exact.
+  A day and a thread are the same shape, so read a thread the way you read a day.
+  The day's chat.jsonl holds only the messages that START a thread (plus
+  standalone ones) and costs ONE request; each root that has replies carries
+  `reply_count`, and that thread is the directory threads/<its ts>/, which costs
+  one request when you enter it. So: read the day's chat.jsonl, pick the roots
+  worth expanding, enter only those. `threads/` is empty when no thread started
+  that day.
 
-  A file posted inside a thread is NOT in the day's files/ — it is only reachable
-  through that thread, so it appears under threads/<root-ts>/ instead. That
-  directory is listed for every thread but is filled by reading the thread, so it
-  reads as empty until you do. If you are looking for an attachment and files/
-  does not have it, read the thread whose reply carried it (chat.jsonl and the
-  thread JSONL both name files in each message's `files` field).
+  A file posted inside a thread is NOT in the day's files/ — it is in that
+  thread's files/, because Slack's day listing cannot see it. If you are looking
+  for an attachment the day's files/ does not have, find the message that carried
+  it (every message names its own files in the `files` field) and enter its
+  thread.
 
   Dates run back at most 90 days from the newest message, and a directory exists
   for every day in that span — a quiet day's chat.jsonl is simply empty. Reading
@@ -223,12 +185,10 @@ struct Day {
     files: Vec<FileMeta>,
 }
 
-/// A thread as the day's listing knows it: its root ts, plus the reply count
-/// Slack reports on the root. The count is all the listing has to size the
-/// thread's file with — see [`estimated_thread_size`].
+/// A thread as the day's listing knows it: just its root ts. That names the
+/// directory, and everything inside it comes from reading the thread.
 struct ThreadRef {
     ts: String,
-    replies: u64,
 }
 
 /// One thread, from a single `conversations.replies` call.
@@ -258,6 +218,20 @@ struct FileMeta {
     mtime: Option<SystemTime>,
 }
 
+/// Which conversation-day a `chat.jsonl` / `files/` belongs to: the day itself,
+/// or one thread within it.
+///
+/// A day and a thread are the same thing at different scales — a stretch of
+/// conversation with messages and attachments — so they carry the same two
+/// children and this is the only thing that distinguishes them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Scope {
+    id: String,
+    date: String,
+    /// `None` = the whole day; `Some(root ts)` = that thread.
+    ts: Option<String>,
+}
+
 /// What a mount path names. Resolved from the path's segments alone (see
 /// [`resolve`]) — every id the tree needs is in the names, so a deep path is
 /// resolvable without walking its parents.
@@ -273,40 +247,17 @@ enum Node {
     User { id: String },
     /// `/{channels,dms}/<name>__<id>` — a conversation's date listing.
     Conv { id: String },
-    /// `/…/<conv>/<date>` — the day directory.
-    Day { id: String, date: String },
-    /// `/…/<date>/chat.jsonl`.
-    Chat { id: String, date: String },
-    /// `/…/<date>/threads`.
+    /// A day (`/…/<date>`) or a thread (`/…/<date>/threads/<ts>`): either way, a
+    /// directory holding `chat.jsonl` and `files/`.
+    Convo(Scope),
+    /// That scope's `chat.jsonl`.
+    Chat(Scope),
+    /// That scope's `files/`.
+    Files(Scope),
+    /// One file in it.
+    File { scope: Scope, name: String },
+    /// `/…/<date>/threads` — the day's threads, one directory each.
     Threads { id: String, date: String },
-    /// `/…/<date>/threads/<ts>.jsonl`.
-    Thread {
-        id: String,
-        date: String,
-        ts: String,
-    },
-    /// `/…/<date>/threads/<ts>` — the sibling dir holding that thread's own
-    /// attachments (see [`Thread::files`]).
-    ThreadFiles {
-        id: String,
-        date: String,
-        ts: String,
-    },
-    /// `/…/<date>/threads/<ts>/<name>__<id>.<ext>`.
-    ThreadFile {
-        id: String,
-        date: String,
-        ts: String,
-        name: String,
-    },
-    /// `/…/<date>/files`.
-    Files { id: String, date: String },
-    /// `/…/<date>/files/<name>__<id>.<ext>`.
-    File {
-        id: String,
-        date: String,
-        name: String,
-    },
 }
 
 /// One cached value with the time it was fetched, shared so a `stat` or a read
@@ -553,14 +504,10 @@ impl SlackResource {
             chat.extend_from_slice(&message_line(m, &names));
             // Only a root with replies gets a thread file; an empty `threads/`
             // then truthfully means no discussion started that day.
-            let replies = m.get("reply_count").and_then(Value::as_u64).unwrap_or(0);
-            if replies > 0
+            if m.get("reply_count").and_then(Value::as_u64).unwrap_or(0) > 0
                 && let Some(t) = m.get("ts").and_then(Value::as_str)
             {
-                threads.push(ThreadRef {
-                    ts: t.to_string(),
-                    replies,
-                });
+                threads.push(ThreadRef { ts: t.to_string() });
             }
             for f in m
                 .get("files")
@@ -652,18 +599,6 @@ impl SlackResource {
         Ok(serde_json::to_vec_pretty(u)?)
     }
 
-    /// The thread's exact byte length if it has already been fetched, `None`
-    /// otherwise. Never fetches: the caller falls back to an estimate, because
-    /// this is asked once per entry in a `threads/` listing.
-    async fn thread_len_if_read(&self, id: &str, ts: &str) -> Option<u64> {
-        self.threads
-            .lock()
-            .await
-            .get(&(id.to_string(), ts.to_string()))
-            .filter(|(at, _)| at.elapsed() < TTL)
-            .map(|(_, t)| t.jsonl.len() as u64)
-    }
-
     /// A thread the day actually listed. The `ts` indexes a request, so a path
     /// naming an arbitrary one must not become a `conversations.replies` call —
     /// this is what ties it back to the day's own roots.
@@ -672,6 +607,54 @@ impl SlackResource {
             return Err(ResourceError::NotFound);
         }
         self.thread(id, ts).await
+    }
+
+    /// One scope's `chat.jsonl` bytes and `files/` entries: the day's, or one
+    /// thread's. Both are filled by a single request (`conversations.history` for
+    /// a day, `conversations.replies` for a thread), which is what makes listing
+    /// either scope's two children cost nothing extra.
+    async fn contents(&self, s: &Scope) -> ResourceResult<(Arc<Vec<u8>>, Vec<FileMeta>)> {
+        match &s.ts {
+            None => {
+                let day = self.day(&s.id, &s.date).await?;
+                Ok((day.chat.clone(), day.files.clone()))
+            }
+            Some(ts) => {
+                let t = self.listed_thread(&s.id, &s.date, ts).await?;
+                Ok((t.jsonl.clone(), t.files.clone()))
+            }
+        }
+    }
+
+    /// Whether the scope exists at all, without producing its contents. A day
+    /// exists if it is in the conversation's date range; a thread if the day
+    /// listed it. Both answers come from listings a walk already fetched, so a
+    /// `stat` of a made-up path costs no request of its own.
+    async fn scope_exists(&self, s: &Scope) -> ResourceResult<bool> {
+        if !self.dates(&s.id).await?.contains(&s.date) {
+            return Ok(false);
+        }
+        Ok(match &s.ts {
+            None => true,
+            Some(ts) => self
+                .day(&s.id, &s.date)
+                .await?
+                .threads
+                .iter()
+                .any(|t| &t.ts == ts),
+        })
+    }
+
+    /// The scope's mtime: its newest message, falling back to the day's midnight
+    /// (or the thread's own start).
+    async fn scope_mtime(&self, s: &Scope) -> Option<SystemTime> {
+        match &s.ts {
+            Some(ts) => ts.parse::<f64>().ok().and_then(ts_time),
+            None => {
+                let day = self.day(&s.id, &s.date).await.ok()?;
+                day.newest.and_then(ts_time).or_else(|| date_mtime(&s.date))
+            }
+        }
     }
 
     /// Fetch an attachment's bytes, applying `range` ourselves when the server
@@ -689,11 +672,11 @@ impl SlackResource {
         })
     }
 
-    /// The `files/` entry named `name` in that day, if it exists.
-    async fn file_of(&self, id: &str, date: &str, name: &str) -> ResourceResult<FileMeta> {
-        self.day(id, date)
+    /// The `files/` entry named `name` in that scope, if it exists.
+    async fn file_of(&self, s: &Scope, name: &str) -> ResourceResult<FileMeta> {
+        self.contents(s)
             .await?
-            .files
+            .1
             .iter()
             .find(|f| f.vfs_name == name)
             .cloned()
@@ -709,27 +692,12 @@ impl Resource for SlackResource {
         range: Option<Range<u64>>,
     ) -> ResourceResult<Vec<u8>> {
         match resolve(path).ok_or(ResourceError::NotFound)? {
-            Node::Chat { id, date } => Ok(slice(&self.day(&id, &date).await?.chat, &range)),
-            Node::Thread { id, date, ts } => {
-                let t = self.listed_thread(&id, &date, &ts).await?;
-                Ok(slice(&t.jsonl, &range))
+            Node::Chat(s) => Ok(slice(&self.contents(&s).await?.0, &range)),
+            Node::File { scope, name } => {
+                let f = self.file_of(&scope, &name).await?;
+                self.download(&f, range).await
             }
             Node::User { id } => Ok(slice(&self.user_profile(&id).await?, &range)),
-            Node::File { id, date, name } => {
-                let f = self.file_of(&id, &date, &name).await?;
-                self.download(&f, range).await
-            }
-            Node::ThreadFile { id, date, ts, name } => {
-                let f = self
-                    .listed_thread(&id, &date, &ts)
-                    .await?
-                    .files
-                    .iter()
-                    .find(|f| f.vfs_name == name)
-                    .cloned()
-                    .ok_or(ResourceError::NotFound)?;
-                self.download(&f, range).await
-            }
             // Directories have no bytes.
             _ => Err(ResourceError::NotFound),
         }
@@ -768,57 +736,36 @@ impl Resource for SlackResource {
                 .iter()
                 .map(|d| dir(d, date_mtime(d)))
                 .collect()),
-            Node::Day { id, date } => {
-                let day = self.day(&id, &date).await?;
-                let mtime = day.newest.and_then(ts_time).or_else(|| date_mtime(&date));
-                Ok(vec![
-                    // Listed at 0 so the wrapper resolves the real length — the
-                    // day is already cached by this call, so that costs nothing.
-                    file(CHAT_FILE, 0, mtime),
-                    dir(THREADS_DIR, mtime),
-                    dir(FILES_DIR, mtime),
-                ])
-            }
-            Node::Threads { id, date } => {
-                let day = self.day(&id, &date).await?;
-                let mut out = Vec::with_capacity(day.threads.len() * 2);
-                for t in day.threads.iter() {
-                    let mtime = t.ts.parse::<f64>().ok().and_then(ts_time);
-                    // An estimate, not a measurement: sizing this for real would
-                    // fetch every thread, which is what separating them avoided.
-                    let size = match self.thread_len_if_read(&id, &t.ts).await {
-                        Some(exact) => exact,
-                        None => estimated_thread_size(t.replies),
-                    };
-                    out.push(file(&format!("{}.jsonl", t.ts), size, mtime));
-                    // The thread's own attachments, when its replies carry any.
-                    // Only known once the thread has been read, so an unread
-                    // thread lists the directory unconditionally rather than
-                    // fetching to find out whether it would be empty.
-                    out.push(dir(&t.ts, mtime));
+            // A day and a thread list the same two children. `threads/` only
+            // exists on a day — Slack has no nested threads.
+            Node::Convo(s) => {
+                let mtime = self.scope_mtime(&s).await;
+                // Listed at 0 so the wrapper resolves the real length: this call
+                // already fetched the bytes, so that costs nothing.
+                let mut out = vec![file(CHAT_FILE, 0, mtime), dir(FILES_DIR, mtime)];
+                if s.ts.is_none() {
+                    out.push(dir(THREADS_DIR, mtime));
                 }
                 Ok(out)
             }
-            Node::Files { id, date } => Ok(self
+            // One directory per thread, named by its root ts — the same shape a
+            // date directory has, so a thread reads exactly like a day.
+            Node::Threads { id, date } => Ok(self
                 .day(&id, &date)
                 .await?
-                .files
+                .threads
                 .iter()
-                .map(|f| file(&f.vfs_name, f.size, f.mtime))
+                .map(|t| dir(&t.ts, t.ts.parse::<f64>().ok().and_then(ts_time)))
                 .collect()),
-            Node::ThreadFiles { id, date, ts } => Ok(self
-                .listed_thread(&id, &date, &ts)
+            Node::Files(s) => Ok(self
+                .contents(&s)
                 .await?
-                .files
+                .1
                 .iter()
                 .map(|f| file(&f.vfs_name, f.size, f.mtime))
                 .collect()),
             // Files aren't directories.
-            Node::Chat { .. }
-            | Node::Thread { .. }
-            | Node::File { .. }
-            | Node::ThreadFile { .. }
-            | Node::User { .. } => Err(ResourceError::NotFound),
+            Node::Chat(_) | Node::File { .. } | Node::User { .. } => Err(ResourceError::NotFound),
         }
     }
 
@@ -832,7 +779,7 @@ impl Resource for SlackResource {
                 let c = self.conv_exists(&id).await?;
                 Ok(stat_dir(epoch_secs(c)))
             }
-            Node::Day { id, date } | Node::Threads { id, date } | Node::Files { id, date } => {
+            Node::Threads { id, date } => {
                 // A date directory exists iff it is in the conversation's range —
                 // which is what `readdir` of the conversation lists, so a `stat`
                 // after an `ls` is served from that cached range.
@@ -841,66 +788,25 @@ impl Resource for SlackResource {
                 }
                 Ok(stat_dir(date_mtime(&date)))
             }
-            Node::Chat { id, date } => {
-                let day = self.day(&id, &date).await?;
-                Ok(FileStat {
-                    kind: FileKind::File,
-                    size: day.chat.len() as u64,
-                    mtime: day.newest.and_then(ts_time).or_else(|| date_mtime(&date)),
-                    ..Default::default()
-                })
-            }
-            Node::Thread { id, date, ts } => {
-                let day = self.day(&id, &date).await?;
-                let Some(t) = day.threads.iter().find(|t| t.ts == ts) else {
-                    return Err(ResourceError::NotFound);
-                };
-                // Exact once it has been read (the cache holds the bytes), an
-                // estimate until then — see `estimated_thread_size`.
-                let size = match self.thread_len_if_read(&id, &ts).await {
-                    Some(exact) => exact,
-                    None => estimated_thread_size(t.replies),
-                };
-                Ok(FileStat {
-                    kind: FileKind::File,
-                    size,
-                    mtime: ts.parse::<f64>().ok().and_then(ts_time),
-                    ..Default::default()
-                })
-            }
-            Node::ThreadFiles { id, date, ts } => {
-                // Exists iff the day listed that thread; reading it is what fills
-                // the directory, so a `stat` before that says "a directory" without
-                // fetching.
-                if !self
-                    .day(&id, &date)
-                    .await?
-                    .threads
-                    .iter()
-                    .any(|t| t.ts == ts)
-                {
+            // A day or a thread directory, and their `files/`: existence comes
+            // from listings a walk already fetched, not from producing contents.
+            Node::Convo(s) | Node::Files(s) => {
+                if !self.scope_exists(&s).await? {
                     return Err(ResourceError::NotFound);
                 }
-                Ok(stat_dir(ts.parse::<f64>().ok().and_then(ts_time)))
+                Ok(stat_dir(self.scope_mtime(&s).await))
             }
-            Node::File { id, date, name } => {
-                let f = self.file_of(&id, &date, &name).await?;
+            Node::Chat(s) => {
+                let (bytes, _) = self.contents(&s).await?;
                 Ok(FileStat {
                     kind: FileKind::File,
-                    size: f.size,
-                    mtime: f.mtime,
+                    size: bytes.len() as u64,
+                    mtime: self.scope_mtime(&s).await,
                     ..Default::default()
                 })
             }
-            Node::ThreadFile { id, date, ts, name } => {
-                let f = self
-                    .listed_thread(&id, &date, &ts)
-                    .await?
-                    .files
-                    .iter()
-                    .find(|f| f.vfs_name == name)
-                    .cloned()
-                    .ok_or(ResourceError::NotFound)?;
+            Node::File { scope, name } => {
+                let f = self.file_of(&scope, &name).await?;
                 Ok(FileStat {
                     kind: FileKind::File,
                     size: f.size,
@@ -999,53 +905,47 @@ fn resolve(path: &MountPath) -> Option<Node> {
             Some(Node::User { id: conv_id(stem)? })
         }
         [s, conv] if *s == CHANNELS || *s == DMS => Some(Node::Conv { id: conv_id(conv)? }),
-        [s, conv, date] if (*s == CHANNELS || *s == DMS) && is_date(date) => Some(Node::Day {
-            id: conv_id(conv)?,
-            date: date.to_string(),
-        }),
-        [s, conv, date, leaf] if (*s == CHANNELS || *s == DMS) && is_date(date) => {
-            let (id, date) = (conv_id(conv)?, date.to_string());
-            match *leaf {
-                CHAT_FILE => Some(Node::Chat { id, date }),
-                THREADS_DIR => Some(Node::Threads { id, date }),
-                FILES_DIR => Some(Node::Files { id, date }),
-                _ => None,
-            }
-        }
-        [s, conv, date, dir, leaf] if (*s == CHANNELS || *s == DMS) && is_date(date) => {
-            let (id, date) = (conv_id(conv)?, date.to_string());
-            match *dir {
-                // `<ts>.jsonl` is the thread; the bare `<ts>` is its files dir.
-                THREADS_DIR => match leaf.strip_suffix(".jsonl") {
-                    Some(ts) => Some(Node::Thread {
-                        id,
-                        date,
-                        ts: valid_ts(ts)?,
-                    }),
-                    None => Some(Node::ThreadFiles {
-                        id,
-                        date,
-                        ts: valid_ts(leaf)?,
-                    }),
-                },
-                FILES_DIR => Some(Node::File {
-                    id,
-                    date,
-                    name: (*leaf).to_string(),
-                }),
-                _ => None,
-            }
-        }
-        [s, conv, date, dir, ts, leaf] if (*s == CHANNELS || *s == DMS) && is_date(date) => {
-            // Only `threads/<ts>/<file>` goes this deep; `files/` holds no dirs.
-            (*dir == THREADS_DIR).then_some(())?;
-            Some(Node::ThreadFile {
+        // A day, then whatever is inside it. A thread re-enters the same tail via
+        // `threads/<ts>`, which is why the two have identical children.
+        [s, conv, date, rest @ ..] if (*s == CHANNELS || *s == DMS) && is_date(date) => {
+            let scope = Scope {
                 id: conv_id(conv)?,
                 date: date.to_string(),
-                ts: valid_ts(ts)?,
-                name: (*leaf).to_string(),
-            })
+                ts: None,
+            };
+            match rest {
+                // The day's own `threads/` listing has no counterpart inside a
+                // thread (Slack has no nested threads), so it is handled here
+                // rather than in `within`.
+                [d] if *d == THREADS_DIR => Some(Node::Threads {
+                    id: scope.id,
+                    date: scope.date,
+                }),
+                [d, ts, rest @ ..] if *d == THREADS_DIR => within(
+                    Scope {
+                        ts: Some(valid_ts(ts)?),
+                        ..scope
+                    },
+                    rest,
+                ),
+                _ => within(scope, rest),
+            }
         }
+        _ => None,
+    }
+}
+
+/// The part of a path below a day or a thread — both hold exactly `chat.jsonl`
+/// and `files/`, so one function resolves both.
+fn within(scope: Scope, rest: &[&str]) -> Option<Node> {
+    match rest {
+        [] => Some(Node::Convo(scope)),
+        [leaf] if *leaf == CHAT_FILE => Some(Node::Chat(scope)),
+        [leaf] if *leaf == FILES_DIR => Some(Node::Files(scope)),
+        [d, name] if *d == FILES_DIR => Some(Node::File {
+            scope,
+            name: (*name).to_string(),
+        }),
         _ => None,
     }
 }

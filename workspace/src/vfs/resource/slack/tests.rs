@@ -26,55 +26,58 @@ fn a_deep_path_resolves_from_its_segments_alone() {
         r("/channels/general__C0123"),
         Some(Node::Conv { id: "C0123".into() })
     );
+    // A day, and the two children it holds.
+    let day = Scope {
+        id: "C0123".into(),
+        date: "2026-08-03".into(),
+        ts: None,
+    };
+    let base = "/channels/general__C0123/2026-08-03";
+    assert_eq!(r(base), Some(Node::Convo(day.clone())));
     assert_eq!(
-        r("/channels/general__C0123/2026-08-03"),
-        Some(Node::Day {
-            id: "C0123".into(),
-            date: "2026-08-03".into()
-        })
+        r(&format!("{base}/chat.jsonl")),
+        Some(Node::Chat(day.clone()))
     );
+    assert_eq!(r(&format!("{base}/files")), Some(Node::Files(day.clone())));
     assert_eq!(
-        r("/channels/general__C0123/2026-08-03/chat.jsonl"),
-        Some(Node::Chat {
-            id: "C0123".into(),
-            date: "2026-08-03".into()
-        })
-    );
-    assert_eq!(
-        r("/channels/general__C0123/2026-08-03/threads/1754210000.123456.jsonl"),
-        Some(Node::Thread {
-            id: "C0123".into(),
-            date: "2026-08-03".into(),
-            ts: "1754210000.123456".into()
-        })
-    );
-    assert_eq!(
-        r("/channels/general__C0123/2026-08-03/files/spec__F0456.pdf"),
+        r(&format!("{base}/files/spec__F0456.pdf")),
         Some(Node::File {
-            id: "C0123".into(),
-            date: "2026-08-03".into(),
+            scope: day.clone(),
             name: "spec__F0456.pdf".into()
         })
     );
-    // A thread's own attachment directory, and a file inside it. `<ts>.jsonl` is
-    // the thread; the bare `<ts>` is where its replies' files live.
     assert_eq!(
-        r("/channels/general__C0123/2026-08-03/threads/1754210000.123456"),
-        Some(Node::ThreadFiles {
+        r(&format!("{base}/threads")),
+        Some(Node::Threads {
             id: "C0123".into(),
-            date: "2026-08-03".into(),
-            ts: "1754210000.123456".into()
+            date: "2026-08-03".into()
         })
     );
+
+    // A thread is the SAME shape as a day — that is the point of `Scope`, and it
+    // is why the tree needs one explanation rather than two.
+    let thread = Scope {
+        ts: Some("1754210000.123456".into()),
+        ..day
+    };
+    let tbase = format!("{base}/threads/1754210000.123456");
+    assert_eq!(r(&tbase), Some(Node::Convo(thread.clone())));
     assert_eq!(
-        r("/channels/general__C0123/2026-08-03/threads/1754210000.123456/deck__F0456.pptx"),
-        Some(Node::ThreadFile {
-            id: "C0123".into(),
-            date: "2026-08-03".into(),
-            ts: "1754210000.123456".into(),
+        r(&format!("{tbase}/chat.jsonl")),
+        Some(Node::Chat(thread.clone()))
+    );
+    assert_eq!(
+        r(&format!("{tbase}/files")),
+        Some(Node::Files(thread.clone()))
+    );
+    assert_eq!(
+        r(&format!("{tbase}/files/deck__F0456.pptx")),
+        Some(Node::File {
+            scope: thread,
             name: "deck__F0456.pptx".into()
         })
     );
+
     // DMs route through the same shapes.
     assert_eq!(
         r("/dms/kim__D0789/2026-08-03/threads"),
@@ -82,6 +85,18 @@ fn a_deep_path_resolves_from_its_segments_alone() {
             id: "D0789".into(),
             date: "2026-08-03".into()
         })
+    );
+}
+
+/// Slack has no nested threads, so a thread has no `threads/` of its own — and a
+/// path claiming one must not resolve to the day's.
+#[test]
+fn a_thread_has_no_threads_of_its_own() {
+    let base = "/channels/general__C0123/2026-08-03/threads/1754210000.123456";
+    assert_eq!(resolve(&MountPath::new(format!("{base}/threads"))), None);
+    assert_eq!(
+        resolve(&MountPath::new(format!("{base}/threads/1754210001.1"))),
+        None
     );
 }
 
@@ -103,41 +118,16 @@ fn only_timestamp_shaped_segments_become_a_thread() {
     ] {
         assert!(valid_ts(bad).is_none(), "{bad:?} should be rejected");
     }
-    // And a rejected ts makes the whole path unresolvable, at both depths.
+    // And a rejected ts makes the whole path unresolvable, at every depth below.
     let base = "/channels/general__C0123/2026-08-03/threads";
-    assert_eq!(resolve(&MountPath::new(format!("{base}/abc"))), None);
-    assert_eq!(resolve(&MountPath::new(format!("{base}/abc.jsonl"))), None);
-    assert_eq!(
-        resolve(&MountPath::new(format!("{base}/abc/f__F1.pdf"))),
-        None
-    );
-}
-
-/// An unread thread's size is guessed from `reply_count`, and the guess must be an
-/// upper bound: over-estimating means `cat` sees the real bytes then EOF, while
-/// under-estimating truncates the file. It also cannot be 0 — a 0-length file
-/// clamps reads to nothing under `direct_io`, and the cache wrapper eagerly
-/// renders anything listed at 0, which here would fetch every thread in the
-/// directory.
-#[test]
-fn an_unread_thread_is_sized_as_an_upper_bound() {
-    // Measured per-message reality on real threads: 437 B and 724 B.
-    for (replies, real) in [(1u64, 874u64), (3, 2898)] {
-        let est = estimated_thread_size(replies);
-        assert!(est >= real, "{replies} replies: {est} must bound {real}");
-        // And not absurdly: the 8 MiB flat placeholder this replaced was 2895x
-        // to 9598x over.
-        assert!(
-            est < real * 20,
-            "{replies} replies: {est} is {}x over {real}",
-            est / real
-        );
+    for bad in [
+        format!("{base}/abc"),
+        format!("{base}/abc/chat.jsonl"),
+        format!("{base}/abc/files"),
+        format!("{base}/abc/files/f__F1.pdf"),
+    ] {
+        assert_eq!(resolve(&MountPath::new(&bad)), None, "should reject {bad}");
     }
-    assert!(estimated_thread_size(0) > 0, "never 0");
-    // Capped, so a thread stays inside the content cache's per-object limit
-    // instead of being re-fetched per chunk.
-    assert_eq!(estimated_thread_size(u64::MAX), THREAD_SIZE_MAX);
-    assert_eq!(estimated_thread_size(100_000), THREAD_SIZE_MAX);
 }
 
 /// A path that names nothing must resolve to `None` rather than to some
@@ -566,7 +556,7 @@ async fn slack_mock_tree_walk() {
         // Descending a day lists exactly the three children.
         let day_path = conv.child(&dates[0].name);
         let children = names(&r.readdir(&day_path).await.expect("day"));
-        assert_eq!(children, vec![CHAT_FILE, THREADS_DIR, FILES_DIR]);
+        assert_eq!(children, vec![CHAT_FILE, FILES_DIR, THREADS_DIR]);
 
         let chat = r
             .read_bytes(&day_path.child(CHAT_FILE), None)
@@ -591,16 +581,23 @@ async fn slack_mock_tree_walk() {
             .readdir(&day_path.child(THREADS_DIR))
             .await
             .expect("threads");
-        // One `<ts>.jsonl` plus one `<ts>/` files dir per thread.
-        let (jsonl, dirs): (Vec<_>, Vec<_>) = threads
-            .iter()
-            .partition(|e| matches!(e.kind, FileKind::File));
-        assert_eq!(jsonl.len(), dirs.len(), "one files dir per thread");
-        for t in jsonl.iter().take(2) {
-            let p = day_path.child(THREADS_DIR).child(&t.name);
-            // The listing's size is an estimate; it must bound the truth.
-            let estimated = r.stat(&p).await.expect("stat thread").size;
-            let bytes = r.read_bytes(&p, None).await.expect("a thread");
+        // One directory per thread, each shaped exactly like a day.
+        assert!(
+            threads.iter().all(|e| matches!(e.kind, FileKind::Dir)),
+            "a thread is a directory: {:?}",
+            names(&threads)
+        );
+        for t in threads.iter().take(2) {
+            let tp = day_path.child(THREADS_DIR).child(&t.name);
+            assert_eq!(
+                names(&r.readdir(&tp).await.expect("thread")),
+                vec![CHAT_FILE, FILES_DIR],
+                "a thread holds the same two children a day does"
+            );
+            let bytes = r
+                .read_bytes(&tp.child(CHAT_FILE), None)
+                .await
+                .expect("a thread");
             let lines = bytes
                 .split(|b| *b == b'\n')
                 .filter(|l| !l.is_empty())
@@ -608,22 +605,12 @@ async fn slack_mock_tree_walk() {
             // A listed thread has a root plus at least one reply.
             assert!(lines >= 2, "{} has {lines} line(s)", t.name);
             println!("  thread {} -> {lines} messages", t.name);
-            assert!(
-                estimated >= bytes.len() as u64,
-                "estimate {estimated} must bound {}",
-                bytes.len()
+            // stat must agree with the read, as it does for a day.
+            assert_eq!(
+                r.stat(&tp.child(CHAT_FILE)).await.expect("stat").size,
+                bytes.len() as u64
             );
-            // Once read, the size is exact rather than estimated.
-            let st = r.stat(&p).await.expect("stat thread");
-            assert_eq!(st.size, bytes.len() as u64);
-
-            // The thread's own attachment dir resolves (empty is fine — the mock
-            // corpus has no in-thread uploads).
-            let ts = t.name.trim_end_matches(".jsonl");
-            let in_thread = r
-                .readdir(&day_path.child(THREADS_DIR).child(ts))
-                .await
-                .expect("thread files dir");
+            let in_thread = r.readdir(&tp.child(FILES_DIR)).await.expect("thread files");
             println!("    {} file(s) inside it", in_thread.len());
         }
 
@@ -781,7 +768,7 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
         let done = timed("day listing");
         let children = names(&r.readdir(&day).await.expect("day"));
         done(format!("{children:?}"));
-        assert_eq!(children, vec![CHAT_FILE, THREADS_DIR, FILES_DIR]);
+        assert_eq!(children, vec![CHAT_FILE, FILES_DIR, THREADS_DIR]);
 
         let done = timed("cat chat.jsonl");
         let chat = r
@@ -805,27 +792,32 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
             continue; // a quiet day; try the next one
         }
 
-        // Each thread contributes two entries: `<ts>.jsonl` and its files dir.
+        // One directory per thread, each shaped exactly like a day — so reading a
+        // thread is the same three steps as reading a day.
         let threads = r.readdir(&day.child(THREADS_DIR)).await.expect("threads");
-        let (jsonl, dirs): (Vec<_>, Vec<_>) = threads
-            .iter()
-            .partition(|e| matches!(e.kind, FileKind::File));
-        println!("  {} thread(s) that day", jsonl.len());
-        assert_eq!(jsonl.len(), dirs.len(), "one files dir per thread");
-        if let Some(t) = jsonl.first() {
-            let p = day.child(THREADS_DIR).child(&t.name);
-            // The listed size is an estimate before the read...
-            let before = r.stat(&p).await.expect("stat thread").size;
-            let done = timed("cat a thread");
-            let bytes = r.read_bytes(&p, None).await.expect("thread");
+        println!("  {} thread(s) that day", threads.len());
+        assert!(
+            threads.iter().all(|e| matches!(e.kind, FileKind::Dir)),
+            "a thread is a directory: {:?}",
+            names(&threads)
+        );
+        if let Some(t) = threads.first() {
+            let tp = day.child(THREADS_DIR).child(&t.name);
+            let done = timed("thread listing");
+            let children = names(&r.readdir(&tp).await.expect("thread"));
+            done(format!("{children:?}"));
+            assert_eq!(children, vec![CHAT_FILE, FILES_DIR]);
+
+            let done = timed("cat a thread's chat.jsonl");
+            let bytes = r
+                .read_bytes(&tp.child(CHAT_FILE), None)
+                .await
+                .expect("thread");
             done(format!("{} bytes", bytes.len()));
-            // ...and exact after it, having bounded the truth beforehand.
-            let after = r.stat(&p).await.expect("stat thread").size;
-            println!("  thread size: estimated {before} -> resolved {after}");
-            assert_eq!(after, bytes.len() as u64);
-            assert!(
-                before >= after,
-                "the estimate ({before}) must bound the real length ({after})"
+            // stat agrees with the read, exactly as it does for a day.
+            assert_eq!(
+                r.stat(&tp.child(CHAT_FILE)).await.expect("stat").size,
+                bytes.len() as u64
             );
             // A listed thread is a root plus at least one reply.
             let n = bytes
@@ -834,10 +826,9 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
                 .count();
             assert!(n >= 2, "{} carried {n} message(s)", t.name);
 
-            // Attachments posted INSIDE the thread live under its own dir — the
-            // day's files/ cannot hold them (history returns roots only).
-            let ts = t.name.trim_end_matches(".jsonl");
-            let tf = day.child(THREADS_DIR).child(ts);
+            // Attachments posted INSIDE the thread live in ITS files/ — the day's
+            // cannot hold them (history returns roots only).
+            let tf = tp.child(FILES_DIR);
             let in_thread = r.readdir(&tf).await.expect("thread files");
             println!("  {} file(s) inside that thread", in_thread.len());
             if let Some(f) = in_thread.iter().find(|f| f.size > 0) {
