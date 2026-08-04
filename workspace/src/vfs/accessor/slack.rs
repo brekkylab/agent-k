@@ -38,9 +38,13 @@ fn api_base(base_url: Option<&str>) -> String {
 /// it; a bounded retry keeps a transient limit from failing the whole read.
 const MAX_RETRIES: u32 = 5;
 /// Cap on a single retry wait. These calls sit behind a FUSE op the agent blocks
-/// on, so a `Retry-After` of 60s (which Slack's Tier-1 methods do send) is
-/// clamped rather than honored in full — the read fails and can be retried,
-/// which beats wedging the guest for a minute per call.
+/// on, so a long `Retry-After` is clamped rather than honored in full — the read
+/// fails and can be retried, which beats wedging the guest.
+///
+/// The clamp is a deliberate mismatch on the 1-request/minute tier: obeying a
+/// 60s wait there would be correct and unusable, so a throttled read surfaces as
+/// an error instead. Whoever raises the ceiling should move the wait off the FUSE
+/// path first (a background fetch the guest polls), not just raise the number.
 const MAX_BACKOFF: Duration = Duration::from_secs(16);
 /// Jitter ceiling, recomputed per retry so concurrent readers don't retry in
 /// lockstep.
@@ -66,9 +70,20 @@ fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
 
 /// Items per page for the cursor-paginated listings. Slack's documented ceiling
 /// is 1000 but it recommends "no more than 200" and returns fewer under load.
+///
+/// It is a *request*, not a promise, and history is where that matters: an app
+/// under the 2025-05-29 non-Marketplace limits gets **15 objects per request** for
+/// `conversations.history`/`replies` no matter what is asked for. So a busy day
+/// pages, and each page is its own minute on that tier.
 const PAGE_LIMIT: usize = 200;
-/// Pages one paginated listing will walk. A workspace with more conversations
-/// than this truncates (logged) rather than paginating without bound.
+/// Pages one paginated listing will walk, past which it truncates (logged) rather
+/// than paginating without bound.
+///
+/// Sized for the listings this actually protects — `conversations.list` and
+/// `users.list`, where 50 pages of ~200 is a workspace far larger than any this
+/// serves. It is a backstop, not a budget: a day that needed 50 history pages
+/// would be 750 messages under the 15-per-request cap, and on that tier the
+/// request timeout ends the read long before this does.
 const MAX_PAGES: usize = 50;
 
 /// A Slack API error carried out of [`SlackAccessor::call`], preserving the

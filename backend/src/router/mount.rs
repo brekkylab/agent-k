@@ -81,6 +81,15 @@ pub enum ProviderSpec {
     /// Do **not** enable token rotation on the app: the accessor holds no refresh
     /// loop, so a rotating token would break the mount when it expires.
     ///
+    /// Rate limits depend on how the app is distributed, and the difference is
+    /// large enough to plan around. Since 2025-05-29 an app that is commercially
+    /// distributed without Marketplace approval gets `conversations.history` and
+    /// `conversations.replies` at **1 request/minute, 15 objects per request**,
+    /// while internal customer-built apps keep the ordinary tiers (Tier 3, 50+/min)
+    /// — see <https://docs.slack.dev/apis/web-api/rate-limits>. So a mount that is
+    /// quick in development can be minutes-per-read once this ships to customer
+    /// workspaces, and Marketplace approval is what buys that back.
+    ///
     /// The frontend runs the OAuth consent and sends only the authorization
     /// `code` (+ the `redirect_uri` used at consent). The backend exchanges it
     /// server-side with the app's config-held client credentials

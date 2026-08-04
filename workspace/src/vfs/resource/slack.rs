@@ -6,9 +6,17 @@
 //! then date, then that day's messages — and the layout is chosen for what it
 //! costs in API calls rather than for what Slack's data model looks like.
 //!
-//! That cost is the design constraint: `conversations.history` for an app created
-//! after 2025-05 is limited to **1 request/minute**. Three consequences shape the
-//! tree:
+//! That cost is the design constraint, and how hard it bites depends on how this
+//! app is distributed. Slack's own tiers put `conversations.history` at Tier 3
+//! (50+/min), but since 2025-05-29 an app that is **commercially distributed and
+//! not Marketplace-approved** gets `conversations.history` and
+//! `conversations.replies` at **1 request/minute, 15 objects per request**;
+//! internal customer-built apps keep their existing limits
+//! (<https://docs.slack.dev/apis/web-api/rate-limits>, plus the 2025-05-29 and
+//! 2025-06-03 changelog entries). Measured from an internal app, 100 consecutive
+//! `conversations.history` calls went through untouched at ~0.33s each — so the
+//! severe tier is what a deployed agent-k faces, not what a dev workspace shows.
+//! Two consequences shape the tree either way:
 //!
 //! - **Descending one day costs one call.** A single `conversations.history`
 //!   window fills `chat.jsonl`'s bytes, the `threads/` listing and the `files/`
@@ -16,8 +24,9 @@
 //!   directory and listing all three of its children is one request, not four.
 //! - **A thread is its own directory, shaped like a day.** `conversations.history`
 //!   returns thread *roots* only; replies need one `conversations.replies` per
-//!   thread. Inlining them would make `cat chat.jsonl` cost `1 + N` calls — a
-//!   20-thread day is 21 minutes at one call per minute. So a thread sits under
+//!   thread. Inlining them would make `cat chat.jsonl` cost `1 + N` calls, spent
+//!   whether or not anything reads those replies — and on the severe tier a
+//!   20-thread day would take 21 minutes. So a thread sits under
 //!   `threads/<root-ts>/` with the same two children a day has, filled by one call
 //!   when it is entered.
 //!
@@ -114,10 +123,10 @@ group DMs, by date. A thread is a directory shaped like a day.
   the threads worth expanding. A file posted inside a thread is in THAT thread's
   files/, never the day's.
 
-  Every listing and read is a live API call, and Slack rate-limits history hard.
-  Walk one level at a time; never recursive find or grep here. Names are not
-  predictable — `ls` the parent rather than constructing a path. Dates go back 90
-  days at most, and exist for quiet days too.
+  Every listing and read is a live API call, and reading history may be limited to
+  one request per minute. Walk one level at a time; never recursive find or grep
+  here. Names are not predictable — `ls` the parent rather than constructing a
+  path. Dates go back 90 days at most, and exist for quiet days too.
 
   This is private material, DMs included. Read what the task needs and no more,
   and do not carry someone's messages into an output nobody asked for.";
