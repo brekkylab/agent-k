@@ -13,10 +13,13 @@
 //! `conversations.replies` at **1 request/minute, 15 objects per request**;
 //! internal customer-built apps keep their existing limits
 //! (<https://docs.slack.dev/apis/web-api/rate-limits>, plus the 2025-05-29 and
-//! 2025-06-03 changelog entries). Measured from an internal app, 100 consecutive
-//! `conversations.history` calls went through untouched at ~0.33s each — so the
-//! severe tier is what a deployed agent-k faces, not what a dev workspace shows.
-//! Two consequences shape the tree either way:
+//! 2025-06-03 changelog entries). The line is drawn at distribution, not at how
+//! serious the use is: a company running its own Slack app against its own
+//! workspace stays on the ordinary tiers, in production as much as in development.
+//! Measured from such an app, 100 consecutive `conversations.history` calls went
+//! through untouched at ~0.33s each. The severe tier is for one app installed into
+//! many workspaces — so which one applies is a deployment-model question, and
+//! whichever it is, two consequences shape the tree:
 //!
 //! - **Descending one day costs one call.** A single `conversations.history`
 //!   window fills `chat.jsonl`'s bytes, the `threads/` listing and the `files/`
