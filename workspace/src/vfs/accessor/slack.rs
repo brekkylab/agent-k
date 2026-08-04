@@ -54,7 +54,8 @@ fn backoff_delay(n: u32) -> Duration {
 }
 
 /// The `Retry-After` delay, if present. Slack sends delta-seconds on a 429 (and
-/// alongside `error: "ratelimited"`); the HTTP-date form is not honored.
+/// alongside `error: "ratelimited"`); the HTTP-date form is not honored (treated
+/// as absent → falls back to [`backoff_delay`]).
 fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
     let raw = resp
         .headers()
@@ -637,6 +638,28 @@ mod tests {
             api_base(Some("http://localhost:8000/")),
             "http://localhost:8000/slack/api"
         );
+    }
+
+    /// Retry `n` waits in `[2^n s, 2^n s + 1s]`, capped at [`MAX_BACKOFF`]. The
+    /// jitter floor matters as much as the ceiling: without it, the concurrent
+    /// readers that tripped this limit together would retry together and trip it
+    /// again.
+    #[test]
+    fn backoff_is_exponential_jittered_and_capped() {
+        for _ in 0..100 {
+            for n in 0..3u32 {
+                let base = Duration::from_secs(1u64 << n);
+                let d = backoff_delay(n);
+                assert!(
+                    d >= base && d <= base + Duration::from_millis(JITTER_MAX_MS),
+                    "n={n}: {d:?}"
+                );
+            }
+            // 2^4 = 16s already meets the cap, so jitter cannot push past it.
+            assert_eq!(backoff_delay(4), MAX_BACKOFF);
+            // The shift is clamped, so a large n saturates instead of overflowing.
+            assert_eq!(backoff_delay(64), MAX_BACKOFF);
+        }
     }
 
     fn config(user: Option<&str>, bot: Option<&str>) -> SlackConfig {
