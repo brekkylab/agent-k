@@ -1633,10 +1633,9 @@ mod tests {
 
     fn live_config() -> Option<GdriveConfig> {
         Some(GdriveConfig {
-            client_id: std::env::var("GDRIVE_CLIENT_ID").ok()?,
-            client_secret: std::env::var("GDRIVE_CLIENT_SECRET").ok()?,
-            refresh_token: std::env::var("GDRIVE_REFRESH_TOKEN").ok()?,
-            account_email: std::env::var("GDRIVE_EMAIL").unwrap_or_else(|_| "live-test".into()),
+            client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
+            client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
+            refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
             origins: Default::default(),
         })
     }
