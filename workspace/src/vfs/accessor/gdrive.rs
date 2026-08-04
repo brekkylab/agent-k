@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::gmail::{OAUTH_ORIGIN, Origins};
+use super::google::{OAUTH_ORIGIN, Origins};
 use tokio::sync::Mutex;
 
 /// The origin each service lives on, without the version suffix this code appends —

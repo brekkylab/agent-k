@@ -7,89 +7,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-/// The origin each Google service lives on, without the version suffix this code
-/// appends. Overriding one replaces the origin and nothing else, so a mock answers
-/// the same paths the real API does.
-pub(crate) const OAUTH_ORIGIN: &str = "https://oauth2.googleapis.com";
+use super::google::{OAUTH_ORIGIN, Origins};
+
+/// This service's origin, without the version suffix [`endpoints`] appends.
 const GMAIL_ORIGIN: &str = "https://gmail.googleapis.com/gmail";
 
-/// `(api_base, token_url)` for a config.
-///
-/// Per-service overrides, because Google gives each service its own host and no
-/// single origin can stand in for all of them. A deployment that fronts them behind
-/// one host points each override at its own path — for enterprise-mock,
-/// `…/gmail` and `…/oauth2` — and the version suffix stays what the official API
-/// uses, so the same code addresses a mock and production alike. Guessing the
-/// intermediate path here instead (`{base}/gmail/v1`) hard-codes one mock's layout
-/// and works nowhere else.
+/// `(api_base, token_url)` for a config: each service's origin (see [`Origins`]) plus
+/// the version suffix the official API uses. Guessing the intermediate path here
+/// instead (`{base}/gmail/v1`) hard-codes one deployment's layout.
 fn endpoints(o: &Origins) -> (String, String) {
     (
         format!("{}/v1", Origins::origin(&o.gmail, GMAIL_ORIGIN)),
         format!("{}/token", Origins::origin(&o.oauth, OAUTH_ORIGIN)),
     )
-}
-
-/// Where to reach each Google service. `None` = the real host.
-///
-/// Google gives every service its own host, and no single origin stands in for all of
-/// them, so each is overridable on its own. Whatever is set here is an *origin*: this
-/// code appends only the suffix the official API uses, so the same paths address a
-/// mock and production alike.
-///
-/// Deployment-level only: the token endpoint receives the app's client secret, so
-/// none of this may be user-suppliable.
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Origins {
-    /// Serves `gmail/v1` (`{gmail}/v1/users/…`), with batch one level above it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gmail: Option<String>,
-    /// Serves the OAuth token endpoint (`{oauth}/token`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oauth: Option<String>,
-    /// Serves `drive/v3` (`{drive}/v3/files`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drive: Option<String>,
-    /// Serves the Docs API (`{docs}/v1/documents/…`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub docs: Option<String>,
-    /// Serves the Sheets API (`{sheets}/v4/spreadsheets/…`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sheets: Option<String>,
-    /// Serves the Slides API (`{slides}/v1/presentations/…`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slides: Option<String>,
-}
-
-impl Origins {
-    /// Whether nothing is overridden, so the field can stay out of a serialized
-    /// config.
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
-
-    /// Every service behind one host, laid out the way Google's own paths read:
-    /// `{host}/gmail`, `{host}/oauth2`, `{host}/drive` and so on. A convenience for a
-    /// deployment that fronts all of them, not a substitute for the per-service knobs.
-    pub fn behind(host: &str) -> Self {
-        let h = host.trim_end_matches('/');
-        let at = |service: &str| Some(format!("{h}/{service}"));
-        Self {
-            gmail: at("gmail"),
-            oauth: at("oauth2"),
-            drive: at("drive"),
-            docs: at("docs"),
-            sheets: at("sheets"),
-            slides: at("slides"),
-        }
-    }
-
-    /// `over` if set, else `default`, without a trailing slash.
-    pub(crate) fn origin(over: &Option<String>, default: &str) -> String {
-        over.as_deref()
-            .unwrap_or(default)
-            .trim_end_matches('/')
-            .to_string()
-    }
 }
 
 /// Messages per batch request. Google's hard cap is 100, but 50 halves the
