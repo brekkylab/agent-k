@@ -498,11 +498,17 @@ fn names(entries: &[DirEntry]) -> Vec<String> {
 /// The mock has **no `oauth.v2.access`**, so the code exchange is only covered by
 /// the live test; this starts from a token.
 ///
-///   cd ~/Documents/Dev/github/enterprise-mock && .venv/bin/uvicorn app.main:app --port 8000
-///   SLACK_BASE_URL=http://localhost:8000 SLACK_USER_TOKEN=<admin-service-token> \
+///   SLACK_BASE_URL=<mock origin> SLACK_USER_TOKEN=usr-… \
 ///     cargo test -p workspace slack_mock -- --ignored --nocapture
+///
+/// Tokens come from the mock's own `GET /_mock/users`. A big corpus is what makes
+/// this worth running — measured against one with 36 channels and 327 users, a
+/// listing pages and takes seconds, exercising what a 3-member workspace never
+/// reaches. It is also close to the client's 30s timeout, so run the two mock
+/// tests one at a time (`slack_mock_tree_walk`, then `slack_mock_search`) rather
+/// than letting them contend.
 #[tokio::test]
-#[ignore = "requires a running enterprise-mock (SLACK_BASE_URL + a SLACK_*_TOKEN)"]
+#[ignore = "requires a reachable enterprise-mock (SLACK_BASE_URL + a SLACK_*_TOKEN)"]
 async fn slack_mock_tree_walk() {
     let Some(cfg) = mock_config() else {
         eprintln!("set SLACK_BASE_URL and SLACK_USER_TOKEN (or SLACK_BOT_TOKEN) to run");
