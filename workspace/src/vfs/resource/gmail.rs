@@ -1179,9 +1179,9 @@ mod tests {
 
     fn live_config() -> Option<GmailConfig> {
         Some(GmailConfig {
-            client_id: std::env::var("GMAIL_CLIENT_ID").ok()?,
-            client_secret: std::env::var("GMAIL_CLIENT_SECRET").ok()?,
-            refresh_token: std::env::var("GMAIL_REFRESH_TOKEN").ok()?,
+            client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
+            client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
+            refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
             account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
             origins: match std::env::var("GMAIL_BASE_URL") {
                 Ok(host) => crate::vfs::accessor::Origins::behind(&host),
