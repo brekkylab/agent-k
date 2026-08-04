@@ -47,10 +47,15 @@ const CHANNELS: &str = "channels";
 const DMS: &str = "dms";
 const USERS: &str = "users";
 
-/// Conversation types behind each section. Slack lists both channel kinds from
-/// one call, and both DM kinds from another.
-const CHANNEL_TYPES: &str = "public_channel,private_channel";
-const DM_TYPES: &str = "im,mpim";
+/// Conversation types behind each section, widest kind first. Slack lists both
+/// kinds of a section in one call, but it wants a scope per *type* and fails the
+/// whole call when one is missing (`types=public_channel,private_channel` on a
+/// token without `groups:read` → `missing_scope`, no channels at all), so a
+/// section that cannot have both drops the second kind and asks again. Measured
+/// against a real workspace holding only `channels:read`, where asking for both
+/// lost the public channels it could have read.
+const CHANNEL_TYPES: &[&str] = &["public_channel", "private_channel"];
+const DM_TYPES: &[&str] = &["im", "mpim"];
 
 /// The day file and its two subdirectories.
 const CHAT_FILE: &str = "chat.jsonl";
@@ -69,16 +74,6 @@ const FILES_DIR: &str = "files";
 /// the shorter TTL), and for the span between the two numbers `ls` answers from
 /// one snapshot while reads resolve against another.
 const TTL: Duration = Duration::from_secs(300);
-
-/// Days of history a conversation exposes, newest backwards.
-///
-/// Slack has no "which days have messages" endpoint, so the date directories are
-/// generated from the span between the conversation's `created` and its newest
-/// message. A years-old channel would otherwise list thousands of date
-/// directories, most of them quiet, and `ls` would be unreadable. 90 days is
-/// mirage's bound and covers the recency an agent asks about; anything older is
-/// reachable through search rather than by walking.
-const MAX_DAYS: i64 = 90;
 
 /// Hits one search returns. Slack ranks by relevance/recency, and a reader that
 /// needs more than this wants a narrower query, not a longer list.
@@ -103,10 +98,14 @@ group DMs, by date. A thread is a directory shaped like a day.
   the threads worth expanding. A file posted inside a thread is in THAT thread's
   files/, never the day's.
 
-  Every listing and read is a live API call, and reading history may be limited to
-  one request per minute. Walk one level at a time; never recursive find or grep
-  here. Names are not predictable — `ls` the parent rather than constructing a
-  path. Dates go back 90 days at most, and exist for quiet days too.
+  Every listing and read is a live API call, and Slack throttles by how fast they
+  arrive: a few per second is the ceiling, so read one thing at a time and never
+  recursive find or grep here. Names are not predictable — `ls` the parent rather
+  than constructing a path. A date directory exists for every day the conversation
+  has existed, quiet ones included, so `ls` of an old channel is long — the newest
+  dates are first, and a quiet day's chat.jsonl is empty. A public channel the user
+  never joined is absent entirely: Slack withholds its history, so its absence here
+  says nothing about whether it is busy.
 
   This is private material, DMs included. Read what the task needs and no more,
   and do not carry someone's messages into an output nobody asked for.";
@@ -267,6 +266,37 @@ impl SlackResource {
             .collect())
     }
 
+    /// List a section's raw conversations: all its `kinds` in one call, and if a
+    /// scope for one of them is missing (see [`CHANNEL_TYPES`]), each kind on its
+    /// own so the ones that are grantable still list. Only when no kind at all is
+    /// listable does the error propagate — `missing_scope` then names what to grant.
+    async fn list_conversations(&self, kinds: &[&str]) -> ResourceResult<Vec<Value>> {
+        match self.accessor.list_conversations(&kinds.join(",")).await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_read_denied(&e) && kinds.len() > 1 => {
+                tracing::debug!("slack: conversations.list denied ({e}); asking per kind");
+            }
+            Err(e) => return Err(backend(e)),
+        }
+        let mut out = Vec::new();
+        let mut last = None;
+        for k in kinds {
+            match self.accessor.list_conversations(k).await {
+                Ok(v) => out.extend(v),
+                Err(e) => {
+                    tracing::debug!("slack: conversations.list({k}) denied ({e}); skipping");
+                    last = Some(e);
+                }
+            }
+        }
+        // Every kind failed: nothing in the section is listable, so say why rather
+        // than presenting an empty section as an answer.
+        match last {
+            Some(e) if out.is_empty() => Err(backend(e)),
+            _ => Ok(out),
+        }
+    }
+
     /// A section's conversations.
     async fn convs(&self, dms: bool) -> ResourceResult<Arc<Vec<Conv>>> {
         let section = if dms { DMS } else { CHANNELS };
@@ -275,16 +305,16 @@ impl SlackResource {
         {
             return Ok(v.clone());
         }
-        let types = if dms { DM_TYPES } else { CHANNEL_TYPES };
         let raw = self
-            .accessor
-            .list_conversations(types)
-            .await
-            .map_err(backend)?;
+            .list_conversations(if dms { DM_TYPES } else { CHANNEL_TYPES })
+            .await?;
         // A DM has no name of its own — it is named after the person on the other
-        // side, so it needs the member list too.
+        // side, so it needs the member list too. Without `users:read` there are no
+        // names to be had, and `conv_label` falls back to the partner's id: a poor
+        // name for a DM that is still there to read, which beats failing the whole
+        // section over what it is called (the same choice `day` makes).
         let mut names = if dms {
-            self.user_names().await?
+            self.user_names().await.unwrap_or_default()
         } else {
             HashMap::new()
         };
@@ -319,6 +349,10 @@ impl SlackResource {
             let Some(id) = c.get("id").and_then(Value::as_str) else {
                 continue;
             };
+            if !readable(c, dms) {
+                tracing::debug!("slack: history withheld for {id} (not a member); skipping");
+                continue;
+            }
             let label = conv_label(c, &names);
             // Two conversations can sanitize to one name (a channel called
             // `a-b` and one called `a_b`), and the id disambiguates them — but
@@ -1006,6 +1040,24 @@ fn sanitize(text: &str) -> String {
     out
 }
 
+/// Whether this conversation's history can actually be read, and so belongs in
+/// the tree.
+///
+/// `conversations.list` returns every public channel in the workspace, joined or
+/// not. History for an unjoined one answers `ok: true` with empty `messages` and
+/// `is_limited: true` — Slack saying "withheld", not "nothing was said". Measured
+/// against a real workspace: 5 of 5 unjoined channels answered that way, one of
+/// them updated three months earlier. Listing them would put a directory in the
+/// tree whose every day is empty and whose emptiness is a lie, which is worse
+/// than an error: the read-denied path at least logs one. Deciding here rather
+/// than on the `is_limited` reply also keeps it to the listing's one request.
+///
+/// A DM carries no `is_member` — being in it is what a DM *is* — so the flag only
+/// governs the channel sections.
+fn readable(c: &Value, dms: bool) -> bool {
+    dms || c.get("is_member").and_then(Value::as_bool) == Some(true)
+}
+
 /// The label a conversation is named after: a channel's own name, or for a DM
 /// the person on the other side (Slack gives a DM no name of its own).
 fn conv_label(c: &Value, user_names: &HashMap<String, String>) -> String {
@@ -1179,19 +1231,25 @@ fn dedup_names<T>(items: &mut [T], name: impl Fn(&mut T) -> &mut String) {
 
 // ---- time -----------------------------------------------------------------
 
-/// The dates a conversation exposes, newest first: back from the newest message
-/// to `created`, at most [`MAX_DAYS`].
+/// The dates a conversation exposes, newest first: every day from its `created` to
+/// its newest message.
+///
+/// Slack has no "which days have messages" endpoint, so the range is generated
+/// rather than listed. It is not capped: on a paid workspace Slack still holds the
+/// whole span, and a cap would make years of history unreachable rather than
+/// merely unlisted, since search — the only other way in — is dormant.
 fn date_range(newest_ts: f64, created: i64) -> Vec<String> {
     let Some(end) = DateTime::from_timestamp(newest_ts as i64, 0) else {
         return Vec::new();
     };
     let end = end.date_naive();
+    // `min(end)` guards a `created` that postdates the newest message, which the
+    // mock has produced: without it the loop below yields nothing and the
+    // conversation looks empty.
     let start = DateTime::from_timestamp(created.max(0), 0)
         .map(|d| d.date_naive())
-        .unwrap_or(end);
-    let start = start
-        .min(end)
-        .max(end - chrono::Duration::days(MAX_DAYS - 1));
+        .unwrap_or(end)
+        .min(end);
     let mut out = Vec::new();
     let mut d = end;
     while d >= start {
