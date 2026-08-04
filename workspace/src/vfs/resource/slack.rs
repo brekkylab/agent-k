@@ -346,34 +346,48 @@ impl SlackResource {
         Ok(out)
     }
 
-    /// A conversation's `created`, from whichever section listing holds it, or
-    /// `conversations.info` when neither does (a deep path resolved cold — the id
-    /// came out of the path, so there is nothing to walk).
-    async fn created_of(&self, id: &str) -> ResourceResult<i64> {
-        for dms in [false, true] {
+    /// A conversation's `created` from a section listing that is *already* cached,
+    /// without fetching one. `None` = not cached, or cached and absent.
+    ///
+    /// The distinction matters because `created` is only the lower bound of a date
+    /// range: worth reading for free, never worth a request of its own.
+    async fn cached_created(&self, id: &str) -> Option<i64> {
+        for section in [CHANNELS, DMS] {
             let cached = self
                 .convs
                 .lock()
                 .await
-                .get(if dms { DMS } else { CHANNELS })
+                .get(section)
                 .filter(|(at, _)| at.elapsed() < TTL)
                 .map(|(_, v)| v.clone());
-            if let Some(list) = cached
-                && let Some(c) = list.iter().find(|c| c.id == id)
-            {
+            if let Some(c) = cached.as_ref().and_then(|l| l.iter().find(|c| c.id == id)) {
+                return Some(c.created);
+            }
+        }
+        None
+    }
+
+    /// `created` of the conversation `id`, erroring [`ResourceError::NotFound`]
+    /// when neither section lists it.
+    ///
+    /// Deliberately does not fall back to `conversations.info`: this answers
+    /// "does this directory exist", and a `stat` of a made-up name must not become
+    /// a request. A real conversation is in one of the two listings.
+    async fn conv_exists(&self, id: &str) -> ResourceResult<i64> {
+        for dms in [false, true] {
+            if let Some(c) = self.convs(dms).await?.iter().find(|c| c.id == id) {
                 return Ok(c.created);
             }
         }
-        let info = self.accessor.conversation_info(id).await.map_err(backend)?;
-        Ok(info.get("created").and_then(Value::as_i64).unwrap_or(0))
+        Err(ResourceError::NotFound)
     }
 
     /// A conversation's date directories, newest first.
     ///
     /// Two calls at most: one `conversations.history?limit=1` for the newest
-    /// message (the range's upper bound) and, only when the conversation isn't in
-    /// a cached listing, one `conversations.info` for `created`. A conversation
-    /// with no messages — or one this token cannot read — has no dates.
+    /// message (the range's upper bound) and, only when no cached listing holds the
+    /// conversation, one `conversations.info` for `created`. A conversation with no
+    /// messages — or one this token cannot read — has no dates.
     async fn dates(&self, id: &str) -> ResourceResult<Arc<Vec<String>>> {
         if let Some((at, v)) = self.dates.lock().await.get(id)
             && at.elapsed() < TTL
@@ -392,7 +406,15 @@ impl SlackResource {
         };
         let dates = match latest {
             Some(newest) => {
-                let created = self.created_of(id).await?;
+                let created = match self.cached_created(id).await {
+                    Some(c) => c,
+                    // A deep path resolved cold: the id came out of the path, so
+                    // there is no parent listing to have read it from.
+                    None => {
+                        let info = self.accessor.conversation_info(id).await.map_err(backend)?;
+                        info.get("created").and_then(Value::as_i64).unwrap_or(0)
+                    }
+                };
                 date_range(newest, created)
             }
             None => Vec::new(),
@@ -547,50 +569,51 @@ impl SlackResource {
         Ok(serde_json::to_vec_pretty(u)?)
     }
 
-    /// A thread the day actually listed. The `ts` indexes a request, so a path
-    /// naming an arbitrary one must not become a `conversations.replies` call —
-    /// this is what ties it back to the day's own roots.
-    async fn listed_thread(&self, id: &str, date: &str, ts: &str) -> ResourceResult<Arc<Thread>> {
-        if !self.day(id, date).await?.threads.iter().any(|t| t.ts == ts) {
-            return Err(ResourceError::NotFound);
-        }
-        self.thread(id, ts).await
-    }
-
     /// One scope's `chat.jsonl` bytes and `files/` entries: the day's, or one
     /// thread's. Both are filled by a single request (`conversations.history` for
     /// a day, `conversations.replies` for a thread), which is what makes listing
     /// either scope's two children cost nothing extra.
+    ///
+    /// Gated on the scope existing, so a path naming a date outside the
+    /// conversation's range is `NotFound` rather than an empty day — otherwise
+    /// `readdir` and `cat` would answer for a directory `stat` denies, and any
+    /// date at all would become a `conversations.history` call.
     async fn contents(&self, s: &Scope) -> ResourceResult<(Arc<Vec<u8>>, Vec<FileMeta>)> {
+        self.require_scope(s).await?;
         match &s.ts {
             None => {
                 let day = self.day(&s.id, &s.date).await?;
                 Ok((day.chat.clone(), day.files.clone()))
             }
             Some(ts) => {
-                let t = self.listed_thread(&s.id, &s.date, ts).await?;
+                let t = self.thread(&s.id, ts).await?;
                 Ok((t.jsonl.clone(), t.files.clone()))
             }
         }
     }
 
-    /// Whether the scope exists at all, without producing its contents. A day
-    /// exists if it is in the conversation's date range; a thread if the day
-    /// listed it. Both answers come from listings a walk already fetched, so a
-    /// `stat` of a made-up path costs no request of its own.
-    async fn scope_exists(&self, s: &Scope) -> ResourceResult<bool> {
+    /// Reject a scope the tree does not contain. A day must be in the
+    /// conversation's date range; a thread must be one the day listed — the `ts`
+    /// indexes a `conversations.replies` call, so an arbitrary one must not reach
+    /// it. Both answers come from listings a walk already fetched.
+    async fn require_scope(&self, s: &Scope) -> ResourceResult<()> {
         if !self.dates(&s.id).await?.contains(&s.date) {
-            return Ok(false);
+            return Err(ResourceError::NotFound);
         }
-        Ok(match &s.ts {
-            None => true,
-            Some(ts) => self
-                .day(&s.id, &s.date)
-                .await?
-                .threads
-                .iter()
-                .any(|t| &t.ts == ts),
-        })
+        match &s.ts {
+            None => Ok(()),
+            Some(ts)
+                if self
+                    .day(&s.id, &s.date)
+                    .await?
+                    .threads
+                    .iter()
+                    .any(|t| &t.ts == ts) =>
+            {
+                Ok(())
+            }
+            Some(_) => Err(ResourceError::NotFound),
+        }
     }
 
     /// The scope's mtime: its newest message, falling back to the day's midnight
@@ -687,6 +710,7 @@ impl Resource for SlackResource {
             // A day and a thread list the same two children. `threads/` only
             // exists on a day — Slack has no nested threads.
             Node::Convo(s) => {
+                self.require_scope(&s).await?;
                 let mtime = self.scope_mtime(&s).await;
                 // Listed at 0 so the wrapper resolves the real length: this call
                 // already fetched the bytes, so that costs nothing.
@@ -698,13 +722,17 @@ impl Resource for SlackResource {
             }
             // One directory per thread, named by its root ts — the same shape a
             // date directory has, so a thread reads exactly like a day.
-            Node::Threads { id, date } => Ok(self
-                .day(&id, &date)
-                .await?
-                .threads
-                .iter()
-                .map(|t| dir(&t.ts, t.ts.parse::<f64>().ok().and_then(ts_time)))
-                .collect()),
+            Node::Threads { id, date } => {
+                let s = Scope { id, date, ts: None };
+                self.require_scope(&s).await?;
+                Ok(self
+                    .day(&s.id, &s.date)
+                    .await?
+                    .threads
+                    .iter()
+                    .map(|t| dir(&t.ts, t.ts.parse::<f64>().ok().and_then(ts_time)))
+                    .collect())
+            }
             Node::Files(s) => Ok(self
                 .contents(&s)
                 .await?
@@ -728,20 +756,20 @@ impl Resource for SlackResource {
                 Ok(stat_dir(epoch_secs(c)))
             }
             Node::Threads { id, date } => {
-                // A date directory exists iff it is in the conversation's range —
-                // which is what `readdir` of the conversation lists, so a `stat`
-                // after an `ls` is served from that cached range.
-                if !self.dates(&id).await?.contains(&date) {
-                    return Err(ResourceError::NotFound);
-                }
+                // Exists iff its day does — which `readdir` of the conversation
+                // already listed, so this is served from that cached range.
+                self.require_scope(&Scope {
+                    id,
+                    date: date.clone(),
+                    ts: None,
+                })
+                .await?;
                 Ok(stat_dir(date_mtime(&date)))
             }
             // A day or a thread directory, and their `files/`: existence comes
             // from listings a walk already fetched, not from producing contents.
             Node::Convo(s) | Node::Files(s) => {
-                if !self.scope_exists(&s).await? {
-                    return Err(ResourceError::NotFound);
-                }
+                self.require_scope(&s).await?;
                 Ok(stat_dir(self.scope_mtime(&s).await))
             }
             Node::Chat(s) => {
@@ -805,21 +833,6 @@ impl Resource for SlackResource {
 
     fn prompt(&self) -> &str {
         SLACK_PROMPT
-    }
-}
-
-impl SlackResource {
-    /// `created` of the conversation `id`, erroring [`ResourceError::NotFound`]
-    /// when no section lists it. Unlike [`Self::created_of`], this does not fall
-    /// back to `conversations.info` — a `stat` of a made-up name must not become
-    /// a request, and a real conversation is in one of the two listings.
-    async fn conv_exists(&self, id: &str) -> ResourceResult<i64> {
-        for dms in [false, true] {
-            if let Some(c) = self.convs(dms).await?.iter().find(|c| c.id == id) {
-                return Ok(c.created);
-            }
-        }
-        Err(ResourceError::NotFound)
     }
 }
 

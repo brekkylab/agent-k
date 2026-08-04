@@ -307,11 +307,11 @@ impl SlackAccessor {
 
     /// The token every call uses: the user's own, falling back to the bot's.
     ///
-    /// Not per-method. The mount is one person's view of their Slack, so reading
-    /// it as that person is the whole point — a bot token would silently narrow
-    /// the tree to the bot's own memberships and drop DMs entirely. The fallback
-    /// exists only for a bot-only install.
-    fn token_for(&self, _method: &str) -> &str {
+    /// Deliberately not per-method. The mount is one person's view of their Slack,
+    /// so reading it as that person is the point — a bot token would silently
+    /// narrow the tree to the bot's own memberships and drop DMs entirely. The
+    /// fallback exists only for a bot-only install.
+    fn token(&self) -> &str {
         token(&self.config.user_token)
             .or_else(|| token(&self.config.bot_token))
             // `new` rejects a config with neither, so one is always present.
@@ -331,7 +331,7 @@ impl SlackAccessor {
             &format!("{}/{method}", self.api_base),
             params.iter().map(|(k, v)| (*k, v.as_str())),
         )?;
-        let token = self.token_for(method);
+        let token = self.token();
         let mut retries = 0u32;
         loop {
             let resp = self
@@ -569,7 +569,7 @@ impl SlackAccessor {
         }
         // Same credential as the API calls: a file the person can see in Slack is
         // one their own token can fetch.
-        let mut req = self.client.get(parsed).bearer_auth(self.token_for("files"));
+        let mut req = self.client.get(parsed).bearer_auth(self.token());
         let ranged = range.is_some();
         if let Some(r) = &range {
             // Inclusive-end, per HTTP: a 0..10 read asks for bytes 0-9.
@@ -649,21 +649,13 @@ mod tests {
         }
     }
 
-    /// **Every** call reads as the person, not just search. A bot token would
-    /// narrow the tree to the bot's own memberships and drop DMs entirely, which
-    /// is not what a personal mount is.
+    /// The user token wins when both are present. It is one token for every call
+    /// rather than a per-method choice: reading as the person is the point, and a
+    /// bot token would narrow the tree to the bot's own memberships and drop DMs.
     #[test]
-    fn every_call_prefers_the_user_token() {
+    fn the_user_token_wins_when_both_are_present() {
         let a = SlackAccessor::new(&config(Some("xoxp-user"), Some("xoxb-bot"))).unwrap();
-        for method in [
-            "conversations.history",
-            "conversations.list",
-            "users.list",
-            "search.messages",
-            "files",
-        ] {
-            assert_eq!(a.token_for(method), "xoxp-user", "{method}");
-        }
+        assert_eq!(a.token(), "xoxp-user");
         assert!(a.search_available());
     }
 
@@ -673,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn a_bot_only_install_falls_back_and_cannot_search() {
         let a = SlackAccessor::new(&config(None, Some("xoxb-bot"))).unwrap();
-        assert_eq!(a.token_for("conversations.history"), "xoxb-bot");
+        assert_eq!(a.token(), "xoxb-bot");
         assert!(!a.search_available());
         // No network: the guard rejects before a request is built.
         assert!(a.search_messages("anything", 20).await.is_err());
@@ -683,7 +675,7 @@ mod tests {
     #[test]
     fn a_user_only_install_is_enough() {
         let a = SlackAccessor::new(&config(Some("xoxp-user"), None)).unwrap();
-        assert_eq!(a.token_for("conversations.history"), "xoxp-user");
+        assert_eq!(a.token(), "xoxp-user");
         assert!(a.search_available());
     }
 
@@ -696,7 +688,7 @@ mod tests {
         assert!(SlackAccessor::new(&config(Some(""), Some(""))).is_err());
         // And an empty user token falls through to a real bot token.
         let a = SlackAccessor::new(&config(Some(""), Some("xoxb-bot"))).unwrap();
-        assert_eq!(a.token_for("conversations.history"), "xoxb-bot");
+        assert_eq!(a.token(), "xoxb-bot");
         assert!(!a.search_available());
     }
 

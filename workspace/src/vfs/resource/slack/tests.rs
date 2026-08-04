@@ -88,6 +88,48 @@ fn a_deep_path_resolves_from_its_segments_alone() {
     );
 }
 
+/// `resolve` accepts any well-formed date, because it works from segments alone —
+/// which means the existence check has to happen later, uniformly. It used to
+/// happen in `stat` only, so a date outside a conversation's range was `NotFound`
+/// to `stat` while `readdir` listed its three children and `cat chat.jsonl`
+/// returned 0 bytes; worse, that read was a real `conversations.history` call, so
+/// any date at all could spend a request. Covered against a server in
+/// `slack_mock_tree_walk`; this pins the resolution half.
+#[test]
+fn a_well_formed_date_resolves_and_is_checked_later() {
+    // 1999 predates Slack, but the path is still well-formed…
+    let far_past = resolve(&MountPath::new(
+        "/channels/general__C0123/1999-01-01/chat.jsonl",
+    ));
+    assert!(
+        far_past.is_some(),
+        "resolution is by shape, not by existence"
+    );
+    // …so every node under a day must be one `require_scope` gates. If a variant
+    // is added here that skips it, this is the reminder.
+    let base = "/channels/general__C0123/1999-01-01";
+    for (p, gated) in [
+        (base.to_string(), true),
+        (format!("{base}/chat.jsonl"), true),
+        (format!("{base}/files"), true),
+        (format!("{base}/files/a__F1.pdf"), true),
+        (format!("{base}/threads"), true),
+        (format!("{base}/threads/1.2"), true),
+        (format!("{base}/threads/1.2/chat.jsonl"), true),
+    ] {
+        let node = resolve(&MountPath::new(&p)).unwrap_or_else(|| panic!("{p} should resolve"));
+        let has_scope = matches!(
+            node,
+            Node::Convo(_)
+                | Node::Chat(_)
+                | Node::Files(_)
+                | Node::File { .. }
+                | Node::Threads { .. }
+        );
+        assert_eq!(has_scope, gated, "{p}");
+    }
+}
+
 /// Slack has no nested threads, so a thread has no `threads/` of its own — and a
 /// path claiming one must not resolve to the day's.
 #[test]
@@ -634,6 +676,35 @@ async fn slack_mock_tree_walk() {
         r.stat(&MountPath::new("/channels/nope__C9999999")).await,
         Err(ResourceError::NotFound)
     ));
+
+    // A real conversation but a date outside its range: every operation must
+    // agree it does not exist. `stat` alone used to say so while `readdir` listed
+    // three children and `cat chat.jsonl` spent a real request to return 0 bytes.
+    let first = names(&r.readdir(&MountPath::new("/channels")).await.unwrap())[0].clone();
+    let unborn = MountPath::new(format!("/{CHANNELS}/{first}/1999-01-01"));
+    for p in [
+        unborn.clone(),
+        unborn.child(CHAT_FILE),
+        unborn.child(FILES_DIR),
+        unborn.child(THREADS_DIR),
+    ] {
+        assert!(
+            matches!(r.stat(&p).await, Err(ResourceError::NotFound)),
+            "stat {} must be NotFound",
+            p.as_str()
+        );
+        assert!(
+            matches!(r.readdir(&p).await, Err(ResourceError::NotFound)),
+            "readdir {} must be NotFound",
+            p.as_str()
+        );
+        assert!(
+            matches!(r.read_bytes(&p, None).await, Err(ResourceError::NotFound)),
+            "read {} must be NotFound",
+            p.as_str()
+        );
+    }
+
     // Read-only.
     assert!(matches!(
         r.write_bytes(&MountPath::new("/channels/x__C1/a"), vec![1])
