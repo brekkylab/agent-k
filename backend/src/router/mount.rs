@@ -81,23 +81,13 @@ pub enum ProviderSpec {
     /// Do **not** enable token rotation on the app: the accessor holds no refresh
     /// loop, so a rotating token would break the mount when it expires.
     ///
-    /// Rate limits follow the Slack app's distribution, so they are a consequence
-    /// of the deployment model rather than of this code. Since 2025-05-29 an app
-    /// that is commercially distributed without Marketplace approval gets
-    /// `conversations.history` and `conversations.replies` at **1 request/minute,
-    /// 15 objects per request**, while internal customer-built apps keep the
-    /// ordinary tiers (history is Tier 3, 50+/min) — see
-    /// <https://docs.slack.dev/apis/web-api/rate-limits>.
-    ///
-    /// Which one applies:
-    ///
-    /// - **One app per workspace** — each deployment holds its own
-    ///   [`SlackOAuth`] credentials, so a company self-hosting agent-k against its
-    ///   own Slack is an internal app and keeps the ordinary tiers. Production use
-    ///   does not change that; distribution is the criterion, not seriousness.
-    /// - **One app across many workspaces** — activating public distribution so
-    ///   customers install the same app is what triggers the severe tier, and
-    ///   Marketplace approval is what buys it back.
+    /// Rate limits follow the app's distribution, and the gap is wide enough to
+    /// plan around: since 2025-05-29 an app distributed commercially without
+    /// Marketplace approval reads history at 1 request/minute and 15 objects per
+    /// response, while an app installed only in its own workspace keeps the
+    /// ordinary tiers (<https://docs.slack.dev/apis/web-api/rate-limits>). Since
+    /// [`SlackOAuth`] is per-deployment, self-hosting against your own Slack is the
+    /// latter — production or not.
     ///
     /// The frontend runs the OAuth consent and sends only the authorization
     /// `code` (+ the `redirect_uri` used at consent). The backend exchanges it

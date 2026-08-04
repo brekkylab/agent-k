@@ -1,52 +1,29 @@
-//! The Slack mount: a Slack workspace as a live directory tree.
+//! The Slack mount (read-only): a Slack workspace as a live directory tree.
 //!
-//! Unlike every other provider here, Slack has **no hierarchy to mirror**. S3 has
-//! keys, Notion has a page tree, Drive has folders; Slack has conversations and a
-//! message stream. So this tree is *synthesized* along the time axis — channel,
-//! then date, then that day's messages — and the layout is chosen for what it
-//! costs in API calls rather than for what Slack's data model looks like.
+//! Slack has no hierarchy to mirror — S3 has keys, Notion a page tree, Drive
+//! folders; Slack has conversations and a message stream. So the tree is
+//! synthesized along the time axis, and its shape follows what each level costs in
+//! requests:
 //!
-//! That cost is the design constraint, and how hard it bites depends on how this
-//! app is distributed. Slack's own tiers put `conversations.history` at Tier 3
-//! (50+/min), but since 2025-05-29 an app that is **commercially distributed and
-//! not Marketplace-approved** gets `conversations.history` and
-//! `conversations.replies` at **1 request/minute, 15 objects per request**;
-//! internal customer-built apps keep their existing limits
-//! (<https://docs.slack.dev/apis/web-api/rate-limits>, plus the 2025-05-29 and
-//! 2025-06-03 changelog entries). The line is drawn at distribution, not at how
-//! serious the use is: a company running its own Slack app against its own
-//! workspace stays on the ordinary tiers, in production as much as in development.
-//! Measured from such an app, 100 consecutive `conversations.history` calls went
-//! through untouched at ~0.33s each. The severe tier is for one app installed into
-//! many workspaces — so which one applies is a deployment-model question, and
-//! whichever it is, two consequences shape the tree:
+//! - **Entering a day is one call.** One `conversations.history` window fills
+//!   `chat.jsonl`, the `threads/` listing and the `files/` listing together (see
+//!   [`SlackResource::day`]).
+//! - **A thread is a directory, not a file.** `conversations.history` returns
+//!   roots only, so replies cost one `conversations.replies` each. Inlining them
+//!   would spend `1 + N` calls per day whether or not anything reads them; instead
+//!   a thread is [`Scope`]-identical to a day — `chat.jsonl` plus `files/` — filled
+//!   when it is entered. That also settles where an attachment posted *inside* a
+//!   thread lives, since the day's listing cannot see it.
 //!
-//! - **Descending one day costs one call.** A single `conversations.history`
-//!   window fills `chat.jsonl`'s bytes, the `threads/` listing and the `files/`
-//!   listing together (see [`SlackResource::day`]), so walking into a date
-//!   directory and listing all three of its children is one request, not four.
-//! - **A thread is its own directory, shaped like a day.** `conversations.history`
-//!   returns thread *roots* only; replies need one `conversations.replies` per
-//!   thread. Inlining them would make `cat chat.jsonl` cost `1 + N` calls, spent
-//!   whether or not anything reads those replies — and on the severe tier a
-//!   20-thread day would take 21 minutes. So a thread sits under
-//!   `threads/<root-ts>/` with the same two children a day has, filled by one call
-//!   when it is entered.
+//! Rate limits make that matter more or less depending on how the Slack app is
+//! distributed; `conversations.history` can be as little as 1 request/minute. See
+//! `ProviderSpec::Slack` in the backend for which case applies, and
+//! <https://docs.slack.dev/apis/web-api/rate-limits>.
 //!
-//! That last point is why a day and a thread share one shape ([`Scope`]): both are
-//! a stretch of conversation, so both are `chat.jsonl` plus `files/`, and the tree
-//! needs one explanation rather than two. It also settles where an attachment
-//! posted *inside* a thread goes — invisible to `conversations.history`, it cannot
-//! be in the day's `files/`, and it belongs in the thread's.
-//!
-//! A consequence of synthesizing rather than mirroring: a `.jsonl` here is a file
-//! *this mount invents*, so Slack reports no length for it. Every one is listed at
-//! 0 and sized by the cache wrapper's render-once path — which is free, because
-//! entering the directory already fetched the bytes. An attachment, being a real
-//! object Slack stores, is exact from the listing.
-//!
-//! Read-only: the mount serves history, profiles and file bytes, and nothing
-//! posts.
+//! One consequence of synthesizing rather than mirroring: a `.jsonl` here is a file
+//! this mount invents, so Slack reports no length for it. Each is listed at 0 for
+//! the cache wrapper to size — free, since entering the directory already fetched
+//! the bytes. An attachment, being a real object Slack stores, is exact.
 
 use std::collections::HashMap;
 use std::ops::Range;
