@@ -96,72 +96,31 @@ const MAX_DAYS: i64 = 90;
 const SEARCH_MAX_HITS: usize = 100;
 
 const SLACK_PROMPT: &str = "\
-Slack (read-only) — the user's own Slack, the same conversations they see in their
-client: the channels they are in, their DMs, and group DMs. Organized by date as a
-synthesized tree, not a mirror of anything Slack exposes:
-  channels/<name>__<channel-id>/<yyyy-mm-dd>/
-    chat.jsonl                       # that day's top-level messages, one JSON per line
-    files/<name>__<file-id>.<ext>    # files posted that day, outside a thread
-    threads/<root-ts>/               # one thread — same two children as a day:
-      chat.jsonl                     #   its root plus every reply
-      files/<name>__<file-id>.<ext>  #   files posted inside the thread
-  dms/<user>__<dm-id>/<yyyy-mm-dd>/  # same shape, for direct messages
-  users/<name>__<user-id>.json       # one profile per member
+Slack (read-only) — the user's own Slack: the channels they are in, their DMs and
+group DMs, by date. A thread is a directory shaped like a day.
+  channels/<name>__<id>/<yyyy-mm-dd>/   dms/<user>__<id>/<yyyy-mm-dd>/
+    chat.jsonl          that day's messages, one JSON object per line
+    files/              attachments, cat for the real bytes
+    threads/<root-ts>/  one thread: the same chat.jsonl + files/
+  users/<name>__<id>.json   member profiles
 
-  Entry names end in `__<id>`; the id is the part after the last `__`. Never
-  construct a name — `ls` the parent first. Quote names with spaces.
+  Read with jq, e.g. `jq -r '.user_name + \": \" + .text' chat.jsonl` — Slack's own
+  message object plus `user_name` (mentions in `text` are already `@name`). Skip
+  Slack's event notices with `select(.subtype == null)`.
 
-  A `users/*.json` profile carries {id, name, real_name, profile{…}, tz, is_bot,
-  is_admin, deleted, …}. `profile.email` is there when the install granted the
-  email scope, and it is the one field that identifies the same person in another
-  mount (a Gmail thread, a document's owner) — match on it rather than on a
-  display name, which can repeat or change. A `ts` in this mount is a unix
-  timestamp; `tz` says what local time that was for that member.
+  Costs: a day's chat.jsonl is ONE request and holds only the messages that START
+  a thread; a root with replies has `reply_count`, and its replies are in
+  threads/<that ts>/, one request when you enter it. Read the day, then enter only
+  the threads worth expanding. A file posted inside a thread is in THAT thread's
+  files/, never the day's.
 
-  Read a day with jq, e.g. `jq -r '.user_name + \": \" + .text' chat.jsonl`. Each
-  line is Slack's own message object plus a `user_name` field, so it carries
-  {user, user_name, text, ts, thread_ts?, reply_count?, files?, reactions?}.
-  `user` is the Slack id and `user_name` its display name; mentions in `text` are
-  already rendered as `@name`. An id nobody could resolve keeps its raw form and
-  gets no `user_name`.
+  Every listing and read is a live API call, and Slack rate-limits history hard.
+  Walk one level at a time; never recursive find or grep here. Names are not
+  predictable — `ls` the parent rather than constructing a path. Dates go back 90
+  days at most, and exist for quiet days too.
 
-  Lines with a `subtype` (channel_join, channel_purpose, …) are Slack's own event
-  notices, not things people said — filter them out when summarizing a
-  conversation: `jq 'select(.subtype == null)' chat.jsonl`.
-
-  Most of a line's bytes are `blocks` (a structural copy of `text`) and file
-  metadata, so select the fields you need instead of reading whole lines.
-
-  A day and a thread are the same shape, so read a thread the way you read a day.
-  The day's chat.jsonl holds only the messages that START a thread (plus
-  standalone ones) and costs ONE request; each root that has replies carries
-  `reply_count`, and that thread is the directory threads/<its ts>/, which costs
-  one request when you enter it. So: read the day's chat.jsonl, pick the roots
-  worth expanding, enter only those. `threads/` is empty when no thread started
-  that day.
-
-  A file posted inside a thread is NOT in the day's files/ — it is in that
-  thread's files/, because Slack's day listing cannot see it. If you are looking
-  for an attachment the day's files/ does not have, find the message that carried
-  it (every message names its own files in the `files` field) and enter its
-  thread.
-
-  Dates run back at most 90 days from the newest message, and a directory exists
-  for every day in that span — a quiet day's chat.jsonl is simply empty. Reading
-  one day tells you nothing about the next; there is no index of which days have
-  messages.
-
-  Every listing and read is a live API call, and Slack rate-limits history hard
-  (as little as one request per minute for a new app). Walk one level at a time;
-  do not run recursive find or grep over this mount. A conversation that cannot
-  be read lists as empty rather than failing, so an empty day is not evidence
-  the mount is broken.
-
-  This is private material — DMs included. Read what the task needs and no more,
-  and do not carry someone's messages into an output that wasn't asked for.
-
-  cat a file under files/ to download its real bytes. Listings are cached 5
-  minutes, so a message just posted may not show yet.";
+  This is private material, DMs included. Read what the task needs and no more,
+  and do not carry someone's messages into an output nobody asked for.";
 
 /// One conversation as the tree sees it.
 #[derive(Clone)]
