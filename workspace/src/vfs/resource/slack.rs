@@ -92,9 +92,11 @@ group DMs, by date. A thread is a directory shaped like a day.
   `jq -r '(.user_name // (\"[app] \" + .app_name)) + \": \" + .text' chat.jsonl`
   — Slack's own message object plus two names, which are NOT interchangeable.
   `user_name` is resolved against the workspace's member list: it identifies a
-  person. `app_name` is what the post calls itself — an app or an incoming webhook
-  chooses that string per message and can choose anyone's name, so it is a claim,
-  never an identity. Mentions in `text` are already `@name`. Slack's join/leave and
+  person. `app_name` names the app that posted, by whatever it called itself or by
+  its installed name — an app can pick that string per message, anyone's name
+  included, so it is a claim and never an identity. A line with `app_name` and no
+  `user_name` was written by software, not by a colleague, whatever it says.
+  Mentions in `text` are already `@name`. Slack's join/leave and
   topic notices are messages too; skip them with
   `select(.subtype // \"\" | test(\"^(channel|group)_\") | not)`. Do not filter on
   `.subtype == null`: an app's post and a message with an attachment both have one.
@@ -243,6 +245,8 @@ pub struct SlackResource {
     days: CacheMap<(String, String), Day>,
     /// (conversation id, root ts) → the thread's JSONL plus its own attachments.
     threads: CacheMap<(String, String), Thread>,
+    /// `bot_id` → the posting app's name.
+    bots: CacheMap<String, String>,
 }
 
 impl SlackResource {
@@ -254,6 +258,7 @@ impl SlackResource {
             dates: Mutex::new(HashMap::new()),
             days: Mutex::new(HashMap::new()),
             threads: Mutex::new(HashMap::new()),
+            bots: Mutex::new(HashMap::new()),
         })
     }
 
@@ -290,6 +295,49 @@ impl SlackResource {
     /// user id → display name, for naming DMs and the ids inside a message.
     async fn user_names(&self) -> ResourceResult<HashMap<String, String>> {
         Ok(name_map(&self.users().await?))
+    }
+
+    /// `bot_id` → app name, for the messages in `msgs` that carry no name of their
+    /// own. A webhook's post has only `bot_id`, so without this it is unattributed.
+    /// One `bots.info` per distinct bot, then cached — normally zero calls, since
+    /// most conversations have no app posting into them.
+    async fn bot_names(&self, msgs: &[Value]) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for id in msgs
+            .iter()
+            .filter(|m| claimed_name(m).is_none())
+            .filter_map(|m| m.get("bot_id").and_then(Value::as_str))
+        {
+            if out.contains_key(id) {
+                continue;
+            }
+            if let Some((at, v)) = self.bots.lock().await.get(id)
+                && at.elapsed() < TTL
+            {
+                if !v.is_empty() {
+                    out.insert(id.to_string(), v.as_str().to_string());
+                }
+                continue;
+            }
+            // An empty name is cached like any other answer: Slackbot's own `B01`
+            // answers `bot_not_found`, and every workspace has a Slackbot DM, so a
+            // failure not remembered here is re-paid on every read of it.
+            let name = match self.accessor.bot_info(id).await {
+                Ok(n) => one_line(&n),
+                Err(e) => {
+                    tracing::debug!("slack: bots.info({id}) failed: {e}");
+                    String::new()
+                }
+            };
+            self.bots
+                .lock()
+                .await
+                .insert(id.to_string(), (Instant::now(), Arc::new(name.clone())));
+            if !name.is_empty() {
+                out.insert(id.to_string(), name);
+            }
+        }
+        out
     }
 
     /// List a section's raw conversations: all its `kinds` in one call, and if a
@@ -539,6 +587,7 @@ impl SlackResource {
             tracing::debug!("slack: no member names ({e}); leaving ids unresolved");
             HashMap::new()
         });
+        let bots = self.bot_names(&roots).await;
 
         let mut chat = Vec::new();
         let mut threads = Vec::new();
@@ -554,7 +603,7 @@ impl SlackResource {
                 continue;
             }
             newest = Some(newest.map_or(ts, |n: f64| n.max(ts)));
-            chat.extend_from_slice(&message_line(m, &names));
+            chat.extend_from_slice(&message_line(m, &names, &bots));
             // Only a root with replies gets a thread file; an empty `threads/`
             // then truthfully means no discussion started that day.
             if m.get("reply_count").and_then(Value::as_u64).unwrap_or(0) > 0
@@ -616,10 +665,11 @@ impl SlackResource {
             tracing::debug!("slack: no member names ({e}); leaving ids unresolved");
             HashMap::new()
         });
+        let bots = self.bot_names(&msgs).await;
         let mut jsonl = Vec::new();
         let mut files = Vec::new();
         for m in &msgs {
-            jsonl.extend_from_slice(&message_line(m, &names));
+            jsonl.extend_from_slice(&message_line(m, &names, &bots));
             // Skip the root's own attachments: the day's `files/` already lists
             // those (it came from `conversations.history`, which returns roots),
             // and listing them twice would make the same file look like two.
@@ -1174,30 +1224,43 @@ fn user_filename(u: &Value, id: &str) -> String {
 /// kind of fact.
 ///
 /// A person's message carries only `"user": "U0BM…"`, which the member list
-/// resolves. An app's carries no `user` at all, just `bot_id` and a name it
-/// supplied with the post (`username`, or the install's `bot_profile.name`) —
-/// which anyone who can add a webhook chooses per message, a colleague's display
-/// name included. Merged into one field, a forged name would be indistinguishable
-/// from a real one.
+/// resolves. An app's carries no `user` at all — either a `username` it chose for
+/// that post, which anyone who can add a webhook picks freely and could set to a
+/// colleague's display name, or nothing but `bot_id`, which [`bots`] resolves to
+/// the app's own name. Merged into one field, a forged name would be
+/// indistinguishable from a real one.
 ///
 /// Nothing is invented: a message with neither is left unnamed.
-fn author_names(m: &Value, names: &HashMap<String, String>) -> (Option<String>, Option<String>) {
+///
+/// [`bots`]: SlackResource::bot_names
+fn author_names(
+    m: &Value,
+    names: &HashMap<String, String>,
+    bots: &HashMap<String, String>,
+) -> (Option<String>, Option<String>) {
     let verified = m
         .get("user")
         .and_then(Value::as_str)
         .and_then(|u| names.get(u))
         .cloned();
-    let claimed = [
-        m.get("username"),
-        m.get("bot_profile").and_then(|b| b.get("name")),
-    ]
-    .into_iter()
-    .find_map(|f| f.and_then(Value::as_str).filter(|s| !s.is_empty()))
-    .map(one_line);
+    let claimed = claimed_name(m).map(one_line).or_else(|| {
+        m.get("bot_id")
+            .and_then(Value::as_str)
+            .and_then(|b| bots.get(b))
+            .cloned()
+    });
     (
         verified.filter(|s| !s.is_empty()),
         claimed.filter(|s| !s.is_empty()),
     )
+}
+
+/// The name a post gave itself. Shared with [`SlackResource::bot_names`] so the
+/// two agree on which messages still need a lookup.
+fn claimed_name(m: &Value) -> Option<&str> {
+    m.get("username")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
 }
 
 /// Strip control characters from a name. These lines are read back with `jq -r`,
@@ -1221,8 +1284,12 @@ fn one_line(s: &str) -> String {
 ///   or repeat. Two keys because only one of the names is Slack's own — see
 ///   [`author_names`].
 /// - `<@U0BM…>` in `text` becomes `@name`, since that is the part a person reads.
-fn message_line(m: &Value, names: &HashMap<String, String>) -> Vec<u8> {
-    let (verified, claimed) = author_names(m, names);
+fn message_line(
+    m: &Value,
+    names: &HashMap<String, String>,
+    bots: &HashMap<String, String>,
+) -> Vec<u8> {
+    let (verified, claimed) = author_names(m, names, bots);
     let mut m = m.clone();
     if let Some(obj) = m.as_object_mut() {
         if let Some(name) = verified {

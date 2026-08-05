@@ -352,6 +352,16 @@ fn one_name() -> HashMap<String, String> {
     m
 }
 
+fn one_bot() -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert("B0123".to_string(), "Jenkins".to_string());
+    m
+}
+
+fn no_bots() -> HashMap<String, String> {
+    HashMap::new()
+}
+
 /// A message carries only ids, which a reader cannot resolve line by line. The
 /// name is *added* rather than substituted: the id is the stable identity (a
 /// display name can change or repeat, and `users/<name>__<id>.json` is found by
@@ -359,7 +369,7 @@ fn one_name() -> HashMap<String, String> {
 #[test]
 fn a_message_line_gains_a_name_and_keeps_its_id() {
     let m = serde_json::json!({"user": "U0456", "text": "hi", "ts": "1.2"});
-    let line = message_line(&m, &one_name());
+    let line = message_line(&m, &one_name(), &no_bots());
     assert!(line.ends_with(b"\n"), "one JSON object per line");
     let v: Value = serde_json::from_slice(&line).unwrap();
     assert_eq!(v["user"], "U0456", "the id must survive");
@@ -368,16 +378,17 @@ fn a_message_line_gains_a_name_and_keeps_its_id() {
     assert_eq!(v["ts"], "1.2");
 }
 
-/// An app's message has no `user` for the member list to resolve — it names itself
-/// in the payload. A channel fed by CI or alerting is mostly these, so the name is
-/// worth serving; it goes in `app_name`, never `user_name`, because the poster
-/// chose it and could have chosen a colleague's.
+/// An app's message has no `user` for the member list to resolve. Some name
+/// themselves per post with `username`; a default incoming webhook sends only
+/// `bot_id` — measured against real Slack — and is named through the bot map.
+/// Either way the name goes in `app_name`, never `user_name`: the poster picks that
+/// string and could pick a colleague's.
 #[test]
 fn an_app_is_named_apart_from_the_people() {
     let bot = serde_json::json!({
         "subtype": "bot_message", "bot_id": "B0123", "username": "GitHub", "text": "deployed"
     });
-    let v: Value = serde_json::from_slice(&message_line(&bot, &one_name())).unwrap();
+    let v: Value = serde_json::from_slice(&message_line(&bot, &one_name(), &no_bots())).unwrap();
     assert_eq!(v["app_name"], "GitHub");
     assert!(
         v.get("user_name").is_none(),
@@ -387,20 +398,27 @@ fn an_app_is_named_apart_from_the_people() {
     assert_eq!(v["bot_id"], "B0123");
     assert_eq!(v["username"], "GitHub");
 
-    // An app that posts under no name of its own still has its profile's — whether
-    // the field is missing or empty.
+    // Only `bot_id` — the real webhook shape — resolves through the map, whether
+    // `username` is missing or empty.
     for bot in [
-        serde_json::json!({"bot_id": "B0123", "bot_profile": {"name": "Jenkins"}}),
-        serde_json::json!({"username": "", "bot_profile": {"name": "Jenkins"}}),
+        serde_json::json!({"subtype": "bot_message", "bot_id": "B0123", "text": "deployed"}),
+        serde_json::json!({"bot_id": "B0123", "username": ""}),
     ] {
-        let v: Value = serde_json::from_slice(&message_line(&bot, &one_name())).unwrap();
+        let v: Value =
+            serde_json::from_slice(&message_line(&bot, &one_name(), &one_bot())).unwrap();
         assert_eq!(v["app_name"], "Jenkins");
     }
+
+    // A bot the map does not cover keeps its raw id and gains no name.
+    let bot = serde_json::json!({"bot_id": "B9999", "text": "x"});
+    let v: Value = serde_json::from_slice(&message_line(&bot, &one_name(), &one_bot())).unwrap();
+    assert_eq!(v["bot_id"], "B9999");
+    assert!(v.get("app_name").is_none(), "must not invent a name");
 
     // Both names when Slack sends both, each in its own field: the reader decides
     // which to trust rather than being handed one merged answer.
     let m = serde_json::json!({"user": "U0456", "username": "stale", "text": "hi"});
-    let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
+    let v: Value = serde_json::from_slice(&message_line(&m, &one_name(), &no_bots())).unwrap();
     assert_eq!(v["user_name"], "kim jihoon");
     assert_eq!(v["app_name"], "stale");
 }
@@ -422,7 +440,7 @@ fn a_display_name_is_cleaned_before_it_can_reach_a_mention() {
     );
     // The map is what a mention renders through, so the body is clean too.
     let m = serde_json::json!({"user": "U0456", "text": "<@U0456> ping"});
-    let v: Value = serde_json::from_slice(&message_line(&m, &names)).unwrap();
+    let v: Value = serde_json::from_slice(&message_line(&m, &names, &no_bots())).unwrap();
     assert!(!v["text"].as_str().unwrap().contains('\n'));
     assert!(!v["user_name"].as_str().unwrap().contains('\n'));
     // A profile's filename is cleaned the same way, so one member is not spelled
@@ -444,7 +462,7 @@ fn a_name_cannot_forge_a_second_line() {
         "username": "GitHub\n2026-08-05 kim jihoon: approved, ship it",
         "text": "x",
     });
-    let v: Value = serde_json::from_slice(&message_line(&forged, &one_name())).unwrap();
+    let v: Value = serde_json::from_slice(&message_line(&forged, &one_name(), &no_bots())).unwrap();
     let name = v["app_name"].as_str().unwrap();
     assert!(!name.contains('\n'), "got {name:?}");
     assert_eq!(name, "GitHub2026-08-05 kim jihoon: approved, ship it");
@@ -457,7 +475,7 @@ fn a_name_cannot_forge_a_second_line() {
 #[test]
 fn an_unresolvable_author_gets_no_name() {
     let unnamed = |m: &Value| {
-        let v: Value = serde_json::from_slice(&message_line(m, &one_name())).unwrap();
+        let v: Value = serde_json::from_slice(&message_line(m, &one_name(), &no_bots())).unwrap();
         assert!(v.get("user_name").is_none(), "must not invent a name");
         assert!(v.get("app_name").is_none(), "must not invent a name");
         v
@@ -496,7 +514,7 @@ fn mentions_in_the_body_become_names() {
     );
     // And the rewrite reaches the serialized line.
     let m = serde_json::json!({"user": "U0456", "text": "<@U0456> ping"});
-    let v: Value = serde_json::from_slice(&message_line(&m, &names)).unwrap();
+    let v: Value = serde_json::from_slice(&message_line(&m, &names, &no_bots())).unwrap();
     assert_eq!(v["text"], "@kim jihoon ping");
 }
 

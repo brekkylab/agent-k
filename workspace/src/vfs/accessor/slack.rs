@@ -552,6 +552,20 @@ impl SlackAccessor {
         self.paginate("users.list", &[], "members").await
     }
 
+    /// The app name behind a `bot_id` (`bots.info`). An incoming webhook's message
+    /// carries that id and nothing else to name it by — measured against a real
+    /// workspace — so this is the only way. Empty when Slack reports no name.
+    pub async fn bot_info(&self, bot_id: &str) -> anyhow::Result<String> {
+        let v = self
+            .call("bots.info", &[("bot", bot_id.to_string())])
+            .await?;
+        Ok(v.get("bot")
+            .and_then(|b| b.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string())
+    }
+
     /// One user (`users.info`), for an id the member list didn't cover — a DM
     /// partner outside the workspace's own member list (measured: Slack's own
     /// `USLACK` account).
