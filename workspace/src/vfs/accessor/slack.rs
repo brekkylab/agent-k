@@ -106,11 +106,11 @@ impl std::error::Error for SlackApiError {}
 ///
 /// `not_authed`/`invalid_auth` are deliberately **not** here: those are about the
 /// token itself, so every conversation would fail the same way and swallowing
-/// them would present an empty workspace as a complete one.
+/// them would present an empty workspace as a complete one. Neither is
+/// `missing_scope`, for the same reason — see [`is_missing_scope`].
 const READ_DENIED: &[&str] = &[
     "not_in_channel",
     "channel_not_found",
-    "missing_scope",
     "is_archived",
     "restricted_action",
     "no_permission",
@@ -121,6 +121,20 @@ const READ_DENIED: &[&str] = &[
 pub fn is_read_denied(e: &anyhow::Error) -> bool {
     e.downcast_ref::<SlackApiError>()
         .is_some_and(|s| READ_DENIED.contains(&s.code.as_str()))
+}
+
+/// Whether the install never granted the scope this call needs.
+///
+/// Not a per-conversation denial, which is why it is not in [`READ_DENIED`]: a
+/// scope governs a whole *kind* of conversation, so every channel of that kind
+/// fails identically. Served as an empty result it would render the section as
+/// "all of these exist and none has any history" — the shape of a complete
+/// answer. Only a caller that can narrow the request should absorb it (a listing
+/// asking per kind, so the grantable kinds still list); anywhere else it has to
+/// propagate, and the error names the scope to grant.
+pub fn is_missing_scope(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<SlackApiError>()
+        .is_some_and(|s| s.code == "missing_scope")
 }
 
 /// Result of the mount-create code exchange. `team_name`/`team_id` are the
@@ -729,14 +743,20 @@ mod tests {
             }
             .into()
         };
-        for code in ["not_in_channel", "missing_scope", "is_archived"] {
+        for code in ["not_in_channel", "is_archived"] {
             assert!(is_read_denied(&err(code)), "{code} should be soft");
         }
-        for code in ["not_authed", "invalid_auth", "fatal_error"] {
+        // `missing_scope` applies to a whole kind of conversation, so it belongs
+        // with the token-level errors: absorbing it per conversation would render
+        // a section as complete-and-empty.
+        for code in ["not_authed", "invalid_auth", "fatal_error", "missing_scope"] {
             assert!(!is_read_denied(&err(code)), "{code} must propagate");
         }
+        assert!(is_missing_scope(&err("missing_scope")));
+        assert!(!is_missing_scope(&err("not_in_channel")));
         // A non-Slack error is never a permission denial.
         assert!(!is_read_denied(&anyhow::anyhow!("connection reset")));
+        assert!(!is_missing_scope(&anyhow::anyhow!("connection reset")));
     }
 
     #[test]

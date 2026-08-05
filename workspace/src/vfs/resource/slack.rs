@@ -36,7 +36,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::vfs::{
-    accessor::{SlackAccessor, SlackConfig, is_read_denied},
+    accessor::{SlackAccessor, SlackConfig, is_missing_scope, is_read_denied},
     error::{ResourceError, ResourceResult},
     path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource},
@@ -284,7 +284,7 @@ impl SlackResource {
     async fn list_conversations(&self, kinds: &[&str]) -> ResourceResult<Vec<Value>> {
         match self.accessor.list_conversations(&kinds.join(",")).await {
             Ok(v) => return Ok(v),
-            Err(e) if is_read_denied(&e) && kinds.len() > 1 => {
+            Err(e) if (is_missing_scope(&e) || is_read_denied(&e)) && kinds.len() > 1 => {
                 tracing::debug!("slack: conversations.list denied ({e}); asking per kind");
             }
             Err(e) => return Err(backend(e)),
