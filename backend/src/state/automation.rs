@@ -531,7 +531,6 @@ impl AutomationsState {
         rows.iter().map(Automation::from_row).collect()
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// Recompute `next_fire_at` from `now` for the automation's enabled cron
     /// triggers. Run on re-enable so a slot missed while disabled fires at the
     /// next real instant, not its stale one. Caller owns the tx.
