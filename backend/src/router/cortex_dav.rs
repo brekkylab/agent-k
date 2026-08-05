@@ -60,14 +60,19 @@ impl DavFileSystem for CortexDavFs {
         let ws = self.ws.clone();
         let p = rel(path);
         Box::pin(async move {
-            let opts = CxOpenOptions {
-                read: options.read,
-                write: options.write,
-                append: options.append,
-                truncate: options.truncate,
-                create: options.create,
-                create_new: options.create_new,
+            // `create_new` has no bool setter (its constructor is the only way to
+            // arm `O_EXCL`), so branch on it: start from the exclusive-create base
+            // when asked, else a plain default, then overlay the rest.
+            let base = if options.create_new {
+                CxOpenOptions::create_new()
+            } else {
+                CxOpenOptions::default().create(options.create)
             };
+            let opts = base
+                .read(options.read)
+                .write(options.write)
+                .append(options.append)
+                .truncate(options.truncate);
             let (handle, stat) = ws.open(&p, opts).await.map_err(to_dav)?;
             Ok(Box::new(CortexDavFile {
                 handle: Arc::from(handle),

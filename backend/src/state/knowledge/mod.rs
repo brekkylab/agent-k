@@ -321,10 +321,7 @@ async fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
     let (handle, stat) = ws
         .open(
             &cx(path),
-            OpenOptions {
-                read: true,
-                ..Default::default()
-            },
+            OpenOptions::read_only(),
         )
         .await
         .map_err(|e| anyhow::anyhow!("open {path}: {e:?}"))?;

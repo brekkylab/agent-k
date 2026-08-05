@@ -224,12 +224,7 @@ async fn write_ref(ws: &Workspace, ref_path: &str, body: &[u8]) -> anyhow::Resul
     let (handle, _) = ws
         .open(
             &cx(ref_path),
-            OpenOptions {
-                write: true,
-                create: true,
-                truncate: true,
-                ..Default::default()
-            },
+            OpenOptions::write_only().create(true).truncate(true),
         )
         .await?;
     handle.write_all_at(body, 0).await?;
@@ -242,10 +237,7 @@ async fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
     let (handle, stat) = ws
         .open(
             &cx(path),
-            OpenOptions {
-                read: true,
-                ..Default::default()
-            },
+            OpenOptions::read_only(),
         )
         .await?;
     let mut out = vec![0u8; stat.size as usize];
