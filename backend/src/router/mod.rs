@@ -118,6 +118,12 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/automations",
             get(automation::list_automations).post(automation::create_automation),
         )
+        // Static segment — registered before `/automations/{id}` so a cron
+        // schedule preview isn't read as an automation id.
+        .api_route(
+            "/automations/occurrences",
+            get(automation::list_occurrences),
+        )
         .api_route(
             "/automations/{id}",
             get(automation::get_automation)

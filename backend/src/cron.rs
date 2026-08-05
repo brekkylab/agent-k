@@ -51,6 +51,45 @@ pub fn next_fire_after(
         .map_err(|e| format!("no future occurrence for '{expr}': {e}"))
 }
 
+/// All fire instants of `expr` within `[from, to)` (tz-aware), capped at `max`.
+/// Returns `(instants, truncated)`; `truncated` is true when the cap was hit.
+pub fn occurrences_between(
+    expr: &str,
+    tz_name: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    max: usize,
+) -> Result<(Vec<DateTime<Utc>>, bool), String> {
+    let tz: Tz = tz_name
+        .parse()
+        .map_err(|e: chrono_tz::ParseError| format!("invalid timezone '{tz_name}': {e}"))?;
+    validate_five_field(expr)?;
+    let cron: Cron = expr
+        .parse()
+        .map_err(|e| format!("invalid cron expression '{expr}': {e}"))?;
+
+    let mut out = Vec::new();
+    // First probe inclusive (catch an instant exactly at `from`), then exclusive
+    // to step past each collected instant.
+    let mut cursor = from.with_timezone(&tz);
+    let mut inclusive = true;
+    loop {
+        let Ok(next) = cron.find_next_occurrence(&cursor, inclusive) else {
+            return Ok((out, false)); // croner exhausted its search horizon
+        };
+        let next_utc = next.with_timezone(&Utc);
+        if next_utc >= to {
+            return Ok((out, false));
+        }
+        out.push(next_utc);
+        if out.len() >= max {
+            return Ok((out, true));
+        }
+        cursor = next;
+        inclusive = false;
+    }
+}
+
 fn validate_five_field(expr: &str) -> Result<(), String> {
     let n = expr.split_whitespace().count();
     if n == 5 {
@@ -78,6 +117,54 @@ mod tests {
         // every day at 09:00 UTC
         let next = next_fire_after("0 9 * * *", "UTC", now).unwrap();
         assert_eq!(next, at("2026-06-01T09:00:00Z"));
+    }
+
+    #[test]
+    fn occurrences_between_lists_window() {
+        // Hourly at :00 over [08:30, 11:30) → 09:00, 10:00, 11:00 (`to` exclusive).
+        let (fires, truncated) = occurrences_between(
+            "0 * * * *",
+            "UTC",
+            at("2026-06-01T08:30:00Z"),
+            at("2026-06-01T11:30:00Z"),
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            fires,
+            vec![
+                at("2026-06-01T09:00:00Z"),
+                at("2026-06-01T10:00:00Z"),
+                at("2026-06-01T11:00:00Z"),
+            ]
+        );
+        assert!(!truncated);
+
+        // `from` is inclusive: an instant exactly at the window start is included.
+        let (incl, _) = occurrences_between(
+            "0 * * * *",
+            "UTC",
+            at("2026-06-01T09:00:00Z"),
+            at("2026-06-01T11:00:00Z"),
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            incl,
+            vec![at("2026-06-01T09:00:00Z"), at("2026-06-01T10:00:00Z")]
+        );
+
+        // The cap truncates and flags it.
+        let (capped, truncated) = occurrences_between(
+            "0 * * * *",
+            "UTC",
+            at("2026-06-01T08:30:00Z"),
+            at("2026-06-01T20:00:00Z"),
+            2,
+        )
+        .unwrap();
+        assert_eq!(capped.len(), 2);
+        assert!(truncated);
     }
 
     #[test]

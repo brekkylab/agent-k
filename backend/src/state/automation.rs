@@ -714,27 +714,42 @@ impl AutomationsState {
         row.as_ref().map(AutomationTrigger::from_row).transpose()
     }
 
-    /// Toggle a trigger's `enabled` flag, keeping cron `next_fire_at` consistent:
-    /// cleared on disable, recomputed from now on enable — but only when the
-    /// automation is also enabled, else it stays parked until the automation
-    /// re-enables. Webhook/event triggers carry no next_fire_at.
-    pub async fn set_trigger_enabled(
+    /// Update a trigger's `spec` and/or `enabled`, keeping the cron
+    /// `next_fire_at` invariant: recomputed from now (against the new spec) when
+    /// the trigger and its automation are both enabled, else NULL. The trigger
+    /// kind is immutable. Returns the updated row.
+    pub async fn update_trigger(
         &self,
         trigger_id: Uuid,
-        enabled: bool,
+        spec: Option<&TriggerSpec>,
+        enabled: Option<bool>,
     ) -> StateResult<AutomationTrigger> {
-        let trigger = self.get_trigger(trigger_id).await?.ok_or(StateError::NotFound)?;
+        let current = self.get_trigger(trigger_id).await?.ok_or(StateError::NotFound)?;
+        if let Some(spec) = spec
+            && spec.kind() != current.kind
+        {
+            return Err(StateError::InvalidData(
+                "trigger kind is immutable; delete and recreate to change it".into(),
+            ));
+        }
+        let enabled = enabled.unwrap_or(current.enabled);
+        let spec_json = match spec {
+            Some(s) => s
+                .to_db_spec_json()
+                .map_err(|e| StateError::InvalidData(format!("trigger spec: {e}")))?,
+            None => current.spec_json.clone(),
+        };
         let now_dt = Utc::now();
         let now = now_dt.to_rfc3339();
 
-        let next_fire_at = if trigger.kind == TriggerKind::Cron && enabled {
+        let next_fire_at = if current.kind == TriggerKind::Cron && enabled {
             let automation = self
-                .get_automation(trigger.automation_id)
+                .get_automation(current.automation_id)
                 .await?
                 .ok_or(StateError::NotFound)?;
             if automation.enabled {
                 let TriggerSpec::Cron { expr, tz } =
-                    TriggerSpec::from_db(TriggerKind::Cron, &trigger.spec_json)
+                    TriggerSpec::from_db(TriggerKind::Cron, &spec_json)
                         .map_err(|e| StateError::InvalidData(format!("trigger spec: {e}")))?
                 else {
                     unreachable!("kind == Cron")
@@ -749,8 +764,9 @@ impl AutomationsState {
         };
 
         sqlx::query(
-            "UPDATE automation_triggers SET enabled = ?, next_fire_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE automation_triggers SET spec_json = ?, enabled = ?, next_fire_at = ?, updated_at = ? WHERE id = ?",
         )
+        .bind(&spec_json)
         .bind(enabled)
         .bind(next_fire_at.map(|t| t.to_rfc3339()))
         .bind(&now)
@@ -758,12 +774,56 @@ impl AutomationsState {
         .execute(&self.db)
         .await?;
 
-        Ok(AutomationTrigger {
-            enabled,
-            next_fire_at,
-            updated_at: parse_ts(&now, "automation_triggers.updated_at")?,
-            ..trigger
-        })
+        self.get_trigger(trigger_id).await?.ok_or(StateError::NotFound)
+    }
+
+    /// Enabled cron triggers of enabled automations in `workspace_id`, each with
+    /// its automation's name — for the occurrences (schedule preview) endpoint.
+    pub async fn list_enabled_cron_triggers_by_workspace(
+        &self,
+        workspace_id: Uuid,
+    ) -> StateResult<Vec<(AutomationTrigger, String)>> {
+        let rows = sqlx::query(
+            "SELECT t.id, t.automation_id, t.kind, t.spec_json, t.enabled, t.next_fire_at, \
+                    t.webhook_token_hash, t.created_at, t.updated_at, a.name AS automation_name \
+             FROM automation_triggers t JOIN automations a ON a.id = t.automation_id \
+             WHERE a.workspace_id = ? AND t.kind = 'cron' AND t.enabled = 1 AND a.enabled = 1 \
+             ORDER BY a.name ASC, t.created_at ASC",
+        )
+        .bind(workspace_id.to_string())
+        .fetch_all(&self.db)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let trigger = AutomationTrigger::from_row(row)?;
+                let name: String = row.get("automation_name");
+                Ok((trigger, name))
+            })
+            .collect()
+    }
+
+    /// Runs whose `scheduled_for` falls in `[from, to)` for `workspace_id`,
+    /// newest first — for the calendar/timeline window.
+    pub async fn list_runs_in_window(
+        &self,
+        workspace_id: Uuid,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        limit: i64,
+    ) -> StateResult<Vec<AutomationRun>> {
+        let sql = format!(
+            "SELECT {RUN_COLS} FROM automation_runs \
+             WHERE workspace_id = ? AND scheduled_for >= ? AND scheduled_for < ? \
+             ORDER BY scheduled_for DESC LIMIT ?"
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(workspace_id.to_string())
+            .bind(from.to_rfc3339())
+            .bind(to.to_rfc3339())
+            .bind(limit)
+            .fetch_all(&self.db)
+            .await?;
+        rows.iter().map(AutomationRun::from_row).collect()
     }
 
     pub async fn list_triggers(
@@ -1729,21 +1789,78 @@ mod tests {
         assert_eq!(state.list_due_cron_triggers(Utc::now()).await.unwrap().len(), 1);
 
         // Disable → parked (enabled=0, next_fire_at NULL), out of the due scan.
-        let off = state.set_trigger_enabled(t.id, false).await.unwrap();
+        let off = state.update_trigger(t.id, None, Some(false)).await.unwrap();
         assert!(!off.enabled);
         assert!(off.next_fire_at.is_none());
         assert!(state.list_due_cron_triggers(Utc::now()).await.unwrap().is_empty());
 
         // Re-enable while the automation is enabled → recomputed to a future instant.
-        let on = state.set_trigger_enabled(t.id, true).await.unwrap();
+        let on = state.update_trigger(t.id, None, Some(true)).await.unwrap();
         assert!(on.enabled);
         assert!(on.next_fire_at.unwrap() > Utc::now());
 
         // Enabling a trigger whose automation is disabled leaves it parked.
         state.update_automation(a.id, None, None, None, None, None, Some(false)).await.unwrap();
-        let on2 = state.set_trigger_enabled(t.id, true).await.unwrap();
+        let on2 = state.update_trigger(t.id, None, Some(true)).await.unwrap();
         assert!(on2.enabled);
         assert!(on2.next_fire_at.is_none(), "parked while its automation is disabled");
+    }
+
+    #[tokio::test]
+    async fn update_trigger_spec_and_window_queries() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool);
+        let a = state
+            .create_automation(wid, "j".into(), None, "p".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        let t = state
+            .create_trigger(
+                a.id,
+                &TriggerSpec::Cron { expr: "0 * * * *".into(), tz: None },
+                true,
+                Some(Utc::now()),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Change the cron expr → spec_json updated, next_fire_at recomputed forward.
+        let new_spec = TriggerSpec::Cron { expr: "0 0 * * *".into(), tz: None };
+        let up = state.update_trigger(t.id, Some(&new_spec), None).await.unwrap();
+        assert!(up.spec_json.contains("0 0 * * *"));
+        assert!(up.next_fire_at.unwrap() > Utc::now());
+        // Changing the kind is rejected.
+        assert!(
+            state
+                .update_trigger(t.id, Some(&TriggerSpec::Webhook {}), None)
+                .await
+                .is_err()
+        );
+
+        // Enabled cron triggers by workspace carry the automation name.
+        let cron = state.list_enabled_cron_triggers_by_workspace(wid).await.unwrap();
+        assert_eq!(cron.len(), 1);
+        assert_eq!(cron[0].1, "j");
+
+        // runs-in-window filters by scheduled_for.
+        let inside = state.create_scheduled_run(&a, Utc::now(), "manual").await.unwrap();
+        let _outside = state
+            .create_scheduled_run(&a, Utc::now() + chrono::Duration::days(10), "manual")
+            .await
+            .unwrap();
+        let win = state
+            .list_runs_in_window(
+                wid,
+                Utc::now() - chrono::Duration::hours(1),
+                Utc::now() + chrono::Duration::hours(1),
+                100,
+            )
+            .await
+            .unwrap();
+        assert_eq!(win.len(), 1);
+        assert_eq!(win[0].id, inside.id);
     }
 
     #[tokio::test]

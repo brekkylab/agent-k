@@ -435,11 +435,16 @@ pub(super) async fn delete_trigger(
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateTriggerRequest {
-    pub enabled: bool,
+    /// New spec (same kind — kind is immutable). Omit to keep the current spec.
+    #[serde(default)]
+    pub spec: Option<TriggerSpec>,
+    /// New enabled state. Omit to keep it.
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
-/// Toggle a trigger's `enabled` flag. Disabling parks it (cron `next_fire_at`
-/// cleared); enabling recomputes it (cron, when the automation is also enabled).
+/// Update a trigger's spec and/or enabled state. Kind is immutable; a cron
+/// change recomputes `next_fire_at` (parked when the trigger or automation is off).
 pub(super) async fn update_trigger(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
@@ -457,7 +462,7 @@ pub(super) async fn update_trigger(
     }
     let updated = state
         .automations
-        .set_trigger_enabled(trigger_id, payload.enabled)
+        .update_trigger(trigger_id, payload.spec.as_ref(), payload.enabled)
         .await?;
     Ok(Json(TriggerResponse::from_db(updated)?))
 }
@@ -564,6 +569,10 @@ pub(super) async fn create_run(
 pub struct ListRunsQuery {
     pub automation_id: Option<Uuid>,
     pub workspace_id: Option<Uuid>,
+    /// With `to`, restrict to runs whose `scheduled_for` is in `[from, to)`
+    /// (workspace-scoped) — the calendar/timeline window.
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
 }
 
 /// `GET /automation-runs?automation_id=&workspace_id=`
@@ -572,7 +581,17 @@ pub(super) async fn list_runs(
     Extension(auth): Extension<AuthUser>,
     Query(q): Query<ListRunsQuery>,
 ) -> Result<Json<RunListResponse>, ApiError> {
-    let runs = if let Some(aid) = q.automation_id {
+    let runs = if let (Some(from), Some(to)) = (q.from, q.to) {
+        let ws = q.workspace_id.unwrap_or(auth.id);
+        require_owned_workspace(&state, &auth, ws).await?;
+        if to <= from {
+            return Err(err(StatusCode::BAD_REQUEST, "`to` must be after `from`"));
+        }
+        state
+            .automations
+            .list_runs_in_window(ws, from, to, RUN_WINDOW_MAX)
+            .await?
+    } else if let Some(aid) = q.automation_id {
         require_owned_automation(&state, &auth, aid).await?;
         state.automations.list_runs(aid).await?
     } else {
@@ -583,6 +602,91 @@ pub(super) async fn list_runs(
     Ok(Json(RunListResponse {
         items: runs.into_iter().map(RunResponse::from).collect(),
     }))
+}
+
+const RUN_WINDOW_MAX: i64 = 500;
+const OCCURRENCE_PER_TRIGGER_MAX: usize = 500;
+const OCCURRENCE_WINDOW_MAX_DAYS: i64 = 366;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OccurrencesQuery {
+    pub workspace_id: Option<Uuid>,
+    /// Window start (RFC3339); defaults to now.
+    pub from: Option<DateTime<Utc>>,
+    /// Window end (RFC3339, exclusive); defaults to `from` + 31 days.
+    pub to: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OccurrenceResponse {
+    pub trigger_id: Uuid,
+    pub automation_id: Uuid,
+    pub automation_name: String,
+    pub fire_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tz: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OccurrenceListResponse {
+    pub items: Vec<OccurrenceResponse>,
+    /// True if any trigger hit the per-trigger expansion cap.
+    pub truncated: bool,
+}
+
+/// Predicted cron fire instants across a workspace's enabled automations within
+/// `[from, to)` — the schedule/calendar preview.
+pub(super) async fn list_occurrences(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Query(q): Query<OccurrencesQuery>,
+) -> Result<Json<OccurrenceListResponse>, ApiError> {
+    let ws = q.workspace_id.unwrap_or(auth.id);
+    require_owned_workspace(&state, &auth, ws).await?;
+    let from = q.from.unwrap_or_else(Utc::now);
+    let to = q.to.unwrap_or_else(|| from + chrono::Duration::days(31));
+    if to <= from {
+        return Err(err(StatusCode::BAD_REQUEST, "`to` must be after `from`"));
+    }
+    if to - from > chrono::Duration::days(OCCURRENCE_WINDOW_MAX_DAYS) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            format!("window too wide (max {OCCURRENCE_WINDOW_MAX_DAYS} days)"),
+        ));
+    }
+
+    let triggers = state
+        .automations
+        .list_enabled_cron_triggers_by_workspace(ws)
+        .await?;
+    let mut items: Vec<OccurrenceResponse> = Vec::new();
+    let mut truncated = false;
+    for (trigger, automation_name) in triggers {
+        let TriggerSpec::Cron { expr, tz } = TriggerSpec::from_db(trigger.kind, &trigger.spec_json)
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("spec decode: {e}")))?
+        else {
+            continue; // query already filters kind = 'cron'
+        };
+        let tz_name = tz.as_deref().unwrap_or(default_tz_name());
+        let (fires, trig_truncated) =
+            match crate::cron::occurrences_between(&expr, tz_name, from, to, OCCURRENCE_PER_TRIGGER_MAX) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(trigger = %trigger.id, "occurrences expand skipped: {e}");
+                    continue;
+                }
+            };
+        truncated |= trig_truncated;
+        items.extend(fires.into_iter().map(|fire_at| OccurrenceResponse {
+            trigger_id: trigger.id,
+            automation_id: trigger.automation_id,
+            automation_name: automation_name.clone(),
+            fire_at,
+            tz: tz.clone(),
+        }));
+    }
+    items.sort_by_key(|o| o.fire_at);
+    Ok(Json(OccurrenceListResponse { items, truncated }))
 }
 
 /// `GET /automation-runs/{id}`
