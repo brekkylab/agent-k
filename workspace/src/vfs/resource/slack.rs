@@ -225,12 +225,9 @@ type Cached<T> = (Instant, Arc<T>);
 type Attempt<T> = (Instant, Option<Arc<T>>);
 /// A keyed cache of those, expiring at [`TTL`].
 ///
-/// A conversation read that came back denied is served empty for that one request
-/// but never cached: it looks identical to a quiet conversation, and storing it
-/// would hold that likeness for the whole TTL, with re-reading powerless to
-/// correct it. Names are the exception — a day whose member names failed to
-/// resolve is cached, because [`SlackResource::users`] remembers that failure for
-/// this same TTL, so the two expire together.
+/// A denied read is served empty once but never cached: it is indistinguishable
+/// from a quiet conversation, and storing it would hold that likeness for the
+/// whole TTL with re-reading powerless to correct it.
 type CacheMap<K, T> = Mutex<HashMap<K, Cached<T>>>;
 
 pub struct SlackResource {
@@ -262,11 +259,9 @@ impl SlackResource {
 
     /// The workspace's members. One call for the whole tree's naming needs.
     ///
-    /// A failure is remembered for the same [`TTL`] as a success. Every message
-    /// rendering and the DM listing ask for names, so several ask within one
-    /// `readdir`; without this, a token that simply lacks `users:read` re-learns
-    /// that per call, and a rate-limited `users.list` re-pays its whole retry
-    /// ladder each time to reach the same answer.
+    /// A failure is remembered for the same [`TTL`] as a success: several callers
+    /// ask for names within one `readdir`, and a token that lacks `users:read`
+    /// never starts having it.
     async fn users(&self) -> ResourceResult<Arc<Vec<Value>>> {
         if let Some((at, v)) = self.users.lock().await.as_ref()
             && at.elapsed() < TTL
@@ -301,9 +296,9 @@ impl SlackResource {
     /// scope for one of them is missing (see [`CHANNEL_TYPES`]), each kind on its
     /// own so the ones that are grantable still list. Only when no kind at all is
     /// listable does *that* error propagate — `missing_scope` then names what to
-    /// grant. A failure which is not about permissions propagates immediately
-    /// instead: it says nothing about what this token may list, and skipping the
-    /// kind would drop every conversation in it from a listing the caller caches.
+    /// grant. A failure which is not about permissions propagates immediately, since
+    /// skipping a kind on one would drop every conversation in it from a listing the
+    /// caller caches.
     async fn list_conversations(&self, kinds: &[&str]) -> ResourceResult<Vec<Value>> {
         match self.accessor.list_conversations(&kinds.join(",")).await {
             Ok(v) => return Ok(v),
@@ -349,11 +344,10 @@ impl SlackResource {
         let raw = self
             .list_conversations(if dms { DM_TYPES } else { CHANNEL_TYPES })
             .await?;
-        // A DM has no name of its own — it is named after the person on the other
-        // side, so it needs the member list too. Without it `conv_label` falls back
-        // to the partner's id: a poor name for a DM that is still there to read,
-        // which beats failing the whole section over what it is called (the same
-        // choice `day` makes).
+        // A DM has no name of its own, so it needs the member list too. Without it
+        // `conv_label` falls back to the partner's id: a poor name for a DM that is
+        // still there to read, which beats failing the section over what it is
+        // called (the same choice `day` makes).
         let mut names = if dms {
             self.user_names().await.unwrap_or_else(|e| {
                 tracing::debug!("slack: no member names ({e}); naming DMs by id");
@@ -538,11 +532,9 @@ impl SlackResource {
         };
         // Names for the ids in each message (see `message_line`). Cached for the
         // whole mount, so this costs no request of its own; failing to fetch them
-        // leaves ids as they are rather than failing the day. The day is still
-        // cached: `users` remembers its own failure for the same TTL, so an
-        // id-only day cannot outlive the reason it is id-only by more than that,
-        // and refusing to cache would instead re-fetch this window for every one
-        // of the several `day()` calls a single listing makes.
+        // leaves ids as they are rather than failing the day. The day is cached
+        // either way — `users` remembers its own failure for the same TTL, so an
+        // id-only day cannot outlive the reason it is one.
         let names = self.user_names().await.unwrap_or_else(|e| {
             tracing::debug!("slack: no member names ({e}); leaving ids unresolved");
             HashMap::new()
@@ -733,7 +725,7 @@ impl SlackResource {
     async fn download(&self, f: &FileMeta, range: Option<Range<u64>>) -> ResourceResult<Vec<u8>> {
         let (bytes, served_range) = self
             .accessor
-            .download_file(&f.url, range.clone())
+            .download_file(&f.url, range.clone(), f.size)
             .await
             .map_err(backend)?;
         Ok(if served_range {
@@ -1181,14 +1173,12 @@ fn user_filename(u: &Value, id: &str) -> String {
 /// message claims for itself. They are kept apart because they are not the same
 /// kind of fact.
 ///
-/// A person's message identifies its author by id only (`"user": "U0BM…"`), which
-/// the member list resolves — Slack's own record of who that is. An app's message
-/// has no `user` at all: it carries `bot_id` and a name it supplied with the post
-/// (`username`, or the install's `bot_profile.name`). Anyone who can add an
-/// incoming webhook chooses that string per message, a colleague's own display
-/// name included. In a channel fed by CI or alerting it is most of the day, so it
-/// is worth serving — but merged into one field, a forged name would be
-/// indistinguishable from a real one.
+/// A person's message carries only `"user": "U0BM…"`, which the member list
+/// resolves. An app's carries no `user` at all, just `bot_id` and a name it
+/// supplied with the post (`username`, or the install's `bot_profile.name`) —
+/// which anyone who can add a webhook chooses per message, a colleague's display
+/// name included. Merged into one field, a forged name would be indistinguishable
+/// from a real one.
 ///
 /// Nothing is invented: a message with neither is left unnamed.
 fn author_names(m: &Value, names: &HashMap<String, String>) -> (Option<String>, Option<String>) {
@@ -1214,12 +1204,8 @@ fn author_names(m: &Value, names: &HashMap<String, String>) -> (Option<String>, 
 /// which unescapes as it prints: a newline inside a name would come out as a
 /// second line wearing the shape of another message.
 ///
-/// Applied wherever a name enters the tree rather than at each use: [`name_map`]
-/// and the `users.info` fallback in [`SlackResource::convs`] for the member list
-/// (which is what a mention in the body resolves through), [`user_filename`] for a
-/// profile's own filename, and the claimed name in [`author_names`]. Sanitizing
-/// only where a name is written to its own field would leave the body as an open
-/// door to the same forgery, and leave one member spelled two ways.
+/// Applied wherever a name enters the tree rather than at each use, so the field,
+/// the mention in the body and the profile's filename cannot disagree.
 fn one_line(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
@@ -1227,15 +1213,13 @@ fn one_line(s: &str) -> String {
 /// Serialize one message as a `.jsonl` line, with the ids a reader cannot resolve
 /// on its own turned into names.
 ///
-/// Slack puts only ids in a message: the author is `"user": "U0BM…"` and a mention
-/// in the body is `<@U0BM…>`. Both are unreadable as they stand — resolving them
-/// would mean the reader cross-referencing `users/` per line, and the mention text
-/// would stay opaque even then. So:
+/// Slack puts only ids in a message, which would leave the reader
+/// cross-referencing `users/` per line. So:
 ///
 /// - `user_name` and `app_name` are **added** alongside the author fields, never in
-///   place of them. The id is the stable identity — a display name can change or
-///   repeat, and `users/<name>__<id>.json` is still found by id. The two names are
-///   separate keys because only one of them is Slack's own — see [`author_names`].
+///   place of them: the id is the stable identity, since a display name can change
+///   or repeat. Two keys because only one of the names is Slack's own — see
+///   [`author_names`].
 /// - `<@U0BM…>` in `text` becomes `@name`, since that is the part a person reads.
 fn message_line(m: &Value, names: &HashMap<String, String>) -> Vec<u8> {
     let (verified, claimed) = author_names(m, names);

@@ -281,6 +281,8 @@ pub struct SlackConfig {
 /// profiles and file bytes, and nothing here posts.
 pub struct SlackAccessor {
     client: reqwest::Client,
+    /// For file bytes only: refuses redirects (see [`SlackAccessor::download_file`]).
+    files: reqwest::Client,
     config: SlackConfig,
     /// Resolved API origin (`…/slack/api`) — real Slack or the config's
     /// `base_url` (see [`api_base`]).
@@ -302,6 +304,13 @@ impl SlackAccessor {
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .connect_timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+            // Separate so refusing redirects does not change an API call.
+            files: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
             config: config.clone(),
@@ -550,17 +559,18 @@ impl SlackAccessor {
     }
 
     /// Download a Slack-hosted file. `url` comes from a message's `files[]`
-    /// (`url_private_download`) and **requires** the bearer token — unauthorized
-    /// it answers a 200 HTML login page rather than an error, so an unchecked
-    /// download silently yields a web page instead of the file.
+    /// (`url_private_download`) and needs the bearer token: without an accepted one
+    /// the CDN redirects to a web login answering 200 with HTML, which is no error
+    /// and would be served as the file. So redirects are refused, and the body must
+    /// be `size` bytes unless the status is 206 — only a served range may be short.
     ///
-    /// `range` maps to an HTTP `Range` header; Slack's file CDN honors it, and a
-    /// server that ignores it answers 200 with the whole body, which the caller
-    /// (the resource) slices.
+    /// `range` maps to an HTTP `Range` header; a 200 means it was ignored and the
+    /// caller slices the whole body itself.
     pub async fn download_file(
         &self,
         url: &str,
         range: Option<std::ops::Range<u64>>,
+        size: u64,
     ) -> anyhow::Result<(Vec<u8>, bool)> {
         // Only ever follow Slack's own file hosts: `url_private_download` comes
         // from API data, and sending the mount's token to whatever host a
@@ -584,7 +594,7 @@ impl SlackAccessor {
         }
         // Same credential as the API calls: a file the person can see in Slack is
         // one their own token can fetch.
-        let mut req = self.client.get(parsed).bearer_auth(self.token());
+        let mut req = self.files.get(parsed).bearer_auth(self.token());
         let ranged = range.is_some();
         if let Some(r) = &range {
             // Inclusive-end, per HTTP: a 0..10 read asks for bytes 0-9.
@@ -594,10 +604,22 @@ impl SlackAccessor {
             );
         }
         let resp = req.send().await?.error_for_status()?;
+        let status = resp.status();
+        if status.is_redirection() {
+            // `error_for_status` passes a 3xx, so this has to say so itself.
+            anyhow::bail!("slack file url redirected ({status}); the token was not accepted");
+        }
         // 206 means the range was applied; a 200 to a ranged request means it
         // wasn't, and the caller must slice the full body itself.
-        let served_range = ranged && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-        Ok((resp.bytes().await?.to_vec(), served_range))
+        let served_range = ranged && status == reqwest::StatusCode::PARTIAL_CONTENT;
+        let bytes = resp.bytes().await?.to_vec();
+        if !served_range && bytes.len() as u64 != size {
+            anyhow::bail!(
+                "slack file download was {} bytes, not the listed {size}",
+                bytes.len()
+            );
+        }
+        Ok((bytes, served_range))
     }
 
     /// Message search over Slack's own index (`search.messages`), which reaches
@@ -788,13 +810,13 @@ mod tests {
     async fn download_refuses_a_non_slack_host() {
         let a = SlackAccessor::new(&config(Some("xoxp-user"), None)).unwrap();
         let e = a
-            .download_file("https://evil.example.com/f.pdf", None)
+            .download_file("https://evil.example.com/f.pdf", None, 1)
             .await
             .expect_err("must refuse");
         assert!(e.to_string().contains("not a Slack host"), "{e}");
         // Slack's own hosts pass the check (this one fails later, on connect).
         let e = a
-            .download_file("https://files.slack.com/nope", None)
+            .download_file("https://files.slack.com/nope", None, 1)
             .await
             .expect_err("no network in tests");
         assert!(!e.to_string().contains("not a Slack host"), "{e}");
