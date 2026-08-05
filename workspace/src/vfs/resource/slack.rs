@@ -222,6 +222,11 @@ enum Node {
 /// borrows it instead of copying (a day's messages, a workspace's member list).
 type Cached<T> = (Instant, Arc<T>);
 /// A keyed cache of those, expiring at [`TTL`].
+///
+/// Only answers are stored. A conversation read that came back denied is served
+/// empty for that one request but never cached: it looks identical to a quiet
+/// conversation, and storing it would hold that likeness for the whole TTL, with
+/// re-reading powerless to correct it.
 type CacheMap<K, T> = Mutex<HashMap<K, Cached<T>>>;
 
 pub struct SlackResource {
@@ -439,12 +444,14 @@ impl SlackResource {
         {
             return Ok(v.clone());
         }
+        let mut denied = false;
         let latest = match self.accessor.latest_message_ts(id).await {
             Ok(t) => t,
             // The token can't read this conversation: an empty date list, not a
             // broken tree.
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: history denied for {id} ({e}); listing it empty");
+                denied = true;
                 None
             }
             Err(e) => return Err(backend(e)),
@@ -465,10 +472,12 @@ impl SlackResource {
             None => Vec::new(),
         };
         let dates = Arc::new(dates);
-        self.dates
-            .lock()
-            .await
-            .insert(id.to_string(), (Instant::now(), dates.clone()));
+        if !denied {
+            self.dates
+                .lock()
+                .await
+                .insert(id.to_string(), (Instant::now(), dates.clone()));
+        }
         Ok(dates)
     }
 
@@ -485,6 +494,7 @@ impl SlackResource {
             return Ok(v.clone());
         }
         let (oldest, next) = day_bounds(date).ok_or(ResourceError::NotFound)?;
+        let mut denied = false;
         let roots = match self
             .accessor
             .conversation_history(id, &fmt_ts(oldest), &fmt_ts(next))
@@ -493,6 +503,7 @@ impl SlackResource {
             Ok(m) => m,
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: history denied for {id}/{date} ({e}); serving it empty");
+                denied = true;
                 Vec::new()
             }
             Err(e) => return Err(backend(e)),
@@ -545,10 +556,12 @@ impl SlackResource {
             threads,
             files,
         });
-        self.days
-            .lock()
-            .await
-            .insert(key, (Instant::now(), day.clone()));
+        if !denied {
+            self.days
+                .lock()
+                .await
+                .insert(key, (Instant::now(), day.clone()));
+        }
         Ok(day)
     }
 
@@ -562,10 +575,12 @@ impl SlackResource {
         {
             return Ok(v.clone());
         }
+        let mut denied = false;
         let msgs = match self.accessor.conversation_replies(id, ts).await {
             Ok(m) => m,
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: replies denied for {id}/{ts} ({e}); serving it empty");
+                denied = true;
                 Vec::new()
             }
             Err(e) => return Err(backend(e)),
@@ -597,10 +612,12 @@ impl SlackResource {
             jsonl: Arc::new(jsonl),
             files,
         });
-        self.threads
-            .lock()
-            .await
-            .insert(key, (Instant::now(), thread.clone()));
+        if !denied {
+            self.threads
+                .lock()
+                .await
+                .insert(key, (Instant::now(), thread.clone()));
+        }
         Ok(thread)
     }
 
