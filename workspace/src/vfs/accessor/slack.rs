@@ -111,6 +111,9 @@ impl std::error::Error for SlackApiError {}
 const READ_DENIED: &[&str] = &[
     "not_in_channel",
     "channel_not_found",
+    // Defence only: the read methods do not return this. Archiving closes a
+    // channel to new messages and leaves the old ones readable — do not read this
+    // entry as a reason to keep archived channels out of the tree.
     "is_archived",
     "restricted_action",
     "no_permission",
@@ -453,15 +456,16 @@ impl SlackAccessor {
     }
 
     /// Conversations of `types` the token can see (`conversations.list`).
-    /// Archived channels are excluded — they list fine but their history is
-    /// denied, so they would only ever show as empty date trees.
+    ///
+    /// Archived channels are included. Archiving closes a channel to new messages;
+    /// it does not withhold the old ones — measured against a real workspace, an
+    /// archived channel answered `conversations.history` with its messages and no
+    /// `is_limited`. Excluding them would drop a finished project's whole record
+    /// from the tree while it is still perfectly readable.
     pub async fn list_conversations(&self, types: &str) -> anyhow::Result<Vec<Value>> {
         self.paginate(
             "conversations.list",
-            &[
-                ("types", types.to_string()),
-                ("exclude_archived", "true".to_string()),
-            ],
+            &[("types", types.to_string())],
             "channels",
         )
         .await
