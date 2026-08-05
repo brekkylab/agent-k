@@ -17,12 +17,12 @@ rust-version = "1.95.0"
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "a1f736f713a74cfb36a54870802e5e75cce640ea", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "22eaa1977ba6aebca27cd515ea59832a230fd39a", features = ["sandbox"] }
 # Direct cortex dep so agent-k defines the canonical `Workspace`/`WorkspaceSpec`
 # it hands to the ailoy sandbox and serves from its own WebDAV. Same rev ailoy
 # pins, so the `WorkspaceSpec` type unifies across the boundary. VFS providers
 # only — no VM/FUSE binding (WebDAV is pure Mountable).
-cortex = { git = "https://github.com/brekkylab/cortex.git", rev = "644ac9b56668fa1b84badbdd78a613bf1e37dc3c", features = ["s3", "notion"] }
+cortex = { git = "https://github.com/brekkylab/cortex.git", rev = "0406283d03b29cf64fb2112bc7439a3e37cfb473", features = ["s3", "notion"] }
 
 # NB: the raw-FUSE tunnel (and its `[patch.crates-io] fuser = feat/macfuse-abi`
 # override) is gone — the sandbox is served over cortex virtio-fs now, and
