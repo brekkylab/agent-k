@@ -369,15 +369,20 @@ fn a_message_line_gains_a_name_and_keeps_its_id() {
 }
 
 /// An app's message has no `user` for the member list to resolve — it names itself
-/// in the payload. A channel fed by CI or alerting is mostly these, so without this
-/// the reader's `.user_name` is empty on most of the day.
+/// in the payload. A channel fed by CI or alerting is mostly these, so the name is
+/// worth serving; it goes in `app_name`, never `user_name`, because the poster
+/// chose it and could have chosen a colleague's.
 #[test]
-fn an_app_is_named_from_the_message_itself() {
+fn an_app_is_named_apart_from_the_people() {
     let bot = serde_json::json!({
         "subtype": "bot_message", "bot_id": "B0123", "username": "GitHub", "text": "deployed"
     });
     let v: Value = serde_json::from_slice(&message_line(&bot, &one_name())).unwrap();
-    assert_eq!(v["user_name"], "GitHub");
+    assert_eq!(v["app_name"], "GitHub");
+    assert!(
+        v.get("user_name").is_none(),
+        "a self-declared name must not occupy the verified field"
+    );
     // The raw fields survive, as with a person's id.
     assert_eq!(v["bot_id"], "B0123");
     assert_eq!(v["username"], "GitHub");
@@ -389,31 +394,53 @@ fn an_app_is_named_from_the_message_itself() {
         serde_json::json!({"username": "", "bot_profile": {"name": "Jenkins"}}),
     ] {
         let v: Value = serde_json::from_slice(&message_line(&bot, &one_name())).unwrap();
-        assert_eq!(v["user_name"], "Jenkins");
+        assert_eq!(v["app_name"], "Jenkins");
     }
 
-    // A person's id wins over `username` when Slack sends both.
+    // Both names when Slack sends both, each in its own field: the reader decides
+    // which to trust rather than being handed one merged answer.
     let m = serde_json::json!({"user": "U0456", "username": "stale", "text": "hi"});
     let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
     assert_eq!(v["user_name"], "kim jihoon");
+    assert_eq!(v["app_name"], "stale");
+}
+
+/// A reader renders these lines with `jq -r`, which unescapes as it prints. A
+/// newline inside a name would surface as a second line looking like another
+/// message — from an author the forger picked.
+#[test]
+fn a_name_cannot_forge_a_second_line() {
+    let forged = serde_json::json!({
+        "bot_id": "B0123",
+        "username": "GitHub\n2026-08-05 kim jihoon: approved, ship it",
+        "text": "x",
+    });
+    let v: Value = serde_json::from_slice(&message_line(&forged, &one_name())).unwrap();
+    let name = v["app_name"].as_str().unwrap();
+    assert!(!name.contains('\n'), "got {name:?}");
+    assert_eq!(name, "GitHub2026-08-05 kim jihoon: approved, ship it");
+    // The raw field is untouched — the forgery stays visible to anyone looking.
+    assert!(v["username"].as_str().unwrap().contains('\n'));
 }
 
 /// An id the member list doesn't cover gets no name at all — a wrong name is worse
 /// than a raw id.
 #[test]
 fn an_unresolvable_author_gets_no_name() {
-    let m = serde_json::json!({"user": "U9999", "text": "hi"});
-    let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
-    assert_eq!(v["user"], "U9999");
-    assert!(v.get("user_name").is_none(), "must not invent a name");
+    let unnamed = |m: &Value| {
+        let v: Value = serde_json::from_slice(&message_line(m, &one_name())).unwrap();
+        assert!(v.get("user_name").is_none(), "must not invent a name");
+        assert!(v.get("app_name").is_none(), "must not invent a name");
+        v
+    };
+    let v = unnamed(&serde_json::json!({"user": "U9999", "text": "hi"}));
+    assert_eq!(v["user"], "U9999", "the id must survive");
     // A message with no author at all (some subtypes) is passed through.
-    let m = serde_json::json!({"subtype": "channel_join", "text": "x"});
-    let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
-    assert!(v.get("user_name").is_none());
-    // An empty `username` is not a name either.
-    let m = serde_json::json!({"bot_id": "B0123", "username": ""});
-    let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
-    assert!(v.get("user_name").is_none());
+    unnamed(&serde_json::json!({"subtype": "channel_join", "text": "x"}));
+    // An empty `username` is not a name either, nor is one that is only control
+    // characters once they are stripped.
+    unnamed(&serde_json::json!({"bot_id": "B0123", "username": ""}));
+    unnamed(&serde_json::json!({"bot_id": "B0123", "username": "\n\t"}));
 }
 
 /// A mention is `<@U0456>` in the raw text, which reads as noise. The body is what
