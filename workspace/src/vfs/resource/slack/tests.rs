@@ -423,6 +423,25 @@ fn an_app_is_named_apart_from_the_people() {
     assert_eq!(v["app_name"], "stale");
 }
 
+/// A window that hit the page ceiling holds the newest messages and drops the
+/// oldest, so the file would otherwise read as the whole day. The notice says so in
+/// `text`, where a reader renders it, and carries no name — nobody wrote it, and a
+/// name here would be the forgery the two-field split exists to prevent.
+#[test]
+fn a_truncated_read_says_so_in_the_file() {
+    let line = truncation_line("this day");
+    assert!(line.ends_with(b"\n"), "one JSON object per line");
+    let v: Value = serde_json::from_slice(&line).unwrap();
+    assert_eq!(v["_truncated"], true);
+    assert!(v["text"].as_str().unwrap().contains("this day"));
+    for k in ["user_name", "app_name", "user", "bot_id", "ts", "subtype"] {
+        assert!(
+            v.get(k).is_none(),
+            "a notice must not look like a message: {k}"
+        );
+    }
+}
+
 /// A name reaches the reader two ways — `user_name` on the line, and `@name`
 /// rewritten into `text` — so it is cleaned where it enters the map rather than at
 /// each use. Cleaning only the field it is written to would leave the body as an

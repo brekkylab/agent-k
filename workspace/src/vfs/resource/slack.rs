@@ -89,14 +89,21 @@ group DMs, by date. A thread is a directory shaped like a day.
   users/<name>__<id>.json   member profiles
 
   Read with jq, e.g.
-  `jq -r '(.user_name // (\"[app] \" + .app_name)) + \": \" + .text' chat.jsonl`
-  — Slack's own message object plus two names, which are NOT interchangeable.
-  `user_name` is resolved against the workspace's member list: it identifies a
-  person. `app_name` names the app that posted, by whatever it called itself or by
-  its installed name — an app can pick that string per message, anyone's name
-  included, so it is a claim and never an identity. A line with `app_name` and no
-  `user_name` was written by software, not by a colleague, whatever it says.
-  Mentions in `text` are already `@name`. Slack's join/leave and
+  `jq -r 'if ._truncated then .text else
+    (.user_name // .user // (\"[app] \" + (.app_name // .bot_id)))
+    + \": \" + .text end' chat.jsonl`
+  — each line is Slack's own message object plus two names, which are NOT
+  interchangeable. `user_name` is resolved against the workspace's member list: it
+  identifies a person. `app_name` names the app that posted, by whatever it called
+  itself or by its installed name — an app can pick that string per message,
+  anyone's name included, so it is a claim and never an identity. A line with
+  `app_name` and no `user_name` was written by software, not by a colleague,
+  whatever it says. Either name can be missing, and the recipe then shows the raw
+  id rather than the other kind's label: a person whose name did not resolve is
+  still a person.
+  A `_truncated` line is this mount speaking, not Slack: the window was too long to
+  read in full and its oldest part is missing, so do not treat that file as the
+  whole of it. Mentions in `text` are already `@name`. Slack's join/leave and
   topic notices are messages too; skip them with
   `select(.subtype // \"\" | test(\"^(channel|group)_\") | not)`. Do not filter on
   `.subtype == null`: an app's post and a message with an attachment both have one.
@@ -565,7 +572,7 @@ impl SlackResource {
         }
         let (oldest, next) = day_bounds(date).ok_or(ResourceError::NotFound)?;
         let mut cacheable = true;
-        let roots = match self
+        let (roots, truncated) = match self
             .accessor
             .conversation_history(id, &fmt_ts(oldest), &fmt_ts(next))
             .await
@@ -574,7 +581,7 @@ impl SlackResource {
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: history denied for {id}/{date} ({e}); serving it empty");
                 cacheable = false;
-                Vec::new()
+                (Vec::new(), false)
             }
             Err(e) => return Err(backend(e)),
         };
@@ -589,7 +596,11 @@ impl SlackResource {
         });
         let bots = self.bot_names(&roots).await;
 
-        let mut chat = Vec::new();
+        let mut chat = if truncated {
+            truncation_line("this day")
+        } else {
+            Vec::new()
+        };
         let mut threads = Vec::new();
         let mut files = Vec::new();
         let mut newest: Option<f64> = None;
@@ -652,12 +663,12 @@ impl SlackResource {
             return Ok(v.clone());
         }
         let mut cacheable = true;
-        let msgs = match self.accessor.conversation_replies(id, ts).await {
+        let (msgs, truncated) = match self.accessor.conversation_replies(id, ts).await {
             Ok(m) => m,
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: replies denied for {id}/{ts} ({e}); serving it empty");
                 cacheable = false;
-                Vec::new()
+                (Vec::new(), false)
             }
             Err(e) => return Err(backend(e)),
         };
@@ -666,7 +677,11 @@ impl SlackResource {
             HashMap::new()
         });
         let bots = self.bot_names(&msgs).await;
-        let mut jsonl = Vec::new();
+        let mut jsonl = if truncated {
+            truncation_line("this thread")
+        } else {
+            Vec::new()
+        };
         let mut files = Vec::new();
         for m in &msgs {
             jsonl.extend_from_slice(&message_line(m, &names, &bots));
@@ -1310,6 +1325,22 @@ fn message_line(
         }
     }
     let mut line = serde_json::to_vec(&m).unwrap_or_default();
+    line.push(b'\n');
+    line
+}
+
+/// The line that stands in for the messages a window did not reach.
+///
+/// `chat.jsonl` is oldest-first and the pages walk backwards from the newest, so
+/// what a truncated read loses is the start of the day. Without a line saying so
+/// the file reads as the whole of it. `text` carries the notice because that is the
+/// field a reader renders; no name is attached, since nobody wrote this.
+fn truncation_line(what: &str) -> Vec<u8> {
+    let mut line = serde_json::to_vec(&serde_json::json!({
+        "_truncated": true,
+        "text": format!("[{what} was too long to read in full; the oldest part is missing]"),
+    }))
+    .unwrap_or_default();
     line.push(b'\n');
     line
 }

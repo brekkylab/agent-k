@@ -416,14 +416,15 @@ impl SlackAccessor {
     }
 
     /// Walk a cursor-paginated method, collecting `items_key` across pages.
-    /// Stops at [`MAX_PAGES`] (logged) so a pathological workspace can't
-    /// paginate without bound.
+    /// Stops at [`MAX_PAGES`] so a pathological workspace can't paginate without
+    /// bound; the second return value is true when it stopped there, so a caller
+    /// can say so rather than pass a partial off as the whole.
     async fn paginate(
         &self,
         method: &str,
         params: &[(&str, String)],
         items_key: &str,
-    ) -> anyhow::Result<Vec<Value>> {
+    ) -> anyhow::Result<(Vec<Value>, bool)> {
         let mut out = Vec::new();
         let mut cursor: Option<String> = None;
         for page in 0..MAX_PAGES {
@@ -443,7 +444,7 @@ impl SlackAccessor {
                 .filter(|c| !c.is_empty())
                 .map(String::from);
             if cursor.is_none() {
-                return Ok(out);
+                return Ok((out, false));
             }
             if page + 1 == MAX_PAGES {
                 tracing::warn!(
@@ -452,7 +453,7 @@ impl SlackAccessor {
                 );
             }
         }
-        Ok(out)
+        Ok((out, true))
     }
 
     /// Conversations of `types` the token can see (`conversations.list`).
@@ -462,13 +463,20 @@ impl SlackAccessor {
     /// archived channel answered `conversations.history` with its messages and no
     /// `is_limited`. Excluding them would drop a finished project's whole record
     /// from the tree while it is still perfectly readable.
+    ///
+    /// A truncated listing is logged and returned anyway: a directory has nowhere
+    /// to say it is partial, and 10,000 conversations is far past any real
+    /// workspace, so hitting the ceiling means a runaway cursor rather than a big
+    /// tenant.
     pub async fn list_conversations(&self, types: &str) -> anyhow::Result<Vec<Value>> {
-        self.paginate(
-            "conversations.list",
-            &[("types", types.to_string())],
-            "channels",
-        )
-        .await
+        let (out, _truncated) = self
+            .paginate(
+                "conversations.list",
+                &[("types", types.to_string())],
+                "channels",
+            )
+            .await?;
+        Ok(out)
     }
 
     /// One conversation's metadata (`conversations.info`) — used to learn
@@ -491,8 +499,8 @@ impl SlackAccessor {
         channel: &str,
         oldest: &str,
         latest: &str,
-    ) -> anyhow::Result<Vec<Value>> {
-        let mut msgs = self
+    ) -> anyhow::Result<(Vec<Value>, bool)> {
+        let (mut msgs, truncated) = self
             .paginate(
                 "conversations.history",
                 &[
@@ -505,7 +513,7 @@ impl SlackAccessor {
             )
             .await?;
         msgs.sort_by(|a, b| ts_of(a).total_cmp(&ts_of(b)));
-        Ok(msgs)
+        Ok((msgs, truncated))
     }
 
     /// The newest message's ts in `channel`, or `None` when it has none. One
@@ -528,8 +536,8 @@ impl SlackAccessor {
         &self,
         channel: &str,
         ts: &str,
-    ) -> anyhow::Result<Vec<Value>> {
-        let mut msgs = self
+    ) -> anyhow::Result<(Vec<Value>, bool)> {
+        let (mut msgs, truncated) = self
             .paginate(
                 "conversations.replies",
                 &[("channel", channel.to_string()), ("ts", ts.to_string())],
@@ -537,7 +545,7 @@ impl SlackAccessor {
             )
             .await?;
         msgs.sort_by(|a, b| ts_of(a).total_cmp(&ts_of(b)));
-        Ok(msgs)
+        Ok((msgs, truncated))
     }
 
     /// Workspace members (`users.list`), bots/deleted/Slackbot included — the
@@ -548,8 +556,13 @@ impl SlackAccessor {
     /// carries each member's full profile, not just their id. `profile.email` is
     /// among those fields only when the install granted `users:read.email`;
     /// Slack simply omits it otherwise, so nothing here has to ask.
+    ///
+    /// Truncation is logged and the partial returned, as for `conversations.list`:
+    /// the members it drops surface as unresolved ids in a message, which is the
+    /// same thing an unknown id already looks like.
     pub async fn list_users(&self) -> anyhow::Result<Vec<Value>> {
-        self.paginate("users.list", &[], "members").await
+        let (out, _truncated) = self.paginate("users.list", &[], "members").await?;
+        Ok(out)
     }
 
     /// The app name behind a `bot_id` (`bots.info`). An incoming webhook's message
