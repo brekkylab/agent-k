@@ -366,7 +366,7 @@ pub(super) async fn create_trigger(
     Path(automation_id): Path<Uuid>,
     Json(payload): Json<CreateTriggerRequest>,
 ) -> Result<(StatusCode, Json<CreatedTriggerResponse>), ApiError> {
-    require_owned_automation(&state, &auth, automation_id).await?;
+    let automation = require_owned_automation(&state, &auth, automation_id).await?;
 
     // Cron: validate the expression + compute the first fire instant. Webhook:
     // issue a token (client never provides it) and store only its hash.
@@ -376,7 +376,9 @@ pub(super) async fn create_trigger(
             let tz_name = tz.as_deref().unwrap_or(default_tz_name());
             let fire = next_fire_after(expr, tz_name, Utc::now())
                 .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-            payload.enabled.then_some(fire)
+            // Schedule only while both the trigger and its automation are enabled;
+            // re-enabling the automation recomputes it (see update_automation).
+            (payload.enabled && automation.enabled).then_some(fire)
         }
         TriggerSpec::Webhook {} => {
             let (token, hash) = crate::state::AutomationsState::new_webhook_token();

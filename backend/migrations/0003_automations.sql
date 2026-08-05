@@ -27,7 +27,7 @@ CREATE INDEX idx_automations_workspace ON automations(workspace_id, created_at D
 
 -- Cron triggers (webhook out of scope). `spec_json` holds the untagged variant
 -- fields ({expr, tz}); `next_fire_at` is the next scheduled UTC instant, NULL
--- when the trigger is disabled.
+-- when the trigger or its automation is disabled (recomputed on re-enable).
 CREATE TABLE automation_triggers (
     id            TEXT PRIMARY KEY,
     automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,

@@ -532,6 +532,43 @@ impl AutomationsState {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Recompute `next_fire_at` from `now` for the automation's enabled cron
+    /// triggers. Run on re-enable so a slot missed while disabled fires at the
+    /// next real instant, not its stale one. Caller owns the tx.
+    async fn recompute_cron_next_fire(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        automation_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> StateResult<()> {
+        let rows = sqlx::query(
+            "SELECT id, spec_json FROM automation_triggers \
+             WHERE automation_id = ? AND kind = 'cron' AND enabled = 1",
+        )
+        .bind(automation_id.to_string())
+        .fetch_all(&mut **tx)
+        .await?;
+        for row in &rows {
+            let tid: String = row.get("id");
+            let spec_json: String = row.get("spec_json");
+            let TriggerSpec::Cron { expr, tz } = TriggerSpec::from_db(TriggerKind::Cron, &spec_json)
+                .map_err(|e| StateError::InvalidData(format!("trigger spec: {e}")))?
+            else {
+                continue;
+            };
+            let tz_name = tz.as_deref().unwrap_or(crate::cron::default_tz_name());
+            let next = crate::cron::next_fire_after(&expr, tz_name, now)
+                .map_err(StateError::InvalidData)?;
+            sqlx::query("UPDATE automation_triggers SET next_fire_at = ?, updated_at = ? WHERE id = ?")
+                .bind(next.to_rfc3339())
+                .bind(now.to_rfc3339())
+                .bind(&tid)
+                .execute(&mut **tx)
+                .await?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)] // field-per-arg update; a struct adds no clarity here
     pub async fn update_automation(
         &self,
         id: Uuid,
@@ -550,7 +587,8 @@ impl AutomationsState {
         validate_agent_type(&agent_type)?;
         let model = model.unwrap_or(current.model);
         let enabled = enabled.unwrap_or(current.enabled);
-        let now = Self::now();
+        let now_dt = Utc::now();
+        let now = now_dt.to_rfc3339();
 
         let mut tx = self.db.begin().await?;
         sqlx::query(
@@ -568,8 +606,20 @@ impl AutomationsState {
         .execute(&mut *tx)
         .await?;
 
-        // Disabling cancels queued runs so nothing new starts under the old config.
+        // next_fire_at encodes schedulability: NULL while the automation is
+        // disabled (so the due scan gates on `next_fire_at IS NOT NULL` alone),
+        // recomputed from now on re-enable so a slot missed while off doesn't
+        // fire at its stale instant.
         if current.enabled && !enabled {
+            // Disabling: park cron triggers and cancel queued runs.
+            sqlx::query(
+                "UPDATE automation_triggers SET next_fire_at = NULL, updated_at = ? \
+                 WHERE automation_id = ? AND kind = 'cron'",
+            )
+            .bind(&now)
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await?;
             sqlx::query(
                 "UPDATE automation_runs SET status = 'cancelled', lease_until = NULL, updated_at = ? \
                  WHERE automation_id = ? AND status = 'queued'",
@@ -578,6 +628,8 @@ impl AutomationsState {
             .bind(id.to_string())
             .execute(&mut *tx)
             .await?;
+        } else if !current.enabled && enabled {
+            Self::recompute_cron_next_fire(&mut tx, id, now_dt).await?;
         }
         tx.commit().await?;
 
@@ -738,7 +790,6 @@ impl AutomationsState {
         let sql = format!(
             "SELECT {TRIGGER_COLS} FROM automation_triggers \
              WHERE kind = 'cron' AND enabled = 1 AND next_fire_at IS NOT NULL AND next_fire_at <= ? \
-               AND automation_id IN (SELECT id FROM automations WHERE enabled = 1) \
              ORDER BY next_fire_at ASC"
         );
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
@@ -1527,19 +1578,43 @@ mod tests {
         let advanced = state.get_trigger(t.id).await.unwrap().unwrap().next_fire_at;
         assert!(advanced.unwrap() > due, "next_fire_at should have advanced");
 
-        // Disabled (rare fire-vs-disable race): no run, and the advance rolls back.
+        // Disabling parks the trigger (next_fire_at NULL) so a stale fire can't
+        // land: the CAS no longer matches and no run is created.
         let next2 = next + chrono::Duration::minutes(5);
         state
             .update_automation(a.id, None, None, None, None, None, Some(false))
             .await
             .unwrap();
+        assert!(state.get_trigger(t.id).await.unwrap().unwrap().next_fire_at.is_none());
         assert!(state.fire_cron_trigger(&a, t.id, next, next2, &payload).await.unwrap().is_none());
         assert_eq!(state.list_runs(a.id).await.unwrap().len(), 1);
-        assert_eq!(
-            state.get_trigger(t.id).await.unwrap().unwrap().next_fire_at,
-            advanced,
-            "disabled fire must roll back the advance"
-        );
+    }
+
+    #[tokio::test]
+    async fn disable_nulls_next_fire_reenable_recomputes() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool);
+        let a = state
+            .create_automation(wid, "j".into(), None, "p".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        // A cron trigger left due at a stale 6h-old slot.
+        let past = Utc::now() - chrono::Duration::hours(6);
+        let spec = TriggerSpec::Cron { expr: "0 * * * *".into(), tz: None };
+        let t = state.create_trigger(a.id, &spec, true, Some(past), None).await.unwrap();
+        assert_eq!(state.list_due_cron_triggers(Utc::now()).await.unwrap().len(), 1);
+
+        // Disable → next_fire_at NULL → drops out of the due scan.
+        state.update_automation(a.id, None, None, None, None, None, Some(false)).await.unwrap();
+        assert!(state.get_trigger(t.id).await.unwrap().unwrap().next_fire_at.is_none());
+        assert!(state.list_due_cron_triggers(Utc::now()).await.unwrap().is_empty());
+
+        // Re-enable → recomputed to a future instant (no stale catch-up fire).
+        state.update_automation(a.id, None, None, None, None, None, Some(true)).await.unwrap();
+        let nfa = state.get_trigger(t.id).await.unwrap().unwrap().next_fire_at.unwrap();
+        assert!(nfa > Utc::now(), "recomputed forward, not the stale slot");
+        assert!(state.list_due_cron_triggers(Utc::now()).await.unwrap().is_empty());
     }
 
     #[tokio::test]
