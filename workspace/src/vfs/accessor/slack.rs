@@ -37,11 +37,14 @@ fn api_base(base_url: Option<&str>) -> String {
 /// workspace, and a listing fans out per-conversation calls, so a burst can trip
 /// it; a bounded retry keeps a transient limit from failing the whole read.
 const MAX_RETRIES: u32 = 5;
-/// Cap on a single retry wait, deliberately shorter than a `Retry-After` Slack may
-/// send: these calls sit behind a FUSE op the agent blocks on, so a throttled read
-/// fails rather than wedging the guest for a minute. Raising this means moving the
-/// wait off the FUSE path, not just raising the number.
+/// Cap on an ordinary retry wait. These calls sit behind a FUSE op the agent blocks
+/// on, so the budget stays short. Raising it means moving the wait off the FUSE
+/// path, not just raising the number.
 const MAX_BACKOFF: Duration = Duration::from_secs(16);
+/// Ceiling on a `Retry-After` this client will sit out (see [`next_wait`]). Slack's
+/// rate-limit delays are seconds to a minute; anything past this is not worth
+/// holding a blocked guest for, however patient the server asks us to be.
+const MAX_HONORED_WAIT: Duration = Duration::from_secs(60);
 /// Jitter ceiling, recomputed per retry so concurrent readers don't retry in
 /// lockstep.
 const JITTER_MAX_MS: u64 = 1000;
@@ -53,8 +56,25 @@ fn backoff_delay(n: u32) -> Duration {
     (base + jitter).min(MAX_BACKOFF)
 }
 
-/// The `Retry-After` delay, if present. Slack sends delta-seconds on a 429 (and
-/// alongside `error: "ratelimited"`); the HTTP-date form is not honored (treated
+/// The delay before the next attempt, and whether it spends the one long wait.
+/// `None` = stop retrying.
+///
+/// A `Retry-After` longer than [`MAX_BACKOFF`] cannot be waited out on the ordinary
+/// budget: no arrangement of five sub-cap sleeps outlasts the window Slack named, so
+/// every retry lands back inside it and the read is spent for nothing. Such a delay
+/// is therefore sat out **once**, in full, and only up to [`MAX_HONORED_WAIT`];
+/// after that the read fails while the window is presumably still open, which the
+/// error says.
+fn next_wait(asked: Option<Duration>, retries: u32, long_spent: bool) -> Option<(Duration, bool)> {
+    match asked {
+        Some(d) if d > MAX_BACKOFF => (!long_spent && d <= MAX_HONORED_WAIT).then_some((d, true)),
+        Some(d) => (retries < MAX_RETRIES).then_some((d, false)),
+        None => (retries < MAX_RETRIES).then_some((backoff_delay(retries), false)),
+    }
+}
+
+/// The `Retry-After` delay, if present. Slack sends delta-seconds on a 429 and
+/// alongside `error: "ratelimited"`; the HTTP-date form is not honored (treated
 /// as absent → falls back to [`backoff_delay`]).
 fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
     let raw = resp
@@ -83,14 +103,15 @@ pub struct SlackApiError {
     pub method: String,
     /// Slack's `error` code, e.g. `not_in_channel`.
     pub code: String,
-    /// `needed`/`provided` scopes, when Slack reports them (`missing_scope`).
-    pub scopes: Option<String>,
+    /// Whatever Slack said about the failure beyond its code: the needed vs
+    /// provided scopes on `missing_scope`, the delay on `ratelimited`.
+    pub detail: Option<String>,
 }
 
 impl std::fmt::Display for SlackApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "slack {}: {}", self.method, self.code)?;
-        if let Some(s) = &self.scopes {
+        if let Some(s) = &self.detail {
             write!(f, " ({s})")?;
         }
         Ok(())
@@ -360,6 +381,7 @@ impl SlackAccessor {
         )?;
         let token = self.token();
         let mut retries = 0u32;
+        let mut long_spent = false;
         loop {
             let resp = self
                 .client
@@ -368,14 +390,18 @@ impl SlackAccessor {
                 .send()
                 .await?;
             let status = resp.status();
+            // Read before the body is consumed below: Slack sends this header with
+            // the in-band `ratelimited` reply too, which the JSON path could not
+            // otherwise see.
+            let asked = retry_after(&resp);
             if (status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error())
-                && retries < MAX_RETRIES
+                && let Some((wait, long)) = next_wait(asked, retries, long_spent)
             {
-                let wait = match retry_after(&resp) {
-                    Some(d) => d.min(MAX_BACKOFF),
-                    None => backoff_delay(retries),
-                };
-                retries += 1;
+                if long {
+                    long_spent = true;
+                } else {
+                    retries += 1;
+                }
                 tokio::time::sleep(wait).await;
                 continue;
             }
@@ -388,28 +414,35 @@ impl SlackAccessor {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown_error")
                 .to_string();
-            // Slack also reports a rate limit in-band (200 + ok:false); retry it
-            // on the same budget as the 429.
-            if code == "ratelimited" && retries < MAX_RETRIES {
-                let wait = backoff_delay(retries);
-                retries += 1;
+            // Slack also reports a rate limit in-band (200 + ok:false); retry it on
+            // the same budget, and on the header it sent with it.
+            if code == "ratelimited"
+                && let Some((wait, long)) = next_wait(asked, retries, long_spent)
+            {
+                if long {
+                    long_spent = true;
+                } else {
+                    retries += 1;
+                }
                 tokio::time::sleep(wait).await;
                 continue;
             }
             // `missing_scope` carries what was needed vs granted — the difference
             // between a mystery and an actionable message.
-            let scopes = match (v.get("needed"), v.get("provided")) {
+            let detail = match (v.get("needed"), v.get("provided")) {
                 (Some(n), p) => Some(format!(
                     "needed: {}; provided: {}",
                     n.as_str().unwrap_or("?"),
                     p.and_then(Value::as_str).unwrap_or("(none)")
                 )),
-                _ => None,
+                // Otherwise whatever `Retry-After` said, which is what a caller
+                // giving up while throttled needs to tell a wait from a dead mount.
+                _ => asked.map(|d| format!("retry in {}s", d.as_secs())),
             };
             return Err(SlackApiError {
                 method: method.to_string(),
                 code,
-                scopes,
+                detail,
             }
             .into());
         }
@@ -783,6 +816,40 @@ mod tests {
     }
 
     /// The soft-fail classification must key off Slack's `error` code, not a
+    /// A `Retry-After` past the ordinary cap used to be clamped to it, so five
+    /// sub-cap sleeps all landed back inside the window Slack named: 80s of waiting
+    /// and then a failure, worse than the 31s the no-header path spends and worse
+    /// than the minute the cap exists to avoid. Such a delay is sat out once, in
+    /// full, and only up to what a blocked guest can be held for.
+    #[test]
+    fn a_long_retry_after_is_honored_once_and_never_clamped() {
+        let secs = |n| Duration::from_secs(n);
+        // Within the cap: the ordinary budget, and the header is used as sent.
+        assert_eq!(next_wait(Some(secs(10)), 0, false), Some((secs(10), false)));
+        assert_eq!(next_wait(Some(secs(10)), MAX_RETRIES, false), None);
+
+        // Past the cap: sat out in full, not clamped — and it spends the one long
+        // wait rather than a retry, so it cannot repeat.
+        assert_eq!(next_wait(Some(secs(60)), 0, false), Some((secs(60), true)));
+        assert_eq!(next_wait(Some(secs(60)), 0, true), None);
+        // Still available even with the ordinary budget gone: the two are separate.
+        assert_eq!(
+            next_wait(Some(secs(60)), MAX_RETRIES, false),
+            Some((secs(60), true))
+        );
+
+        // Past what a blocked guest may be held for: refused outright.
+        assert_eq!(next_wait(Some(secs(3600)), 0, false), None);
+
+        // No header: exponential, capped, on the ordinary budget.
+        for n in 0..MAX_RETRIES {
+            let (w, long) = next_wait(None, n, false).expect("within budget");
+            assert!(!long, "the exponential path must not spend the long wait");
+            assert!(w <= MAX_BACKOFF, "{w:?}");
+        }
+        assert_eq!(next_wait(None, MAX_RETRIES, false), None);
+    }
+
     /// formatted string, and must NOT swallow token-level failures — those apply
     /// to every conversation, so treating them as "this channel is empty" would
     /// present an empty workspace as a complete one.
@@ -792,7 +859,7 @@ mod tests {
             SlackApiError {
                 method: "conversations.history".into(),
                 code: code.into(),
-                scopes: None,
+                detail: None,
             }
             .into()
         };
@@ -817,7 +884,7 @@ mod tests {
         let e = SlackApiError {
             method: "conversations.history".into(),
             code: "missing_scope".into(),
-            scopes: Some("needed: channels:history; provided: channels:read".into()),
+            detail: Some("needed: channels:history; provided: channels:read".into()),
         };
         let s = e.to_string();
         assert!(s.contains("channels:history"), "{s}");
