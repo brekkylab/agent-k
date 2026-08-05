@@ -368,6 +368,36 @@ fn a_message_line_gains_a_name_and_keeps_its_id() {
     assert_eq!(v["ts"], "1.2");
 }
 
+/// An app's message has no `user` for the member list to resolve — it names itself
+/// in the payload. A channel fed by CI or alerting is mostly these, so without this
+/// the reader's `.user_name` is empty on most of the day.
+#[test]
+fn an_app_is_named_from_the_message_itself() {
+    let bot = serde_json::json!({
+        "subtype": "bot_message", "bot_id": "B0123", "username": "GitHub", "text": "deployed"
+    });
+    let v: Value = serde_json::from_slice(&message_line(&bot, &one_name())).unwrap();
+    assert_eq!(v["user_name"], "GitHub");
+    // The raw fields survive, as with a person's id.
+    assert_eq!(v["bot_id"], "B0123");
+    assert_eq!(v["username"], "GitHub");
+
+    // An app that posts under no name of its own still has its profile's — whether
+    // the field is missing or empty.
+    for bot in [
+        serde_json::json!({"bot_id": "B0123", "bot_profile": {"name": "Jenkins"}}),
+        serde_json::json!({"username": "", "bot_profile": {"name": "Jenkins"}}),
+    ] {
+        let v: Value = serde_json::from_slice(&message_line(&bot, &one_name())).unwrap();
+        assert_eq!(v["user_name"], "Jenkins");
+    }
+
+    // A person's id wins over `username` when Slack sends both.
+    let m = serde_json::json!({"user": "U0456", "username": "stale", "text": "hi"});
+    let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
+    assert_eq!(v["user_name"], "kim jihoon");
+}
+
 /// An id the member list doesn't cover gets no name at all — a wrong name is worse
 /// than a raw id.
 #[test]
@@ -378,6 +408,10 @@ fn an_unresolvable_author_gets_no_name() {
     assert!(v.get("user_name").is_none(), "must not invent a name");
     // A message with no author at all (some subtypes) is passed through.
     let m = serde_json::json!({"subtype": "channel_join", "text": "x"});
+    let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
+    assert!(v.get("user_name").is_none());
+    // An empty `username` is not a name either.
+    let m = serde_json::json!({"bot_id": "B0123", "username": ""});
     let v: Value = serde_json::from_slice(&message_line(&m, &one_name())).unwrap();
     assert!(v.get("user_name").is_none());
 }

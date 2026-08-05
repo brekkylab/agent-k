@@ -89,8 +89,11 @@ group DMs, by date. A thread is a directory shaped like a day.
   users/<name>__<id>.json   member profiles
 
   Read with jq, e.g. `jq -r '.user_name + \": \" + .text' chat.jsonl` — Slack's own
-  message object plus `user_name` (mentions in `text` are already `@name`). Skip
-  Slack's event notices with `select(.subtype == null)`.
+  message object plus `user_name`, which names people and apps alike (mentions in
+  `text` are already `@name`). Slack's join/leave and topic notices are messages
+  too; skip them with
+  `select(.subtype // \"\" | test(\"^(channel|group)_\") | not)`. Do not filter on
+  `.subtype == null`: an app's post and a message with an attachment both have one.
 
   Costs: a day's chat.jsonl is ONE request and holds only the messages that START
   a thread; a root with replies has `reply_count`, and its replies are in
@@ -1097,31 +1100,52 @@ fn user_filename(u: &Value, id: &str) -> String {
     format!("{}__{id}.json", sanitize(display_name(u)))
 }
 
+/// The name for `user_name`, or `None` when the message has no author to name.
+///
+/// A person's message identifies its author by id only (`"user": "U0BM…"`), which
+/// the member list resolves. An app's message has no `user` at all — it carries
+/// `bot_id` and the name it posted under — and in a channel fed by CI or alerting
+/// that is most of the day. Both names are already in hand, so neither costs a
+/// request.
+///
+/// Nothing is invented: a wrong name is worse than a raw id.
+fn author_name(m: &Value, names: &HashMap<String, String>) -> Option<String> {
+    if let Some(name) = m
+        .get("user")
+        .and_then(Value::as_str)
+        .and_then(|u| names.get(u))
+    {
+        return Some(name.clone());
+    }
+    for field in [
+        m.get("username"),
+        m.get("bot_profile").and_then(|b| b.get("name")),
+    ] {
+        if let Some(name) = field.and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
 /// Serialize one message as a `.jsonl` line, with the ids a reader cannot resolve
 /// on its own turned into names.
 ///
 /// Slack puts only ids in a message: the author is `"user": "U0BM…"` and a mention
 /// in the body is `<@U0BM…>`. Both are unreadable as they stand — resolving them
 /// would mean the reader cross-referencing `users/` per line, and the mention text
-/// would stay opaque even then. The member list is already in hand (it names the
-/// DMs), so this fills them in at zero extra cost:
+/// would stay opaque even then. So:
 ///
-/// - `user_name` is **added** alongside `user`. Added rather than substituted
-///   because the id is the stable identity — a display name can change or repeat,
-///   and `users/<name>__<id>.json` is still found by id.
+/// - `user_name` is **added** alongside the author fields, never in place of them.
+///   The id is the stable identity — a display name can change or repeat, and
+///   `users/<name>__<id>.json` is still found by id. See [`author_name`].
 /// - `<@U0BM…>` in `text` becomes `@name`, since that is the part a person reads.
-///
-/// An id the member list doesn't cover is left exactly as it was: a wrong name is
-/// worse than a raw id.
 fn message_line(m: &Value, names: &HashMap<String, String>) -> Vec<u8> {
+    let author = author_name(m, names);
     let mut m = m.clone();
     if let Some(obj) = m.as_object_mut() {
-        if let Some(name) = obj
-            .get("user")
-            .and_then(Value::as_str)
-            .and_then(|u| names.get(u))
-        {
-            obj.insert("user_name".into(), Value::String(name.clone()));
+        if let Some(name) = author {
+            obj.insert("user_name".into(), Value::String(name));
         }
         if let Some(text) = obj.get("text").and_then(Value::as_str) {
             let resolved = resolve_mentions(text, names);
