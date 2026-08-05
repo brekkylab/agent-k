@@ -724,12 +724,13 @@ pub(super) async fn cancel_run(
     Extension(auth): Extension<AuthUser>,
     Path(run_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    require_owned_run(&state, &auth, run_id).await?;
+    let run = require_owned_run(&state, &auth, run_id).await?;
     let payload = serde_json::json!({ "source": "manual", "by": auth.id.to_string() });
     let cancelled = state.automations.cancel_run(run_id, &payload).await?;
     if !cancelled {
         return Err(err(StatusCode::CONFLICT, "run is already terminal"));
     }
+    state.sessions.cancel(run.session_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

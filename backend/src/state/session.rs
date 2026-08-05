@@ -885,10 +885,34 @@ impl SessionsState {
 
     /// Drive a single user turn for `id` **to completion**, persisting the user
     /// message and each agent output, honoring `cancel`. Unlike [`Self::run`]
-    /// (fire-and-forget, gated by the runs map) this awaits and returns the
-    /// result, so a caller like the automation worker can finalize the run.
-    /// Errors (including cancellation) surface as [`StateError`].
+    /// (fire-and-forget) this awaits and returns the result so the automation
+    /// worker can finalize the run. It registers in the runs map for the
+    /// duration, so a session teardown ([`Self::remove`] → [`Self::cancel`])
+    /// reaches the in-flight agent instead of deleting the row under it. Errors
+    /// (including cancellation) surface as [`StateError`].
     pub async fn drive_prompt(
+        &self,
+        id: Uuid,
+        query: Vec<Part>,
+        cancel: CancellationToken,
+    ) -> StateResult<()> {
+        {
+            let mut runs = self.runs.lock().await;
+            runs.insert(
+                id,
+                ActiveRun {
+                    cancel: cancel.clone(),
+                    partial: Arc::new(StdMutex::new(String::new())),
+                },
+            );
+        }
+        // Always unregister, whatever the inner result.
+        let result = self.drive_prompt_inner(id, query, cancel).await;
+        self.runs.lock().await.remove(&id);
+        result
+    }
+
+    async fn drive_prompt_inner(
         &self,
         id: Uuid,
         query: Vec<Part>,
