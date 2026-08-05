@@ -490,9 +490,13 @@ impl Resource for GdriveResource {
                     .await
                     .map_err(not_found_or_backend)?;
                 // Drive honored the range, so the window is already the answer;
-                // fall back to slicing if it sent the whole object anyway.
+                // fall back to slicing if it sent the whole object anyway. Saturating,
+                // because `end - start` on a backwards range underflows and takes the
+                // process with it.
                 return Ok(match &range {
-                    Some(r) if bytes.len() as u64 > r.end - r.start => slice(&bytes, range),
+                    Some(r) if bytes.len() as u64 > r.end.saturating_sub(r.start) => {
+                        slice(&bytes, range)
+                    }
                     _ => bytes,
                 });
             }
@@ -1040,13 +1044,16 @@ fn split_last(path: &str) -> (String, String) {
     }
 }
 
-/// The requested window of `data`, clamped (an out-of-range read yields empty
-/// rather than panicking).
+/// The requested window of `data`, clamped to what exists.
+///
+/// Both ends are clamped and the end is never allowed below the start: a range that
+/// asks backwards is empty, not a panic. The caller is a filesystem read, so the range
+/// arrives from whatever a client asked for, and `data[4..2]` aborts the process.
 fn slice(data: &[u8], range: Option<std::ops::Range<u64>>) -> Vec<u8> {
     match range {
         Some(r) => {
             let start = (r.start as usize).min(data.len());
-            let end = (r.end as usize).min(data.len());
+            let end = (r.end as usize).min(data.len()).max(start);
             data[start..end].to_vec()
         }
         None => data.to_vec(),
@@ -1486,6 +1493,24 @@ mod tests {
         assert_eq!(range_title("'Sheet1!B2'!A1:Z10"), "Sheet1!B2");
         assert_eq!(range_title("'it''s'!A1"), "it's");
         assert_eq!(range_title("Sheet1"), "Sheet1");
+    }
+
+    /// A range that asks backwards is empty, not a crash. The window arrives from
+    /// whatever a client asked for, and `data[4..2]` aborts the process rather than
+    /// erroring — which makes this the provider's job, not the caller's.
+    #[test]
+    fn a_backwards_window_is_empty_rather_than_fatal() {
+        let data = b"abcdef";
+        // Built from values: a literal `4..2` is a lint, but a range arriving from a
+        // client is just two numbers.
+        let backwards = |start: u64, end: u64| slice(data, Some(start..end));
+        assert!(backwards(4, 2).is_empty());
+        assert!(backwards(9, 3).is_empty());
+        assert!(backwards(6, 6).is_empty());
+        // Past the end clamps to the end; the ordinary cases keep working.
+        assert_eq!(backwards(4, 99).len(), 2);
+        assert_eq!(slice(data, Some(1..3)), b"bc");
+        assert_eq!(slice(data, None), data);
     }
 
     #[test]

@@ -643,3 +643,54 @@ async fn one_service_can_move_without_moving_the_others() {
         "nor A for Sheets: one origin moving does not move the rest"
     );
 }
+
+/// The same window, asked backwards, through the pair a mount actually uses.
+///
+/// It has to be a large file: a small one is cached whole and sliced by the wrapper,
+/// whose own slicing clamps. Past the cacheable limit the range goes down to the
+/// provider, where the arithmetic deciding whether to slice ran `end - start` on it
+/// (underflow) and the slice indexed `data[4..2]`. Neither errors; both abort the
+/// process, and a filesystem read is where a client's range arrives.
+#[tokio::test]
+async fn a_backwards_window_does_not_take_the_process_down() {
+    const REAL: usize = 10 * 1024 * 1024; // over the wrapper's cacheable limit
+    let mock = start(
+        json!([row(
+            "big.bin",
+            "B1",
+            "application/octet-stream",
+            Some("10485760")
+        )]),
+        HashMap::from([("B1".to_string(), vec![b'z'; REAL])]),
+    )
+    .await;
+    let fs = mounted(&mock.config());
+    let file = MountPath::new("/My Drive/big.bin");
+    let st = fs.stat(&file).await.unwrap();
+    assert!(
+        !whole_or_small_enough(&st),
+        "the range must reach the provider"
+    );
+
+    // Built from values, since a literal backwards range is a lint — but one arriving
+    // from a client is just two numbers.
+    for (start, end) in [(3_000_000u64, 1_000_000u64), (99_999_999, 10), (4096, 4096)] {
+        let got = fs
+            .read_bytes_pinned(&file, Some(start..end), &st)
+            .await
+            .expect("a backwards window answers instead of panicking");
+        assert!(got.is_empty(), "{start}..{end} should read nothing");
+    }
+    // And a forwards one still works.
+    let got = fs
+        .read_bytes_pinned(&file, Some(0..512), &st)
+        .await
+        .unwrap();
+    assert_eq!(got.len(), 512);
+}
+
+/// Mirrors the wrapper's own rule, so the test above can assert it is *not* the one
+/// doing the slicing.
+fn whole_or_small_enough(st: &crate::vfs::resource::FileStat) -> bool {
+    st.serves_whole || st.size == 0 || (!st.size_is_estimate && st.size <= 8 << 20)
+}
