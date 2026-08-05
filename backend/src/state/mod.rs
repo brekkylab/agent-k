@@ -70,8 +70,8 @@ pub type StateResult<T> = Result<T, StateError>;
 pub struct SlackOAuth {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
-    /// Alternative Slack API origin for the whole deployment (an enterprise mock
-    /// or gateway; see `SlackConfig::base_url`). Deployment config only — never
+    /// Alternative Slack API origin for the whole deployment (a mock or gateway;
+    /// see `SlackConfig::base_url`). Deployment config only — never
     /// user-suppliable, since the exchange endpoint receives the client secret.
     /// `None` = production Slack.
     pub base_url: Option<String>,

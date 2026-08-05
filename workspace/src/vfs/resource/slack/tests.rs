@@ -1,7 +1,7 @@
 //! Slack mount tests.
 //!
 //! The pure layers — path resolution, naming, the date range — are unit-tested
-//! here without a network. The tree itself is exercised against enterprise-mock
+//! here without a network. The tree itself is exercised against a mock origin
 //! (`slack_mock`) and a real workspace (`slack_live`), both `#[ignore]`d.
 
 use super::*;
@@ -698,7 +698,7 @@ fn env_tokens() -> Option<(Option<String>, Option<String>)> {
     (user.is_some() || bot.is_some()).then_some((user, bot))
 }
 
-/// Config for the enterprise-mock (`app/routers/slack.py`), which serves the
+/// Config for a Slack-compatible mock origin, which serves the
 /// Slack API under `{base}/slack/api`.
 fn mock_config() -> Option<SlackConfig> {
     let (user_token, bot_token) = env_tokens()?;
@@ -726,7 +726,7 @@ fn names(entries: &[DirEntry]) -> Vec<String> {
     entries.iter().map(|e| e.name.clone()).collect()
 }
 
-/// Walk the whole tree against enterprise-mock: the three sections, a channel's
+/// Walk the whole tree against a mock origin: the three sections, a channel's
 /// dates, one day's three children, `chat.jsonl`'s contents, a thread if the day
 /// has one, and the user profiles.
 ///
@@ -736,14 +736,14 @@ fn names(entries: &[DirEntry]) -> Vec<String> {
 ///   SLACK_BASE_URL=<mock origin> SLACK_USER_TOKEN=usr-… \
 ///     cargo test -p workspace slack_mock -- --ignored --nocapture
 ///
-/// Tokens come from the mock's own `GET /_mock/users`. A big corpus is what makes
+/// The token is whatever that mock accepts. A big corpus is what makes
 /// this worth running — measured against one with 36 channels and 327 users, a
 /// listing pages and takes seconds, exercising what a 3-member workspace never
 /// reaches. It is also close to the client's 30s timeout, so run the two mock
 /// tests one at a time (`slack_mock_tree_walk`, then `slack_mock_search`) rather
 /// than letting them contend.
 #[tokio::test]
-#[ignore = "requires a reachable enterprise-mock (SLACK_BASE_URL + a SLACK_*_TOKEN)"]
+#[ignore = "requires a reachable mock origin (SLACK_BASE_URL + a SLACK_*_TOKEN)"]
 async fn slack_mock_tree_walk() {
     let Some(cfg) = mock_config() else {
         eprintln!("set SLACK_BASE_URL and SLACK_USER_TOKEN (or SLACK_BOT_TOKEN) to run");
@@ -917,7 +917,7 @@ async fn slack_mock_tree_walk() {
 /// Search reaches Slack's own index (inside files it indexed) — the one thing
 /// reading the tree cannot do. Needs a user token; skipped without one.
 #[tokio::test]
-#[ignore = "requires a running enterprise-mock + SLACK_USER_TOKEN"]
+#[ignore = "requires a running mock origin + SLACK_USER_TOKEN"]
 async fn slack_mock_search() {
     let Some(cfg) = mock_config() else {
         eprintln!("set SLACK_BASE_URL and SLACK_USER_TOKEN to run");

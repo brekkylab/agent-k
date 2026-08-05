@@ -25,7 +25,7 @@ use serde_json::Value;
 const SLACK_API: &str = "https://slack.com/api";
 
 /// The API origin for a config: real Slack by default, or `{base_url}/slack/api`
-/// when set — the enterprise-mock/gateway layout.
+/// when set — the mock/gateway layout.
 fn api_base(base_url: Option<&str>) -> String {
     match base_url {
         Some(b) => format!("{}/slack/api", b.trim_end_matches('/')),
@@ -292,7 +292,7 @@ pub struct SlackConfig {
     /// mount info.
     pub team_id: String,
     pub team_name: String,
-    /// Alternative API origin (an enterprise mock or gateway): requests go to
+    /// Alternative API origin (a mock or gateway): requests go to
     /// `{base_url}/slack/api` instead of `slack.com/api`. `None` = production.
     /// Deployment-level only — the exchange endpoint receives the app's client
     /// secret, so this must never be user-suppliable: it is NOT part of the
@@ -737,8 +737,8 @@ mod tests {
     #[test]
     fn api_base_defaults_to_slack_and_honors_the_override() {
         assert_eq!(api_base(None), "https://slack.com/api");
-        // The mock mounts Slack under /slack/api, and a trailing slash in the
-        // configured origin must not double up.
+        // A mock or gateway serves Slack under /slack/api, and a trailing slash in
+        // the configured origin must not double up.
         assert_eq!(
             api_base(Some("http://localhost:8000")),
             "http://localhost:8000/slack/api"
