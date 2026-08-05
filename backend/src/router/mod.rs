@@ -130,7 +130,7 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
         )
         .api_route(
             "/automations/{id}/triggers/{trigger_id}",
-            delete(automation::delete_trigger),
+            delete(automation::delete_trigger).patch(automation::update_trigger),
         )
         // Runs are a top-level resource, independent of automations.
         .api_route(

@@ -433,6 +433,35 @@ pub(super) async fn delete_trigger(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateTriggerRequest {
+    pub enabled: bool,
+}
+
+/// Toggle a trigger's `enabled` flag. Disabling parks it (cron `next_fire_at`
+/// cleared); enabling recomputes it (cron, when the automation is also enabled).
+pub(super) async fn update_trigger(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthUser>,
+    Path((automation_id, trigger_id)): Path<(Uuid, Uuid)>,
+    Json(payload): Json<UpdateTriggerRequest>,
+) -> Result<Json<TriggerResponse>, ApiError> {
+    require_owned_automation(&state, &auth, automation_id).await?;
+    let trigger = state
+        .automations
+        .get_trigger(trigger_id)
+        .await?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "trigger not found"))?;
+    if trigger.automation_id != automation_id {
+        return Err(err(StatusCode::NOT_FOUND, "trigger not found"));
+    }
+    let updated = state
+        .automations
+        .set_trigger_enabled(trigger_id, payload.enabled)
+        .await?;
+    Ok(Json(TriggerResponse::from_db(updated)?))
+}
+
 /// Public webhook receiver (no auth middleware): fires the automation whose
 /// webhook trigger matches the `Authorization: Bearer <token>` header. The token
 /// hashes to a globally-unique `webhook_token_hash`, so it alone identifies the

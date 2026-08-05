@@ -714,6 +714,58 @@ impl AutomationsState {
         row.as_ref().map(AutomationTrigger::from_row).transpose()
     }
 
+    /// Toggle a trigger's `enabled` flag, keeping cron `next_fire_at` consistent:
+    /// cleared on disable, recomputed from now on enable — but only when the
+    /// automation is also enabled, else it stays parked until the automation
+    /// re-enables. Webhook/event triggers carry no next_fire_at.
+    pub async fn set_trigger_enabled(
+        &self,
+        trigger_id: Uuid,
+        enabled: bool,
+    ) -> StateResult<AutomationTrigger> {
+        let trigger = self.get_trigger(trigger_id).await?.ok_or(StateError::NotFound)?;
+        let now_dt = Utc::now();
+        let now = now_dt.to_rfc3339();
+
+        let next_fire_at = if trigger.kind == TriggerKind::Cron && enabled {
+            let automation = self
+                .get_automation(trigger.automation_id)
+                .await?
+                .ok_or(StateError::NotFound)?;
+            if automation.enabled {
+                let TriggerSpec::Cron { expr, tz } =
+                    TriggerSpec::from_db(TriggerKind::Cron, &trigger.spec_json)
+                        .map_err(|e| StateError::InvalidData(format!("trigger spec: {e}")))?
+                else {
+                    unreachable!("kind == Cron")
+                };
+                let tz_name = tz.as_deref().unwrap_or(crate::cron::default_tz_name());
+                Some(crate::cron::next_fire_after(&expr, tz_name, now_dt).map_err(StateError::InvalidData)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        sqlx::query(
+            "UPDATE automation_triggers SET enabled = ?, next_fire_at = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(enabled)
+        .bind(next_fire_at.map(|t| t.to_rfc3339()))
+        .bind(&now)
+        .bind(trigger_id.to_string())
+        .execute(&self.db)
+        .await?;
+
+        Ok(AutomationTrigger {
+            enabled,
+            next_fire_at,
+            updated_at: parse_ts(&now, "automation_triggers.updated_at")?,
+            ..trigger
+        })
+    }
+
     pub async fn list_triggers(
         &self,
         automation_id: Uuid,
@@ -1660,6 +1712,38 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(logs, 0);
+    }
+
+    #[tokio::test]
+    async fn toggle_trigger_enabled_maintains_next_fire() {
+        let pool = fresh_db().await;
+        let (uid, wid) = seed(&pool).await;
+        let state = AutomationsState::new(pool);
+        let a = state
+            .create_automation(wid, "j".into(), None, "p".into(), "coworker".into(), None, uid)
+            .await
+            .unwrap();
+        let spec = TriggerSpec::Cron { expr: "0 * * * *".into(), tz: None };
+        let due = Utc::now() - chrono::Duration::hours(1);
+        let t = state.create_trigger(a.id, &spec, true, Some(due), None).await.unwrap();
+        assert_eq!(state.list_due_cron_triggers(Utc::now()).await.unwrap().len(), 1);
+
+        // Disable → parked (enabled=0, next_fire_at NULL), out of the due scan.
+        let off = state.set_trigger_enabled(t.id, false).await.unwrap();
+        assert!(!off.enabled);
+        assert!(off.next_fire_at.is_none());
+        assert!(state.list_due_cron_triggers(Utc::now()).await.unwrap().is_empty());
+
+        // Re-enable while the automation is enabled → recomputed to a future instant.
+        let on = state.set_trigger_enabled(t.id, true).await.unwrap();
+        assert!(on.enabled);
+        assert!(on.next_fire_at.unwrap() > Utc::now());
+
+        // Enabling a trigger whose automation is disabled leaves it parked.
+        state.update_automation(a.id, None, None, None, None, None, Some(false)).await.unwrap();
+        let on2 = state.set_trigger_enabled(t.id, true).await.unwrap();
+        assert!(on2.enabled);
+        assert!(on2.next_fire_at.is_none(), "parked while its automation is disabled");
     }
 
     #[tokio::test]
