@@ -221,20 +221,25 @@ enum Node {
 /// One cached value with the time it was fetched, shared so a `stat` or a read
 /// borrows it instead of copying (a day's messages, a workspace's member list).
 type Cached<T> = (Instant, Arc<T>);
+/// One fetch attempt with the time it was made — `None` is a remembered failure.
+type Attempt<T> = (Instant, Option<Arc<T>>);
 /// A keyed cache of those, expiring at [`TTL`].
 ///
-/// Only answers are stored. A conversation read that came back denied is served
-/// empty for that one request but never cached: it looks identical to a quiet
-/// conversation, and storing it would hold that likeness for the whole TTL, with
-/// re-reading powerless to correct it.
+/// A conversation read that came back denied is served empty for that one request
+/// but never cached: it looks identical to a quiet conversation, and storing it
+/// would hold that likeness for the whole TTL, with re-reading powerless to
+/// correct it. Names are the exception — a day whose member names failed to
+/// resolve is cached, because [`SlackResource::users`] remembers that failure for
+/// this same TTL, so the two expire together.
 type CacheMap<K, T> = Mutex<HashMap<K, Cached<T>>>;
 
 pub struct SlackResource {
     accessor: SlackAccessor,
     /// Section (`channels`/`dms`) → its conversations.
     convs: CacheMap<String, Vec<Conv>>,
-    /// The workspace's members, for DM names and profile files.
-    users: Mutex<Option<Cached<Vec<Value>>>>,
+    /// The workspace's members, for DM names and profile files. A `None` payload
+    /// inside a fresh entry is a remembered failure — see [`SlackResource::users`].
+    users: Mutex<Option<Attempt<Vec<Value>>>>,
     /// Conversation id → its date directories (newest first).
     dates: CacheMap<String, Vec<String>>,
     /// (conversation id, date) → that day, fetched once for all three children.
@@ -256,36 +261,49 @@ impl SlackResource {
     }
 
     /// The workspace's members. One call for the whole tree's naming needs.
+    ///
+    /// A failure is remembered for the same [`TTL`] as a success. Every message
+    /// rendering and the DM listing ask for names, so several ask within one
+    /// `readdir`; without this, a token that simply lacks `users:read` re-learns
+    /// that per call, and a rate-limited `users.list` re-pays its whole retry
+    /// ladder each time to reach the same answer.
     async fn users(&self) -> ResourceResult<Arc<Vec<Value>>> {
         if let Some((at, v)) = self.users.lock().await.as_ref()
             && at.elapsed() < TTL
         {
-            return Ok(v.clone());
+            return v
+                .clone()
+                .ok_or_else(|| backend(anyhow::anyhow!("slack: member list unavailable")));
         }
         // Lock released across the await on purpose: a duplicate concurrent fetch
         // is harmless, holding a lock over a network call is not.
-        let list = Arc::new(self.accessor.list_users().await.map_err(backend)?);
-        *self.users.lock().await = Some((Instant::now(), list.clone()));
-        Ok(list)
+        let fetched = self.accessor.list_users().await;
+        let mut slot = self.users.lock().await;
+        match fetched {
+            Ok(list) => {
+                let list = Arc::new(list);
+                *slot = Some((Instant::now(), Some(list.clone())));
+                Ok(list)
+            }
+            Err(e) => {
+                *slot = Some((Instant::now(), None));
+                Err(backend(e))
+            }
+        }
     }
 
-    /// user id → display name, for naming DMs.
+    /// user id → display name, for naming DMs and the ids inside a message.
     async fn user_names(&self) -> ResourceResult<HashMap<String, String>> {
-        Ok(self
-            .users()
-            .await?
-            .iter()
-            .filter_map(|u| {
-                let id = u.get("id").and_then(Value::as_str)?;
-                Some((id.to_string(), display_name(u).to_string()))
-            })
-            .collect())
+        Ok(name_map(&self.users().await?))
     }
 
     /// List a section's raw conversations: all its `kinds` in one call, and if a
     /// scope for one of them is missing (see [`CHANNEL_TYPES`]), each kind on its
     /// own so the ones that are grantable still list. Only when no kind at all is
-    /// listable does the error propagate — `missing_scope` then names what to grant.
+    /// listable does *that* error propagate — `missing_scope` then names what to
+    /// grant. A failure which is not about permissions propagates immediately
+    /// instead: it says nothing about what this token may list, and skipping the
+    /// kind would drop every conversation in it from a listing the caller caches.
     async fn list_conversations(&self, kinds: &[&str]) -> ResourceResult<Vec<Value>> {
         match self.accessor.list_conversations(&kinds.join(",")).await {
             Ok(v) => return Ok(v),
@@ -295,19 +313,26 @@ impl SlackResource {
             Err(e) => return Err(backend(e)),
         }
         let mut out = Vec::new();
-        let mut last = None;
+        let mut denied = None;
         for k in kinds {
             match self.accessor.list_conversations(k).await {
                 Ok(v) => out.extend(v),
-                Err(e) => {
+                Err(e) if is_missing_scope(&e) || is_read_denied(&e) => {
                     tracing::debug!("slack: conversations.list({k}) denied ({e}); skipping");
-                    last = Some(e);
+                    denied = Some(e);
+                }
+                // A timeout or a 5xx says nothing about what this token may list,
+                // so dropping the kind on one would delete every conversation of
+                // that kind from the section — and the caller would cache that.
+                Err(e) => {
+                    tracing::warn!("slack: conversations.list({k}) failed: {e}");
+                    return Err(backend(e));
                 }
             }
         }
-        // Every kind failed: nothing in the section is listable, so say why rather
-        // than presenting an empty section as an answer.
-        match last {
+        // Every kind was denied: nothing in the section is listable, so say why
+        // rather than presenting an empty section as an answer.
+        match denied {
             Some(e) if out.is_empty() => Err(backend(e)),
             _ => Ok(out),
         }
@@ -325,12 +350,15 @@ impl SlackResource {
             .list_conversations(if dms { DM_TYPES } else { CHANNEL_TYPES })
             .await?;
         // A DM has no name of its own — it is named after the person on the other
-        // side, so it needs the member list too. Without `users:read` there are no
-        // names to be had, and `conv_label` falls back to the partner's id: a poor
-        // name for a DM that is still there to read, which beats failing the whole
-        // section over what it is called (the same choice `day` makes).
+        // side, so it needs the member list too. Without it `conv_label` falls back
+        // to the partner's id: a poor name for a DM that is still there to read,
+        // which beats failing the whole section over what it is called (the same
+        // choice `day` makes).
         let mut names = if dms {
-            self.user_names().await.unwrap_or_default()
+            self.user_names().await.unwrap_or_else(|e| {
+                tracing::debug!("slack: no member names ({e}); naming DMs by id");
+                HashMap::new()
+            })
         } else {
             HashMap::new()
         };
@@ -351,7 +379,7 @@ impl SlackResource {
             for uid in missing {
                 match self.accessor.user_info(&uid).await {
                     Ok(u) => {
-                        names.insert(uid, display_name(&u).to_string());
+                        names.insert(uid, one_line(display_name(&u)));
                     }
                     // A deactivated or cross-org partner may not resolve; the id is
                     // a poor name but a stable one, so keep listing the DM.
@@ -444,14 +472,14 @@ impl SlackResource {
         {
             return Ok(v.clone());
         }
-        let mut denied = false;
+        let mut cacheable = true;
         let latest = match self.accessor.latest_message_ts(id).await {
             Ok(t) => t,
             // The token can't read this conversation: an empty date list, not a
             // broken tree.
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: history denied for {id} ({e}); listing it empty");
-                denied = true;
+                cacheable = false;
                 None
             }
             Err(e) => return Err(backend(e)),
@@ -472,7 +500,7 @@ impl SlackResource {
             None => Vec::new(),
         };
         let dates = Arc::new(dates);
-        if !denied {
+        if cacheable {
             self.dates
                 .lock()
                 .await
@@ -494,7 +522,7 @@ impl SlackResource {
             return Ok(v.clone());
         }
         let (oldest, next) = day_bounds(date).ok_or(ResourceError::NotFound)?;
-        let mut denied = false;
+        let mut cacheable = true;
         let roots = match self
             .accessor
             .conversation_history(id, &fmt_ts(oldest), &fmt_ts(next))
@@ -503,15 +531,22 @@ impl SlackResource {
             Ok(m) => m,
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: history denied for {id}/{date} ({e}); serving it empty");
-                denied = true;
+                cacheable = false;
                 Vec::new()
             }
             Err(e) => return Err(backend(e)),
         };
         // Names for the ids in each message (see `message_line`). Cached for the
-        // whole mount, so this costs no request of its own; a failure to fetch
-        // them leaves ids as they are rather than failing the day.
-        let names = self.user_names().await.unwrap_or_default();
+        // whole mount, so this costs no request of its own; failing to fetch them
+        // leaves ids as they are rather than failing the day. The day is still
+        // cached: `users` remembers its own failure for the same TTL, so an
+        // id-only day cannot outlive the reason it is id-only by more than that,
+        // and refusing to cache would instead re-fetch this window for every one
+        // of the several `day()` calls a single listing makes.
+        let names = self.user_names().await.unwrap_or_else(|e| {
+            tracing::debug!("slack: no member names ({e}); leaving ids unresolved");
+            HashMap::new()
+        });
 
         let mut chat = Vec::new();
         let mut threads = Vec::new();
@@ -556,7 +591,7 @@ impl SlackResource {
             threads,
             files,
         });
-        if !denied {
+        if cacheable {
             self.days
                 .lock()
                 .await
@@ -575,17 +610,20 @@ impl SlackResource {
         {
             return Ok(v.clone());
         }
-        let mut denied = false;
+        let mut cacheable = true;
         let msgs = match self.accessor.conversation_replies(id, ts).await {
             Ok(m) => m,
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: replies denied for {id}/{ts} ({e}); serving it empty");
-                denied = true;
+                cacheable = false;
                 Vec::new()
             }
             Err(e) => return Err(backend(e)),
         };
-        let names = self.user_names().await.unwrap_or_default();
+        let names = self.user_names().await.unwrap_or_else(|e| {
+            tracing::debug!("slack: no member names ({e}); leaving ids unresolved");
+            HashMap::new()
+        });
         let mut jsonl = Vec::new();
         let mut files = Vec::new();
         for m in &msgs {
@@ -612,7 +650,7 @@ impl SlackResource {
             jsonl: Arc::new(jsonl),
             files,
         });
-        if !denied {
+        if cacheable {
             self.threads
                 .lock()
                 .await
@@ -1103,6 +1141,18 @@ fn conv_label(c: &Value, user_names: &HashMap<String, String>) -> String {
         .unwrap_or_else(|| uid.to_string())
 }
 
+/// id → display name for a member list: the one map every rendering of a message
+/// resolves through, which is why names are cleaned here rather than at each use.
+fn name_map(users: &[Value]) -> HashMap<String, String> {
+    users
+        .iter()
+        .filter_map(|u| {
+            let id = u.get("id").and_then(Value::as_str)?;
+            Some((id.to_string(), one_line(display_name(u))))
+        })
+        .collect()
+}
+
 /// A member's display name, preferring the human-facing fields Slack fills.
 fn display_name(u: &Value) -> &str {
     for key in ["display_name", "real_name"] {
@@ -1115,14 +1165,16 @@ fn display_name(u: &Value) -> &str {
             return v;
         }
     }
-    u.get("name")
-        .or_else(|| u.get("real_name"))
-        .and_then(Value::as_str)
-        .unwrap_or("unnamed")
+    for key in ["name", "real_name"] {
+        if let Some(v) = u.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            return v;
+        }
+    }
+    "unnamed"
 }
 
 fn user_filename(u: &Value, id: &str) -> String {
-    format!("{}__{id}.json", sanitize(display_name(u)))
+    format!("{}__{id}.json", sanitize(&one_line(display_name(u))))
 }
 
 /// `(verified, claimed)`: the name the workspace vouches for, and the name the
@@ -1144,7 +1196,7 @@ fn author_names(m: &Value, names: &HashMap<String, String>) -> (Option<String>, 
         .get("user")
         .and_then(Value::as_str)
         .and_then(|u| names.get(u))
-        .map(|n| one_line(n));
+        .cloned();
     let claimed = [
         m.get("username"),
         m.get("bot_profile").and_then(|b| b.get("name")),
@@ -1161,6 +1213,13 @@ fn author_names(m: &Value, names: &HashMap<String, String>) -> (Option<String>, 
 /// Strip control characters from a name. These lines are read back with `jq -r`,
 /// which unescapes as it prints: a newline inside a name would come out as a
 /// second line wearing the shape of another message.
+///
+/// Applied wherever a name enters the tree rather than at each use: [`name_map`]
+/// and the `users.info` fallback in [`SlackResource::convs`] for the member list
+/// (which is what a mention in the body resolves through), [`user_filename`] for a
+/// profile's own filename, and the claimed name in [`author_names`]. Sanitizing
+/// only where a name is written to its own field would leave the body as an open
+/// door to the same forgery, and leave one member spelled two ways.
 fn one_line(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }

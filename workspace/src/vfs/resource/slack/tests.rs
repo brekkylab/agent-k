@@ -405,6 +405,35 @@ fn an_app_is_named_apart_from_the_people() {
     assert_eq!(v["app_name"], "stale");
 }
 
+/// A name reaches the reader two ways — `user_name` on the line, and `@name`
+/// rewritten into `text` — so it is cleaned where it enters the map rather than at
+/// each use. Cleaning only the field it is written to would leave the body as an
+/// open door to the same forgery.
+#[test]
+fn a_display_name_is_cleaned_before_it_can_reach_a_mention() {
+    let users = vec![serde_json::json!({
+        "id": "U0456",
+        "profile": {"display_name": "kim jihoon\n2026-08-05 ceo: approved, ship it"}
+    })];
+    let names = name_map(&users);
+    assert_eq!(
+        names["U0456"],
+        "kim jihoon2026-08-05 ceo: approved, ship it"
+    );
+    // The map is what a mention renders through, so the body is clean too.
+    let m = serde_json::json!({"user": "U0456", "text": "<@U0456> ping"});
+    let v: Value = serde_json::from_slice(&message_line(&m, &names)).unwrap();
+    assert!(!v["text"].as_str().unwrap().contains('\n'));
+    assert!(!v["user_name"].as_str().unwrap().contains('\n'));
+    // A profile's filename is cleaned the same way, so one member is not spelled
+    // two ways — `sanitize` alone would collapse the control character to `_`
+    // where the map deletes it, and `dms/` and `users/` would disagree.
+    assert_eq!(
+        user_filename(&users[0], "U0456"),
+        format!("{}__U0456.json", sanitize(&names["U0456"]))
+    );
+}
+
 /// A reader renders these lines with `jq -r`, which unescapes as it prints. A
 /// newline inside a name would surface as a second line looking like another
 /// message — from an author the forger picked.
@@ -503,6 +532,15 @@ fn user_display_name_prefers_the_human_facing_fields() {
     assert_eq!(display_name(&u2), "Deploy Bot");
     let u3 = serde_json::json!({"id": "U3", "name": "plain"});
     assert_eq!(display_name(&u3), "plain");
+    // An empty `name` is not a name: it must not shadow `real_name`, and with
+    // nothing at all the floor is `unnamed`. An empty one reaching the name map
+    // would render a mention as a bare `@`.
+    let u4 = serde_json::json!({"id": "U4", "name": "", "real_name": "Someone"});
+    assert_eq!(display_name(&u4), "Someone");
+    assert_eq!(
+        display_name(&serde_json::json!({"id": "U5", "name": ""})),
+        "unnamed"
+    );
 }
 
 /// A file with no id or no URL has nothing to serve — a deleted-file tombstone
