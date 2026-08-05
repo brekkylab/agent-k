@@ -636,6 +636,15 @@ impl SlackAccessor {
         range: Option<std::ops::Range<u64>>,
         size: u64,
     ) -> anyhow::Result<(Vec<u8>, bool)> {
+        // A read of no bytes needs no request. The inclusive-end conversion below
+        // cannot express one — `8..8` becomes `bytes=8-8`, which asks for the single
+        // byte the caller said it did not want, and a 206 would hand it back
+        // unsliced while the in-process `slice` returns nothing for the same input.
+        if let Some(r) = &range
+            && r.end <= r.start
+        {
+            return Ok((Vec::new(), true));
+        }
         // Only ever follow Slack's own file hosts: `url_private_download` comes
         // from API data, and sending the mount's token to whatever host a
         // message's file metadata names would leak it.
@@ -899,6 +908,25 @@ mod tests {
         assert_eq!(ts_of(&v[0]), 1_754_209_000.000_1);
         // A message without a ts sorts first rather than panicking.
         assert_eq!(ts_of(&serde_json::json!({})), 0.0);
+    }
+
+    /// `8..8` asks for nothing, but the inclusive-end conversion has no way to say
+    /// so: it produced `bytes=8-8`, one byte, which a 206 then handed back unsliced
+    /// while `slice` returned none for the same range. Answering before the request
+    /// settles both — and this can be tested at all because the answer comes before
+    /// the host check too, so a host that would be refused proves nothing was sent.
+    #[tokio::test]
+    async fn a_range_of_no_bytes_needs_no_request() {
+        let a = SlackAccessor::new(&config(Some("xoxp-user"), None)).unwrap();
+        // Built from values: an empty or reversed range literal is a lint, and these
+        // are exactly the shapes under test.
+        for (start, end) in [(8u64, 8u64), (8, 2), (0, 0)] {
+            let (bytes, _) = a
+                .download_file("https://evil.example.com/f.pdf", Some(start..end), 100)
+                .await
+                .unwrap_or_else(|e| panic!("{start}..{end} must answer without a request: {e}"));
+            assert!(bytes.is_empty(), "{start}..{end} asked for no bytes");
+        }
     }
 
     /// A file download must refuse to send the mount's token to a host that isn't
