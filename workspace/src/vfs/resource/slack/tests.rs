@@ -344,6 +344,35 @@ fn an_unreadable_channel_is_not_listed() {
     assert!(readable(&mpim, true));
 }
 
+// ---- caching ---------------------------------------------------------------
+
+/// Expiry stops an entry being used; it does not free it. Nothing else removed one,
+/// and a mount lives as long as the session reading through it, so every day an
+/// agent walked stayed resident. Storing now sweeps on the way in.
+#[tokio::test]
+async fn remembering_frees_what_expired() {
+    let map: CacheMap<String, u32> = Mutex::new(HashMap::new());
+    let Some(stale) = Instant::now().checked_sub(TTL + Duration::from_secs(1)) else {
+        return; // the clock cannot express an instant that long ago yet
+    };
+    map.lock()
+        .await
+        .insert("expired".into(), (stale, Arc::new(1)));
+    map.lock()
+        .await
+        .insert("fresh".into(), (Instant::now(), Arc::new(2)));
+
+    remember(&map, "new".to_string(), Arc::new(3)).await;
+
+    let m = map.lock().await;
+    assert!(
+        !m.contains_key("expired"),
+        "an expired entry must be dropped"
+    );
+    assert!(m.contains_key("fresh"), "a live entry must survive");
+    assert!(m.contains_key("new"));
+}
+
 // ---- message rendering ----------------------------------------------------
 
 fn one_name() -> HashMap<String, String> {

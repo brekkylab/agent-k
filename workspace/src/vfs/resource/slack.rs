@@ -239,6 +239,17 @@ type Attempt<T> = (Instant, Option<Arc<T>>);
 /// whole TTL with re-reading powerless to correct it.
 type CacheMap<K, T> = Mutex<HashMap<K, Cached<T>>>;
 
+/// Store `value`, dropping whatever has expired on the way in.
+///
+/// Expiry alone only stops an entry being *used*; the bytes stay. Nothing else
+/// removes them, and one mount lives as long as the agent session reading through
+/// it, so a session that walks a lot of days would hold every one of them.
+async fn remember<K: std::hash::Hash + Eq, T>(map: &CacheMap<K, T>, key: K, value: Arc<T>) {
+    let mut map = map.lock().await;
+    map.retain(|_, (at, _)| at.elapsed() < TTL);
+    map.insert(key, (Instant::now(), value));
+}
+
 pub struct SlackResource {
     accessor: SlackAccessor,
     /// Section (`channels`/`dms`) → its conversations.
@@ -336,10 +347,7 @@ impl SlackResource {
                     String::new()
                 }
             };
-            self.bots
-                .lock()
-                .await
-                .insert(id.to_string(), (Instant::now(), Arc::new(name.clone())));
+            remember(&self.bots, id.to_string(), Arc::new(name.clone())).await;
             if !name.is_empty() {
                 out.insert(id.to_string(), name);
             }
@@ -466,10 +474,7 @@ impl SlackResource {
             });
         }
         let out = Arc::new(out);
-        self.convs
-            .lock()
-            .await
-            .insert(section.to_string(), (Instant::now(), out.clone()));
+        remember(&self.convs, section.to_string(), out.clone()).await;
         Ok(out)
     }
 
@@ -550,10 +555,7 @@ impl SlackResource {
         };
         let dates = Arc::new(dates);
         if cacheable {
-            self.dates
-                .lock()
-                .await
-                .insert(id.to_string(), (Instant::now(), dates.clone()));
+            remember(&self.dates, id.to_string(), dates.clone()).await;
         }
         Ok(dates)
     }
@@ -644,10 +646,7 @@ impl SlackResource {
             files,
         });
         if cacheable {
-            self.days
-                .lock()
-                .await
-                .insert(key, (Instant::now(), day.clone()));
+            remember(&self.days, key, day.clone()).await;
         }
         Ok(day)
     }
@@ -708,10 +707,7 @@ impl SlackResource {
             files,
         });
         if cacheable {
-            self.threads
-                .lock()
-                .await
-                .insert(key, (Instant::now(), thread.clone()));
+            remember(&self.threads, key, thread.clone()).await;
         }
         Ok(thread)
     }
