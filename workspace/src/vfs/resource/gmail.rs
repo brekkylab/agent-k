@@ -1267,7 +1267,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// An HTML-only mail's `href`s survive as `links`. The motivating case is
     /// an over-25 MB file: Gmail replaces the attachment with a Drive URL, and
     /// the rendered text keeps only the anchor's words.
