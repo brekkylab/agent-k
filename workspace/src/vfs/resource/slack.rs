@@ -723,7 +723,7 @@ impl SlackResource {
             .iter()
             .find(|u| u.get("id").and_then(Value::as_str) == Some(id))
             .ok_or(ResourceError::NotFound)?;
-        Ok(serde_json::to_vec_pretty(u)?)
+        Ok(user_profile_bytes(u))
     }
 
     /// One scope's `chat.jsonl` bytes and `files/` entries: the day's, or one
@@ -853,9 +853,13 @@ impl Resource for SlackResource {
                 .iter()
                 .filter_map(|u| {
                     let id = u.get("id").and_then(Value::as_str)?;
-                    // Rendered from the member list already in hand, so the
-                    // wrapper's eager sizing of these costs no request.
-                    Some(file(&user_filename(u, id), 0, None))
+                    // Sized here rather than listed at 0. A 0 sends the cache
+                    // wrapper down its eager path, which stats and renders every
+                    // entry — and `user_profile` finds its member by scanning the
+                    // list, so that pass is quadratic: measured at 10,000 members,
+                    // 5.4s for one `ls` against 0.012s for rendering each once here.
+                    let size = user_profile_bytes(u).len() as u64;
+                    Some(file(&user_filename(u, id), size, None))
                 })
                 .collect()),
             Node::Conv { id } => {
@@ -1202,6 +1206,13 @@ fn conv_label(c: &Value, user_names: &HashMap<String, String>) -> String {
         .get(uid)
         .cloned()
         .unwrap_or_else(|| uid.to_string())
+}
+
+/// The bytes one `users/<name>__<id>.json` serves. Shared with the listing, which
+/// sizes each entry with it, so a `stat` and a read cannot disagree about a length
+/// the guest then trusts for every chunk of the file.
+fn user_profile_bytes(u: &Value) -> Vec<u8> {
+    serde_json::to_vec_pretty(u).unwrap_or_default()
 }
 
 /// id → display name for a member list: the one map every rendering of a message

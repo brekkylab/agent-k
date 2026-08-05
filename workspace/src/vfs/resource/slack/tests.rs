@@ -748,6 +748,13 @@ async fn slack_mock_tree_walk() {
         .expect("a profile");
     let v: Value = serde_json::from_slice(&profile).expect("valid JSON");
     assert!(v.get("id").is_some(), "{v}");
+    // The guest trusts the listed size for every chunk it reads, so the listing and
+    // the read have to agree — they share `user_profile_bytes` for that reason.
+    assert_eq!(
+        users[0].size,
+        profile.len() as u64,
+        "a listed profile size must be the bytes a read returns"
+    );
 
     // Find a channel with dates and read one day.
     let mut walked = 0;
@@ -951,6 +958,23 @@ async fn slack_live_tree_and_reads() {
             Vec::new()
         });
     done(format!("{} members", users.len()));
+    // The guest trusts a listed size for every chunk it reads, so the listing and
+    // the read must agree — they share `user_profile_bytes` for that reason.
+    if let Some(u) = users.first() {
+        let p = MountPath::new(format!("/users/{}", u.name));
+        let bytes = r.read_bytes(&p, None).await.expect("a profile");
+        assert_eq!(
+            u.size,
+            bytes.len() as u64,
+            "a listed profile size must be the bytes a read returns"
+        );
+        assert_eq!(
+            r.stat(&p).await.expect("stat a profile").size,
+            bytes.len() as u64,
+            "and stat must agree with both"
+        );
+        println!("  listing, stat and read agree at {} bytes", bytes.len());
+    }
 
     let done = timed("dms");
     // A bot token (or an install without im:read) lists no DMs; that is a scope
