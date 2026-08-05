@@ -730,18 +730,15 @@ fn names(entries: &[DirEntry]) -> Vec<String> {
 /// dates, one day's three children, `chat.jsonl`'s contents, a thread if the day
 /// has one, and the user profiles.
 ///
-/// The mock has **no `oauth.v2.access`**, so the code exchange is only covered by
-/// the live test; this starts from a token.
+/// Starts from a token, since a mock has no `oauth.v2.access` — only the live test
+/// covers the code exchange.
 ///
-///   SLACK_BASE_URL=<mock origin> SLACK_USER_TOKEN=usr-… \
+///   SLACK_BASE_URL=<mock origin> SLACK_USER_TOKEN=… \
 ///     cargo test -p workspace slack_mock -- --ignored --nocapture
 ///
-/// The token is whatever that mock accepts. A big corpus is what makes
-/// this worth running — measured against one with 36 channels and 327 users, a
-/// listing pages and takes seconds, exercising what a 3-member workspace never
-/// reaches. It is also close to the client's 30s timeout, so run the two mock
-/// tests one at a time (`slack_mock_tree_walk`, then `slack_mock_search`) rather
-/// than letting them contend.
+/// A big corpus is what makes this worth running: a listing then pages and takes
+/// seconds, which a 3-member workspace never reaches. That also puts it near the
+/// client's 30s timeout, so run the two mock tests one at a time.
 #[tokio::test]
 #[ignore = "requires a reachable mock origin (SLACK_BASE_URL + a SLACK_*_TOKEN)"]
 async fn slack_mock_tree_walk() {

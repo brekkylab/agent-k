@@ -2,20 +2,15 @@
 //!
 //! Three things make this unlike the other accessors in this module:
 //!
-//! - **Slack signals failure inside a 200.** Every method answers
-//!   `{"ok": true, …}` or `{"ok": false, "error": "…"}` with HTTP 200 either way,
-//!   so a status-only check reads every failure as an empty success.
-//!   [`SlackAccessor::call`] is the single gate on the API (file downloads aside,
-//!   which are plain HTTP) and it is what enforces the `ok` check.
-//! - **It reads as a person, not as an app.** The mount is one person's own view
-//!   of their Slack, so the credential is that person's user token — see
-//!   [`SlackConfig::user_token`] for why a bot token cannot express the same
-//!   thing.
-//! - **Tokens don't expire.** A user/bot token is long-lived *unless the app opts
-//!   into token rotation*, which this client does not implement: there is no
-//!   refresh loop, so a rotating app's mount would break when its token expires.
-//!   The `code` exchange at mount-create ([`exchange_slack_code`]) is the only
-//!   OAuth step.
+//! - **Slack signals failure inside a 200** (`{"ok": false, "error": …}`), so a
+//!   status-only check reads every failure as an empty success.
+//!   [`SlackAccessor::call`] is the single gate that checks `ok` — file downloads
+//!   aside, which are plain HTTP.
+//! - **It reads as a person, not as an app**, so the credential is that person's
+//!   user token; see [`SlackConfig::user_token`].
+//! - **Tokens don't expire** unless the app opts into rotation, which this client
+//!   does not implement — a rotating app's mount would break when its token does.
+//!   The `code` exchange at mount-create is the only OAuth step.
 
 use std::time::Duration;
 
@@ -150,12 +145,10 @@ pub fn is_read_denied(e: &anyhow::Error) -> bool {
 /// Whether the install never granted the scope this call needs.
 ///
 /// Not a per-conversation denial, which is why it is not in [`READ_DENIED`]: a
-/// scope governs a whole *kind* of conversation, so every channel of that kind
-/// fails identically. Served as an empty result it would render the section as
-/// "all of these exist and none has any history" — the shape of a complete
-/// answer. Only a caller that can narrow the request should absorb it (a listing
-/// asking per kind, so the grantable kinds still list); anywhere else it has to
-/// propagate, and the error names the scope to grant.
+/// scope governs a whole *kind* of conversation, so serving it empty would render
+/// the section as "all of these exist and none has any history". Only a caller that
+/// can narrow the request absorbs it — a listing asking per kind; anywhere else it
+/// propagates, naming the scope to grant.
 pub fn is_missing_scope(e: &anyhow::Error) -> bool {
     e.downcast_ref::<SlackApiError>()
         .is_some_and(|s| s.code == "missing_scope")
@@ -272,14 +265,11 @@ pub struct SlackConfig {
     /// User token (`xoxp-…`) — the mount's primary credential, because the mount
     /// is one person's own view of their Slack.
     ///
-    /// A workspace VFS is a personal space (one owner per workspace row), so what
-    /// belongs in it is what that person sees in their own Slack client:
-    /// every conversation they are in, their DMs, and search. A bot token cannot
-    /// express that — it is a separate member with its own membership, blind to
-    /// anyone's DMs, and Slack does not offer it search at all.
-    ///
-    /// `None` falls back to [`Self::bot_token`], which still serves the tree for
-    /// the conversations the bot was invited to.
+    /// A workspace VFS has one owner, so what belongs in it is what that person
+    /// sees in their own client. A bot token cannot express that: it is a separate
+    /// member with its own membership, blind to anyone's DMs, and Slack offers it no
+    /// search. `None` falls back to [`Self::bot_token`], which still serves the
+    /// conversations the bot was invited to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_token: Option<String>,
     /// Bot token (`xoxb-…`), when the install requested bot scopes. Only used as
@@ -491,16 +481,13 @@ impl SlackAccessor {
 
     /// Conversations of `types` the token can see (`conversations.list`).
     ///
-    /// Archived channels are included. Archiving closes a channel to new messages;
-    /// it does not withhold the old ones — measured against a real workspace, an
-    /// archived channel answered `conversations.history` with its messages and no
-    /// `is_limited`. Excluding them would drop a finished project's whole record
-    /// from the tree while it is still perfectly readable.
+    /// Archived channels are included: archiving closes a channel to new messages
+    /// and leaves the old ones readable, measured against a real workspace, so
+    /// excluding them would drop a finished project's whole record while it is still
+    /// there to read.
     ///
-    /// A truncated listing is logged and returned anyway: a directory has nowhere
-    /// to say it is partial, and 10,000 conversations is far past any real
-    /// workspace, so hitting the ceiling means a runaway cursor rather than a big
-    /// tenant.
+    /// A truncated listing is logged and returned anyway — a directory has nowhere
+    /// to say it is partial, and the ceiling is past any real workspace.
     pub async fn list_conversations(&self, types: &str) -> anyhow::Result<Vec<Value>> {
         let (out, _truncated) = self
             .paginate(
@@ -591,8 +578,7 @@ impl SlackAccessor {
     /// Slack simply omits it otherwise, so nothing here has to ask.
     ///
     /// Truncation is logged and the partial returned, as for `conversations.list`:
-    /// the members it drops surface as unresolved ids in a message, which is the
-    /// same thing an unknown id already looks like.
+    /// a dropped member surfaces as the unresolved id it already would have been.
     pub async fn list_users(&self) -> anyhow::Result<Vec<Value>> {
         let (out, _truncated) = self.paginate("users.list", &[], "members").await?;
         Ok(out)
