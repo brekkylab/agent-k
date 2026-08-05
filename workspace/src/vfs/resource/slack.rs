@@ -506,12 +506,22 @@ impl SlackResource {
     /// "does this directory exist", and a `stat` of a made-up name must not become
     /// a request. A real conversation is in one of the two listings.
     async fn conv_exists(&self, id: &str) -> ResourceResult<i64> {
+        let mut unlistable = None;
         for dms in [false, true] {
-            if let Some(c) = self.convs(dms).await?.iter().find(|c| c.id == id) {
-                return Ok(c.created);
+            match self.convs(dms).await {
+                Ok(list) => {
+                    if let Some(c) = list.iter().find(|c| c.id == id) {
+                        return Ok(c.created);
+                    }
+                }
+                // One section being unlistable must not decide for the other. The
+                // channels section is checked first, so propagating here would lose
+                // the DMs of a token that can read them and not channels.
+                Err(e) => unlistable = Some(e),
             }
         }
-        Err(ResourceError::NotFound)
+        // Not found — but only say so when both sections could actually be read.
+        Err(unlistable.unwrap_or(ResourceError::NotFound))
     }
 
     /// A conversation's date directories, newest first.
