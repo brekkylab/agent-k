@@ -843,12 +843,18 @@ impl Resource for SlackResource {
                     Some(file(&user_filename(u, id), 0, None))
                 })
                 .collect()),
-            Node::Conv { id } => Ok(self
-                .dates(&id)
-                .await?
-                .iter()
-                .map(|d| dir(d, date_mtime(d)))
-                .collect()),
+            Node::Conv { id } => {
+                // Gated like `stat`, or a made-up name would list as an existing
+                // but empty conversation: `dates` soft-fails `channel_not_found`
+                // into no dates, and that answer costs a request every time.
+                self.conv_exists(&id).await?;
+                Ok(self
+                    .dates(&id)
+                    .await?
+                    .iter()
+                    .map(|d| dir(d, date_mtime(d)))
+                    .collect())
+            }
             // A day and a thread list the same two children. `threads/` only
             // exists on a day — Slack has no nested threads.
             Node::Convo(s) => {
