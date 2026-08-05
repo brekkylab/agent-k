@@ -167,7 +167,6 @@ impl ProviderSpec {
                     client_id: client_id.to_string(),
                     client_secret: client_secret.to_string(),
                     refresh_token: exchanged.refresh_token,
-                    account_email: exchanged.account_email,
                     // Deployment-level override (mock/gateway), inherited from
                     // backend config — never from the request.
                     origins: oauth.origins.clone(),
@@ -194,9 +193,11 @@ pub enum ProviderInfo {
     /// Gmail: the OAuth pieces are secret, but the account email (resolved at
     /// mount-create) is shown so the UI can tell mounts apart.
     Gmail { email: String },
-    /// Google Drive: the OAuth pieces are secret, but the account email
-    /// (resolved at mount-create) is shown so the UI can tell mounts apart.
-    Gdrive { email: String },
+    /// Google Drive: every field of the config is a secret, and the account the
+    /// mount is bound to is a property of its refresh token rather than something
+    /// stored beside it — `about.get` answers it, and a listing that called it per
+    /// mount would depend on the network and on every token still being valid.
+    Gdrive {},
 }
 
 impl From<&ProviderConfig> for ProviderInfo {
@@ -212,9 +213,7 @@ impl From<&ProviderConfig> for ProviderInfo {
             ProviderConfig::Gmail(c) => ProviderInfo::Gmail {
                 email: c.account_email.clone(),
             },
-            ProviderConfig::Gdrive(c) => ProviderInfo::Gdrive {
-                email: c.account_email.clone(),
-            },
+            ProviderConfig::Gdrive(_) => ProviderInfo::Gdrive {},
         }
     }
 }

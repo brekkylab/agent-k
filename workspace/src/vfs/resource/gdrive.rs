@@ -1299,7 +1299,6 @@ mod tests {
             client_id: "x".into(),
             client_secret: "x".into(),
             refresh_token: "x".into(),
-            account_email: "x@example.com".into(),
             origins: crate::vfs::accessor::Origins::behind("http://127.0.0.1:1"),
         })
         .unwrap();
@@ -1512,8 +1511,9 @@ mod tests {
             client_secret: "mock".into(),
             refresh_token: std::env::var("GOOGLE_MOCK_TOKEN")
                 .unwrap_or_else(|_| "admin-service-token".into()),
-            account_email: "mock@example.com".into(),
-            origins: crate::vfs::accessor::Origins::behind(&std::env::var("GOOGLE_API_BASE_URL").ok()?),
+            origins: crate::vfs::accessor::Origins::behind(
+                &std::env::var("GOOGLE_API_BASE_URL").ok()?,
+            ),
         })
     }
 
@@ -1636,10 +1636,6 @@ mod tests {
             client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
             client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
             refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
-            // Nothing on this mount reads it — there is no on-disk mirror to name — so
-            // a placeholder does here. The value that matters is the one the OAuth
-            // exchange resolves at mount-create, which `GET /mounts` reports.
-            account_email: "live-test".into(),
             origins: Default::default(),
         })
     }
@@ -1804,6 +1800,32 @@ mod tests {
     /// Live: an original is a real file, and a ranged read transfers only its
     /// range — what makes serving originals affordable, since a search tool
     /// samples a file's head before deciding it is binary.
+    /// The account a token belongs to is a question the token can answer, which is why
+    /// nothing stores it: `about.get` is the single source of truth, and two mounts
+    /// consented to two accounts return two different emails.
+    #[tokio::test]
+    #[ignore = "requires GOOGLE_* env + network"]
+    async fn gdrive_live_a_token_names_its_own_account() {
+        let Some(cfg) = live_config() else {
+            eprintln!("set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN to run");
+            return;
+        };
+        let email = GdriveAccessor::new(&cfg)
+            .unwrap()
+            .account_email()
+            .await
+            .expect("about.get");
+        // Printed by shape, not by value: a live run should not put someone's address
+        // into a log.
+        let (local, domain) = email.split_once('@').expect("an email address");
+        eprintln!(
+            "  token belongs to an account at {domain} (local part {} chars)",
+            local.chars().count()
+        );
+        assert!(!local.is_empty() && domain.contains('.'));
+        assert_eq!(email, email.to_lowercase(), "normalised for comparison");
+    }
+
     /// The one search the mount cannot do by reading: a phrase that lives inside a
     /// PDF, which no read of the bytes will match.
     #[tokio::test]

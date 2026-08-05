@@ -41,7 +41,6 @@ impl Mock {
             client_id: "cid".into(),
             client_secret: "cs".into(),
             refresh_token: "rt".into(),
-            account_email: "u@example.com".into(),
             origins: Origins::behind(&self.addr),
         }
     }
@@ -607,7 +606,6 @@ async fn one_service_can_move_without_moving_the_others() {
         client_id: "cid".into(),
         client_secret: "cs".into(),
         refresh_token: "rt".into(),
-        account_email: "u@example.com".into(),
         origins: Origins {
             drive: Some(format!("{}/drive", a.addr)),
             oauth: Some(format!("{}/oauth2", a.addr)),

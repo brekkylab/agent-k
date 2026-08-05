@@ -185,13 +185,14 @@ fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
     raw.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
-/// Result of the mount-create code exchange: the long-lived refresh token plus
-/// the account's email address (`about.get`). The email identifies the
-/// *account* — shown in mount info — since a refresh token changes on every
-/// re-consent while the email doesn't.
+/// Result of the mount-create code exchange: the long-lived refresh token.
+///
+/// No email. A refresh token is only issued after an account is chosen on the consent
+/// screen, so the token already names the account; storing the email beside it would
+/// be a second copy that nothing keeps in agreement. Whoever needs to show it asks
+/// `about.get` with the token.
 pub struct GdriveExchange {
     pub refresh_token: String,
-    pub account_email: String,
 }
 
 /// Exchange an OAuth authorization `code` for a refresh token (confidential
@@ -243,44 +244,7 @@ pub async fn exchange_gdrive_code(
                  access_type=offline + prompt=consent)"
             )
         })?;
-    // The exchange response carries a live access token — resolve the account
-    // email while we have it. Required: the email is the mount's identity, so a
-    // transient failure fails the create with a clear message rather than
-    // minting a half-identified mount.
-    let account_email = match v.get("access_token").and_then(|t| t.as_str()) {
-        Some(at) => fetch_about_email(at, &urls.drive).await,
-        None => None,
-    }
-    .ok_or_else(|| {
-        anyhow::anyhow!("code exchange succeeded but about.get failed; retry the mount")
-    })?;
-    Ok(GdriveExchange {
-        refresh_token,
-        account_email,
-    })
-}
-
-/// `about.get?fields=user(emailAddress)` → lowercased email, if the call
-/// succeeds.
-async fn fetch_about_email(access_token: &str, api_base: &str) -> Option<String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .connect_timeout(Duration::from_secs(10))
-        .build()
-        .ok()?;
-    let v: Value = client
-        .get(format!("{api_base}/about?fields=user(emailAddress)"))
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
-    v.get("user")
-        .and_then(|u| u.get("emailAddress"))
-        .and_then(|e| e.as_str())
-        .map(|s| s.trim().to_lowercase())
+    Ok(GdriveExchange { refresh_token })
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -288,11 +252,6 @@ pub struct GdriveConfig {
     pub client_id: String,
     pub client_secret: String,
     pub refresh_token: String,
-    /// The account's email address, resolved at mount-create
-    /// ([`exchange_gdrive_code`]). Identifies the account across re-consents
-    /// (a refresh token changes each consent; the email doesn't); shown in
-    /// mount info so the UI can tell mounts apart.
-    pub account_email: String,
     /// Where to reach each Google service, when not production Google (an enterprise
     /// mock or a gateway). Deployment-level only — the token endpoint receives the
     /// app's client secret, so this is NOT part of the mount-create API; the backend
@@ -568,6 +527,26 @@ impl GdriveAccessor {
         total
             .parse::<u64>()
             .map_err(|e| anyhow::anyhow!("gdrive probe {id}: bad total {total:?}: {e}"))
+    }
+
+    /// The account this mount's refresh token belongs to
+    /// (`about.get?fields=user(emailAddress)`), lowercased.
+    ///
+    /// Asked rather than remembered. A refresh token is only issued once an account has
+    /// been chosen on the consent screen, so the token already names the account; a copy
+    /// stored beside it would be a second answer that nothing keeps in agreement.
+    pub async fn account_email(&self) -> anyhow::Result<String> {
+        let url = format!("{}/about?fields=user(emailAddress)", self.urls.drive);
+        let v: Value = self
+            .send_with_refresh(|t| self.client.get(&url).bearer_auth(t))
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        v.pointer("/user/emailAddress")
+            .and_then(|e| e.as_str())
+            .map(|s| s.trim().to_lowercase())
+            .ok_or_else(|| anyhow::anyhow!("about.get returned no user.emailAddress"))
     }
 
     /// Files whose *contents* match `phrase`, via Drive's own index

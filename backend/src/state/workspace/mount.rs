@@ -391,8 +391,8 @@ mod tests {
         assert!(!acct.exists(), "mirror removed with its last mount");
     }
 
-    /// A gdrive mount round-trips through encode/decode (credentials + the
-    /// account email preserved) and builds into the VFS.
+    /// A gdrive mount round-trips through encode/decode with its credentials intact,
+    /// and builds into the VFS.
     #[tokio::test]
     async fn gdrive_mount_round_trips_and_builds() {
         let (state, _tmp, wid) = fresh_state().await;
@@ -400,7 +400,6 @@ mod tests {
             client_id: "cid".into(),
             client_secret: "cs".into(),
             refresh_token: "rt".into(),
-            account_email: "user@example.com".into(),
             origins: Default::default(),
         });
         state
@@ -412,7 +411,7 @@ mod tests {
         match &listed[0].provider {
             ProviderConfig::Gdrive(c) => {
                 assert_eq!(c.refresh_token, "rt");
-                assert_eq!(c.account_email, "user@example.com");
+                assert_eq!(c.client_id, "cid");
             }
             _ => panic!("expected Gdrive"),
         }
