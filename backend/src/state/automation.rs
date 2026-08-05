@@ -23,7 +23,7 @@ pub const MAX_ATTEMPTS: i64 = 3;
 /// Reject an `agent_type` that names no known preset, so a bad value fails at
 /// create/update rather than silently degrading to coworker at run time.
 fn validate_agent_type(agent_type: &str) -> StateResult<()> {
-    crate::model::AgentType::from_str(agent_type)
+    crate::model::AgentType::parse(agent_type)
         .map(|_| ())
         .ok_or_else(|| StateError::InvalidData(format!("unknown agent_type: {agent_type}")))
 }
@@ -37,7 +37,7 @@ pub fn build_spec(agent_type: &str, model: Option<&str>) -> AgentSpec {
     use agent_k::agents::{get_coworker_agent_spec, get_deep_research_agent_spec};
     use crate::model::{AgentType, resolve_model};
 
-    let agent = AgentType::from_str(agent_type).unwrap_or(AgentType::Coworker);
+    let agent = AgentType::parse(agent_type).unwrap_or(AgentType::Coworker);
     let model = resolve_model(Some(agent.as_str()), model);
     match agent {
         AgentType::DeepResearch => get_deep_research_agent_spec(SESSION_AGENT_NAME, &model),
@@ -68,7 +68,7 @@ impl RunStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "queued" => Some(RunStatus::Queued),
             "running" => Some(RunStatus::Running),
@@ -95,7 +95,7 @@ impl TriggerKind {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "cron" => Some(TriggerKind::Cron),
             "webhook" => Some(TriggerKind::Webhook),
@@ -197,7 +197,7 @@ impl RunLogKind {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "triggered" => Some(RunLogKind::Triggered),
             "queued" => Some(RunLogKind::Queued),
@@ -268,7 +268,7 @@ pub struct AutomationTrigger {
 impl AutomationTrigger {
     fn from_row(row: &SqliteRow) -> StateResult<Self> {
         let kind_s: String = row.get("kind");
-        let kind = TriggerKind::from_str(&kind_s)
+        let kind = TriggerKind::parse(&kind_s)
             .ok_or_else(|| StateError::InvalidData(format!("invalid trigger kind '{kind_s}'")))?;
         let next_fire_at = row
             .get::<Option<String>, _>("next_fire_at")
@@ -320,7 +320,7 @@ pub struct AutomationRun {
 impl AutomationRun {
     fn from_row(row: &SqliteRow) -> StateResult<Self> {
         let status_s: String = row.get("status");
-        let status = RunStatus::from_str(&status_s)
+        let status = RunStatus::parse(&status_s)
             .ok_or_else(|| StateError::InvalidData(format!("invalid run status '{status_s}'")))?;
         let opt_uuid = |col: &str| -> StateResult<Option<Uuid>> {
             row.get::<Option<String>, _>(col)
@@ -374,7 +374,7 @@ pub struct RunLog {
 impl RunLog {
     fn from_row(row: &SqliteRow) -> StateResult<Self> {
         let kind_s: String = row.get("kind");
-        let kind = RunLogKind::from_str(&kind_s)
+        let kind = RunLogKind::parse(&kind_s)
             .ok_or_else(|| StateError::InvalidData(format!("invalid event kind '{kind_s}'")))?;
         let payload = row
             .get::<Option<String>, _>("payload")
@@ -510,7 +510,7 @@ impl AutomationsState {
 
     pub async fn get_automation(&self, id: Uuid) -> StateResult<Option<Automation>> {
         let sql = format!("SELECT {AUTOMATION_COLS} FROM automations WHERE id = ?");
-        let row = sqlx::query(&sql)
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(id.to_string())
             .fetch_optional(&self.db)
             .await?;
@@ -524,7 +524,7 @@ impl AutomationsState {
         let sql = format!(
             "SELECT {AUTOMATION_COLS} FROM automations WHERE workspace_id = ? ORDER BY created_at DESC"
         );
-        let rows = sqlx::query(&sql)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(workspace_id.to_string())
             .fetch_all(&self.db)
             .await?;
@@ -655,7 +655,7 @@ impl AutomationsState {
 
     pub async fn get_trigger(&self, id: Uuid) -> StateResult<Option<AutomationTrigger>> {
         let sql = format!("SELECT {TRIGGER_COLS} FROM automation_triggers WHERE id = ?");
-        let row = sqlx::query(&sql)
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(id.to_string())
             .fetch_optional(&self.db)
             .await?;
@@ -669,7 +669,7 @@ impl AutomationsState {
         let sql = format!(
             "SELECT {TRIGGER_COLS} FROM automation_triggers WHERE automation_id = ? ORDER BY created_at ASC"
         );
-        let rows = sqlx::query(&sql)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(automation_id.to_string())
             .fetch_all(&self.db)
             .await?;
@@ -695,7 +695,7 @@ impl AutomationsState {
         let sql = format!(
             "SELECT {TRIGGER_COLS} FROM automation_triggers WHERE webhook_token_hash = ?"
         );
-        let row = sqlx::query(&sql)
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(token_hash)
             .fetch_optional(&self.db)
             .await?;
@@ -741,7 +741,7 @@ impl AutomationsState {
                AND automation_id IN (SELECT id FROM automations WHERE enabled = 1) \
              ORDER BY next_fire_at ASC"
         );
-        let rows = sqlx::query(&sql)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(now.to_rfc3339())
             .fetch_all(&self.db)
             .await?;
@@ -816,10 +816,10 @@ impl AutomationsState {
         let run_cols = "INSERT INTO automation_runs \
              (id, automation_id, trigger_id, session_id, workspace_id, prompt, agent_type, model, status, scheduled_for, lease_until, previous_run_id, created_at, updated_at)";
         let res = if let Some(aid) = spec.automation_id {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "{run_cols} SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ? \
                   WHERE EXISTS (SELECT 1 FROM automations WHERE id = ? AND enabled = 1)"
-            ))
+            )))
             .bind(run_id.to_string())
             .bind(aid.to_string())
             .bind(spec.trigger_id.map(|u| u.to_string()))
@@ -836,9 +836,9 @@ impl AutomationsState {
             .execute(&mut **tx)
             .await?
         } else {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "{run_cols} VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'queued', ?, NULL, ?, ?, ?)"
-            ))
+            )))
             .bind(run_id.to_string())
             .bind(spec.trigger_id.map(|u| u.to_string()))
             .bind(session_id.to_string())
@@ -971,7 +971,7 @@ impl AutomationsState {
 
     pub async fn get_run(&self, id: Uuid) -> StateResult<Option<AutomationRun>> {
         let sql = format!("SELECT {RUN_COLS} FROM automation_runs WHERE id = ?");
-        let row = sqlx::query(&sql)
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(id.to_string())
             .fetch_optional(&self.db)
             .await?;
@@ -982,7 +982,7 @@ impl AutomationsState {
         let sql = format!(
             "SELECT {RUN_COLS} FROM automation_runs WHERE automation_id = ? ORDER BY created_at DESC"
         );
-        let rows = sqlx::query(&sql)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(automation_id.to_string())
             .fetch_all(&self.db)
             .await?;
@@ -993,7 +993,7 @@ impl AutomationsState {
         let sql = format!(
             "SELECT {RUN_COLS} FROM automation_runs WHERE workspace_id = ? ORDER BY created_at DESC"
         );
-        let rows = sqlx::query(&sql)
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(workspace_id.to_string())
             .fetch_all(&self.db)
             .await?;
@@ -1013,7 +1013,7 @@ impl AutomationsState {
             "SELECT {RUN_COLS} FROM automation_runs \
              WHERE status = 'queued' AND scheduled_for <= ? ORDER BY scheduled_for ASC LIMIT 1"
         );
-        let Some(row) = sqlx::query(&sql)
+        let Some(row) = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(&now_s)
             .fetch_optional(&mut *tx)
             .await?

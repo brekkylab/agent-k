@@ -97,7 +97,7 @@ impl WsIndex {
         self.store
             .get_or_try_init(|| async { anyhow::Ok(Arc::new(RwLock::new(Store::new(root)?))) })
             .await
-            .map(|s| s.clone())
+            .cloned()
     }
 }
 
@@ -779,7 +779,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write(root, "docs/small.md", b"tiny").await;
-        write(root, "docs/big.md", &vec![b'x'; 100]).await;
+        write(root, "docs/big.md", &[b'x'; 100]).await;
         write_ref(root, "small.ref", "/files/docs/small.md").await;
         write_ref(root, "big.ref", "/files/docs/big.md").await;
         let fs = local_fs(root);

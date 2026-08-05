@@ -16,19 +16,15 @@ use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder};
 #[tokio::test]
 #[ignore = "boots a microsandbox VM; run explicitly to verify sandbox works on this host"]
 async fn sandbox_boots_and_has_fuse() {
-    // agent-k pins microsandbox 0.5.5 (via ailoy 3034538). If this host also runs
-    // a NEWER microsandbox (e.g. building the ailoy repo at 61c4c43 → 0.6.x), its
-    // shared state DB at ~/.microsandbox/db/msb.db has a schema 0.5.5 can't open
-    // ("migration … has been applied but its file is missing"). Isolate 0.5.5 in
-    // its own MSB_HOME so it creates a fresh, self-consistent state — without
-    // touching the host's existing microsandbox. Override by exporting MSB_HOME.
-    if std::env::var_os("MSB_HOME").is_none() {
-        if let Some(home) = std::env::var_os("HOME") {
-            let dedicated = std::path::PathBuf::from(home).join(".microsandbox-agentk");
-            // SAFETY: set before any microsandbox call, at test start, single-threaded.
-            unsafe { std::env::set_var("MSB_HOME", &dedicated) };
-            println!("using dedicated MSB_HOME={}", dedicated.display());
-        }
+    // Keep the pinned microsandbox state isolated from other versions installed
+    // on the host. Override by exporting MSB_HOME.
+    if std::env::var_os("MSB_HOME").is_none()
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let dedicated = std::path::PathBuf::from(home).join(".microsandbox-agentk");
+        // SAFETY: set before any microsandbox call, at test start, single-threaded.
+        unsafe { std::env::set_var("MSB_HOME", &dedicated) };
+        println!("using dedicated MSB_HOME={}", dedicated.display());
     }
 
     // Same image the coworker CLI uses, so this mirrors a known-good config.

@@ -42,7 +42,7 @@ pub fn next_fire_after(
         .parse()
         .map_err(|e: chrono_tz::ParseError| format!("invalid timezone '{tz_name}': {e}"))?;
     validate_five_field(expr)?;
-    let cron = Cron::new(expr)
+    let cron: Cron = expr
         .parse()
         .map_err(|e| format!("invalid cron expression '{expr}': {e}"))?;
     let after_in_tz = after.with_timezone(&tz);
