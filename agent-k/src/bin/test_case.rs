@@ -21,7 +21,6 @@ use ailoy::{
     message::{Message, Part, Role},
 };
 use futures::StreamExt;
-use tokio::sync::Mutex;
 
 #[path = "test_case/cases/mod.rs"]
 mod cases;
@@ -72,8 +71,16 @@ enum InputSource {
     Tty(io::BufReader<std::fs::File>),
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // A re-invoked sandbox boot child boots the microVM from a link-time ctor in
+    // ailoy (before this `main`), so nothing to do here.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -146,7 +153,6 @@ async fn main() -> anyhow::Result<()> {
     }
     let case = cases.swap_remove(case_no);
 
-    sweep_orphan_sandboxes();
     prepare_dir(ARTIFACT_DIR);
     prepare_dir(DATA_DIR);
     prepare_dir(SHARED_DATA_DIR);
@@ -155,17 +161,17 @@ async fn main() -> anyhow::Result<()> {
     let mut agent = match agent_kind {
         AgentKind::Coworker => {
             let spec = get_coworker_agent_spec(agent_kind.name(), agent_model, !no_skill);
-            let runenv = Arc::new(Mutex::new(
-                get_coworker_agent_runenv(DATA_DIR, SHARED_DATA_DIR, ARTIFACT_DIR).await?,
-            ));
+            let runenv = Arc::new(get_coworker_agent_runenv(
+                DATA_DIR,
+                SHARED_DATA_DIR,
+                ARTIFACT_DIR,
+            )?);
             let state = AgentState::new().with_runenv(runenv);
             Agent::try_with_state(spec, state)?
         }
         AgentKind::DeepResearch => {
             let spec = get_deep_research_agent_spec(agent_kind.name(), agent_model);
-            let runenv = Arc::new(Mutex::new(
-                get_deep_research_agent_runenv(ARTIFACT_DIR).await?,
-            ));
+            let runenv = Arc::new(get_deep_research_agent_runenv(ARTIFACT_DIR)?);
             let state = AgentState::new().with_runenv(runenv);
             Agent::try_with_state(spec, state)?
         }
@@ -259,51 +265,6 @@ fn prepare_dir(dir: &str) {
     }
     if let Err(e) = std::fs::create_dir_all(path) {
         println!("[warn] failed to create {}: {e}", path.display());
-    }
-}
-
-/// Prune leftover `ailoy-*` sandbox dirs from prior runs that were force-killed
-/// before `Sandbox`'s `Drop` (the only place non-persist cleanup happens) could
-/// run. Skips entirely if any `msb` process is alive, and only removes dirs that
-/// haven't been touched for a few minutes — so a concurrent run's freshly-created
-/// sandbox is never deleted, even in the gap between `pgrep` and a real launch.
-/// Best-effort: failures are logged, never fatal.
-fn sweep_orphan_sandboxes() {
-    const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
-    let Some(home) = std::env::var_os("HOME") else { return };
-    let dir = std::path::Path::new(&home).join(".microsandbox/sandboxes");
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
-    let msb_alive = std::process::Command::new("pgrep")
-        .args(["-f", "microsandbox/bin/msb"])
-        .output()
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(true);
-    if msb_alive {
-        return;
-    }
-    let now = std::time::SystemTime::now();
-    let mut pruned = 0;
-    for entry in entries.flatten() {
-        if !entry.file_name().to_string_lossy().starts_with("ailoy-") {
-            continue;
-        }
-        // Only sweep dirs idle for STALE_AFTER — never a sandbox mid-startup.
-        let recent = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| now.duration_since(t).ok())
-            .map(|age| age < STALE_AFTER)
-            .unwrap_or(true);
-        if recent {
-            continue;
-        }
-        if std::fs::remove_dir_all(entry.path()).is_ok() {
-            pruned += 1;
-        }
-    }
-    if pruned > 0 {
-        println!("[sweep] pruned {pruned} orphan sandbox dir(s)");
     }
 }
 

@@ -1,5 +1,5 @@
-//! Content-hash knowledge indexing (the current approach, ported to the
-//! `workspace` crate + `FsHook`).
+//! Content-hash knowledge indexing over the workspace's cortex
+//! [`Workspace`](cortex::Workspace).
 //!
 //! Membership is a set of `*.ref` files under `/files/knowledge`, each holding
 //! the unified-tree path of a target. Resync/reconcile against
@@ -16,16 +16,22 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_k::knowledge_base::{FileType, PdfEngine, SharedStore, Store};
+use cortex::{CortexError, DirentKind, FileExt, Mountable, OpenOptions, Workspace};
 use dashmap::DashMap;
-use futures_util::StreamExt as _;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, OnceCell, RwLock};
 use uuid::Uuid;
 
-use ::workspace::{FsError, FsResult, OpenOptions, WorkspaceFs};
+use super::workspace::{build_workspace_vfs, cortex_workspace_spec};
 
-use super::workspace::{build_workspace_vfs, workspace_fs};
+/// A workspace-relative path (leading slash, e.g. `/files/knowledge/a.ref`) as a
+/// cortex mount path (no leading slash — cortex treats a request path as relative
+/// to the workspace root). Knowledge paths keep the leading-slash form internally
+/// (ref-file targets are stored that way; [`is_safe_target`] requires it).
+fn cx(path: &str) -> PathBuf {
+    PathBuf::from(path.trim_start_matches('/'))
+}
 
 /// Unified-tree directory holding the index references. Local files live under
 /// the `/files` mount, so knowledge refs are `/files/knowledge/*.ref`.
@@ -42,8 +48,6 @@ const BATCH_BUDGET_BYTES: usize = 128 * 1024 * 1024;
 /// Per-file cap. A file can't be streamed (read whole to hash/translate), so an
 /// arbitrarily large one could OOM; files over this are skipped.
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
-
-const READ_CHUNK: usize = 256 * 1024;
 
 /// The on-disk body of a `*.ref` file: the unified-tree path of its target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,22 +156,28 @@ impl Resyncer {
 
     /// Reconcile `wid`'s [`Store`] with its `/files/knowledge` references: ingest
     /// referenced targets in byte-bounded batches, then purge documents whose ref
-    /// is gone. Not self-serializing — callers run it under `ws.lock` via
+    /// is gone. Not self-serializing — callers run it under `ws_index.lock` via
     /// [`coalesce`] (or [`forget`](Self::forget)).
-    async fn reconcile(&self, wid: Uuid, ws: &WsIndex) -> anyhow::Result<()> {
-        let config = build_workspace_vfs(&self.db, wid).await?;
-        let fs = workspace_fs(&self.data_root, wid, config)?;
-
-        let targets = collect_targets(&fs, MAX_FILE_BYTES).await?;
+    async fn reconcile(&self, wid: Uuid, ws_index: &WsIndex) -> anyhow::Result<()> {
+        // A hookless read view of the unified tree (local `files/` + providers):
+        // no resync hook, so reads made here can't re-trigger a reconcile.
+        // `from_spec` builds the provider clients synchronously; the async
+        // `Mountable` ops are awaited directly on this runtime.
+        let mounts = build_workspace_vfs(&self.db, wid).await?;
+        let spec = cortex_workspace_spec(&self.data_root, wid, mounts);
+        let ws = Arc::new(
+            Workspace::from_spec(&spec).map_err(|e| anyhow::anyhow!("cortex workspace: {e:?}"))?,
+        );
+        let targets = collect_targets(&ws, MAX_FILE_BYTES).await?;
         let member_count = targets.len();
         if member_count == 0 && !self.store_root(wid).join("index").exists() {
             return Ok(());
         }
 
-        let store = ws.store(self.store_root(wid)).await?;
+        let store = ws_index.store(self.store_root(wid)).await?;
         let mut store = store.write().await;
 
-        let prev = ws.refmaps.lock().unwrap().clone();
+        let prev = ws_index.refmaps.lock().unwrap().clone();
 
         // Read each target (remembering its content-hash id, or that it failed)
         // and ingest readable bytes in byte-bounded batches.
@@ -176,7 +186,8 @@ impl Resyncer {
         let mut batch: Vec<(Vec<u8>, FileType)> = Vec::new();
         let mut batch_bytes = 0usize;
         for (path, ft) in targets {
-            match read_all(&fs, &path).await {
+            let read = read_all(&ws, &path).await;
+            match read {
                 Ok(bytes) => {
                     let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, &bytes);
                     reads.push((path, Some(id)));
@@ -199,7 +210,7 @@ impl Resyncer {
         }
 
         let (next, protected) = build_keepset(&prev, &reads, &succeeded);
-        *ws.refmaps.lock().unwrap() = next;
+        *ws_index.refmaps.lock().unwrap() = next;
 
         // Purge only docs whose ref is gone — never docs that merely failed to
         // read/ingest this cycle (protected via the memo above).
@@ -306,23 +317,20 @@ async fn ingest_batch(
 }
 
 /// Read an entire file into memory via the unified tree.
-async fn read_all(fs: &WorkspaceFs, path: &str) -> FsResult<Vec<u8>> {
-    let mut file = fs
+async fn read_all(ws: &Workspace, path: &str) -> anyhow::Result<Vec<u8>> {
+    let (handle, stat) = ws
         .open(
-            path,
-            OpenOptions {
-                read: true,
-                ..Default::default()
-            },
+            &cx(path),
+            OpenOptions::read_only(),
         )
-        .await?;
-    let mut out = Vec::new();
-    loop {
-        let chunk = file.read_bytes(READ_CHUNK).await?;
-        if chunk.is_empty() {
-            break;
-        }
-        out.extend_from_slice(&chunk);
+        .await
+        .map_err(|e| anyhow::anyhow!("open {path}: {e:?}"))?;
+    let mut out = vec![0u8; stat.size as usize];
+    if stat.size > 0 {
+        handle
+            .read_exact_at(&mut out, 0)
+            .await
+            .map_err(|e| anyhow::anyhow!("read {path}: {e}"))?;
     }
     Ok(out)
 }
@@ -330,23 +338,22 @@ async fn read_all(fs: &WorkspaceFs, path: &str) -> FsResult<Vec<u8>> {
 /// Walk `/files/knowledge`, resolve each `*.ref` to its target(s), and return the
 /// indexable files' paths + types — without reading their bytes.
 async fn collect_targets(
-    fs: &WorkspaceFs,
+    ws: &Workspace,
     max_file_bytes: u64,
 ) -> anyhow::Result<Vec<(String, FileType)>> {
     let mut out = Vec::new();
-    let mut stream = match fs.read_dir(KNOWLEDGE_ROOT).await {
-        Ok(s) => s,
-        Err(FsError::NotFound) => return Ok(out),
+    let entries = match ws.list(&cx(KNOWLEDGE_ROOT)).await {
+        Ok(e) => e,
+        Err(CortexError::NotFound) => return Ok(out),
         Err(e) => anyhow::bail!("read {KNOWLEDGE_ROOT}: {e:?}"),
     };
-    while let Some(entry) = stream.next().await {
-        let entry = entry.map_err(|e| anyhow::anyhow!("read {KNOWLEDGE_ROOT}: {e:?}"))?;
-        let name = String::from_utf8_lossy(&entry.name()).into_owned();
+    for entry in entries {
+        let name = entry.name;
         if !name.ends_with(REF_SUFFIX) {
             continue;
         }
         let ref_path = format!("{KNOWLEDGE_ROOT}/{name}");
-        let bytes = match read_all(fs, &ref_path).await {
+        let bytes = match read_all(ws, &ref_path).await {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!("skipping unreadable reference {ref_path}: {e:?}");
@@ -364,7 +371,7 @@ async fn collect_targets(
             tracing::warn!("skipping unsafe/self reference target {target}");
             continue;
         }
-        add_target(fs, &target, max_file_bytes, &mut out).await?;
+        add_target(ws, &target, max_file_bytes, &mut out).await?;
     }
     // A directory ref overlapping a file ref (or two refs to the same target) can
     // enumerate the same path twice; keep the first so a path is indexed once.
@@ -376,24 +383,24 @@ async fn collect_targets(
 /// Enumerate a target into `out`: a file contributes itself, a directory its
 /// indexable descendants. Oversized and missing targets are skipped.
 async fn add_target(
-    fs: &WorkspaceFs,
+    ws: &Workspace,
     target: &str,
     max_file_bytes: u64,
     out: &mut Vec<(String, FileType)>,
 ) -> anyhow::Result<()> {
-    let meta = match fs.metadata(target).await {
+    let meta = match ws.stat(&cx(target)).await {
         Ok(m) => m,
-        Err(FsError::NotFound | FsError::Forbidden) => {
+        Err(CortexError::NotFound | CortexError::PermissionDenied) => {
             tracing::warn!("skipping unresolvable target {target}");
             return Ok(());
         }
         Err(e) => anyhow::bail!("stat {target}: {e:?}"),
     };
 
-    if !meta.is_dir() {
+    if meta.kind != DirentKind::Dir {
         if let Some(ft) = FileType::from_path(Path::new(target)) {
-            if meta.len > max_file_bytes {
-                tracing::warn!("skipping oversized target {target} ({} bytes)", meta.len);
+            if meta.size > max_file_bytes {
+                tracing::warn!("skipping oversized target {target} ({} bytes)", meta.size);
             } else {
                 out.push((target.to_string(), ft));
             }
@@ -403,19 +410,21 @@ async fn add_target(
 
     let mut stack = vec![target.trim_end_matches('/').to_string()];
     while let Some(dir) = stack.pop() {
-        let mut stream = fs
-            .read_dir(&dir)
+        let entries = ws
+            .list(&cx(&dir))
             .await
             .map_err(|e| anyhow::anyhow!("read {dir}: {e:?}"))?;
-        while let Some(entry) = stream.next().await {
-            let entry = entry.map_err(|e| anyhow::anyhow!("read {dir}: {e:?}"))?;
-            let name = String::from_utf8_lossy(&entry.name()).into_owned();
-            let child = format!("{dir}/{name}");
-            let is_dir = entry.metadata().map(|s| s.is_dir()).unwrap_or(false);
-            if is_dir {
+        for entry in entries {
+            let child = format!("{dir}/{}", entry.name);
+            if entry.kind == DirentKind::Dir {
                 stack.push(child);
-            } else if let Some(ft) = FileType::from_path(Path::new(&name)) {
-                let len = entry.metadata().map(|s| s.len).unwrap_or(0);
+            } else if let Some(ft) = FileType::from_path(Path::new(&entry.name)) {
+                // Prefer the in-list stat (an object store returns it for free);
+                // fall back to a stat call (a local passthrough may omit it).
+                let len = match entry.stat() {
+                    Some(s) => s.size,
+                    None => ws.stat(&cx(&child)).await.map(|s| s.size).unwrap_or(0),
+                };
                 if len > max_file_bytes {
                     tracing::warn!("skipping oversized target {child} ({len} bytes)");
                 } else {
@@ -452,16 +461,11 @@ pub(super) fn is_under_knowledge(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
-    use std::ops::Range;
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use ::workspace::{
-        FileKind, FileStat, FsConfig, LocalResource, Mount, MountPath, Resource, ResourceDirEntry,
-        ResourceError, ResourceResult, WorkspaceFs,
-    };
-    use async_trait::async_trait;
+    use cortex::{VolumeSpec, Workspace, WorkspaceSpec};
     use uuid::Uuid;
 
     use super::{
@@ -609,132 +613,62 @@ mod tests {
 
     // --- enumeration -----------------------------------------------------
 
-    /// A read-only provider with one markdown file at its root, `/doc.md`.
-    struct MockResource {
-        content: Vec<u8>,
-    }
-
-    #[async_trait]
-    impl Resource for MockResource {
-        async fn read_bytes(
-            &self,
-            path: &MountPath,
-            range: Option<Range<u64>>,
-        ) -> ResourceResult<Vec<u8>> {
-            if path.as_str() != "/doc.md" {
-                return Err(ResourceError::NotFound);
-            }
-            Ok(match range {
-                Some(r) => {
-                    let s = (r.start as usize).min(self.content.len());
-                    let e = (r.end as usize).min(self.content.len());
-                    self.content[s..e].to_vec()
-                }
-                None => self.content.clone(),
-            })
-        }
-        async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
-            Err(ResourceError::Unsupported)
-        }
-        async fn readdir(&self, path: &MountPath) -> ResourceResult<Vec<ResourceDirEntry>> {
-            if path.is_root() {
-                Ok(vec![ResourceDirEntry {
-                    name: "doc.md".into(),
-                    kind: FileKind::File,
-                    size: self.content.len() as u64,
-                    mtime: None,
-                    atime: None,
-                    ctime: None,
-                    created: None,
-                    etag: None,
-                }])
-            } else {
-                Err(ResourceError::NotFound)
-            }
-        }
-        async fn stat(&self, path: &MountPath) -> ResourceResult<FileStat> {
-            if path.is_root() {
-                Ok(FileStat {
-                    kind: FileKind::Dir,
-                    ..Default::default()
-                })
-            } else if path.as_str() == "/doc.md" {
-                Ok(FileStat {
-                    kind: FileKind::File,
-                    size: self.content.len() as u64,
-                    ..Default::default()
-                })
-            } else {
-                Err(ResourceError::NotFound)
-            }
-        }
-    }
-
-    async fn write(root: &Path, rel: &str, body: &[u8]) {
+    fn write(root: &Path, rel: &str, body: &[u8]) {
         let p = root.join(rel);
-        tokio::fs::create_dir_all(p.parent().unwrap()).await.unwrap();
-        tokio::fs::write(p, body).await.unwrap();
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
     }
 
-    async fn write_ref(root: &Path, name: &str, target: &str) {
+    fn write_ref(root: &Path, name: &str, target: &str) {
         let body = KnowledgeRef {
             path: target.into(),
         }
         .to_bytes();
-        write(root, &format!("knowledge/{name}"), &body).await;
+        write(root, &format!("knowledge/{name}"), &body);
     }
 
-    /// A local `/files` mount over `root` plus a `/mock` provider mount.
-    fn fs_with_mock(root: &Path, mock: MockResource) -> WorkspaceFs {
-        WorkspaceFs::from_mounts(vec![
-            Mount {
-                prefix: "/files".into(),
-                resource: Arc::new(LocalResource::new(root.to_path_buf())),
-            },
-            Mount {
-                prefix: "/mock".into(),
-                resource: Arc::new(mock),
-            },
-        ])
-        .unwrap()
+    /// A local `files` mount over `root` plus a second local `mock` mount —
+    /// enough to exercise cross-mount enumeration.
+    fn ws_with_mock(root: &Path, mock_root: &Path) -> Workspace {
+        let spec = WorkspaceSpec::default()
+            .mount("files", VolumeSpec::Local { host: root.to_path_buf() })
+            .mount("mock", VolumeSpec::Local { host: mock_root.to_path_buf() });
+        Workspace::from_spec(&spec).unwrap()
     }
 
-    /// A local-only `/files` mount over `root`.
-    fn local_fs(root: &Path) -> WorkspaceFs {
-        WorkspaceFs::from_config(FsConfig {
-            local_root: Some(root.to_path_buf()),
-            mounts: vec![],
-        })
-        .unwrap()
+    /// A local-only `files` mount over `root`.
+    fn local_ws(root: &Path) -> Workspace {
+        let spec = WorkspaceSpec::default().mount("files", VolumeSpec::Local {
+            host: root.to_path_buf(),
+        });
+        Workspace::from_spec(&spec).unwrap()
     }
 
-    /// Enumeration gathers local files, a directory's descendants, and a mounted
-    /// object — skipping non-`.ref`, self-references, missing targets, and
-    /// non-indexable extensions — and the paths resolve to real bytes.
+    /// Enumeration gathers local files, a directory's descendants, and a file on
+    /// a second mount — skipping non-`.ref`, self-references, missing targets,
+    /// and non-indexable extensions — and the paths resolve to real bytes.
     #[tokio::test]
     async fn collects_local_dir_and_mount_targets() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
+        let mock = tempfile::tempdir().unwrap();
+        let mock_root = mock.path();
 
-        write(root, "docs/a.md", b"AAA").await;
-        write(root, "docs/sub/b.md", b"BBB").await;
-        write(root, "docs/sub/ignore.bin", b"nope").await;
+        write(root, "docs/a.md", b"AAA");
+        write(root, "docs/sub/b.md", b"BBB");
+        write(root, "docs/sub/ignore.bin", b"nope");
+        write(mock_root, "doc.md", b"MOUNTED");
 
-        write_ref(root, "a.ref", "/files/docs/a.md").await;
-        write_ref(root, "dir.ref", "/files/docs/sub").await;
-        write_ref(root, "mount.ref", "/mock/doc.md").await;
-        write_ref(root, "missing.ref", "/files/docs/gone.md").await;
-        write_ref(root, "self.ref", "/files/knowledge/a.ref").await;
-        write(root, "knowledge/note.txt", b"not a ref").await;
+        write_ref(root, "a.ref", "/files/docs/a.md");
+        write_ref(root, "dir.ref", "/files/docs/sub");
+        write_ref(root, "mount.ref", "/mock/doc.md");
+        write_ref(root, "missing.ref", "/files/docs/gone.md");
+        write_ref(root, "self.ref", "/files/knowledge/a.ref");
+        write(root, "knowledge/note.txt", b"not a ref");
 
-        let fs = fs_with_mock(
-            root,
-            MockResource {
-                content: b"MOUNTED".to_vec(),
-            },
-        );
+        let ws = ws_with_mock(root, mock_root);
 
-        let targets = collect_targets(&fs, u64::MAX).await.unwrap();
+        let targets = collect_targets(&ws, u64::MAX).await.unwrap();
         let mut paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         paths.sort();
         assert_eq!(
@@ -748,7 +682,7 @@ mod tests {
 
         let mut bodies = Vec::new();
         for (p, _) in &targets {
-            bodies.push(read_all(&fs, p).await.unwrap());
+            bodies.push(read_all(&ws, p).await.unwrap());
         }
         bodies.sort();
         assert_eq!(
@@ -763,12 +697,12 @@ mod tests {
     async fn dedups_overlapping_targets() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        write(root, "docs/a.md", b"A").await;
-        write_ref(root, "dir.ref", "/files/docs").await;
-        write_ref(root, "file.ref", "/files/docs/a.md").await;
-        let fs = local_fs(root);
+        write(root, "docs/a.md", b"A");
+        write_ref(root, "dir.ref", "/files/docs");
+        write_ref(root, "file.ref", "/files/docs/a.md");
+        let ws = local_ws(root);
 
-        let targets = collect_targets(&fs, u64::MAX).await.unwrap();
+        let targets = collect_targets(&ws, u64::MAX).await.unwrap();
         let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(paths, vec!["/files/docs/a.md".to_string()]);
     }
@@ -778,13 +712,13 @@ mod tests {
     async fn oversized_target_is_skipped() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        write(root, "docs/small.md", b"tiny").await;
-        write(root, "docs/big.md", &[b'x'; 100]).await;
-        write_ref(root, "small.ref", "/files/docs/small.md").await;
-        write_ref(root, "big.ref", "/files/docs/big.md").await;
-        let fs = local_fs(root);
+        write(root, "docs/small.md", b"tiny");
+        write(root, "docs/big.md", &[b'x'; 100]);
+        write_ref(root, "small.ref", "/files/docs/small.md");
+        write_ref(root, "big.ref", "/files/docs/big.md");
+        let ws = local_ws(root);
 
-        let targets = collect_targets(&fs, 10).await.unwrap();
+        let targets = collect_targets(&ws, 10).await.unwrap();
         let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(paths, vec!["/files/docs/small.md".to_string()]);
     }
@@ -795,13 +729,13 @@ mod tests {
     async fn skips_unsafe_ref_targets() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        write_ref(root, "esc.ref", "/../outside.md").await;
-        write_ref(root, "rel.ref", "docs/x.md").await;
-        write(root, "docs/ok.md", b"OK").await;
-        write_ref(root, "ok.ref", "/files/docs/ok.md").await;
-        let fs = local_fs(root);
+        write_ref(root, "esc.ref", "/../outside.md");
+        write_ref(root, "rel.ref", "docs/x.md");
+        write(root, "docs/ok.md", b"OK");
+        write_ref(root, "ok.ref", "/files/docs/ok.md");
+        let ws = local_ws(root);
 
-        let targets = collect_targets(&fs, u64::MAX).await.unwrap();
+        let targets = collect_targets(&ws, u64::MAX).await.unwrap();
         let paths: Vec<String> = targets.iter().map(|(p, _)| p.clone()).collect();
         assert_eq!(paths, vec!["/files/docs/ok.md".to_string()]);
     }
@@ -810,8 +744,8 @@ mod tests {
     #[tokio::test]
     async fn absent_knowledge_dir_is_empty() {
         let tmp = tempfile::tempdir().unwrap();
-        let fs = local_fs(tmp.path());
-        let targets = collect_targets(&fs, u64::MAX).await.unwrap();
+        let ws = local_ws(tmp.path());
+        let targets = collect_targets(&ws, u64::MAX).await.unwrap();
         assert!(targets.is_empty());
     }
 

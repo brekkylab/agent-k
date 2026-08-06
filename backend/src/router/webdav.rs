@@ -1,7 +1,4 @@
-use std::future::ready;
-use std::io::SeekFrom;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Router,
@@ -10,29 +7,17 @@ use axum::{
     http::{Response, StatusCode},
     response::IntoResponse,
 };
-use dav_server::{
-    DavHandler,
-    davpath::DavPath,
-    fakels::FakeLs,
-    fs::{
-        DavDirEntry, DavFile, DavFileSystem, DavMetaData, FsError, FsFuture, FsResult, FsStream,
-        OpenOptions, ReadDirMeta,
-    },
-};
-use futures_util::StreamExt;
+use dav_server::{DavHandler, fakels::FakeLs};
 use uuid::Uuid;
 
+use super::cortex_dav::CortexDavFs;
 use crate::auth::authenticate;
 use crate::state::AppState;
-use workspace::{
-    DirEntry as WsDirEntry, File as WsFile, FsError as WsFsError, OpenOptions as WsOpenOptions,
-    Stat, WorkspaceFs,
-};
 
 /// WebDAV workspace router. Mounted by [`super::get_router`] at
 /// `/workspaces/{wid}/sources[/…]`; serves the **unified** workspace tree —
-/// local files under `files/`, each provider mount as a sibling — the same view
-/// the guest sees.
+/// local files under `files/`, each provider mount as a sibling — the same
+/// cortex [`Workspace`](cortex::Workspace) the sandbox guest sees.
 ///
 /// Routes via `fallback` so axum forwards every HTTP method — including
 /// WebDAV-specific ones (`PROPFIND`, `MKCOL`, `COPY`, `MOVE`, `LOCK`, …) —
@@ -76,19 +61,22 @@ async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response<Bo
         }
     }
 
-    // The filesystem (and its side-processing) lives in `state.workspaces`;
-    // here we only wrap it in the WebDAV protocol (see [`DavFs`]). Building it
-    // loads the workspace's external-provider mounts, which can fail (bad
-    // stored config); surface that as a 500 rather than panicking.
-    let fs = match state.workspaces.get_fs(wid).await {
-        Ok(fs) => fs,
+    // Serve the workspace's cortex [`Workspace`](cortex::Workspace) — the same
+    // unified tree (local `files/` + provider mounts) handed to the sandbox
+    // guest, wrapped here in the WebDAV protocol by [`CortexDavFs`]. The
+    // knowledge resync hook is attached inside `cortex_workspace`, so writes
+    // under `files/knowledge/` over WebDAV trigger a resync. Building it loads
+    // the workspace's external-provider mounts, which can fail (bad stored
+    // config); surface that as a 500 rather than panicking.
+    let ws = match state.workspaces.cortex_workspace(wid).await {
+        Ok(ws) => ws,
         Err(e) => {
             tracing::error!("failed to build workspace filesystem: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
         }
     };
     let dav = DavHandler::builder()
-        .filesystem(Box::new(DavFs(fs)))
+        .filesystem(Box::new(CortexDavFs::new(ws)))
         .locksystem(FakeLs::new())
         .strip_prefix(format!("/workspaces/{wid}/sources"))
         .build_handler();
@@ -105,247 +93,6 @@ fn parse_wid(path: &str) -> Option<Uuid> {
     // non-canonical segment (uppercase, or the 32-char no-hyphen form) would
     // authenticate but then 502 on PrefixMismatch. Reject it up front as a 400.
     (wid_str == wid.to_string()).then_some(wid)
-}
-
-/// Workspace-relative path (leading `/`) in the shape [`WorkspaceFs`] expects.
-/// `as_rel_ospath` already drops the leading slash, so we re-add one.
-fn rel_path_string(path: &DavPath) -> String {
-    format!("/{}", path.as_rel_ospath().to_string_lossy())
-}
-
-/// Map a workspace [`WsFsError`] onto the WebDAV [`FsError`].
-fn to_dav_err(e: WsFsError) -> FsError {
-    match e {
-        WsFsError::NotImplemented => FsError::NotImplemented,
-        WsFsError::GeneralFailure => FsError::GeneralFailure,
-        WsFsError::Exists => FsError::Exists,
-        WsFsError::NotFound => FsError::NotFound,
-        WsFsError::Forbidden => FsError::Forbidden,
-    }
-}
-
-/// Adapts a [`WorkspaceFs`] onto `dav_server`'s [`DavFileSystem`]. Pure
-/// translation: [`DavPath`] ↔ workspace-relative string, and the workspace's
-/// own file/metadata/dir-entry types onto the corresponding `dav_server`
-/// trait objects. All disk access and side-processing happen inside
-/// [`WorkspaceFs`].
-#[derive(Clone)]
-struct DavFs(WorkspaceFs);
-
-impl DavFileSystem for DavFs {
-    fn open<'a>(
-        &'a self,
-        path: &'a DavPath,
-        options: OpenOptions,
-    ) -> FsFuture<'a, Box<dyn DavFile>> {
-        Box::pin(async move {
-            let opts = WsOpenOptions {
-                read: options.read,
-                write: options.write,
-                append: options.append,
-                truncate: options.truncate,
-                create: options.create,
-                create_new: options.create_new,
-            };
-            let file = self
-                .0
-                .open(&rel_path_string(path), opts)
-                .await
-                .map_err(to_dav_err)?;
-            Ok(Box::new(DavFileAdapter(file)) as Box<dyn DavFile>)
-        })
-    }
-
-    fn read_dir<'a>(
-        &'a self,
-        path: &'a DavPath,
-        _meta: ReadDirMeta,
-    ) -> FsFuture<'a, FsStream<Box<dyn DavDirEntry>>> {
-        Box::pin(async move {
-            // `_meta` (symlink-follow hint) is moot: the workspace resolves
-            // symlinks to their target and never reports the symlink kind.
-            let stream = self
-                .0
-                .read_dir(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)?;
-            let mapped = stream.map(|res| {
-                res.map(|e| Box::new(DavDirEntryAdapter(e)) as Box<dyn DavDirEntry>)
-                    .map_err(to_dav_err)
-            });
-            Ok(Box::pin(mapped) as FsStream<Box<dyn DavDirEntry>>)
-        })
-    }
-
-    fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
-        Box::pin(async move {
-            let meta = self
-                .0
-                .metadata(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)?;
-            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
-        })
-    }
-
-    fn symlink_metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, Box<dyn DavMetaData>> {
-        Box::pin(async move {
-            let meta = self
-                .0
-                .symlink_metadata(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)?;
-            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
-        })
-    }
-
-    fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .create_dir(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-
-    fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .remove_dir(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-
-    fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .remove_file(&rel_path_string(path))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-
-    fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .rename(&rel_path_string(from), &rel_path_string(to))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-
-    fn copy<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            self.0
-                .copy(&rel_path_string(from), &rel_path_string(to))
-                .await
-                .map_err(to_dav_err)
-        })
-    }
-}
-
-/// Adapts a workspace [`WsFile`] onto [`DavFile`].
-struct DavFileAdapter(WsFile);
-
-impl std::fmt::Debug for DavFileAdapter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DavFileAdapter").finish_non_exhaustive()
-    }
-}
-
-impl DavFile for DavFileAdapter {
-    fn metadata(&mut self) -> FsFuture<'_, Box<dyn DavMetaData>> {
-        Box::pin(async move {
-            let meta = self.0.metadata().await.map_err(to_dav_err)?;
-            Ok(Box::new(DavMetaAdapter(meta)) as Box<dyn DavMetaData>)
-        })
-    }
-
-    fn write_buf(&mut self, buf: Box<dyn bytes::Buf + Send>) -> FsFuture<'_, ()> {
-        Box::pin(async move { self.0.write_buf(buf).await.map_err(to_dav_err) })
-    }
-
-    fn write_bytes(&mut self, buf: bytes::Bytes) -> FsFuture<'_, ()> {
-        Box::pin(async move { self.0.write_bytes(buf).await.map_err(to_dav_err) })
-    }
-
-    fn read_bytes(&mut self, count: usize) -> FsFuture<'_, bytes::Bytes> {
-        Box::pin(async move { self.0.read_bytes(count).await.map_err(to_dav_err) })
-    }
-
-    fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64> {
-        Box::pin(async move { self.0.seek(pos).await.map_err(to_dav_err) })
-    }
-
-    fn flush(&mut self) -> FsFuture<'_, ()> {
-        Box::pin(async move { self.0.flush().await.map_err(to_dav_err) })
-    }
-}
-
-/// Adapts a workspace [`Stat`] onto [`DavMetaData`]. The `Stat` already carries
-/// the WebDAV-specific projections (`status_changed`, `executable`), computed at
-/// capture time in the filesystem layer; a `None` there (e.g. an external
-/// provider that doesn't report the field) surfaces as `NotImplemented`.
-#[derive(Debug, Clone)]
-struct DavMetaAdapter(Stat);
-
-impl DavMetaData for DavMetaAdapter {
-    fn len(&self) -> u64 {
-        self.0.len
-    }
-
-    fn modified(&self) -> FsResult<SystemTime> {
-        // WebDAV wants a Last-Modified; fall back to the epoch when the source
-        // (e.g. an external object without a timestamp) doesn't report one.
-        Ok(self.0.modified.unwrap_or(UNIX_EPOCH))
-    }
-
-    fn is_dir(&self) -> bool {
-        self.0.is_dir()
-    }
-
-    fn is_file(&self) -> bool {
-        self.0.is_file()
-    }
-
-    fn is_symlink(&self) -> bool {
-        self.0.is_symlink()
-    }
-
-    fn accessed(&self) -> FsResult<SystemTime> {
-        self.0.accessed.ok_or(FsError::NotImplemented)
-    }
-
-    fn created(&self) -> FsResult<SystemTime> {
-        self.0.created.ok_or(FsError::NotImplemented)
-    }
-
-    fn status_changed(&self) -> FsResult<SystemTime> {
-        self.0.status_changed.ok_or(FsError::NotImplemented)
-    }
-
-    fn executable(&self) -> FsResult<bool> {
-        self.0.executable.ok_or(FsError::NotImplemented)
-    }
-}
-
-/// Adapts a workspace [`WsDirEntry`] onto [`DavDirEntry`].
-struct DavDirEntryAdapter(WsDirEntry);
-
-impl DavDirEntry for DavDirEntryAdapter {
-    fn name(&self) -> Vec<u8> {
-        self.0.name()
-    }
-
-    fn metadata(&self) -> FsFuture<'_, Box<dyn DavMetaData>> {
-        let meta = self
-            .0
-            .metadata()
-            .map(|m| Box::new(DavMetaAdapter(m)) as Box<dyn DavMetaData>)
-            .map_err(to_dav_err);
-        Box::pin(ready(meta))
-    }
 }
 
 #[cfg(test)]

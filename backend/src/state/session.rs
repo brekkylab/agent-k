@@ -7,7 +7,7 @@ use std::{
 use ailoy::{
     agent::{Agent, AgentSpec, AgentState},
     message::{FinishReason, Message, Part, Role},
-    runenv::{Machine as _, Sandbox, SandboxNetwork},
+    runenv::Sandbox,
 };
 use chrono::{DateTime, Utc};
 use futures_util::{FutureExt as _, StreamExt as _};
@@ -227,8 +227,8 @@ impl SessionsState {
     /// `data_root/{session_id}/sandbox.tar.zst`; sessions without a sandbox
     /// touch no disk state outside the database. The `runenv` column tracks
     /// whether the archive exists so readers don't need to probe disk.
-    pub async fn insert(&self, mut item: Session, runenv: Option<Sandbox>) -> StateResult<()> {
-        item.runenv = runenv.is_some();
+    pub async fn insert(&self, mut item: Session, has_runenv: bool) -> StateResult<()> {
+        item.runenv = has_runenv;
 
         sqlx::query(
             "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at) \
@@ -245,19 +245,8 @@ impl SessionsState {
         .execute(&self.db)
         .await?;
 
-        if let Some(mut runenv) = runenv {
-            let dir = self.data_root.join("sessions").join(item.id.to_string());
-            tokio::fs::create_dir_all(&dir).await?;
-            runenv
-                .stop()
-                .await
-                .map_err(|e| StateError::Sandbox(format!("{e:#}")))?;
-            runenv
-                .archive(dir.join("sandbox.tar.zst"))
-                .await
-                .map_err(|e| StateError::Sandbox(format!("{e:#}")))?;
-        }
-
+        // The session's filesystem state lives in its per-session upper disk
+        // (created lazily on first run); nothing to archive here.
         Ok(())
     }
 
@@ -390,7 +379,6 @@ impl SessionsState {
         tokio::spawn(async move {
             let session_key = id.to_string();
             let dir = data_root.join("sessions").join(&session_key);
-            let archive_path = dir.join("sandbox.tar.zst");
             let channel = message_channel(id);
 
             // Ok(bool) is "was the run stopped?" — it picks the terminal
@@ -415,53 +403,36 @@ impl SessionsState {
                 let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
                 let has_runenv: bool = row.get("runenv");
 
-                // The workspace's external-provider mounts, if any. Mounted into
-                // the guest below so the agent reads them as files.
+                // Build the ephemeral krun sandbox for this session (if it uses
+                // one), mounting each workspace provider as a cortex volume under
+                // /mnt/workspace/<prefix>. Each tool-call boots a fresh microVM;
+                // filesystem state persists in the session's upper disk. Providers
+                // cortex doesn't serve yet (e.g. Notion) are skipped.
                 let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
-
-                let runenv = if has_runenv {
-                    if !tokio::fs::try_exists(&archive_path).await? {
-                        anyhow::bail!(
-                            "session {id} marked as having a runenv but archive is missing at {}",
-                            archive_path.display()
-                        );
+                let runenv: Option<Arc<Sandbox>> = if has_runenv {
+                    tokio::fs::create_dir_all(&dir).await?;
+                    // ailoy owns rootfs/kernel; agent-k only owns this session's
+                    // writable state. The upper is ephemeral per `Sandbox`, so we
+                    // persist it as a sparse snapshot across reloads: restore it
+                    // when present, else boot a fresh one on the session's first run.
+                    let snap = dir.join("upper.snap");
+                    let sandbox = if snap.exists() {
+                        Sandbox::from_snapshot(&snap)
+                    } else {
+                        Sandbox::new()
                     }
-                    // A runenv always runs an in-guest FUSE forwarder (the
-                    // unified workspace mount, below), which reaches the host
-                    // forward server via host.microsandbox.internal and so needs
-                    // guest->host egress. The archive doesn't carry the network
-                    // policy, so re-apply it on restore.
-                    let sandbox =
-                        Sandbox::try_from_archive_with_network(&archive_path, SandboxNetwork::Public).await?;
-                    Some(Arc::new(Mutex::new(sandbox)))
+                    .map_err(|e| anyhow::anyhow!("sandbox init: {e}"))?;
+                    // The canonical unified spec — local `files/` plus every
+                    // provider mount — the same tree served over WebDAV
+                    // (see [`crate::state::cortex_workspace_spec`]), mounted at
+                    // the guest's /mnt/workspace root. No hook here: guest writes
+                    // cross the sandbox process boundary, so knowledge resync is
+                    // driven from the WebDAV side only.
+                    let ws = crate::state::cortex_workspace_spec(&data_root, workspace_id, vfs);
+                    let sandbox = sandbox.with_workspace("/mnt/workspace", ws);
+                    Some(Arc::new(sandbox))
                 } else {
                     None
-                };
-
-                // Mount the unified workspace tree into the guest before the
-                // agent runs — local files under `files/` plus the provider
-                // mounts as siblings, the browser-WebDAV view served over FUSE
-                // at /mnt/workspace. The raw-FUSE tunnel host engine is held for
-                // the whole run; dropping it (at the end of this scope) tears the
-                // mount down.
-                let _vfs_forward = match &runenv {
-                    Some(r) => {
-                        let mut sandbox = r.lock().await;
-                        let console = sandbox.start().await?;
-                        let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(
-                            crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
-                        );
-                        Some(
-                            crate::sandbox_tunnel::mount_vfs_tunnel_in_guest(
-                                console,
-                                unified,
-                                "/mnt/workspace",
-                                tokio::runtime::Handle::current(),
-                            )
-                            .await?,
-                        )
-                    }
-                    None => None,
                 };
 
                 let rows = sqlx::query(
@@ -759,21 +730,15 @@ impl SessionsState {
                 }
                 .await;
 
-                if let Some(runenv) = runenv {
-                    let mut sandbox = runenv.lock().await;
-                    let archive: anyhow::Result<()> = async {
-                        sandbox.stop().await?;
-                        if tokio::fs::try_exists(&archive_path).await? {
-                            tokio::fs::remove_file(&archive_path).await?;
-                        }
-                        sandbox.archive(&archive_path).await?;
-                        Ok(())
-                    }
-                    .await;
-                    if let Err(e) = archive {
-                        tracing::error!(session = %id, "sandbox archive failed: {e:#}");
-                    }
+                // Archive the session's writable filesystem as a sparse snapshot
+                // so the next reload restores it; each tool-call booted its own
+                // ephemeral microVM off the shared upper held by `runenv`.
+                if let Some(ref sandbox) = runenv
+                    && let Err(e) = sandbox.snapshot(dir.join("upper.snap")).await
+                {
+                    tracing::error!(session = %id, "failed to snapshot sandbox upper: {e}");
                 }
+                drop(runenv);
 
                 drive
             }

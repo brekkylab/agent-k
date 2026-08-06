@@ -2,13 +2,21 @@ use std::path::{Path, PathBuf};
 
 use ailoy::{
     agent::AgentSpec,
-    runenv::{FileEntry, Sandbox, SandboxBuilder, VolumeMount},
+    cortex::{VolumeSpec, WorkspaceSpec},
+    runenv::{FileEntry, Sandbox, SandboxNetwork},
 };
 
+/// Guest root the workspace tree mounts at; the sub-mounts below sit under it.
+/// A dedicated path, not the guest home — see the `GUEST_*` note above.
+const GUEST_ROOT: &str = "/workspace";
+
 const XLSX_SKILL_DIR: &str = "/root/skills/xlsx";
-pub const GUEST_ATTACHED_DIR: &str = "/root/attached";
-pub const GUEST_SHARED_DIR: &str = "/root/shared";
-pub const GUEST_ARTIFACTS_DIR: &str = "/root/artifacts";
+// The cortex workspace mounts at `/workspace` (a dedicated root), NOT `/root`:
+// mounting it over `/root` would shadow the guest home where skills and scratch
+// live. `/root` stays the writable rootfs; inputs/outputs live under the mount.
+pub const GUEST_ATTACHED_DIR: &str = "/workspace/attached";
+pub const GUEST_SHARED_DIR: &str = "/workspace/shared";
+pub const GUEST_ARTIFACTS_DIR: &str = "/workspace/artifacts";
 pub const PPTX_SKILL_DIR: &str = "/root/skills/pptx";
 
 const COWORKER_INSTRUCTION: &str = r#"You are {{NAME}}. Your primary role is to plan and perform tasks based on the user's query.
@@ -145,30 +153,39 @@ pub fn get_coworker_agent_spec(
     spec
 }
 
-pub async fn get_coworker_agent_runenv(
+/// Build the coworker sandbox: an ephemeral microVM (its writable upper is a
+/// temp image discarded on drop), with the three host directories mounted as
+/// cortex passthrough volumes.
+pub fn get_coworker_agent_runenv(
     input_dir: impl AsRef<Path>,
     shared_data_dir: impl AsRef<Path>,
     artifacts_dir: impl AsRef<Path>,
 ) -> anyhow::Result<Sandbox> {
-    SandboxBuilder::new()
-        .image("brekkylab/agent-k-libreoffice:latest")
-        .cpus(8)
-        .memory_mib(1024)
-        .mount(VolumeMount::Bind {
-            host: input_dir.as_ref().to_path_buf(),
-            guest: GUEST_ATTACHED_DIR.to_string(),
-            readonly: false,
-        })
-        .mount(VolumeMount::Bind {
-            host: shared_data_dir.as_ref().to_path_buf(),
-            guest: GUEST_SHARED_DIR.to_string(),
-            readonly: true,
-        })
-        .mount(VolumeMount::Bind {
-            host: artifacts_dir.as_ref().to_path_buf(),
-            guest: GUEST_ARTIFACTS_DIR.to_string(),
-            readonly: false,
-        })
-        .build()
-        .await
+    // One workspace under `/root`: `attached`/`shared`/`artifacts` land at
+    // `GUEST_ATTACHED_DIR` etc. (guest_root + name), so the guest paths are
+    // unchanged even though it is now a single virtio-fs device.
+    let workspace = WorkspaceSpec::default()
+        .mount(
+            "attached",
+            VolumeSpec::Local {
+                host: input_dir.as_ref().to_path_buf(),
+            },
+        )
+        .mount(
+            "shared",
+            VolumeSpec::Local {
+                host: shared_data_dir.as_ref().to_path_buf(),
+            },
+        )
+        .mount(
+            "artifacts",
+            VolumeSpec::Local {
+                host: artifacts_dir.as_ref().to_path_buf(),
+            },
+        );
+    Ok(Sandbox::new()?
+        // The coworker installs packages and runs scripts that reach the
+        // internet, so it needs public egress (default is HostOnly).
+        .with_network(SandboxNetwork::Public)
+        .with_workspace(GUEST_ROOT, workspace))
 }

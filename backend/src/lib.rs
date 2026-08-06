@@ -1,13 +1,12 @@
 //! agent-k backend library. The binary (`src/main.rs`) is a thin wrapper over
 //! [`run`]; exposing the modules as a lib lets integration tests in `tests/`
-//! drive internals like [`sandbox_tunnel`].
+//! drive internals directly.
 
 pub mod agent_stream;
 pub mod auth;
 pub mod event;
 pub mod model;
 pub mod router;
-pub mod sandbox_tunnel;
 pub mod state;
 
 use std::{path::PathBuf, sync::Arc};

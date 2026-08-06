@@ -14,6 +14,7 @@ pub(crate) mod error;
 
 mod agent;
 mod auth;
+mod cortex_dav;
 mod knowledge;
 mod message;
 mod models;

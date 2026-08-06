@@ -4,7 +4,6 @@ members = [
     "./agent-k",
     "./backend",
     "./docling-sys",
-    "./workspace",
 ]
 exclude = [
     "./backend-v1",
@@ -18,17 +17,17 @@ rust-version = "1.95.0"
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "0767a0872e665a9a505589b8d2b498269453fe9a", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "bdcc03d650916b697da5da5d7803f1abbf4e5df4", features = ["sandbox"] }
+# Direct cortex dep so agent-k defines the canonical `Workspace`/`WorkspaceSpec`
+# it hands to the ailoy sandbox and serves from its own WebDAV. Same rev ailoy
+# pins, so the `WorkspaceSpec` type unifies across the boundary. VFS providers
+# only — no VM/FUSE binding (WebDAV is pure Mountable).
+cortex = { git = "https://github.com/brekkylab/cortex.git", rev = "0406283d03b29cf64fb2112bc7439a3e37cfb473", features = ["s3", "notion"] }
 
-# Patched fuser (branch feat/macfuse-abi): on macOS, upstream fuser emits macFUSE
-# wire structs (extra crtime/flags in fuse_attr, minor pinned to 19) that a Linux
-# guest kernel rejects with EINVAL. That layout is gated behind the `macfuse-abi`
-# feature (on by default); backend opts out via `default-features = false` to
-# emit the LINUX wire layout on macOS, so the raw-FUSE tunnel host engine
-# (backend/src/sandbox_tunnel.rs) speaks the same protocol the in-guest Linux
-# forwarder does. No-op on a Linux host.
-[patch.crates-io]
-fuser = { git = "https://github.com/brekkylab/fuser.git", rev = "4a08d0ba46f7e4911da1fdb73883f30a36637a28" }
+# NB: the raw-FUSE tunnel (and its `[patch.crates-io] fuser = feat/macfuse-abi`
+# override) is gone — the sandbox is served over cortex virtio-fs now, and
+# cortex's host-FUSE binding wants upstream fuser's native macFUSE ABI, not the
+# Linux-on-macOS layout that patch forced.
 
 # microsandbox 0.6.7 computes a sparse-sha256 integrity digest over the upper
 # layer's full logical size (default 4 GiB) on snapshot create, save, and load.

@@ -17,7 +17,6 @@ use ailoy::{
     message::{Message, Part, Role},
 };
 use futures::StreamExt;
-use tokio::sync::Mutex;
 
 const COWORKER_AGENT_NAME: &str = "minerva";
 const COWORKER_AGENT_OPENAI_MODEL: &str = "openai/gpt-5.4";
@@ -32,8 +31,16 @@ enum InputSource {
     Tty(io::BufReader<std::fs::File>),
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // A re-invoked sandbox boot child boots the microVM from a link-time ctor in
+    // ailoy (before this `main`), so nothing to do here.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     prepare_dir(ARTIFACT_DIR);
@@ -95,9 +102,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let spec = get_coworker_agent_spec(COWORKER_AGENT_NAME, coworker_agent_model, true);
-    let runenv = Arc::new(Mutex::new(
-        get_coworker_agent_runenv(DATA_DIR, SHARED_DATA_DIR, ARTIFACT_DIR).await?,
-    ));
+    let runenv = Arc::new(get_coworker_agent_runenv(
+        DATA_DIR,
+        SHARED_DATA_DIR,
+        ARTIFACT_DIR,
+    )?);
     let state = AgentState::new().with_runenv(runenv);
     let mut agent = Agent::try_with_state(spec, state)?;
     println!(
