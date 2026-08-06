@@ -5,7 +5,7 @@ use tantivy::{
     Index, IndexWriter, TantivyDocument, Term,
     collector::TopDocs,
     query::{AllQuery, BooleanQuery, Occur, Query, TermQuery},
-    schema::{IndexRecordOption, OwnedValue, STORED, STRING, Schema, TEXT},
+    schema::{IndexRecordOption, STORED, STRING, Schema, TEXT, Value as _},
 };
 
 use super::Document;
@@ -131,7 +131,7 @@ pub fn document_exists(index: &Index, id: &str) -> Result<bool> {
     let id_f = schema.get_field("id")?;
     let term = Term::from_field_text(id_f, id);
     let query = TermQuery::new(term, IndexRecordOption::Basic);
-    let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+    let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
     Ok(!top_docs.is_empty())
 }
 
@@ -147,7 +147,7 @@ pub fn delete_document(index: &Index, id: &str) -> Result<Option<Document>> {
         let searcher = reader.searcher();
         let term = Term::from_field_text(id_f, id);
         let query = TermQuery::new(term, IndexRecordOption::Basic);
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
 
         if top_docs.is_empty() {
             return Ok(None);
@@ -199,7 +199,10 @@ pub fn list_documents(index: &Index, include_content: bool) -> Result<Vec<Docume
         return Ok(vec![]);
     }
 
-    let top_docs = searcher.search(&AllQuery, &TopDocs::with_limit(total))?;
+    let top_docs = searcher.search(
+        &AllQuery,
+        &TopDocs::with_limit(total).order_by_score(),
+    )?;
     Ok(top_docs
         .into_iter()
         .map(|(_, addr)| {
@@ -232,7 +235,7 @@ pub fn get_document(index: &Index, id: &str) -> Result<Option<Document>> {
 
     let term = Term::from_field_text(id_f, id);
     let query = TermQuery::new(term, IndexRecordOption::Basic);
-    let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+    let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
 
     Ok(top_docs.into_iter().next().map(|(_, addr)| {
         let doc: TantivyDocument = searcher.doc(addr).unwrap();
@@ -270,7 +273,10 @@ pub fn get_documents(index: &Index, ids: &[&str]) -> Result<Vec<Document>> {
         .collect();
 
     let query = BooleanQuery::new(subqueries);
-    let top_docs = searcher.search(&query, &TopDocs::with_limit(ids.len()))?;
+    let top_docs = searcher.search(
+        &query,
+        &TopDocs::with_limit(ids.len()).order_by_score(),
+    )?;
 
     Ok(top_docs
         .into_iter()
@@ -290,10 +296,10 @@ pub fn get_documents(index: &Index, ids: &[&str]) -> Result<Vec<Document>> {
 }
 
 fn get_str(doc: &TantivyDocument, field: tantivy::schema::Field) -> String {
-    match doc.get_first(field) {
-        Some(OwnedValue::Str(s)) => s.clone(),
-        _ => String::new(),
-    }
+    doc.get_first(field)
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -345,6 +351,25 @@ mod tests {
         assert!(
             index.schema().get_field("purpose").is_ok(),
             "expected rebuilt schema to contain purpose field"
+        );
+    }
+
+    #[test]
+    fn open_or_create_rebuilds_unreadable_index_without_touching_corpus() {
+        let tmp = TempDir::new().unwrap();
+        let corpus = tmp.path().join("corpus");
+        let path = tmp.path().join("idx");
+        fs::create_dir_all(&corpus).unwrap();
+        fs::create_dir_all(&path).unwrap();
+        fs::write(corpus.join("document.md"), "source of truth").unwrap();
+        fs::write(path.join("meta.json"), b"not a readable Tantivy index").unwrap();
+
+        let index = open_or_create(&path).unwrap();
+
+        assert!(index.schema().get_field("purpose").is_ok());
+        assert_eq!(
+            fs::read_to_string(corpus.join("document.md")).unwrap(),
+            "source of truth"
         );
     }
 

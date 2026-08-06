@@ -81,7 +81,7 @@ impl NotionAccessor {
         // list_children per block, to depth 10), so a medium page can trip
         // Notion's ~3 req/s limit. Retry 429/5xx a bounded number of times,
         // honoring Retry-After, so a transient limit doesn't fail the whole read.
-        for attempt in 0..=RETRY_BACKOFF.len() {
+        for default_wait in RETRY_BACKOFF {
             let Some(this) = req.try_clone() else {
                 // Non-cloneable body (not used by our calls): send once, no retry.
                 return finish(self.authed(req).send().await?).await;
@@ -90,16 +90,14 @@ impl NotionAccessor {
             let status = resp.status();
             let retryable =
                 status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
-            if retryable && attempt < RETRY_BACKOFF.len() {
-                let wait = retry_after(&resp)
-                    .unwrap_or(RETRY_BACKOFF[attempt])
-                    .min(MAX_BACKOFF);
+            if retryable {
+                let wait = retry_after(&resp).unwrap_or(default_wait).min(MAX_BACKOFF);
                 tokio::time::sleep(wait).await;
                 continue;
             }
             return finish(resp).await;
         }
-        unreachable!("the final attempt returns instead of retrying")
+        finish(self.authed(req).send().await?).await
     }
 
     /// Pages shared with the integration (search, filtered to pages), paging

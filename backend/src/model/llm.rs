@@ -50,7 +50,7 @@ impl AgentType {
     }
 
     /// Parse a stored/request value; unknown values → `None`.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "coworker" => Some(AgentType::Coworker),
             "deep-research" => Some(AgentType::DeepResearch),
@@ -166,7 +166,7 @@ pub fn provider_available(model_id: &str) -> bool {
 /// [`resolve_model_in`]). `agent_type` defaults to Coworker when absent/unknown.
 pub fn resolve_model(agent_type: Option<&str>, pin: Option<&str>) -> String {
     let agent = agent_type
-        .and_then(AgentType::from_str)
+        .and_then(AgentType::parse)
         .unwrap_or(AgentType::Coworker);
     resolve_model_in(agent.chain(), pin)
 }
@@ -290,13 +290,13 @@ mod tests {
 
     #[test]
     fn agent_type_parses_canonical_values() {
-        assert_eq!(AgentType::from_str("coworker"), Some(AgentType::Coworker));
+        assert_eq!(AgentType::parse("coworker"), Some(AgentType::Coworker));
         assert_eq!(
-            AgentType::from_str("deep-research"),
+            AgentType::parse("deep-research"),
             Some(AgentType::DeepResearch)
         );
-        assert_eq!(AgentType::from_str("speedwagon"), None);
-        assert_eq!(AgentType::from_str("nope"), None);
+        assert_eq!(AgentType::parse("speedwagon"), None);
+        assert_eq!(AgentType::parse("nope"), None);
     }
 
     #[test]
