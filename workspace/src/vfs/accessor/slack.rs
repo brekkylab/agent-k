@@ -498,9 +498,8 @@ impl SlackAccessor {
     /// Conversations of `types` the token can see (`conversations.list`).
     ///
     /// Archived channels are included: archiving closes a channel to new messages
-    /// and leaves the old ones readable, measured against a real workspace, so
-    /// excluding them would drop a finished project's whole record while it is still
-    /// there to read.
+    /// and leaves the old ones readable, so excluding them would drop a finished
+    /// project's whole record while it is still there to read.
     ///
     /// A truncated listing is logged and returned anyway — a directory has nowhere
     /// to say it is partial, and the ceiling is past any real workspace.
@@ -513,15 +512,6 @@ impl SlackAccessor {
             )
             .await?;
         Ok(out)
-    }
-
-    /// One conversation's metadata (`conversations.info`) — used to learn
-    /// `created` when a deep path is resolved without its parent listing.
-    pub async fn conversation_info(&self, channel: &str) -> anyhow::Result<Value> {
-        let v = self
-            .call("conversations.info", &[("channel", channel.to_string())])
-            .await?;
-        Ok(v.get("channel").cloned().unwrap_or(Value::Null))
     }
 
     /// Top-level messages in `channel` between `oldest` and `latest` (unix
@@ -611,8 +601,8 @@ impl SlackAccessor {
     }
 
     /// The app name behind a `bot_id` (`bots.info`). An incoming webhook's message
-    /// carries that id and nothing else to name it by — measured against a real
-    /// workspace — so this is the only way. Empty when Slack reports no name.
+    /// carries that id and nothing else to name it by, so this is the only way.
+    /// Empty when Slack reports no name.
     pub async fn bot_info(&self, bot_id: &str) -> anyhow::Result<String> {
         let v = self
             .call("bots.info", &[("bot", bot_id.to_string())])
@@ -625,8 +615,7 @@ impl SlackAccessor {
     }
 
     /// One user (`users.info`), for an id the member list didn't cover — a DM
-    /// partner outside the workspace's own member list (measured: Slack's own
-    /// `USLACK` account).
+    /// partner outside the workspace's own member list.
     pub async fn user_info(&self, user: &str) -> anyhow::Result<Value> {
         let v = self
             .call("users.info", &[("user", user.to_string())])

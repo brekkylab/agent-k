@@ -310,9 +310,8 @@ fn a_dm_is_named_after_the_other_person() {
     let dm = serde_json::json!({"id": "D0789", "user": "U0456"});
     assert_eq!(conv_label(&dm, &names), "kim jihoon");
     // A partner the member list didn't cover: `convs` resolves those with
-    // `users.info` before getting here (measured against a real workspace, where
-    // a DM with Slack's own `USLACK` account was absent from `users.list`). If
-    // even that fails, the id is a poor name but a stable, non-empty one.
+    // `users.info` before getting here. If even that fails, the id is a poor name
+    // but a stable, non-empty one.
     let unknown = serde_json::json!({"id": "D0790", "user": "U9999"});
     assert_eq!(conv_label(&unknown, &names), "U9999");
     // A channel uses its own name.
@@ -323,8 +322,7 @@ fn a_dm_is_named_after_the_other_person() {
 /// Only a channel the user joined is listed. An unjoined public channel is in
 /// `conversations.list`, but its history comes back empty with `is_limited: true`
 /// — so a directory for it would show a span of empty days for a channel that may
-/// be busy. Measured on a real workspace: every unjoined channel answered that
-/// way, one of them updated three months before.
+/// be busy.
 #[test]
 fn an_unreadable_channel_is_not_listed() {
     let ch = |member: Value| serde_json::json!({"id": "C1", "name": "x", "is_member": member});
@@ -442,7 +440,7 @@ fn a_message_line_gains_a_name_and_keeps_its_id() {
 
 /// An app's message has no `user` for the member list to resolve. Some name
 /// themselves per post with `username`; a default incoming webhook sends only
-/// `bot_id` — measured against real Slack — and is named through the bot map.
+/// `bot_id`, and is named through the bot map.
 /// Either way the name goes in `app_name`, never `user_name`: the poster picks that
 /// string and could pick a colleague's.
 #[test]
@@ -694,95 +692,143 @@ fn a_thread_is_timestamped_by_its_last_reply() {
 /// where an off-by-one in either direction would still look right.
 const AUG_3_NOON: f64 = 1_785_758_400.0;
 
-#[test]
-fn the_date_range_runs_back_from_the_newest_message() {
-    let newest = AUG_3_NOON;
-    let created = newest as i64 - 2 * 86_400;
-    let dates = date_range(newest, created);
-    assert_eq!(dates.first().unwrap(), "2026-08-03", "newest first");
-    assert_eq!(dates.len(), 3, "{dates:?}");
-    assert_eq!(dates.last().unwrap(), "2026-08-01");
-}
-
-/// A years-old channel lists all of it. On a paid workspace Slack still holds that
-/// history, and a cap would make it unreachable rather than merely unlisted —
-/// search, the only other way in, is dormant.
-#[test]
-fn the_date_range_covers_a_years_old_channel() {
-    let three_years = AUG_3_NOON as i64 - 1_100 * 86_400;
-    let dates = date_range(AUG_3_NOON, three_years);
-    assert_eq!(dates.len(), 1_101, "every day since `created`");
-    assert_eq!(dates.first().unwrap(), "2026-08-03");
-    assert_eq!(dates.last().unwrap(), "2023-07-30");
-}
-
-/// A conversation created after its newest message (clock skew, or a `created` we
-/// couldn't read) must still list the day that message is in — not an empty tree.
-#[test]
-fn a_created_after_the_newest_message_still_lists_that_day() {
-    let dates = date_range(AUG_3_NOON, AUG_3_NOON as i64 + 10 * 86_400);
-    assert_eq!(dates, vec!["2026-08-03".to_string()]);
-}
-
 /// A message at `ts`, which is all the date logic reads.
 fn at(ts: f64) -> Value {
     serde_json::json!({"ts": format!("{ts:.6}"), "text": "x"})
 }
 
-/// Why the listing walks history instead of generating a range: the same span
-/// `the_date_range_covers_a_years_old_channel` measures is 1,101 directories, and a
-/// conversation that spoke on three of those days should show three.
+/// 2018-01-01T00:00:00Z — a conversation `created` well below the fixtures' days.
+const BORN: i64 = 1_514_764_800;
+
+fn dates(msgs: &[Value], truncated: bool) -> Dates {
+    Dates {
+        days: days_seen(msgs),
+        truncated,
+    }
+}
+
+/// The listing is what the walk saw, not the calendar between `created` and now.
+/// A conversation that spoke on three days out of three years shows three
+/// directories, and each of them has something in it — an empty one would be a
+/// claim the tree cannot support, and the reader cannot tell a quiet day from a
+/// failed request.
 #[test]
-fn a_scan_that_reached_the_start_lists_only_days_that_have_messages() {
+fn only_days_that_have_messages_are_listed() {
     let day = 86_400.0;
     let msgs = vec![
         at(AUG_3_NOON),
         at(AUG_3_NOON - 2.0 * day),
         at(AUG_3_NOON - 5.0 * day),
     ];
-    // `created` is 1,100 days back and must not be consulted: the walk reached the
-    // start, so what it saw is the whole answer.
-    let created = AUG_3_NOON as i64 - 1_100 * 86_400;
     assert_eq!(
-        scan_dates(&msgs, false, created),
+        days_seen(&msgs),
         vec!["2026-08-03", "2026-08-01", "2026-07-29"],
         "newest first, and nothing for the silent days between"
     );
 }
 
-/// A truncated walk stopped somewhere inside its oldest day, so what came back for
-/// that day is a fragment. It stays listed — the calendar range below the floor
-/// covers it — but never as a day the walk saw whole, or [`SlackResource::prefill`]
-/// would cache the fragment and serve it as the day for the whole TTL.
+/// Listing and reachability are different questions, but only where the walk
+/// stopped short. One that reached the start has named every day there is, so an
+/// unlisted date is proven empty — refused outright, with no request spent.
 #[test]
-fn a_truncated_scan_hands_its_oldest_day_back_to_the_calendar() {
+fn a_complete_walk_settles_every_date() {
+    let day = 86_400.0;
+    let d = dates(&[at(AUG_3_NOON), at(AUG_3_NOON - 2.0 * day)], false);
+    assert!(d.lists("2026-08-03"));
+    assert!(!d.lists("2026-08-02"), "proven empty by the walk");
+    assert!(
+        !d.below_floor("2019-01-01", BORN),
+        "a complete walk has no unexplored region, however old the date"
+    );
+}
+
+/// A truncated walk cannot say what is below its floor, so it neither lists those
+/// days nor refuses them: that region is where old history lives, and naming a date
+/// is the only route in while search is dormant. `require_scope` resolves it by
+/// fetching the day, so a directory still only exists where there are messages.
+#[test]
+fn a_truncated_walk_leaves_only_the_region_below_its_floor_open() {
     let day = 86_400.0;
     let floor = AUG_3_NOON - 2.0 * day;
-    let msgs = vec![at(AUG_3_NOON), at(AUG_3_NOON - day), at(floor)];
-    let created = floor as i64 - 3 * 86_400;
+    let d = dates(&[at(AUG_3_NOON), at(AUG_3_NOON - day), at(floor)], true);
+    assert_eq!(d.days, vec!["2026-08-03", "2026-08-02", "2026-08-01"]);
+    assert!(d.below_floor("2019-01-01", BORN), "older than the floor");
+    assert!(
+        !d.below_floor("2026-08-01", BORN),
+        "the floor itself is listed"
+    );
+    assert!(
+        !d.below_floor("2026-08-02", BORN),
+        "inside the walked range: the walk already answered"
+    );
+    assert!(
+        !d.below_floor("2026-08-04", BORN),
+        "newer than anything seen, so not the unexplored region either"
+    );
+}
 
-    assert_eq!(
-        complete_days(&msgs, true),
-        vec!["2026-08-03", "2026-08-02"],
-        "the floor's own day was not seen whole"
+/// The region below the floor is bounded underneath too. Without `created` every
+/// date back to year 1 is a `conversations.history` call that can only come back
+/// empty — the calendar this replaced had exactly this floor, and dropping it
+/// turned a free refusal into a request.
+#[test]
+fn nothing_older_than_the_conversation_is_worth_asking_about() {
+    let day = 86_400.0;
+    let d = dates(&[at(AUG_3_NOON), at(AUG_3_NOON - 2.0 * day)], true);
+    assert!(
+        d.below_floor("2018-01-02", BORN),
+        "after the conversation began and below the floor"
     );
-    let dates = scan_dates(&msgs, true, created);
-    assert_eq!(
-        dates,
-        vec![
-            "2026-08-03",
-            "2026-08-02",
-            "2026-08-01",
-            "2026-07-31",
-            "2026-07-30",
-            "2026-07-29"
-        ],
-        "the exact days, then the range, meeting once at the floor"
+    assert!(
+        d.below_floor("2018-01-01", BORN),
+        "the day it was created can hold its first message"
     );
-    let mut unique = dates.clone();
-    unique.sort_unstable();
-    unique.dedup();
-    assert_eq!(unique.len(), dates.len(), "no day listed twice: {dates:?}");
+    assert!(!d.below_floor("2017-12-31", BORN), "before it existed");
+    assert!(
+        !d.below_floor("2019-01-01", 0),
+        "an unreadable `created` closes the region rather than opening it"
+    );
+}
+
+/// Only a `yyyy-mm-dd` reaches the tree. This matters beyond tidiness: dates are
+/// compared as strings, and chrono accepts signed and space-padded years whose
+/// first byte sorts below every digit — so `+12026-08-03` would read as older than
+/// any floor and turn into a request no real date could.
+#[test]
+fn only_a_canonical_date_is_a_date() {
+    assert!(is_date("2026-08-03"));
+    for s in [
+        "+12026-08-03",
+        "-0001-08-03",
+        " 2026-08-03",
+        "2026-8-3",
+        "999-01-01",
+        "2026-08-03 ",
+        "2026-13-01",
+    ] {
+        assert!(!is_date(s), "{s:?} must not name a directory");
+    }
+    // The same rule going out: a message whose ts widens the year past four digits
+    // would otherwise become the walk's floor and close the region below it.
+    let wide = serde_json::json!({"ts": "999999999999.000000"});
+    assert!(day_of(&wide).is_none(), "{:?}", day_of(&wide));
+}
+
+/// The oldest day of a truncated walk is listed — it does have messages — but the
+/// walk stopped somewhere inside it, so what it holds is a fragment and must not be
+/// cached as the day. A complete walk has no such day.
+#[test]
+fn a_truncated_walk_does_not_cache_its_oldest_day() {
+    let day = 86_400.0;
+    let msgs = [at(AUG_3_NOON), at(AUG_3_NOON - day)];
+    assert_eq!(
+        dates(&msgs, true).whole(),
+        ["2026-08-03".to_string()],
+        "the floor's day is listed but not stored"
+    );
+    assert_eq!(dates(&msgs, false).whole().len(), 2, "nothing was cut off");
+    // Not a panic on the degenerate case: one day, seen partly, caches nothing.
+    assert!(dates(&[at(AUG_3_NOON)], true).whole().is_empty());
 }
 
 /// A message carrying no usable `ts` would otherwise land on 1970-01-01 and hang a
@@ -790,7 +836,7 @@ fn a_truncated_scan_hands_its_oldest_day_back_to_the_calendar() {
 #[test]
 fn a_message_without_a_timestamp_adds_no_date() {
     let msgs = vec![at(AUG_3_NOON), serde_json::json!({"text": "no ts"})];
-    assert_eq!(scan_dates(&msgs, false, 0), vec!["2026-08-03"]);
+    assert_eq!(days_seen(&msgs), vec!["2026-08-03"]);
     assert!(day_of(&serde_json::json!({"ts": "0.000000"})).is_none());
 }
 
@@ -929,6 +975,18 @@ async fn slack_mock_tree_walk() {
         );
         // Newest first, so the first entry is the day to read.
         assert!(dates[0].name >= dates[dates.len() - 1].name);
+
+        // Every listed day has messages. This is the listing's whole claim, and a
+        // corpus is the only place to check it: the walk names days it saw, so an
+        // empty one means something upstream invented a directory. Free — the walk
+        // that produced the listing also filled these.
+        for d in dates.iter() {
+            let bytes = r
+                .read_bytes(&conv.child(&d.name).child(CHAT_FILE), None)
+                .await
+                .expect("chat.jsonl");
+            assert!(!bytes.is_empty(), "listed but empty: {}/{}", c.name, d.name);
+        }
 
         // Descending a day lists exactly the three children.
         let day_path = conv.child(&dates[0].name);
@@ -1219,8 +1277,31 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
         ));
     }
 
-    let mut empty = 0usize;
-    for d in dates.iter().take(10) {
+    // The headline claim of the listing, checked against a server rather than
+    // asserted in prose: the walk names days it saw messages on, so a listed date
+    // with nothing in it means something upstream invented one.
+    let done = timed("read every listed day");
+    let mut lines_total = 0usize;
+    for d in dates.iter() {
+        let chat = r
+            .read_bytes(&conv.child(&d.name).child(CHAT_FILE), None)
+            .await
+            .expect("chat");
+        let lines = chat
+            .split(|b| *b == b'\n')
+            .filter(|l| !l.is_empty())
+            .count();
+        assert!(
+            lines > 0,
+            "a listed date directory must never be empty: {}",
+            d.name
+        );
+        lines_total += lines;
+    }
+    done(format!("{} days, {lines_total} messages", dates.len()));
+
+    // Then the newest day in full: its three children, a thread, an attachment.
+    if let Some(d) = dates.first() {
         let day = conv.child(&d.name);
         let done = timed("day listing");
         let children = names(&r.readdir(&day).await.expect("day"));
@@ -1245,15 +1326,6 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
             r.stat(&day.child(CHAT_FILE)).await.expect("stat chat").size,
             chat.len() as u64
         );
-        if lines == 0 {
-            // Only the stretch below the walk's floor is listed by the calendar,
-            // so a quiet day here means this conversation has more history than
-            // SCAN_PAGES reaches. Counted rather than asserted on: which it is
-            // depends on the workspace.
-            empty += 1;
-            println!("  {} is quiet (below the walk's floor)", d.name);
-            continue;
-        }
 
         // One directory per thread, each shaped exactly like a day — so reading a
         // thread is the same three steps as reading a day.
@@ -1320,8 +1392,5 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
             assert_eq!(head, whole[..n as usize], "ranged read must match");
             println!("  ranged read of {n} bytes matched");
         }
-        println!("  {empty} of the days tried were quiet");
-        return;
     }
-    println!("  the newest {empty} days were all empty");
 }
