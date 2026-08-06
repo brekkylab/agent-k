@@ -627,6 +627,34 @@ fn files_without_bytes_are_not_listed() {
     assert!(ok.mtime.is_some());
 }
 
+/// A thread's mtime is its last reply, not its first message: `latest_reply` rides
+/// along on the root, so a thread that grew all week sorts by when it grew rather
+/// than by the day it began. `stat` and the listing read it from the same place,
+/// which is what keeps them from disagreeing about one directory.
+#[test]
+fn a_thread_is_timestamped_by_its_last_reply() {
+    let t = ThreadRef {
+        ts: "1785737875.341929".into(),
+        latest: Some(1_785_740_143.024_019),
+    };
+    assert_eq!(t.mtime(), ts_time(1_785_740_143.024_019));
+
+    // No `latest_reply`: the thread's own start, rather than nothing.
+    let t = ThreadRef {
+        ts: "1785737875.341929".into(),
+        latest: None,
+    };
+    assert_eq!(t.mtime(), ts_time(1_785_737_875.341_929));
+
+    // Neither parses: no mtime rather than the epoch, which `ls -l` would show as
+    // 1970 and a change-detector would read as ancient.
+    let t = ThreadRef {
+        ts: "not-a-ts".into(),
+        latest: None,
+    };
+    assert!(t.mtime().is_none());
+}
+
 // ---- dates ----------------------------------------------------------------
 
 /// 2026-08-03T12:00:00Z — midday, so the fixture doesn't sit on a day boundary

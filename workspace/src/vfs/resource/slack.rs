@@ -118,10 +118,23 @@ struct Day {
     files: Vec<FileMeta>,
 }
 
-/// A thread as the day's listing knows it: just its root ts. That names the
-/// directory, and everything inside it comes from reading the thread.
+/// A thread as the day's listing knows it: the root ts that names its directory,
+/// and when it was last replied to.
 struct ThreadRef {
     ts: String,
+    /// `latest_reply`, which `conversations.history` already sends on the root.
+    /// Without it a thread's mtime is the moment it *started*, so one that grew all
+    /// week still showed the day it began and `ls -lt` sorted by the wrong thing.
+    latest: Option<f64>,
+}
+
+impl ThreadRef {
+    /// Last activity, falling back to the thread's own start.
+    fn mtime(&self) -> Option<SystemTime> {
+        self.latest
+            .or_else(|| self.ts.parse().ok())
+            .and_then(ts_time)
+    }
 }
 
 /// One thread, from a single `conversations.replies` call.
@@ -598,7 +611,13 @@ impl SlackResource {
             if m.get("reply_count").and_then(Value::as_u64).unwrap_or(0) > 0
                 && let Some(t) = m.get("ts").and_then(Value::as_str)
             {
-                threads.push(ThreadRef { ts: t.to_string() });
+                threads.push(ThreadRef {
+                    ts: t.to_string(),
+                    latest: m
+                        .get("latest_reply")
+                        .and_then(Value::as_str)
+                        .and_then(|s| s.parse().ok()),
+                });
             }
             for f in m
                 .get("files")
@@ -745,11 +764,23 @@ impl SlackResource {
         }
     }
 
-    /// The scope's mtime: its newest message, falling back to the day's midnight
-    /// (or the thread's own start).
+    /// The scope's newest message: a thread's last reply, or a day's last root,
+    /// falling back to the day's midnight.
+    ///
+    /// A thread's comes from the day's listing, which every caller here has already
+    /// fetched through `require_scope` — and taking it from there rather than from
+    /// the path is what keeps `stat` agreeing with `readdir`.
     async fn scope_mtime(&self, s: &Scope) -> Option<SystemTime> {
         match &s.ts {
-            Some(ts) => ts.parse::<f64>().ok().and_then(ts_time),
+            Some(ts) => self
+                .day(&s.id, &s.date)
+                .await
+                .ok()?
+                .threads
+                .iter()
+                .find(|t| &t.ts == ts)
+                .and_then(ThreadRef::mtime)
+                .or_else(|| ts.parse::<f64>().ok().and_then(ts_time)),
             None => {
                 let day = self.day(&s.id, &s.date).await.ok()?;
                 day.newest.and_then(ts_time).or_else(|| date_mtime(&s.date))
@@ -869,7 +900,7 @@ impl Resource for SlackResource {
                     .await?
                     .threads
                     .iter()
-                    .map(|t| dir(&t.ts, t.ts.parse::<f64>().ok().and_then(ts_time)))
+                    .map(|t| dir(&t.ts, t.mtime()))
                     .collect())
             }
             Node::Files(s) => Ok(self
