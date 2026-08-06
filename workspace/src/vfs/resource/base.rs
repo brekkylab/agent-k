@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use crate::vfs::error::{ResourceError, ResourceResult};
 use crate::vfs::path::MountPath;
 
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FileKind {
     #[default]
@@ -122,5 +123,18 @@ pub trait Resource: Send + Sync {
     /// System-prompt section describing this mount's layout and commands.
     fn prompt(&self) -> &str {
         ""
+    }
+
+
+
+    /// Whether `readdir` returns a *complete* listing of a directory. When true,
+    /// a fresh parent listing that lacks a name proves that name doesn't exist,
+    /// so the cache can answer `stat` of a missing child with `NotFound` without
+    /// a network probe (negative caching). Gmail listings come from a TTL-cached
+    /// index (optionally capped via `index_cap`), so a date/message absent from
+    /// a listing may still exist and must be probed — it returns `false`.
+    /// Default: `true`.
+    fn listings_complete(&self) -> bool {
+        true
     }
 }

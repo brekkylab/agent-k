@@ -3099,6 +3099,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "html2text"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1c97eea9d3e6524d8d2a4643ce0e3135500c4c7ca1d02393a485f871bef69d8"
+dependencies = [
+ "html5ever",
+ "tendril",
+ "thiserror 2.0.19",
+ "unicode-width",
+]
+
+[[package]]
 name = "html5ever"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4672,7 +4684,7 @@ dependencies = [
  "libc",
  "libloading 0.8.9",
  "log",
- "lru 0.16.4",
+ "lru 0.18.1",
  "msb-imago",
  "msb_krun_arch",
  "msb_krun_hvf",
@@ -9287,12 +9299,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "dotenvy",
+ "fastrand",
  "fuser",
  "futures",
  "futures-util",
+ "html2text",
  "libc",
  "object_store",
  "reqwest",
