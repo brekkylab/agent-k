@@ -30,18 +30,24 @@ fn main() {
     let target = format!("{arch}-unknown-linux-musl");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
 
+    let linker = bundled_rust_lld().unwrap_or_else(|| PathBuf::from("lld"));
+    let encoded_rustflags = format!(
+        "-Clinker={}\u{1f}-Clinker-flavor=ld.lld",
+        linker.to_string_lossy()
+    );
     let output = Command::new(&cargo)
         .args(["build", "--release", "--target", &target, "--manifest-path"])
         .arg(pump_dir.join("Cargo.toml"))
-        // Rust's bundled lld links the musl target without an external toolchain
-        // (works from a macOS build host too).
-        .env("RUSTFLAGS", "-C linker-flavor=ld.lld")
+        // Use the rustup toolchain's bundled rust-lld directly. Merely selecting
+        // the ld.lld flavor still makes rustc search PATH for an `lld` binary,
+        // which rustup does not install there.
+        .env("CARGO_ENCODED_RUSTFLAGS", encoded_rustflags)
         // Cargo sets these for build-script children; leaving them would make the
         // sub-build inherit the OUTER build's flags/target-dir/wrapper — most
-        // importantly `CARGO_ENCODED_RUSTFLAGS`, which conflicts with the
-        // `RUSTFLAGS` we set ("both … were set"). Clear them so the pump builds
-        // in its own workspace with just our lld flag.
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        // importantly `RUSTFLAGS`, which conflicts with the encoded flags above.
+        // Clear them so the pump builds in its own workspace with just our lld
+        // configuration.
+        .env_remove("RUSTFLAGS")
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
@@ -70,4 +76,29 @@ fn main() {
             );
         }
     }
+}
+
+fn bundled_rust_lld() -> Option<PathBuf> {
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let host = std::env::var("HOST").ok()?;
+    let output = Command::new(rustc)
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let executable = if cfg!(windows) {
+        "rust-lld.exe"
+    } else {
+        "rust-lld"
+    };
+    let linker = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim())
+        .join("lib")
+        .join("rustlib")
+        .join(host)
+        .join("bin")
+        .join(executable);
+    linker.is_file().then_some(linker)
 }

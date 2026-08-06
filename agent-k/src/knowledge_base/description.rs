@@ -56,10 +56,10 @@ impl HelperAgent for DescriptionAgent {
 fn build_user_message(kb_name: &str, instruction: Option<&str>, docs: &[(&str, &str)]) -> String {
     let mut s = String::new();
     s.push_str(&format!("KB name: {kb_name}\n"));
-    if let Some(instr) = instruction {
-        if !instr.trim().is_empty() {
-            s.push_str(&format!("KB instruction: {instr}\n"));
-        }
+    if let Some(instr) = instruction
+        && !instr.trim().is_empty()
+    {
+        s.push_str(&format!("KB instruction: {instr}\n"));
     }
     s.push_str(&format!("\nDocuments ({}):\n", docs.len()));
     for (_title, purpose) in docs {

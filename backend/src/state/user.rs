@@ -212,15 +212,14 @@ impl UsersState {
 }
 
 fn map_sqlx_error(e: sqlx::Error) -> StateError {
-    if let sqlx::Error::Database(ref db_err) = e {
-        if db_err
+    if let sqlx::Error::Database(ref db_err) = e
+        && (db_err
             .code()
             .map(|c| c == "2067" || c == "1555")
             .unwrap_or(false)
-            || db_err.message().contains("UNIQUE")
-        {
-            return StateError::UniqueViolation("username".to_string());
-        }
+            || db_err.message().contains("UNIQUE"))
+    {
+        return StateError::UniqueViolation("username".to_string());
     }
     StateError::Sqlx(e)
 }

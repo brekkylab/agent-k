@@ -9,29 +9,29 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppIndexRouteImport } from './routes/_app.index'
 import { Route as AppProjectsRouteImport } from './routes/_app.projects'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app.projects.index'
 import { Route as AppProjectsProjectSlugRouteImport } from './routes/_app.projects.$projectSlug'
 import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app.projects.$projectSlug.index'
-import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app.projects.$projectSlug.settings'
-import { Route as AppProjectsProjectSlugMembersRouteImport } from './routes/_app.projects.$projectSlug.members'
-import { Route as AppProjectsProjectSlugFilesRouteImport } from './routes/_app.projects.$projectSlug.files'
 import { Route as AppProjectsProjectSlugAutomationRouteImport } from './routes/_app.projects.$projectSlug.automation'
+import { Route as AppProjectsProjectSlugFilesRouteImport } from './routes/_app.projects.$projectSlug.files'
+import { Route as AppProjectsProjectSlugMembersRouteImport } from './routes/_app.projects.$projectSlug.members'
+import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app.projects.$projectSlug.settings'
 import { Route as AppProjectsProjectSlugAutomationIndexRouteImport } from './routes/_app.projects.$projectSlug.automation.index'
-import { Route as AppProjectsProjectSlugSessionsSessionPrefixRouteImport } from './routes/_app.projects.$projectSlug.sessions.$sessionPrefix'
-import { Route as AppProjectsProjectSlugAutomationNewRouteImport } from './routes/_app.projects.$projectSlug.automation.new'
 import { Route as AppProjectsProjectSlugAutomationAutomationIdRouteImport } from './routes/_app.projects.$projectSlug.automation.$automationId'
+import { Route as AppProjectsProjectSlugAutomationNewRouteImport } from './routes/_app.projects.$projectSlug.automation.new'
+import { Route as AppProjectsProjectSlugSessionsSessionPrefixRouteImport } from './routes/_app.projects.$projectSlug.sessions.$sessionPrefix'
 
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AppRoute = AppRouteImport.update({
-  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -60,16 +60,10 @@ const AppProjectsProjectSlugIndexRoute =
     path: '/',
     getParentRoute: () => AppProjectsProjectSlugRoute,
   } as any)
-const AppProjectsProjectSlugSettingsRoute =
-  AppProjectsProjectSlugSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AppProjectsProjectSlugRoute,
-  } as any)
-const AppProjectsProjectSlugMembersRoute =
-  AppProjectsProjectSlugMembersRouteImport.update({
-    id: '/members',
-    path: '/members',
+const AppProjectsProjectSlugAutomationRoute =
+  AppProjectsProjectSlugAutomationRouteImport.update({
+    id: '/automation',
+    path: '/automation',
     getParentRoute: () => AppProjectsProjectSlugRoute,
   } as any)
 const AppProjectsProjectSlugFilesRoute =
@@ -78,10 +72,16 @@ const AppProjectsProjectSlugFilesRoute =
     path: '/files',
     getParentRoute: () => AppProjectsProjectSlugRoute,
   } as any)
-const AppProjectsProjectSlugAutomationRoute =
-  AppProjectsProjectSlugAutomationRouteImport.update({
-    id: '/automation',
-    path: '/automation',
+const AppProjectsProjectSlugMembersRoute =
+  AppProjectsProjectSlugMembersRouteImport.update({
+    id: '/members',
+    path: '/members',
+    getParentRoute: () => AppProjectsProjectSlugRoute,
+  } as any)
+const AppProjectsProjectSlugSettingsRoute =
+  AppProjectsProjectSlugSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
     getParentRoute: () => AppProjectsProjectSlugRoute,
   } as any)
 const AppProjectsProjectSlugAutomationIndexRoute =
@@ -90,11 +90,11 @@ const AppProjectsProjectSlugAutomationIndexRoute =
     path: '/',
     getParentRoute: () => AppProjectsProjectSlugAutomationRoute,
   } as any)
-const AppProjectsProjectSlugSessionsSessionPrefixRoute =
-  AppProjectsProjectSlugSessionsSessionPrefixRouteImport.update({
-    id: '/sessions/$sessionPrefix',
-    path: '/sessions/$sessionPrefix',
-    getParentRoute: () => AppProjectsProjectSlugRoute,
+const AppProjectsProjectSlugAutomationAutomationIdRoute =
+  AppProjectsProjectSlugAutomationAutomationIdRouteImport.update({
+    id: '/$automationId',
+    path: '/$automationId',
+    getParentRoute: () => AppProjectsProjectSlugAutomationRoute,
   } as any)
 const AppProjectsProjectSlugAutomationNewRoute =
   AppProjectsProjectSlugAutomationNewRouteImport.update({
@@ -102,11 +102,11 @@ const AppProjectsProjectSlugAutomationNewRoute =
     path: '/new',
     getParentRoute: () => AppProjectsProjectSlugAutomationRoute,
   } as any)
-const AppProjectsProjectSlugAutomationAutomationIdRoute =
-  AppProjectsProjectSlugAutomationAutomationIdRouteImport.update({
-    id: '/$automationId',
-    path: '/$automationId',
-    getParentRoute: () => AppProjectsProjectSlugAutomationRoute,
+const AppProjectsProjectSlugSessionsSessionPrefixRoute =
+  AppProjectsProjectSlugSessionsSessionPrefixRouteImport.update({
+    id: '/sessions/$sessionPrefix',
+    path: '/sessions/$sessionPrefix',
+    getParentRoute: () => AppProjectsProjectSlugRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -212,18 +212,18 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_app': {
       id: '/_app'
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/': {
@@ -261,18 +261,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugIndexRouteImport
       parentRoute: typeof AppProjectsProjectSlugRoute
     }
-    '/_app/projects/$projectSlug/settings': {
-      id: '/_app/projects/$projectSlug/settings'
-      path: '/settings'
-      fullPath: '/projects/$projectSlug/settings'
-      preLoaderRoute: typeof AppProjectsProjectSlugSettingsRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRoute
-    }
-    '/_app/projects/$projectSlug/members': {
-      id: '/_app/projects/$projectSlug/members'
-      path: '/members'
-      fullPath: '/projects/$projectSlug/members'
-      preLoaderRoute: typeof AppProjectsProjectSlugMembersRouteImport
+    '/_app/projects/$projectSlug/automation': {
+      id: '/_app/projects/$projectSlug/automation'
+      path: '/automation'
+      fullPath: '/projects/$projectSlug/automation'
+      preLoaderRoute: typeof AppProjectsProjectSlugAutomationRouteImport
       parentRoute: typeof AppProjectsProjectSlugRoute
     }
     '/_app/projects/$projectSlug/files': {
@@ -282,11 +275,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugFilesRouteImport
       parentRoute: typeof AppProjectsProjectSlugRoute
     }
-    '/_app/projects/$projectSlug/automation': {
-      id: '/_app/projects/$projectSlug/automation'
-      path: '/automation'
-      fullPath: '/projects/$projectSlug/automation'
-      preLoaderRoute: typeof AppProjectsProjectSlugAutomationRouteImport
+    '/_app/projects/$projectSlug/members': {
+      id: '/_app/projects/$projectSlug/members'
+      path: '/members'
+      fullPath: '/projects/$projectSlug/members'
+      preLoaderRoute: typeof AppProjectsProjectSlugMembersRouteImport
+      parentRoute: typeof AppProjectsProjectSlugRoute
+    }
+    '/_app/projects/$projectSlug/settings': {
+      id: '/_app/projects/$projectSlug/settings'
+      path: '/settings'
+      fullPath: '/projects/$projectSlug/settings'
+      preLoaderRoute: typeof AppProjectsProjectSlugSettingsRouteImport
       parentRoute: typeof AppProjectsProjectSlugRoute
     }
     '/_app/projects/$projectSlug/automation/': {
@@ -296,12 +296,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugAutomationIndexRouteImport
       parentRoute: typeof AppProjectsProjectSlugAutomationRoute
     }
-    '/_app/projects/$projectSlug/sessions/$sessionPrefix': {
-      id: '/_app/projects/$projectSlug/sessions/$sessionPrefix'
-      path: '/sessions/$sessionPrefix'
-      fullPath: '/projects/$projectSlug/sessions/$sessionPrefix'
-      preLoaderRoute: typeof AppProjectsProjectSlugSessionsSessionPrefixRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRoute
+    '/_app/projects/$projectSlug/automation/$automationId': {
+      id: '/_app/projects/$projectSlug/automation/$automationId'
+      path: '/$automationId'
+      fullPath: '/projects/$projectSlug/automation/$automationId'
+      preLoaderRoute: typeof AppProjectsProjectSlugAutomationAutomationIdRouteImport
+      parentRoute: typeof AppProjectsProjectSlugAutomationRoute
     }
     '/_app/projects/$projectSlug/automation/new': {
       id: '/_app/projects/$projectSlug/automation/new'
@@ -310,12 +310,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugAutomationNewRouteImport
       parentRoute: typeof AppProjectsProjectSlugAutomationRoute
     }
-    '/_app/projects/$projectSlug/automation/$automationId': {
-      id: '/_app/projects/$projectSlug/automation/$automationId'
-      path: '/$automationId'
-      fullPath: '/projects/$projectSlug/automation/$automationId'
-      preLoaderRoute: typeof AppProjectsProjectSlugAutomationAutomationIdRouteImport
-      parentRoute: typeof AppProjectsProjectSlugAutomationRoute
+    '/_app/projects/$projectSlug/sessions/$sessionPrefix': {
+      id: '/_app/projects/$projectSlug/sessions/$sessionPrefix'
+      path: '/sessions/$sessionPrefix'
+      fullPath: '/projects/$projectSlug/sessions/$sessionPrefix'
+      preLoaderRoute: typeof AppProjectsProjectSlugSessionsSessionPrefixRouteImport
+      parentRoute: typeof AppProjectsProjectSlugRoute
     }
   }
 }
