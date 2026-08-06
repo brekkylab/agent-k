@@ -13,11 +13,9 @@ use uuid::Uuid;
 use super::WorkspacesState;
 use crate::state::{StateError, StateResult, parse_ts, parse_uuid};
 use ::workspace::{
-    FsConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config, SlackConfig,
-    WorkspaceFs,
+    FsConfig, GmailConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig, S3Config,
+    SlackConfig, WorkspaceFs,
 };
-
-const SELECT_COLUMNS: &str = "id, workspace_id, prefix, provider, config, created_at, updated_at";
 
 /// A configured external-provider mount for a workspace.
 #[derive(Clone)]
@@ -72,6 +70,7 @@ impl WorkspaceMount {
         Ok(match &self.provider {
             ProviderConfig::S3(c) => ("s3", serde_json::to_string(c)?),
             ProviderConfig::Notion(c) => ("notion", serde_json::to_string(c)?),
+            ProviderConfig::Gmail(c) => ("gmail", serde_json::to_string(c)?),
             ProviderConfig::Slack(c) => ("slack", serde_json::to_string(c)?),
         })
     }
@@ -86,6 +85,9 @@ fn decode_provider(kind: &str, config_json: &str) -> StateResult<ProviderConfig>
         "notion" => Ok(ProviderConfig::Notion(
             serde_json::from_str::<NotionConfig>(config_json)?,
         )),
+        "gmail" => Ok(ProviderConfig::Gmail(serde_json::from_str::<GmailConfig>(
+            config_json,
+        )?)),
         "slack" => Ok(ProviderConfig::Slack(serde_json::from_str::<SlackConfig>(
             config_json,
         )?)),
@@ -115,9 +117,10 @@ fn normalize_prefix(prefix: &str) -> StateResult<String> {
 impl WorkspacesState {
     /// Every mount configured for `workspace_id`, ordered by prefix.
     pub async fn list_mounts(&self, workspace_id: Uuid) -> StateResult<Vec<WorkspaceMount>> {
-        let rows = sqlx::query(&format!(
-            "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC"
-        ))
+        let rows = sqlx::query(
+            "SELECT id, workspace_id, prefix, provider, config, created_at, updated_at \
+             FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC",
+        )
         .bind(workspace_id.to_string())
         .fetch_all(&self.db)
         .await?;
@@ -126,9 +129,10 @@ impl WorkspacesState {
 
     /// A single mount by id, or `None`.
     pub async fn get_mount(&self, id: Uuid) -> StateResult<Option<WorkspaceMount>> {
-        let row = sqlx::query(&format!(
-            "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE id = ?"
-        ))
+        let row = sqlx::query(
+            "SELECT id, workspace_id, prefix, provider, config, created_at, updated_at \
+             FROM workspace_mounts WHERE id = ?",
+        )
         .bind(id.to_string())
         .fetch_optional(&self.db)
         .await?;
@@ -161,7 +165,9 @@ impl WorkspacesState {
         Ok(mount)
     }
 
-    /// Delete a mount by id, returning the removed row.
+    /// Delete a mount by id, returning the removed row. Provider-side cleanup
+    /// runs after the row is gone (e.g. Gmail's mirror GC — see
+    /// [`WorkspacesState::on_mount_removed`]).
     pub async fn remove_mount(&self, id: Uuid) -> StateResult<WorkspaceMount> {
         let existing = self.get_mount(id).await?.ok_or(StateError::NotFound)?;
         sqlx::query("DELETE FROM workspace_mounts WHERE id = ?")
@@ -169,6 +175,7 @@ impl WorkspacesState {
             .execute(&self.db)
             .await?;
         self.invalidate_fs(existing.workspace_id);
+        self.on_mount_removed(&existing.provider).await;
         Ok(existing)
     }
 
@@ -177,6 +184,7 @@ impl WorkspacesState {
     pub(super) async fn build_fs(&self, workspace_id: Uuid) -> StateResult<WorkspaceFs> {
         let mut config = build_workspace_vfs(&self.db, workspace_id).await?;
         config.local_root = Some(self.get_root(workspace_id));
+        config.mirror_root = Some(self.mirror_root());
         WorkspaceFs::from_config(config)
             .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))
     }
@@ -190,9 +198,10 @@ pub(crate) async fn build_workspace_vfs(
     db: &SqlitePool,
     workspace_id: Uuid,
 ) -> StateResult<FsConfig> {
-    let rows = sqlx::query(&format!(
-        "SELECT {SELECT_COLUMNS} FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC"
-    ))
+    let rows = sqlx::query(
+        "SELECT id, workspace_id, prefix, provider, config, created_at, updated_at \
+         FROM workspace_mounts WHERE workspace_id = ? ORDER BY prefix ASC",
+    )
     .bind(workspace_id.to_string())
     .fetch_all(db)
     .await?;
@@ -202,6 +211,7 @@ pub(crate) async fn build_workspace_vfs(
         .collect::<StateResult<Vec<_>>>()?;
     Ok(FsConfig {
         local_root: None,
+        mirror_root: None,
         mounts: mounts
             .into_iter()
             .map(|m| MountSpec {
@@ -215,15 +225,14 @@ pub(crate) async fn build_workspace_vfs(
 /// Map a SQLite UNIQUE violation on `(workspace_id, prefix)` to a typed error so
 /// the router can answer `409 Conflict`. Everything else passes through.
 fn map_mount_sqlx_error(e: sqlx::Error) -> StateError {
-    if let sqlx::Error::Database(ref db_err) = e {
-        if db_err
+    if let sqlx::Error::Database(ref db_err) = e
+        && (db_err
             .code()
             .map(|c| c == "2067" || c == "1555")
             .unwrap_or(false)
-            || db_err.message().contains("UNIQUE")
-        {
-            return StateError::UniqueViolation("workspace_mounts.prefix".to_string());
-        }
+            || db_err.message().contains("UNIQUE"))
+    {
+        return StateError::UniqueViolation("workspace_mounts.prefix".to_string());
     }
     StateError::Sqlx(e)
 }
@@ -331,6 +340,54 @@ mod tests {
             state.remove_mount(created.id).await,
             Err(StateError::NotFound)
         ));
+    }
+
+    /// Removing a Gmail mount GCs the account's on-disk mirror — but only when
+    /// no other mount (case-insensitively) references the same account.
+    #[tokio::test]
+    async fn gmail_mirror_gc_on_last_reference() {
+        let (state, _tmp, wid) = fresh_state().await;
+        let gmail = |email: &str| {
+            ProviderConfig::Gmail(GmailConfig {
+                client_id: "c".into(),
+                client_secret: "s".into(),
+                refresh_token: "r".into(),
+                account_email: email.into(),
+                origins: Default::default(),
+                index_cap: None,
+            })
+        };
+        // Two mounts referencing one account — the email case differs, but
+        // both map to the same (sanitized, lowercased) mirror dir.
+        let m1 = state
+            .create_mount(WorkspaceMount::new(
+                wid,
+                "g1".into(),
+                gmail("Sync.Test@x.com"),
+            ))
+            .await
+            .unwrap();
+        let m2 = state
+            .create_mount(WorkspaceMount::new(
+                wid,
+                "g2".into(),
+                gmail("sync.test@x.com"),
+            ))
+            .await
+            .unwrap();
+
+        // A fabricated mirror as the sync would leave it.
+        let acct = ::workspace::account_mirror_dir(&state.mirror_root(), "sync.test@x.com");
+        std::fs::create_dir_all(acct.join("tree/INBOX")).unwrap();
+        std::fs::write(acct.join("state.json"), b"{}").unwrap();
+
+        // First removal: the account is still referenced — mirror stays.
+        state.remove_mount(m1.id).await.unwrap();
+        assert!(acct.exists(), "mirror kept while a reference remains");
+
+        // Last removal: mirror dir is deleted wholesale.
+        state.remove_mount(m2.id).await.unwrap();
+        assert!(!acct.exists(), "mirror removed with its last mount");
     }
 
     /// A slack mount round-trips through encode/decode (tokens + workspace

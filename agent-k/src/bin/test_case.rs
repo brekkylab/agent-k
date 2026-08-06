@@ -252,10 +252,10 @@ async fn main() -> anyhow::Result<()> {
 
 fn prepare_dir(dir: &str) {
     let path = std::path::Path::new(dir);
-    if path.exists() {
-        if let Err(e) = std::fs::remove_dir_all(path) {
-            println!("[warn] failed to clean {}: {e}", path.display());
-        }
+    if path.exists()
+        && let Err(e) = std::fs::remove_dir_all(path)
+    {
+        println!("[warn] failed to clean {}: {e}", path.display());
     }
     if let Err(e) = std::fs::create_dir_all(path) {
         println!("[warn] failed to create {}: {e}", path.display());
@@ -343,11 +343,11 @@ async fn stream_turn(agent: &mut Agent, query: Message, log_prefix: &str) -> any
         match msg.role {
             Role::Assistant => {
                 for part in &msg.contents {
-                    if let Some(t) = part.as_text() {
-                        if !t.is_empty() {
-                            println!("{t}");
-                            io::stdout().flush().ok();
-                        }
+                    if let Some(t) = part.as_text()
+                        && !t.is_empty()
+                    {
+                        println!("{t}");
+                        io::stdout().flush().ok();
                     }
                 }
                 if let Some(tcs) = &msg.tool_calls {

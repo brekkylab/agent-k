@@ -10,8 +10,10 @@ use uuid::Uuid;
 use super::knowledge::Resyncer;
 use super::{StateError, StateResult, User, parse_ts, parse_uuid};
 
+mod gmail_sync;
 mod mount;
 
+pub use gmail_sync::*;
 pub use mount::*;
 
 /// A workspace: both a database row and a directory tree on disk.
@@ -83,6 +85,9 @@ pub struct WorkspacesState {
     /// (so `/files/knowledge` writes trigger a resync) and reused by the router
     /// and periodic sweep.
     resyncer: Resyncer,
+    /// Per-account single-flight driver for Gmail mirror syncs (see
+    /// [`gmail_sync`]); spawned at mount creation and on frontend request.
+    gmail_sync: GmailSyncRunner,
 }
 
 impl WorkspacesState {
@@ -93,6 +98,7 @@ impl WorkspacesState {
             data_root,
             fs_cache: Mutex::new(HashMap::new()),
             resyncer,
+            gmail_sync: GmailSyncRunner::default(),
         }
     }
 
@@ -251,6 +257,12 @@ impl WorkspacesState {
     fn workspace_dir(&self, wid: Uuid) -> PathBuf {
         self.data_root.join("workspaces").join(wid.to_string())
     }
+
+    /// Deployment-level mailbox-mirror root (`data_root/mirror`) — outside
+    /// every workspace's `files/` tree, so sync state is never mounted.
+    fn mirror_root(&self) -> PathBuf {
+        self.data_root.join("mirror")
+    }
 }
 
 /// The change hook attached to every [`WorkspaceFs`] this backend builds: it
@@ -272,10 +284,10 @@ impl FsHook for KnowledgeHook {
                 super::knowledge::is_under_knowledge(p)
             }
         };
-        if touched {
-            if let Some(r) = &self.resyncer {
-                r.spawn_resync(self.wid);
-            }
+        if touched
+            && let Some(r) = &self.resyncer
+        {
+            r.spawn_resync(self.wid);
         }
     }
 }
@@ -304,6 +316,7 @@ pub(crate) fn workspace_fs(
         .join(wid.to_string())
         .join("files");
     config.local_root = Some(root);
+    config.mirror_root = Some(data_root.join("mirror"));
     let fs = WorkspaceFs::from_config(config)
         .map_err(|e| StateError::InvalidData(format!("workspace fs: {e}")))?;
     Ok(fs.with_hook(knowledge_hook(wid, None)))

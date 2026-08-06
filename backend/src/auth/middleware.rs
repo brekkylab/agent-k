@@ -107,7 +107,8 @@ mod tests {
             &db_url,
             tmp.path().to_path_buf(),
             jwt,
-            // No Slack app configured: these tests don't create mounts.
+            // No provider OAuth apps configured: these tests don't create mounts.
+            Default::default(),
             Default::default(),
         )
         .await

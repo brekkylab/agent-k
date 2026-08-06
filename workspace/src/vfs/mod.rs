@@ -1,4 +1,4 @@
-//! Virtual filesystem over external providers (S3, Notion).
+//! Virtual filesystem over external providers (S3, Notion, Gmail).
 //!
 //! Vendored from ailoy's `feat/vfs-provider-mounts` branch (commit 61c4c43),
 //! reduced to the **frontend-agnostic core**: the FUSE / sandbox frontends,
@@ -25,13 +25,17 @@ pub mod sandbox;
 
 mod mount;
 
-pub use accessor::{NotionConfig, S3Config, SlackConfig, SlackExchange, exchange_slack_code};
+pub use accessor::{
+    GmailConfig, GmailExchange, NotionConfig, Origins, S3Config, SlackConfig, SlackExchange,
+    exchange_gmail_code, exchange_slack_code,
+};
 pub use error::{ResourceError, ResourceResult};
 pub(crate) use mount::build_mounts;
 pub use mount::{FsConfig, LOCAL_MOUNT, Mount, MountSpec, ProviderConfig};
 pub use path::MountPath;
 pub use resource::{
-    DirEntry, FileKind, FileStat, LocalResource, NotionResource, Resource, S3Resource,
-    SlackResource,
+    DirEntry, FileKind, FileStat, GmailResource, GmailSyncDelta, GmailSyncState, LocalResource,
+    NotionResource, Resource, S3Resource, SlackResource, account_mirror_dir, mirror_tree,
+    sync_gmail_incremental, sync_gmail_mirror,
 };
 pub use sandbox::{ForwardFs, FwdEntry, FwdStat, TunnelServer};

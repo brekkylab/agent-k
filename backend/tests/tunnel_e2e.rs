@@ -20,6 +20,7 @@ use agent_k_backend::sandbox_tunnel::{mount_vfs_tunnel_in_guest, tunnel_availabl
 fn provider_fs(prefix: &str, provider: ProviderConfig) -> Arc<dyn ForwardFs> {
     let config = FsConfig {
         local_root: None,
+        mirror_root: None,
         mounts: vec![MountSpec {
             prefix: prefix.into(),
             provider,
@@ -39,14 +40,14 @@ fn s3_config_from_env() -> Option<S3Config> {
     })
 }
 
-/// Isolate microsandbox 0.5.5 state in a dedicated MSB_HOME (see the repo notes
-/// on the schema clash with a newer msb on the host).
+/// Isolate the pinned microsandbox state from other versions on the host.
 fn set_dedicated_msb_home() {
-    if std::env::var_os("MSB_HOME").is_none() {
-        if let Some(home) = std::env::var_os("HOME") {
-            let d = std::path::PathBuf::from(home).join(".microsandbox-agentk");
-            unsafe { std::env::set_var("MSB_HOME", &d) };
-        }
+    if std::env::var_os("MSB_HOME").is_none()
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let d = std::path::PathBuf::from(home).join(".microsandbox-agentk");
+        // SAFETY: called at test start before the microsandbox runtime spawns.
+        unsafe { std::env::set_var("MSB_HOME", &d) };
     }
 }
 
@@ -278,5 +279,127 @@ echo -n "head: "; timeout 20 head -c 100 "$f" 2>/dev/null; echo"#
     assert_eq!(
         cat_bytes, true_len,
         "readahead read {cat_bytes} bytes but page.json is {true_len} — clamped short?"
+    );
+}
+
+/// Everything above proves the tree is *readable* from the guest. This proves
+/// the agent actually *goes there* — that
+/// [`workspace_prompt`](agent_k_backend::sandbox_tunnel::workspace_prompt) is
+/// enough for the model to discover the mount on its own.
+///
+/// The query deliberately never says where to look: it asks for a fact that
+/// exists only in a file under the mount. Passing means the model reasoned its
+/// way from "the user's own notes" to `/mnt/workspace`; failing means it
+/// searched the home directory, gave up, or hallucinated. Needs an LLM key on
+/// top of the usual VM requirements:
+///
+///   ANTHROPIC_API_KEY=… cargo test -p agent-k-backend --test tunnel_e2e agent_finds_the_mount_unprompted -- --ignored --nocapture
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "boots a VM + spends real LLM tokens (needs ANTHROPIC_API_KEY, built pump ELF, working microsandbox)"]
+async fn agent_finds_the_mount_unprompted() {
+    use agent_k_backend::sandbox_tunnel::{GUEST_MOUNT_ROOT, workspace_prompt};
+    use ailoy::{
+        agent::{Agent, AgentState},
+        message::{Message, Part, Role},
+    };
+    use futures_util::StreamExt;
+    use tokio::sync::Mutex;
+
+    // A string that exists nowhere else — not in the prompt, not on the guest's
+    // disk, not in the model's training data. The only way into the answer is
+    // through the mount.
+    const MARKER: &str = "PLATYPUS-7";
+
+    dotenvy::dotenv().ok();
+    std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY to run this e2e check");
+    set_dedicated_msb_home();
+    assert!(tunnel_available(), "tunnel pump ELF not built");
+
+    let data_root = tempfile::tempdir().unwrap();
+    let files = data_root.path().join("files");
+    std::fs::create_dir_all(&files).unwrap();
+    std::fs::write(
+        files.join("project.md"),
+        format!("# Internal\n\nProject codename: {MARKER}\n"),
+    )
+    .unwrap();
+
+    // Local files only: this is about discovery, not about any one provider, and
+    // a plain file keeps the assertion deterministic.
+    let unified: Arc<dyn ForwardFs> = Arc::new(
+        WorkspaceFs::from_config(FsConfig {
+            local_root: Some(files),
+            mirror_root: None,
+            mounts: vec![],
+        })
+        .expect("workspace fs"),
+    );
+
+    let sandbox = build_sandbox_builder().build().await.expect("build sandbox");
+    let sandbox = Arc::new(Mutex::new(sandbox));
+
+    let _srv = {
+        let mut guard = sandbox.lock().await;
+        let console = guard.start().await.expect("start VM");
+        mount_vfs_tunnel_in_guest(
+            console,
+            unified,
+            GUEST_MOUNT_ROOT,
+            tokio::runtime::Handle::current(),
+        )
+        .await
+        .expect("mount workspace in guest")
+    };
+
+    // The same spec the backend builds for a coworker session, plus the mount
+    // section the session run loop appends once the mount is up.
+    let spec =
+        agent_k::agents::get_coworker_agent_spec("agent-k", "anthropic/claude-sonnet-4-5", false);
+    let instruction = format!(
+        "{}{}",
+        spec.instruction.clone().unwrap_or_default(),
+        workspace_prompt(&[]),
+    );
+    let spec = spec.instruction(instruction);
+    let state = AgentState::new().with_runenv(sandbox.clone());
+    let mut agent = Agent::try_with_state(spec, state).expect("build agent");
+
+    let query = Message::new(Role::User).with_contents([Part::text(
+        "What is the project codename? Answer with just the codename.",
+    )]);
+    let mut transcript = String::new();
+    let mut stream = agent.run(query);
+    while let Some(event) = stream.next().await {
+        let event = event.expect("agent turn");
+        let msg = &event.message;
+        for part in &msg.contents {
+            if let Some(t) = part.as_text() {
+                transcript.push_str(t);
+                transcript.push('\n');
+            }
+        }
+        if let Some(tcs) = &msg.tool_calls {
+            for tc in tcs {
+                if let Some((_id, name, args)) = tc.as_function() {
+                    let args = serde_json::to_string(args).unwrap_or_default();
+                    println!("  tool: {name} {args}");
+                    transcript.push_str(&args);
+                    transcript.push('\n');
+                }
+            }
+        }
+    }
+    drop(stream);
+    println!("--- transcript ---\n{transcript}");
+
+    let _ = sandbox.lock().await.stop().await;
+
+    assert!(
+        transcript.contains(GUEST_MOUNT_ROOT),
+        "the agent never touched {GUEST_MOUNT_ROOT}; it did not discover the mount"
+    );
+    assert!(
+        transcript.contains(MARKER),
+        "the agent never surfaced {MARKER}; it did not read the file through the mount"
     );
 }

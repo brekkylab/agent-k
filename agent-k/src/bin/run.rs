@@ -15,7 +15,6 @@ use agent_k::agents::{get_coworker_agent_runenv, get_coworker_agent_spec};
 use ailoy::{
     agent::{Agent, AgentState},
     message::{Message, Part, Role},
-    runenv::Sandbox,
 };
 use futures::StreamExt;
 use tokio::sync::Mutex;
@@ -106,10 +105,10 @@ async fn main() -> anyhow::Result<()> {
         COWORKER_AGENT_NAME, coworker_agent_model
     );
 
-    if let Some(input) = first_input {
-        if let Err(e) = stream_turn(&mut agent, &input).await {
-            println!("[error] {e}");
-        }
+    if let Some(input) = first_input
+        && let Err(e) = stream_turn(&mut agent, &input).await
+    {
+        println!("[error] {e}");
     }
 
     let source = if stdin_is_tty {
@@ -168,10 +167,10 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Some(line) => {
                         let input = line.trim().to_string();
-                        if !input.is_empty() {
-                            if let Err(e) = stream_turn(&mut agent, &input).await {
-                                println!("[error] {e}");
-                            }
+                        if !input.is_empty()
+                            && let Err(e) = stream_turn(&mut agent, &input).await
+                        {
+                            println!("[error] {e}");
                         }
                     }
                 }
@@ -184,10 +183,10 @@ async fn main() -> anyhow::Result<()> {
 
 fn prepare_dir(dir: &str) {
     let path = std::path::Path::new(dir);
-    if path.exists() {
-        if let Err(e) = std::fs::remove_dir_all(path) {
-            println!("[warn] failed to clean {}: {e}", path.display());
-        }
+    if path.exists()
+        && let Err(e) = std::fs::remove_dir_all(path)
+    {
+        println!("[warn] failed to clean {}: {e}", path.display());
     }
     if let Err(e) = std::fs::create_dir_all(path) {
         println!("[warn] failed to create {}: {e}", path.display());
@@ -203,11 +202,11 @@ async fn stream_turn(agent: &mut Agent, user_input: &str) -> anyhow::Result<()> 
         match msg.role {
             Role::Assistant => {
                 for part in &msg.contents {
-                    if let Some(t) = part.as_text() {
-                        if !t.is_empty() {
-                            println!("{t}");
-                            io::stdout().flush().ok();
-                        }
+                    if let Some(t) = part.as_text()
+                        && !t.is_empty()
+                    {
+                        println!("{t}");
+                        io::stdout().flush().ok();
                     }
                 }
                 if let Some(tcs) = &msg.tool_calls {
