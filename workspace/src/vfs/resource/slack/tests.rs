@@ -1213,7 +1213,10 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
             !chat.is_empty(),
             "the newest date a walk named must have messages"
         );
-        done(format!("{} bytes, prefilled by the date listing", chat.len()));
+        done(format!(
+            "{} bytes, prefilled by the date listing",
+            chat.len()
+        ));
     }
 
     let mut empty = 0usize;
