@@ -106,7 +106,6 @@ pub fn get_deep_research_agent_spec(
 /// which is where the prompt instructs the model to write its outputs.
 pub fn get_deep_research_agent_runenv(
     artifacts_dir: impl AsRef<Path>,
-    upper: impl Into<std::path::PathBuf>,
 ) -> anyhow::Result<Sandbox> {
     // Reaching the internet for user scripts requires public egress; the
     // default posture is HostOnly. `artifacts` mounts under `/workspace`, so the
@@ -117,7 +116,7 @@ pub fn get_deep_research_agent_runenv(
             host: artifacts_dir.as_ref().to_path_buf(),
         },
     );
-    Ok(Sandbox::new(upper)?
+    Ok(Sandbox::new()?
         .with_network(SandboxNetwork::Public)
         .with_workspace("/workspace", workspace))
 }

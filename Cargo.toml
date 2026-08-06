@@ -17,7 +17,7 @@ rust-version = "1.95.0"
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "22eaa1977ba6aebca27cd515ea59832a230fd39a", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "e503dec75f3712baa1b57cc4dfb9e580fa9a1dbc", features = ["sandbox"] }
 # Direct cortex dep so agent-k defines the canonical `Workspace`/`WorkspaceSpec`
 # it hands to the ailoy sandbox and serves from its own WebDAV. Same rev ailoy
 # pins, so the `WorkspaceSpec` type unifies across the boundary. VFS providers

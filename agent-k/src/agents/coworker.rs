@@ -153,14 +153,13 @@ pub fn get_coworker_agent_spec(
     spec
 }
 
-/// Build the coworker sandbox: an ephemeral microVM whose persistent state
-/// lives in `upper`, with the three host directories mounted as cortex
-/// passthrough volumes.
+/// Build the coworker sandbox: an ephemeral microVM (its writable upper is a
+/// temp image discarded on drop), with the three host directories mounted as
+/// cortex passthrough volumes.
 pub fn get_coworker_agent_runenv(
     input_dir: impl AsRef<Path>,
     shared_data_dir: impl AsRef<Path>,
     artifacts_dir: impl AsRef<Path>,
-    upper: impl Into<PathBuf>,
 ) -> anyhow::Result<Sandbox> {
     // One workspace under `/root`: `attached`/`shared`/`artifacts` land at
     // `GUEST_ATTACHED_DIR` etc. (guest_root + name), so the guest paths are
@@ -184,7 +183,7 @@ pub fn get_coworker_agent_runenv(
                 host: artifacts_dir.as_ref().to_path_buf(),
             },
         );
-    Ok(Sandbox::new(upper)?
+    Ok(Sandbox::new()?
         // The coworker installs packages and runs scripts that reach the
         // internet, so it needs public egress (default is HostOnly).
         .with_network(SandboxNetwork::Public)

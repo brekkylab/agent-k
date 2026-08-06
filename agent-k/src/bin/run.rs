@@ -32,9 +32,8 @@ enum InputSource {
 }
 
 fn main() -> anyhow::Result<()> {
-    // MUST be first: a re-invoked sandbox child boots the microVM here and
-    // never returns. Do it before creating the tokio runtime.
-    ailoy::runenv::boot_if_requested();
+    // A re-invoked sandbox boot child boots the microVM from a link-time ctor in
+    // ailoy (before this `main`), so nothing to do here.
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -107,7 +106,6 @@ async fn async_main() -> anyhow::Result<()> {
         DATA_DIR,
         SHARED_DATA_DIR,
         ARTIFACT_DIR,
-        "./test/sandbox-upper.img",
     )?);
     let state = AgentState::new().with_runenv(runenv);
     let mut agent = Agent::try_with_state(spec, state)?;

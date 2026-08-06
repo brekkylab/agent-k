@@ -411,10 +411,17 @@ impl SessionsState {
                 let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
                 let runenv: Option<Arc<Sandbox>> = if has_runenv {
                     tokio::fs::create_dir_all(&dir).await?;
-                    // ailoy owns rootfs/kernel; agent-k only picks where this
-                    // session's writable state (upper disk) lives.
-                    let sandbox = Sandbox::new(dir.join("upper.img"))
-                        .map_err(|e| anyhow::anyhow!("sandbox init: {e}"))?;
+                    // ailoy owns rootfs/kernel; agent-k only owns this session's
+                    // writable state. The upper is ephemeral per `Sandbox`, so we
+                    // persist it as a sparse snapshot across reloads: restore it
+                    // when present, else boot a fresh one on the session's first run.
+                    let snap = dir.join("upper.snap");
+                    let sandbox = if snap.exists() {
+                        Sandbox::from_snapshot(&snap)
+                    } else {
+                        Sandbox::new()
+                    }
+                    .map_err(|e| anyhow::anyhow!("sandbox init: {e}"))?;
                     // The canonical unified spec — local `files/` plus every
                     // provider mount — the same tree served over WebDAV
                     // (see [`crate::state::cortex_workspace_spec`]), mounted at
@@ -723,9 +730,14 @@ impl SessionsState {
                 }
                 .await;
 
-                // Nothing to archive: the session's filesystem state persists in
-                // its upper disk. `runenv` drops here — each tool-call booted its
-                // own ephemeral microVM.
+                // Archive the session's writable filesystem as a sparse snapshot
+                // so the next reload restores it; each tool-call booted its own
+                // ephemeral microVM off the shared upper held by `runenv`.
+                if let Some(ref sandbox) = runenv
+                    && let Err(e) = sandbox.snapshot(dir.join("upper.snap")).await
+                {
+                    tracing::error!(session = %id, "failed to snapshot sandbox upper: {e}");
+                }
                 drop(runenv);
 
                 drive
