@@ -373,6 +373,39 @@ async fn remembering_frees_what_expired() {
     assert!(m.contains_key("new"));
 }
 
+/// Days are the one cache holding message bytes, and a date listing fills it with
+/// days nothing has asked for yet, so age alone does not bound it. Eviction is
+/// oldest-first, and never the entry just stored — that one is what the caller is
+/// about to read.
+#[tokio::test]
+async fn the_day_cache_evicts_by_size_oldest_first() {
+    let big = |n: usize| {
+        Arc::new(Day {
+            chat: Arc::new(vec![b'x'; n]),
+            newest: None,
+            threads: Vec::new(),
+            files: Vec::new(),
+        })
+    };
+    let map: CacheMap<DayKey, Day> = Mutex::new(HashMap::new());
+    let key = |d: &str| ("C1".to_string(), d.to_string());
+
+    // Two thirds of the budget each: the third insert cannot leave both resident.
+    let two_thirds = DAYS_BUDGET * 2 / 3;
+    remember_day(&map, key("2026-08-01"), big(two_thirds)).await;
+    remember_day(&map, key("2026-08-02"), big(two_thirds)).await;
+    assert!(
+        !map.lock().await.contains_key(&key("2026-08-01")),
+        "the oldest goes first"
+    );
+
+    // A single day over the whole budget still survives its own insert.
+    remember_day(&map, key("2026-08-03"), big(DAYS_BUDGET + 1)).await;
+    let m = map.lock().await;
+    assert!(m.contains_key(&key("2026-08-03")));
+    assert_eq!(m.len(), 1, "everything else made room for it");
+}
+
 // ---- message rendering ----------------------------------------------------
 
 fn one_name() -> HashMap<String, String> {
@@ -689,6 +722,76 @@ fn the_date_range_covers_a_years_old_channel() {
 fn a_created_after_the_newest_message_still_lists_that_day() {
     let dates = date_range(AUG_3_NOON, AUG_3_NOON as i64 + 10 * 86_400);
     assert_eq!(dates, vec!["2026-08-03".to_string()]);
+}
+
+/// A message at `ts`, which is all the date logic reads.
+fn at(ts: f64) -> Value {
+    serde_json::json!({"ts": format!("{ts:.6}"), "text": "x"})
+}
+
+/// Why the listing walks history instead of generating a range: the same span
+/// `the_date_range_covers_a_years_old_channel` measures is 1,101 directories, and a
+/// conversation that spoke on three of those days should show three.
+#[test]
+fn a_scan_that_reached_the_start_lists_only_days_that_have_messages() {
+    let day = 86_400.0;
+    let msgs = vec![
+        at(AUG_3_NOON),
+        at(AUG_3_NOON - 2.0 * day),
+        at(AUG_3_NOON - 5.0 * day),
+    ];
+    // `created` is 1,100 days back and must not be consulted: the walk reached the
+    // start, so what it saw is the whole answer.
+    let created = AUG_3_NOON as i64 - 1_100 * 86_400;
+    assert_eq!(
+        scan_dates(&msgs, false, created),
+        vec!["2026-08-03", "2026-08-01", "2026-07-29"],
+        "newest first, and nothing for the silent days between"
+    );
+}
+
+/// A truncated walk stopped somewhere inside its oldest day, so what came back for
+/// that day is a fragment. It stays listed — the calendar range below the floor
+/// covers it — but never as a day the walk saw whole, or [`SlackResource::prefill`]
+/// would cache the fragment and serve it as the day for the whole TTL.
+#[test]
+fn a_truncated_scan_hands_its_oldest_day_back_to_the_calendar() {
+    let day = 86_400.0;
+    let floor = AUG_3_NOON - 2.0 * day;
+    let msgs = vec![at(AUG_3_NOON), at(AUG_3_NOON - day), at(floor)];
+    let created = floor as i64 - 3 * 86_400;
+
+    assert_eq!(
+        complete_days(&msgs, true),
+        vec!["2026-08-03", "2026-08-02"],
+        "the floor's own day was not seen whole"
+    );
+    let dates = scan_dates(&msgs, true, created);
+    assert_eq!(
+        dates,
+        vec![
+            "2026-08-03",
+            "2026-08-02",
+            "2026-08-01",
+            "2026-07-31",
+            "2026-07-30",
+            "2026-07-29"
+        ],
+        "the exact days, then the range, meeting once at the floor"
+    );
+    let mut unique = dates.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), dates.len(), "no day listed twice: {dates:?}");
+}
+
+/// A message carrying no usable `ts` would otherwise land on 1970-01-01 and hang a
+/// date directory half a century away from every other one.
+#[test]
+fn a_message_without_a_timestamp_adds_no_date() {
+    let msgs = vec![at(AUG_3_NOON), serde_json::json!({"text": "no ts"})];
+    assert_eq!(scan_dates(&msgs, false, 0), vec!["2026-08-03"]);
+    assert!(day_of(&serde_json::json!({"ts": "0.000000"})).is_none());
 }
 
 #[test]
@@ -1097,6 +1200,23 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
         names(&dates)
     );
 
+    // The listing walked history, so its pages are already these days' contents.
+    // Reading one without listing its directory first shows that: the bytes are
+    // there, and no request went out for them.
+    if let Some(newest) = dates.first() {
+        let done = timed("cat a day never listed");
+        let chat = r
+            .read_bytes(&conv.child(&newest.name).child(CHAT_FILE), None)
+            .await
+            .expect("the newest day");
+        assert!(
+            !chat.is_empty(),
+            "the newest date a walk named must have messages"
+        );
+        done(format!("{} bytes, prefilled by the date listing", chat.len()));
+    }
+
+    let mut empty = 0usize;
     for d in dates.iter().take(10) {
         let day = conv.child(&d.name);
         let done = timed("day listing");
@@ -1123,7 +1243,13 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
             chat.len() as u64
         );
         if lines == 0 {
-            continue; // a quiet day; try the next one
+            // Only the stretch below the walk's floor is listed by the calendar,
+            // so a quiet day here means this conversation has more history than
+            // SCAN_PAGES reaches. Counted rather than asserted on: which it is
+            // depends on the workspace.
+            empty += 1;
+            println!("  {} is quiet (below the walk's floor)", d.name);
+            continue;
         }
 
         // One directory per thread, each shaped exactly like a day — so reading a
@@ -1191,7 +1317,8 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
             assert_eq!(head, whole[..n as usize], "ranged read must match");
             println!("  ranged read of {n} bytes matched");
         }
+        println!("  {empty} of the days tried were quiet");
         return;
     }
-    println!("  the newest 10 days were all empty");
+    println!("  the newest {empty} days were all empty");
 }

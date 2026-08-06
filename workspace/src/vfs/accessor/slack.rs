@@ -448,9 +448,31 @@ impl SlackAccessor {
         params: &[(&str, String)],
         items_key: &str,
     ) -> anyhow::Result<(Vec<Value>, bool)> {
+        let (out, truncated) = self
+            .paginate_upto(method, params, items_key, MAX_PAGES)
+            .await?;
+        if truncated {
+            tracing::warn!(
+                "slack {method}: stopped at {MAX_PAGES} pages ({} items); rest omitted",
+                out.len()
+            );
+        }
+        Ok((out, truncated))
+    }
+
+    /// [`Self::paginate`] with a ceiling the caller chooses, for a walk whose cost
+    /// it budgets itself rather than one that only needs a backstop. Reaching that
+    /// ceiling is the plan, not an incident, so it is reported only in the flag.
+    async fn paginate_upto(
+        &self,
+        method: &str,
+        params: &[(&str, String)],
+        items_key: &str,
+        max_pages: usize,
+    ) -> anyhow::Result<(Vec<Value>, bool)> {
         let mut out = Vec::new();
         let mut cursor: Option<String> = None;
-        for page in 0..MAX_PAGES {
+        for _ in 0..max_pages {
             let mut p = params.to_vec();
             p.push(("limit", PAGE_LIMIT.to_string()));
             if let Some(c) = &cursor {
@@ -468,12 +490,6 @@ impl SlackAccessor {
                 .map(String::from);
             if cursor.is_none() {
                 return Ok((out, false));
-            }
-            if page + 1 == MAX_PAGES {
-                tracing::warn!(
-                    "slack {method}: stopped at {MAX_PAGES} pages ({} items); rest omitted",
-                    out.len()
-                );
             }
         }
         Ok((out, true))
@@ -536,19 +552,29 @@ impl SlackAccessor {
         Ok((msgs, truncated))
     }
 
-    /// The newest message's ts in `channel`, or `None` when it has none. One
-    /// call (`limit=1`) — the upper bound of the channel's date range.
-    pub async fn latest_message_ts(&self, channel: &str) -> anyhow::Result<Option<f64>> {
-        let v = self
-            .call(
+    /// A conversation's history from its newest message backwards, at most
+    /// `max_pages` pages, returned oldest-first. The flag is true when the walk
+    /// stopped at that ceiling — there is older history it did not reach.
+    ///
+    /// This is how the tree learns which days a conversation *has*. Slack has no
+    /// endpoint for that question, and the alternative — a calendar range between
+    /// `created` and the newest message — invents a directory for every silent day
+    /// in between, which on a long quiet channel is nearly all of them.
+    pub async fn scan_history(
+        &self,
+        channel: &str,
+        max_pages: usize,
+    ) -> anyhow::Result<(Vec<Value>, bool)> {
+        let (mut msgs, truncated) = self
+            .paginate_upto(
                 "conversations.history",
-                &[("channel", channel.to_string()), ("limit", "1".to_string())],
+                &[("channel", channel.to_string())],
+                "messages",
+                max_pages,
             )
             .await?;
-        Ok(v.get("messages")
-            .and_then(Value::as_array)
-            .and_then(|a| a.first())
-            .map(ts_of))
+        msgs.sort_by(|a, b| ts_of(a).total_cmp(&ts_of(b)));
+        Ok((msgs, truncated))
     }
 
     /// A thread: its root followed by every reply, oldest-first.

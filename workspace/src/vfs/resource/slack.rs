@@ -8,6 +8,9 @@
 //!
 //! - **Entering a day is one call**, filling `chat.jsonl`, `threads/` and `files/`
 //!   together (see [`SlackResource::day`]).
+//! - **A conversation lists the days it has**, not every day it has existed, by
+//!   walking its history once (see [`SlackResource::dates`]). Those pages are the
+//!   days' own contents, so listing a conversation usually leaves reading it free.
 //! - **A thread is a directory, not a file**, and [`Scope`]-identical to a day.
 //!   Replies cost a `conversations.replies` each, so inlining them would spend
 //!   `1 + N` per day whether or not anything read them. It also settles where an
@@ -64,6 +67,16 @@ const TTL: Duration = Duration::from_secs(300);
 /// needs more than this wants a narrower query, not a longer list.
 const SEARCH_MAX_HITS: usize = 100;
 
+/// Pages of history a date listing walks, newest first, 200 messages a page.
+///
+/// The walk is what makes the date directories the days a conversation *has*
+/// rather than every day it has existed, and what it reads becomes those days'
+/// contents — so its cost is not additional, only paid earlier: a listing that
+/// reaches the start leaves every one of its days free to read. Ten bounds the
+/// first `ls` of a busy conversation; below the floor the walk reaches, the
+/// listing falls back to a calendar range and those days are fetched one by one.
+const SCAN_PAGES: usize = 10;
+
 const SLACK_PROMPT: &str = "\
 Slack (read-only) — the channels this person is in, their DMs, by date.
   channels/<name>__<id>/<yyyy-mm-dd>/   dms/<user>__<id>/<yyyy-mm-dd>/
@@ -90,7 +103,8 @@ Slack (read-only) — the channels this person is in, their DMs, by date.
   thread is in THAT thread's files/, never the day's. Anything not already fetched
   is a live call, and Slack throttles on rate — a few per second — so read one
   thing at a time and never recursive find or grep here. `ls` the parent instead
-  of building a path: a date directory exists for every day it has existed, and a
+  of building a path: a date directory is normally a day that has messages, but
+  far enough back in a long history they are listed by the calendar instead, and a
   quiet one's chat.jsonl is empty. A channel this person never joined is absent
   entirely, which says nothing about whether it is busy.
 
@@ -108,7 +122,8 @@ struct Conv {
     created: i64,
 }
 
-/// One channel-day, all of it from a single `conversations.history` window.
+/// One channel-day: its messages and both its child listings, assembled together
+/// by [`build_day`] from whichever `conversations.history` call covered it.
 struct Day {
     /// `chat.jsonl`: the day's top-level messages, one JSON object per line.
     chat: Arc<Vec<u8>>,
@@ -219,6 +234,8 @@ type Attempt<T> = (Instant, Option<Arc<T>>);
 /// from a quiet conversation, and storing it would hold that likeness for the
 /// whole TTL with re-reading powerless to correct it.
 type CacheMap<K, T> = Mutex<HashMap<K, Cached<T>>>;
+/// Conversation id and date — what one [`Day`] is filed under.
+type DayKey = (String, String);
 
 /// Store `value`, dropping whatever has expired on the way in.
 ///
@@ -231,6 +248,40 @@ async fn remember<K: std::hash::Hash + Eq, T>(map: &CacheMap<K, T>, key: K, valu
     map.insert(key, (Instant::now(), value));
 }
 
+/// Message bytes the day cache may hold. Every other cache here stores metadata
+/// whose size the workspace bounds, but a date listing fills this one with whole
+/// days nothing has asked for yet ([`SlackResource::prefill`]), so it is bounded
+/// by size as well as age.
+const DAYS_BUDGET: usize = 32 << 20;
+
+/// [`remember`] for days, evicting oldest-first once [`DAYS_BUDGET`] is exceeded.
+///
+/// Never the entry just stored: it is what the caller is about to read, and a day
+/// larger than the whole budget would otherwise be dropped between being fetched
+/// and being served.
+async fn remember_day(map: &CacheMap<DayKey, Day>, key: DayKey, value: Arc<Day>) {
+    let mut map = map.lock().await;
+    map.retain(|_, (at, _)| at.elapsed() < TTL);
+    map.insert(key.clone(), (Instant::now(), value));
+    let mut total: usize = map.values().map(|(_, d)| d.chat.len()).sum();
+    if total <= DAYS_BUDGET {
+        return;
+    }
+    let mut by_age: Vec<(DayKey, Instant, usize)> = map
+        .iter()
+        .filter(|(k, _)| **k != key)
+        .map(|(k, (at, d))| (k.clone(), *at, d.chat.len()))
+        .collect();
+    by_age.sort_unstable_by_key(|(_, at, _)| *at);
+    for (k, _, bytes) in by_age {
+        if total <= DAYS_BUDGET {
+            break;
+        }
+        map.remove(&k);
+        total -= bytes;
+    }
+}
+
 pub struct SlackResource {
     accessor: SlackAccessor,
     /// Section (`channels`/`dms`) → its conversations.
@@ -241,7 +292,7 @@ pub struct SlackResource {
     /// Conversation id → its date directories (newest first).
     dates: CacheMap<String, Vec<String>>,
     /// (conversation id, date) → that day, fetched once for all three children.
-    days: CacheMap<(String, String), Day>,
+    days: CacheMap<DayKey, Day>,
     /// (conversation id, root ts) → the thread's JSONL plus its own attachments.
     threads: CacheMap<(String, String), Thread>,
     /// `bot_id` → the posting app's name.
@@ -505,12 +556,17 @@ impl SlackResource {
         Err(unlistable.unwrap_or(ResourceError::NotFound))
     }
 
-    /// A conversation's date directories, newest first.
+    /// A conversation's date directories, newest first — the days it actually has,
+    /// as far back as one bounded walk reaches.
     ///
-    /// Two calls at most: one `conversations.history?limit=1` for the newest
-    /// message (the range's upper bound) and, only when no cached listing holds the
-    /// conversation, one `conversations.info` for `created`. A conversation with no
-    /// messages — or one this token cannot read — has no dates.
+    /// [`SCAN_PAGES`] pages of `conversations.history` from the newest message
+    /// backwards. Reaching the start makes the answer exact and prefills every day
+    /// in it, so reading them costs nothing more. Stopping short leaves the days
+    /// above the walk's floor exact and falls back to a calendar range below —
+    /// which is the only branch that needs `created`, and so the only one that can
+    /// spend a `conversations.info` on a conversation no cached listing holds.
+    ///
+    /// A conversation with no messages, or one this token cannot read, has no dates.
     async fn dates(&self, id: &str) -> ResourceResult<Arc<Vec<String>>> {
         if let Some((at, v)) = self.dates.lock().await.get(id)
             && at.elapsed() < TTL
@@ -518,37 +574,68 @@ impl SlackResource {
             return Ok(v.clone());
         }
         let mut cacheable = true;
-        let latest = match self.accessor.latest_message_ts(id).await {
-            Ok(t) => t,
+        let (msgs, truncated) = match self.accessor.scan_history(id, SCAN_PAGES).await {
+            Ok(v) => v,
             // The token can't read this conversation: an empty date list, not a
             // broken tree.
             Err(e) if is_read_denied(&e) => {
                 tracing::debug!("slack: history denied for {id} ({e}); listing it empty");
                 cacheable = false;
-                None
+                (Vec::new(), false)
             }
             Err(e) => return Err(backend(e)),
         };
-        let dates = match latest {
-            Some(newest) => {
-                let created = match self.cached_created(id).await {
-                    Some(c) => c,
-                    // A deep path resolved cold: the id came out of the path, so
-                    // there is no parent listing to have read it from.
-                    None => {
-                        let info = self.accessor.conversation_info(id).await.map_err(backend)?;
-                        info.get("created").and_then(Value::as_i64).unwrap_or(0)
-                    }
-                };
-                date_range(newest, created)
+        let created = if truncated {
+            match self.cached_created(id).await {
+                Some(c) => c,
+                // A deep path resolved cold: the id came out of the path, so there
+                // is no parent listing to have read it from.
+                None => {
+                    let info = self.accessor.conversation_info(id).await.map_err(backend)?;
+                    info.get("created").and_then(Value::as_i64).unwrap_or(0)
+                }
             }
-            None => Vec::new(),
+        } else {
+            0
         };
-        let dates = Arc::new(dates);
+        let whole = complete_days(&msgs, truncated);
+        let dates = Arc::new(scan_dates(&msgs, truncated, created));
         if cacheable {
+            self.prefill(id, &msgs, &whole).await;
             remember(&self.dates, id.to_string(), dates.clone()).await;
         }
         Ok(dates)
+    }
+
+    /// File the days a listing walk saw whole, so reading them costs nothing.
+    ///
+    /// `whole` is [`complete_days`], which excludes a day the walk only partly saw:
+    /// storing that one would serve a fragment as the day, and cache it as such for
+    /// the whole [`TTL`].
+    async fn prefill(&self, id: &str, msgs: &[Value], whole: &[String]) {
+        if whole.is_empty() {
+            return;
+        }
+        let names = self.user_names().await.unwrap_or_else(|e| {
+            tracing::debug!("slack: no member names ({e}); leaving ids unresolved");
+            HashMap::new()
+        });
+        // Once for the walk rather than once per day: the same apps post across
+        // days, and `bot_names` charges per distinct bot.
+        let bots = self.bot_names(msgs).await;
+        let mut by_day: HashMap<String, Vec<&Value>> = HashMap::new();
+        for m in msgs {
+            if let Some(d) = day_of(m) {
+                by_day.entry(d).or_default().push(m);
+            }
+        }
+        for date in whole {
+            let Some(roots) = by_day.remove(date) else {
+                continue;
+            };
+            let day = Arc::new(build_day(&roots, &names, &bots, false));
+            remember_day(&self.days, (id.to_string(), date.clone()), day).await;
+        }
     }
 
     /// One conversation-day: `chat.jsonl`'s bytes plus the `threads/` and
@@ -588,62 +675,14 @@ impl SlackResource {
             HashMap::new()
         });
         let bots = self.bot_names(&roots).await;
-
-        let mut chat = if truncated {
-            truncation_line("this day")
-        } else {
-            Vec::new()
-        };
-        let mut threads = Vec::new();
-        let mut files = Vec::new();
-        let mut newest: Option<f64> = None;
-        for m in &roots {
-            let ts = ts_of(m);
-            // Slack's window is inclusive at both ends, so a message landing
-            // exactly at the next midnight comes back for both days. Asking for
-            // one tick less would instead drop anything in that tick, so the
-            // window stays wide and the far edge is excluded here.
-            if ts >= next as f64 {
-                continue;
-            }
-            newest = Some(newest.map_or(ts, |n: f64| n.max(ts)));
-            chat.extend_from_slice(&message_line(m, &names, &bots));
-            // Only a root with replies gets a thread file; an empty `threads/`
-            // then truthfully means no discussion started that day.
-            if m.get("reply_count").and_then(Value::as_u64).unwrap_or(0) > 0
-                && let Some(t) = m.get("ts").and_then(Value::as_str)
-            {
-                threads.push(ThreadRef {
-                    ts: t.to_string(),
-                    latest: m
-                        .get("latest_reply")
-                        .and_then(Value::as_str)
-                        .and_then(|s| s.parse().ok()),
-                });
-            }
-            for f in m
-                .get("files")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                if let Some(meta) = file_meta(f) {
-                    files.push(meta);
-                }
-            }
-        }
-        // Two uploads can share a filename within one day; the file id is in the
-        // name, so entries stay distinct, and this only guards a repeated id.
-        dedup_names(&mut files, |f| &mut f.vfs_name);
-
-        let day = Arc::new(Day {
-            chat: Arc::new(chat),
-            newest,
-            threads,
-            files,
-        });
+        // Slack's window is inclusive at both ends, so a message landing exactly at
+        // the next midnight comes back for both days. Asking for one tick less would
+        // instead drop anything in that tick, so the window stays wide and the far
+        // edge is excluded here.
+        let roots: Vec<&Value> = roots.iter().filter(|m| ts_of(m) < next as f64).collect();
+        let day = Arc::new(build_day(&roots, &names, &bots, truncated));
         if cacheable {
-            remember(&self.days, key, day.clone()).await;
+            remember_day(&self.days, key, day.clone()).await;
         }
         Ok(day)
     }
@@ -1302,6 +1341,64 @@ fn one_line(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
 }
 
+/// Assemble one [`Day`] from its root messages: the `chat.jsonl` bytes and the
+/// `threads/` and `files/` listings that share them.
+///
+/// Shared by the two ways a day arrives — a single-day `conversations.history`
+/// window ([`SlackResource::day`]) and a slice of a range walk
+/// ([`SlackResource::prefill`]) — so a day reads the same whichever paid for it.
+fn build_day(
+    roots: &[&Value],
+    names: &HashMap<String, String>,
+    bots: &HashMap<String, String>,
+    truncated: bool,
+) -> Day {
+    let mut chat = if truncated {
+        truncation_line("this day")
+    } else {
+        Vec::new()
+    };
+    let mut threads = Vec::new();
+    let mut files = Vec::new();
+    let mut newest: Option<f64> = None;
+    for m in roots {
+        newest = Some(newest.map_or(ts_of(m), |n: f64| n.max(ts_of(m))));
+        chat.extend_from_slice(&message_line(m, names, bots));
+        // Only a root with replies gets a thread directory; an empty `threads/`
+        // then truthfully means no discussion started that day.
+        if m.get("reply_count").and_then(Value::as_u64).unwrap_or(0) > 0
+            && let Some(t) = m.get("ts").and_then(Value::as_str)
+        {
+            threads.push(ThreadRef {
+                ts: t.to_string(),
+                latest: m
+                    .get("latest_reply")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse().ok()),
+            });
+        }
+        for f in m
+            .get("files")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(meta) = file_meta(f) {
+                files.push(meta);
+            }
+        }
+    }
+    // Two uploads can share a filename within one day; the file id is in the name,
+    // so entries stay distinct, and this only guards a repeated id.
+    dedup_names(&mut files, |f| &mut f.vfs_name);
+    Day {
+        chat: Arc::new(chat),
+        newest,
+        threads,
+        files,
+    }
+}
+
 /// Serialize one message as a `.jsonl` line, with the ids a reader cannot resolve
 /// on its own turned into names.
 ///
@@ -1448,13 +1545,60 @@ fn dedup_names<T>(items: &mut [T], name: impl Fn(&mut T) -> &mut String) {
 
 // ---- time -----------------------------------------------------------------
 
-/// The dates a conversation exposes, newest first: every day from its `created` to
-/// its newest message.
+/// The UTC day a message falls on, as its directory name. `None` for a message
+/// carrying no usable `ts` — which would otherwise land on 1970-01-01 and add a
+/// date directory half a century from the rest.
+fn day_of(m: &Value) -> Option<String> {
+    let ts = ts_of(m);
+    (ts > 0.0)
+        .then(|| DateTime::from_timestamp(ts as i64, 0))
+        .flatten()
+        .map(|d| d.format("%Y-%m-%d").to_string())
+}
+
+/// The days a history walk saw in full, newest first.
 ///
-/// Slack has no "which days have messages" endpoint, so the range is generated
-/// rather than listed. It is not capped: on a paid workspace Slack still holds the
-/// whole span, and a cap would make years of history unreachable rather than
-/// merely unlisted, since search — the only other way in — is dormant.
+/// A `truncated` walk stopped somewhere inside its oldest day, so that day is
+/// dropped: what came back for it is a fragment, and neither the listing nor the
+/// cache may treat a fragment as the day. [`scan_dates`] still lists it — from the
+/// calendar range that covers everything the walk did not reach.
+fn complete_days(msgs: &[Value], truncated: bool) -> Vec<String> {
+    let mut days: Vec<String> = msgs.iter().filter_map(day_of).collect();
+    days.sort_unstable();
+    days.dedup();
+    if truncated && !days.is_empty() {
+        days.remove(0);
+    }
+    days.reverse();
+    days
+}
+
+/// A conversation's date directories, newest first: the days [`complete_days`]
+/// proved, then — only when the walk stopped short — a calendar range covering
+/// everything below them.
+///
+/// The two meet without overlapping because the range starts at the walk's oldest
+/// message, whose day `complete_days` left out.
+fn scan_dates(msgs: &[Value], truncated: bool, created: i64) -> Vec<String> {
+    let mut out = complete_days(msgs, truncated);
+    if !truncated {
+        return out;
+    }
+    let floor = msgs.iter().map(ts_of).fold(f64::INFINITY, f64::min);
+    if floor.is_finite() && floor > 0.0 {
+        out.extend(date_range(floor, created));
+    }
+    out
+}
+
+/// Every day from `created` to `newest_ts`, newest first — what a conversation
+/// exposes below the floor a history walk reached.
+///
+/// Slack has no "which days have messages" endpoint, so this stretch is generated
+/// rather than listed, and it therefore includes days with nothing in them. It is
+/// not capped: on a paid workspace Slack still holds the whole span, and a cap
+/// would make years of history unreachable rather than merely noisy, since search
+/// — the only other way in — is dormant.
 fn date_range(newest_ts: f64, created: i64) -> Vec<String> {
     let Some(end) = DateTime::from_timestamp(newest_ts as i64, 0) else {
         return Vec::new();
