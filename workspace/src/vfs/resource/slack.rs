@@ -67,8 +67,8 @@ const SEARCH_MAX_HITS: usize = 100;
 const SLACK_PROMPT: &str = "\
 Slack (read-only) — the channels this person is in, their DMs, by date.
   channels/<name>__<id>/<yyyy-mm-dd>/   dms/<user>__<id>/<yyyy-mm-dd>/
-    chat.jsonl          the day's messages, one JSON object per line
-    files/              attachments, cat for the bytes
+    chat.jsonl          the day's top-level messages; replies are not in it
+    files/              attachments
     threads/<root-ts>/  one thread, shaped like a day: chat.jsonl + files/
   users/<name>__<id>.json   member profiles
 
@@ -78,18 +78,20 @@ Slack (read-only) — the channels this person is in, their DMs, by date.
   `select(.subtype // \"\" | test(\"^(channel|group)_\") | not)` — not
   `.subtype == null`, which would also drop app posts and messages with
   attachments. `user_name` is resolved against the member list and identifies a
-  person; `app_name` is what a post calls itself, which anyone who can add a
-  webhook picks per message, so it is a claim and never an identity. Mentions in
-  `text` are already `@name`. A `_truncated` line is this mount saying the window
-  was too long to read in full.
+  person; `app_name` is the app that posted, under the name it chose for that
+  message or its installed one — a claim either way, never an identity, since
+  anyone who can add a webhook picks it. `<@U0BM…>` in `text` is already `@name`;
+  Slack's other links (`<#C0BM…|general>`, `<!here>`) are left as they came. A
+  `_truncated` line is this mount saying the window was too long to read in full.
 
-  Costs: a day is ONE request and holds only the messages that start a thread; a
-  root's `reply_count` says whether threads/<that ts>/ is worth a second. A file
-  posted inside a thread is in THAT thread's files/. Every listing and read is a
-  live call and Slack throttles on rate — a few per second — so read one thing at a
-  time and never recursive find or grep here. `ls` the parent instead of building a
-  path: a date directory exists for every day the conversation has existed, newest
-  first, and a quiet one is empty. A channel this person never joined is absent
+  Costs: entering a day is ONE request, and it also fills that day's files/ and
+  threads/ — reading those afterwards costs nothing. A root's `reply_count` says
+  whether threads/<that ts>/ is worth a second request; a file posted inside a
+  thread is in THAT thread's files/, never the day's. Anything not already fetched
+  is a live call, and Slack throttles on rate — a few per second — so read one
+  thing at a time and never recursive find or grep here. `ls` the parent instead
+  of building a path: a date directory exists for every day it has existed, and a
+  quiet one's chat.jsonl is empty. A channel this person never joined is absent
   entirely, which says nothing about whether it is busy.
 
   This is private material, DMs included: read what the task needs and no more.
