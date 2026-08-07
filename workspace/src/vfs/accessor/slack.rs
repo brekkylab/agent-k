@@ -81,9 +81,20 @@ fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
     raw.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
-/// Items per page requested. Slack's ceiling is 1000 but it recommends no more
-/// than 200 — and it is only a request: a rate-limited app gets 15 objects per
-/// `conversations.history` response regardless, so a busy day pages.
+/// Items per page requested. Slack caps `conversations.history` at 999 (the
+/// general pagination ceiling is 1000 and "may vary per method") and recommends
+/// no more than 200 — and either way it is only a request, which the docs say
+/// plainly: fewer may come back "even if the end of the conversation history
+/// hasn't been reached", and a rate-limited app gets 15 objects per response
+/// regardless. Nothing here may assume a full page.
+///
+/// A day's window and the two directory listings each tend to fit in one page.
+/// A history *walk* is the one caller bounded by pages rather than by messages,
+/// so a larger page would reach further back for the same number of requests —
+/// but how much further cannot be measured from here (neither a live workspace
+/// nor the offline corpus fills a page), while the cost is certain: every page
+/// of a walk is held in memory at once. Unmeasurable gain, measurable cost, and
+/// past Slack's own advice — so the walk asks for the same 200 as everything else.
 const PAGE_LIMIT: usize = 200;
 /// Pages one listing will walk before truncating (logged). A backstop against an
 /// unbounded cursor loop, not a budget.
@@ -284,8 +295,12 @@ pub struct SlackConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bot_token: Option<String>,
     /// The Slack workspace's own id and name, resolved at mount-create
-    /// ([`exchange_slack_code`]). Identity across token re-issues; shown in
-    /// mount info.
+    /// ([`exchange_slack_code`]).
+    ///
+    /// `team_name` is the mount's display identity and the only one of the two
+    /// the backend reports in mount info. `team_id` is stored and read by
+    /// nothing: it is the identity that survives a token re-issue and a rename,
+    /// kept so a mount can still be matched to its workspace.
     pub team_id: String,
     pub team_name: String,
     /// Alternative API origin (a mock or gateway): requests go to

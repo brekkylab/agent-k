@@ -686,6 +686,71 @@ fn a_thread_is_timestamped_by_its_last_reply() {
     assert!(t.mtime().is_none());
 }
 
+/// A profile serves an allowlist, so what `users.list` sends beyond it never
+/// reaches the tree — and a field Slack adds later stays out until someone
+/// decides it belongs, rather than appearing because nobody removed it.
+#[test]
+fn a_profile_serves_only_the_allowlist() {
+    // Shaped like a real member record: the identity fields, plus the contact
+    // details, workspace security posture and presentation that come with them.
+    // Values are placeholders; only which keys survive is under test.
+    let member = serde_json::json!({
+        "id": "U1", "name": "handle", "deleted": false, "is_bot": false,
+        "tz": "Asia/Seoul",
+        "is_admin": true, "is_owner": true, "is_restricted": false,
+        "has_2fa": true, "team_id": "T1", "color": "9f69e7", "updated": 1,
+        "profile": {
+            "display_name": "shown", "real_name": "Real Name", "title": "SRE",
+            "status_text": "in a meeting",
+            "email": "x", "phone": "x", "skype": "x",
+            "first_name": "x", "last_name": "x",
+            "image_512": "x", "status_emoji": ":x:",
+            "fields": { "Xf01": { "value": "x" } },
+        },
+    });
+    let bytes = user_profile_bytes(&member);
+    let out: Value = serde_json::from_slice(&bytes).expect("valid JSON");
+
+    let mut top: Vec<&str> = out
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    top.sort_unstable();
+    assert_eq!(top, ["deleted", "id", "is_bot", "name", "profile", "tz"]);
+
+    let mut prof: Vec<&str> = out["profile"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    prof.sort_unstable();
+    assert_eq!(prof, ["display_name", "real_name", "status_text", "title"]);
+
+    // Named one by one: these are the keys whose presence would matter, and a
+    // key-set assertion alone would not say which of them got through.
+    let json = String::from_utf8(bytes).expect("utf-8");
+    for gone in [
+        "email",
+        "phone",
+        "skype",
+        "first_name",
+        "last_name",
+        "image_512",
+        "status_emoji",
+        "fields",
+        "is_admin",
+        "is_owner",
+        "is_restricted",
+        "has_2fa",
+        "team_id",
+    ] {
+        assert!(!json.contains(gone), "{gone} reached the tree");
+    }
+}
+
 // ---- dates ----------------------------------------------------------------
 
 /// 2026-08-03T12:00:00Z — midday, so the fixture doesn't sit on a day boundary

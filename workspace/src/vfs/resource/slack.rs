@@ -12,7 +12,7 @@
 //!   walking its history once (see [`SlackResource::dates`]). Those pages are the
 //!   days' own contents, so listing a conversation usually leaves reading it free,
 //!   and no date directory in the tree is ever empty. What the walk did not reach
-//!   is unlisted but still reachable by name ([`Dates::admits`]) — listing and
+//!   is unlisted but still reachable by name ([`Dates::below_floor`]) — listing and
 //!   reachability answer different questions.
 //! - **A thread is a directory, not a file**, and [`Scope`]-identical to a day.
 //!   Replies cost a `conversations.replies` each, so inlining them would spend
@@ -83,7 +83,7 @@ const TTL: Duration = Duration::from_secs(300);
 /// needs more than this wants a narrower query, not a longer list.
 const SEARCH_MAX_HITS: usize = 100;
 
-/// Pages of history a date listing walks, newest first, 200 messages a page.
+/// Pages of history a date listing walks, newest first.
 ///
 /// The walk is what makes the date directories the days a conversation *has*
 /// rather than every day it has existed, and what it reads becomes those days'
@@ -92,7 +92,7 @@ const SEARCH_MAX_HITS: usize = 100;
 ///
 /// Ten bounds the first `ls` of a busy conversation. Below the floor it reaches,
 /// days are not listed — the walk cannot say which of them have anything — but
-/// they stay reachable by name (see [`Dates::admits`]).
+/// they stay reachable by name (see [`Dates::below_floor`]).
 const SCAN_PAGES: usize = 10;
 
 const SLACK_PROMPT: &str = "\
@@ -1133,7 +1133,7 @@ impl Resource for SlackResource {
     }
 
     /// A date listing names the days one bounded walk saw, so a day it omits may
-    /// still exist below the walk's floor ([`Dates::below_floor`]).
+    /// still exist below the walk's floor (`Dates::below_floor`).
     ///
     /// Saying otherwise is not a hint the wrapper can ignore: on `true` it answers
     /// `stat` of any child missing from a fresh parent listing with `NotFound`
@@ -1144,7 +1144,7 @@ impl Resource for SlackResource {
     ///
     /// The cost is that the wrapper drops a conversation's cached listing whenever
     /// it resolves a date that listing lacked. That is only its own copy: this
-    /// resource still holds the walk for [`TTL`], so re-listing spends no request.
+    /// resource still holds the walk for `TTL`, so re-listing spends no request.
     fn listings_complete(&self) -> bool {
         false
     }
