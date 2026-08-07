@@ -27,7 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 
 use crate::vfs::{
@@ -49,6 +49,21 @@ const USERS: &str = "users";
 /// section that cannot have both drops the second kind and asks again.
 const CHANNEL_TYPES: &[&str] = &["public_channel", "private_channel"];
 const DM_TYPES: &[&str] = &["im", "mpim"];
+
+/// What a `users/<name>__<id>.json` serves, out of the much larger record
+/// `users.list` returns.
+///
+/// An allowlist rather than a denylist, because the record is Slack's to grow: a
+/// field added upstream should stay out until someone decides it belongs, not
+/// appear in the tree because nobody removed it. What belongs is what says who is
+/// speaking — `name` is the handle, and the only part Slack keeps unique.
+///
+/// Left out: `email`, `phone` and `skype` (contact details the tree has no use
+/// for), `first_name`/`last_name` (already in `real_name`), the
+/// `is_admin`/`is_owner`/`is_restricted`/`has_2fa` flags (the workspace's security
+/// posture, not an author's identity), and the presentation fields.
+const TOP_FIELDS: &[&str] = &["id", "name", "deleted", "is_bot", "tz"];
+const PROFILE_FIELDS: &[&str] = &["display_name", "real_name", "title", "status_text"];
 
 /// The day file and its two subdirectories.
 const CHAT_FILE: &str = "chat.jsonl";
@@ -1322,7 +1337,17 @@ fn conv_label(c: &Value, user_names: &HashMap<String, String>) -> String {
 /// sizes each entry with it, so a `stat` and a read cannot disagree about a length
 /// the guest then trusts for every chunk of the file.
 fn user_profile_bytes(u: &Value) -> Vec<u8> {
-    serde_json::to_vec_pretty(u).unwrap_or_default()
+    let pick = |src: &Value, keys: &[&str]| -> Map<String, Value> {
+        keys.iter()
+            .filter_map(|k| src.get(*k).map(|v| ((*k).to_string(), v.clone())))
+            .collect()
+    };
+    let mut out = pick(u, TOP_FIELDS);
+    let profile = u.get("profile").map(|p| pick(p, PROFILE_FIELDS));
+    if let Some(p) = profile.filter(|p| !p.is_empty()) {
+        out.insert("profile".to_string(), Value::Object(p));
+    }
+    serde_json::to_vec_pretty(&Value::Object(out)).unwrap_or_default()
 }
 
 /// id → display name for a member list: the one map every rendering of a message

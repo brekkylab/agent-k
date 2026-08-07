@@ -590,9 +590,8 @@ impl SlackAccessor {
     /// whose profile the reader wants to resolve.
     ///
     /// One call answers both naming and the `users/` profiles: the response
-    /// carries each member's full profile, not just their id. `profile.email` is
-    /// among those fields only when the install granted `users:read.email`;
-    /// Slack simply omits it otherwise, so nothing here has to ask.
+    /// carries each member's whole record, not just their id. Most of it never
+    /// leaves the resource — see the allowlist a profile is rendered through.
     ///
     /// Truncation is logged and the partial returned, as for `conversations.list`:
     /// a dropped member surfaces as the unresolved id it already would have been.
