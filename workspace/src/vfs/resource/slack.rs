@@ -864,6 +864,37 @@ impl SlackResource {
         }
     }
 
+    /// The mtime for each of `dates`: the day's newest message where the listing
+    /// walk left that day cached, its midnight otherwise.
+    ///
+    /// Same rule [`Self::scope_mtime`] applies to one day, so `ls -lt` on a
+    /// conversation and a `stat` of one of its dates agree — the mismatch a
+    /// thread was deliberately spared. They can still part company after the day
+    /// cache evicts an entry: `stat` fetches and reports the real time, a listing
+    /// falls back to midnight rather than fetching every day it names.
+    ///
+    /// One lock for the whole listing. A conversation the walk covered has a
+    /// thousand dates, and taking the lock per date to answer `ls` would be a
+    /// thousand acquisitions for information already in one map.
+    async fn day_mtimes(&self, id: &str, dates: &[String]) -> Vec<Option<SystemTime>> {
+        let days = self.days.lock().await;
+        let newest: HashMap<&str, f64> = days
+            .iter()
+            .filter(|((conv, _), (at, _))| conv == id && at.elapsed() < TTL)
+            .filter_map(|((_, date), (_, day))| day.newest.map(|n| (date.as_str(), n)))
+            .collect();
+        dates
+            .iter()
+            .map(|d| {
+                newest
+                    .get(d.as_str())
+                    .copied()
+                    .and_then(ts_time)
+                    .or_else(|| date_mtime(d))
+            })
+            .collect()
+    }
+
     /// The scope's newest message: a thread's last reply, or a day's last root,
     /// falling back to the day's midnight.
     ///
@@ -970,12 +1001,13 @@ impl Resource for SlackResource {
                 // but empty conversation: `dates` soft-fails `channel_not_found`
                 // into no dates, and that answer costs a request every time.
                 self.conv_exists(&id).await?;
-                Ok(self
-                    .dates(&id)
-                    .await?
+                let dates = self.dates(&id).await?;
+                let mtimes = self.day_mtimes(&id, &dates.days).await;
+                Ok(dates
                     .days
                     .iter()
-                    .map(|d| dir(d, date_mtime(d)))
+                    .zip(mtimes)
+                    .map(|(d, mtime)| dir(d, mtime))
                     .collect())
             }
             // A day and a thread list the same two children. `threads/` only
@@ -1601,8 +1633,9 @@ fn file_meta(f: &Value) -> Option<FileMeta> {
     })
 }
 
-/// `<stem>__<file-id>.<ext>` — the extension is preserved so tools that dispatch
-/// on it (`docling`, `file`, a `*.pdf` glob) still work on a downloaded file.
+/// `<stem>__<file-id>.<ext>`. The extension is kept because a downloaded
+/// attachment should behave like the file it is: whatever the reader has for
+/// opening a `.pdf` dispatches on the name, and a glob still matches.
 fn file_blob_name(raw: &str, id: &str) -> String {
     match raw.rsplit_once('.') {
         // Only a plausible extension: a dotted stem (`v1.2 notes`) must not have

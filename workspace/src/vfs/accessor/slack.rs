@@ -155,9 +155,9 @@ pub fn is_missing_scope(e: &anyhow::Error) -> bool {
         .is_some_and(|s| s.code == "missing_scope")
 }
 
-/// Result of the mount-create code exchange. `team_name`/`team_id` are the
-/// mount's stable identity (a token can be re-issued; the workspace it points at
-/// doesn't change), shown in mount info so the UI can tell mounts apart.
+/// Result of the mount-create code exchange: the workspace this mount reads, and
+/// the credentials it reads with. A token can be re-issued, so neither token
+/// identifies the mount — the workspace does.
 pub struct SlackExchange {
     /// The installing user's token — the mount's primary credential (see
     /// [`SlackConfig::user_token`]). Present when the consent requested user
@@ -165,7 +165,12 @@ pub struct SlackExchange {
     pub user_token: Option<String>,
     /// The bot token, when the install also requested bot scopes. A fallback.
     pub bot_token: Option<String>,
+    /// Stored, not yet read. A workspace can be renamed, and `team_name` then
+    /// stops identifying the one this mount was created against; the id does not
+    /// change. Nothing compares them today.
     pub team_id: String,
+    /// The mount's display identity — the one field of the four that reaches the
+    /// API, as `ProviderInfo::Slack`.
     pub team_name: String,
 }
 
