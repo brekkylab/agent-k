@@ -9,7 +9,8 @@
 //! - **It reads as a person, not as an app**, so the credential is that person's
 //!   user token; see [`SlackConfig::user_token`].
 //! - **Tokens don't expire** unless the app opts into rotation, which this client
-//!   does not implement — a rotating app's mount would break when its token does.
+//!   does not implement and Slack does not let an app undo — a rotating app's mount
+//!   breaks every 12 hours when its token does.
 //!   The `code` exchange at mount-create is the only OAuth step.
 
 use std::time::Duration;

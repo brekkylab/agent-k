@@ -104,7 +104,8 @@ pub enum ProviderSpec {
     /// empty rather than failing, so a narrower install still works.
     ///
     /// Do **not** enable token rotation on the app: the accessor holds no refresh
-    /// loop, so a rotating token would break the mount when it expires.
+    /// loop, so a rotating token breaks the mount every 12 hours when it expires.
+    /// Slack does not let an app turn rotation back off, so this is one-way.
     ///
     /// Rate limits follow the app's distribution, and the gap is wide enough to
     /// plan around: since 2025-05-29 an app distributed commercially without
