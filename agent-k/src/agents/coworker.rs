@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use ailoy::{
     agent::AgentSpec,
-    runenv::{FileEntry, Sandbox, SandboxBuilder, VolumeMount},
+    runenv::{FileEntry, Sandbox, SandboxBuilder, SandboxNetwork, VolumeMount},
 };
 
 const XLSX_SKILL_DIR: &str = "/root/skills/xlsx";
@@ -154,10 +154,18 @@ pub async fn get_coworker_agent_runenv(
         .image("brekkylab/agent-k-libreoffice:latest")
         .cpus(8)
         .memory_mib(1024)
+        // Stated rather than inherited: ailoy's default posture is the narrow one
+        // now, and this agent installs Python packages in the guest, so it needs
+        // public egress. It reaches no host service, so no host port is granted.
+        .network(SandboxNetwork::Public)
         .mount(VolumeMount::Bind {
             host: input_dir.as_ref().to_path_buf(),
             guest: GUEST_ATTACHED_DIR.to_string(),
-            readonly: false,
+            // The user's attachments go in read-only. Output belongs in
+            // `artifacts_dir`, and a guest that can overwrite the originals can
+            // also hand a host-side parser — docling, the xlsx and pptx skills —
+            // a file of its own choosing in place of what the user uploaded.
+            readonly: true,
         })
         .mount(VolumeMount::Bind {
             host: shared_data_dir.as_ref().to_path_buf(),
