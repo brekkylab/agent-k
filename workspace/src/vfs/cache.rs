@@ -465,6 +465,15 @@ impl Resource for CachedResource {
         if let Some(entries) = self.cache.list_dir_entries(path.as_str()) {
             return Ok(entries);
         }
+        // Incremental discovery for incomplete-listing providers (gmail): if we
+        // just resolved a child its parent's (capped) listing didn't include,
+        // drop the parent listing so the next readdir re-runs and folds it in
+        // (the provider remembers visited entries). Checked before set_dir,
+        // which would otherwise mark this path as listed.
+        let discovered = !self.inner.listings_complete()
+            && !path.is_root()
+            && self.cache.is_listed(parent_of(path.as_str()))
+            && self.cache.get(path.as_str()).is_none();
         let mut entries = self.inner.readdir(path).await?;
         // Eagerly size (and content-cache) files the backend listed as 0 because
         // sizing needs a render (Notion page.json): render once here so the entry
@@ -483,6 +492,9 @@ impl Resource for CachedResource {
             }
         }
         self.cache.set_dir(path.as_str(), &entries);
+        if discovered {
+            self.cache.invalidate_dir(parent_of(path.as_str()));
+        }
         Ok(entries)
     }
 
@@ -520,8 +532,15 @@ impl Resource for CachedResource {
             Some(_) => {}
             None => {
                 // Negative cache: a fresh parent listing that lacks this path
-                // proves it does not exist — skip the network probe.
-                if !path.is_root() && self.cache.is_listed(parent_of(key)) {
+                // proves it does not exist — skip the network probe. Only valid
+                // when the provider's listings are complete; some return false
+                // (e.g. Gmail, whose date index is TTL-cached, so a just-arrived
+                // message may not be listed yet), so a missing child may still
+                // exist and must be probed.
+                if !path.is_root()
+                    && self.inner.listings_complete()
+                    && self.cache.is_listed(parent_of(key))
+                {
                     return Err(ResourceError::NotFound);
                 }
             }
@@ -541,9 +560,19 @@ impl Resource for CachedResource {
     async fn unlink(&self, path: &MountPath) -> ResourceResult<()> {
         let r = self.inner.unlink(path).await;
         if r.is_ok() {
-            // The path itself may have been a directory; drop its listing too.
-            self.cache.invalidate_dir(path.as_str());
-            self.cache.invalidate_parent(path.as_str());
+            if self.inner.listings_complete() {
+                // The path itself may have been a directory; drop its listing too.
+                self.cache.invalidate_dir(path.as_str());
+                self.cache.invalidate_parent(path.as_str());
+            } else {
+                // Incomplete-listing providers (gmail): the unlinked object can
+                // appear in listings far from `path` — the same message shows
+                // under several labels and any number of `.search` dirs — and
+                // this layer can't know which, so drop every cached listing.
+                // Cheap relative to the provider-side invalidation the mutation
+                // already triggered (gmail rebuilds its label indexes anyway).
+                self.cache.clear();
+            }
             self.content_drop(path.as_str());
         }
         r
@@ -592,7 +621,13 @@ impl Resource for CachedResource {
     fn prompt(&self) -> &str {
         self.inner.prompt()
     }
+
+
+    fn listings_complete(&self) -> bool {
+        self.inner.listings_complete()
+    }
 }
+
 
 /// Parent directory of an absolute mount-relative path: `/a/b` -> `/a`,
 /// `/a` -> `/`, `/` -> `/`.
@@ -832,6 +867,64 @@ mod tests {
         assert!(c.get("/c", &v).is_some(), "just inserted, kept");
         assert!(c.get("/b", &v).is_none(), "least-recently-used, evicted");
         assert!(c.total <= 10, "within budget");
+    }
+
+
+    // On an incomplete-listing provider (gmail), an unlink must drop EVERY
+    // cached listing — the object may be listed under paths unrelated to the
+    // unlinked one (other labels, .search dirs) — not just the parent dir.
+    #[tokio::test]
+    async fn unlink_on_incomplete_listings_drops_every_cached_listing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Incomplete {
+            readdirs: AtomicUsize,
+        }
+        #[async_trait]
+        impl Resource for Incomplete {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                Err(ResourceError::NotFound)
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+                self.readdirs.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![de("a.json", FileKind::File, 3)])
+            }
+            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+                Ok(FileStat::default())
+            }
+            async fn unlink(&self, _p: &MountPath) -> ResourceResult<()> {
+                Ok(())
+            }
+            fn listings_complete(&self) -> bool {
+                false
+            }
+        }
+        let inner = Arc::new(Incomplete {
+            readdirs: AtomicUsize::new(0),
+        });
+        let cached = CachedResource::new(inner.clone());
+        // Two unrelated dirs cached; repeats are hits.
+        cached.readdir(&MountPath::new("/l1")).await.unwrap();
+        cached.readdir(&MountPath::new("/l2")).await.unwrap();
+        cached.readdir(&MountPath::new("/l1")).await.unwrap();
+        assert_eq!(inner.readdirs.load(Ordering::SeqCst), 2, "cached");
+        // Unlink under /l2: /l1's listing must be dropped too.
+        cached
+            .unlink(&MountPath::new("/l2/a.json"))
+            .await
+            .unwrap();
+        cached.readdir(&MountPath::new("/l1")).await.unwrap();
+        assert_eq!(
+            inner.readdirs.load(Ordering::SeqCst),
+            3,
+            "unrelated listing re-fetched after unlink"
+        );
     }
 
     fn de(name: &str, kind: FileKind, size: u64) -> DirEntry {

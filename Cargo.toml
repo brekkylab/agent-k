@@ -10,9 +10,15 @@ exclude = [
     "./backend-v1",
 ]
 
+[workspace.package]
+# Matches the highest MSRV in the resolved graph (the Ailoy pin below). Declared
+# on our own packages so an unsupported toolchain names agent-k rather than only
+# a transitive git dependency. Keep in sync with rust-toolchain.toml.
+rust-version = "1.95.0"
+
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "4859a3204e5906878d8e1016911b16a984b869f2", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "2b795e06269ee42a1de852fea0fdc05ba6a8a94c", features = ["sandbox"] }
 
 # Patched fuser (branch feat/macfuse-abi): on macOS, upstream fuser emits macFUSE
 # wire structs (extra crtime/flags in fuse_attr, minor pinned to 19) that a Linux

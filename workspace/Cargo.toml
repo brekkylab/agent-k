@@ -2,13 +2,16 @@
 name = "workspace"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 
 [dependencies]
 anyhow = "1"
 async-trait = "0.1.89"
 bytes = "1"
 chrono = { version = "0.4.42", features = ["serde", "clock"] }
+base64 = "0.22"
 dotenvy = "0.15"
+fastrand = "2.4.1"
 futures = "0.3"
 futures-util = "0.3"
 # macos-no-mount: run the host FUSE engine (Session::from_fd) on a macOS host
@@ -16,6 +19,7 @@ futures-util = "0.3"
 # layout is LINUX even on macOS, so the tunnel's replies are accepted by the
 # Linux guest kernel. (Do NOT enable `macfuse-abi`.)
 fuser = { version = "0.18", default-features = false, features = ["macos-no-mount"] }
+html2text = "0.17.1"
 libc = "0.2"
 object_store = { version = "0.14", features = ["aws"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

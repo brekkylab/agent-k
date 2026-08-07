@@ -412,12 +412,19 @@ impl SessionsState {
                         .ok_or_else(|| anyhow::anyhow!("session {id} not found"))?;
                 let workspace_id =
                     parse_uuid(row.get::<String, _>("workspace_id"), "sessions.workspace_id")?;
-                let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
+                let mut spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
                 let has_runenv: bool = row.get("runenv");
 
                 // The workspace's external-provider mounts, if any. Mounted into
                 // the guest below so the agent reads them as files.
                 let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
+                // Named in the prompt below so the agent knows which sources are
+                // connected without spending a readdir to find out.
+                let sources: Vec<String> = vfs
+                    .mounts
+                    .iter()
+                    .map(|m| m.prefix.trim_start_matches('/').to_string())
+                    .collect();
 
                 if has_runenv && !tokio::fs::try_exists(&archive_path).await? {
                     anyhow::bail!(
@@ -472,8 +479,21 @@ impl SessionsState {
                 if let (Some(r), Some(srv)) = (&runenv, &vfs_tunnel) {
                     let mut sandbox = r.lock().await;
                     let console = sandbox.start().await?;
-                    crate::sandbox_tunnel::attach_vfs_tunnel_in_guest(console, srv, "/mnt/workspace")
-                        .await?;
+                    crate::sandbox_tunnel::attach_vfs_tunnel_in_guest(
+                        console,
+                        srv,
+                        crate::sandbox_tunnel::GUEST_MOUNT_ROOT,
+                    )
+                    .await?;
+                    // Only now that the mount is actually up does the agent hear
+                    // about it. Appending here rather than baking it into the
+                    // stored spec keeps a session whose mount never came up from
+                    // being told to read a path that isn't there.
+                    spec.instruction = Some(format!(
+                        "{}{}",
+                        spec.instruction.take().unwrap_or_default(),
+                        crate::sandbox_tunnel::workspace_prompt(&sources),
+                    ));
                 }
 
                 let rows = sqlx::query(

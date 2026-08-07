@@ -65,8 +65,22 @@ pub async fn run() -> std::io::Result<()> {
         .unwrap_or(DEFAULT_JWT_EXPIRY_SECS);
     let jwt = JwtConfig::new(&jwt_secret, jwt_expiry_secs);
 
+    // App-level Google OAuth client (confidential), used to exchange a Gmail
+    // mount's authorization code server-side. Absent → Gmail mounts are rejected.
+    let google_oauth = crate::state::GoogleOAuth {
+        client_id: std::env::var("GOOGLE_CLIENT_ID").ok(),
+        client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok(),
+        // One host fronting every Google service is the shape a mock deployment
+        // takes; a service that needs its own origin gets one of the per-service
+        // knobs instead.
+        origins: match std::env::var("GOOGLE_API_BASE_URL") {
+            Ok(host) if !host.trim().is_empty() => ::workspace::Origins::behind(host.trim()),
+            _ => Default::default(),
+        },
+    };
+
     let app_state = Arc::new(
-        AppState::new(&db_url, data_root, jwt)
+        AppState::new(&db_url, data_root, jwt, google_oauth)
             .await
             .expect("failed to initialise app state"),
     );
