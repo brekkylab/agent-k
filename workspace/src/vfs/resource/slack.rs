@@ -161,6 +161,14 @@ struct Dates {
     /// Days that have messages, newest first. Nothing else is listed, so a date
     /// directory in this tree is never empty.
     days: Vec<String>,
+    /// Each listed day's newest message, from the walk that named it.
+    ///
+    /// The walk reads newest-first, so it holds the *tail* of every day it
+    /// touched — including the oldest, which it stopped inside. That makes this
+    /// the one mtime source both `readdir` of a conversation and `stat` of one of
+    /// its dates can read without fetching, which is what keeps them from
+    /// disagreeing about the same directory.
+    newest: HashMap<String, f64>,
     /// The walk stopped at [`SCAN_PAGES`] rather than reaching the conversation's
     /// first message, so days older than the last of `days` may exist. They are
     /// not listed — the walk cannot say which — but they can be opened by name.
@@ -168,6 +176,12 @@ struct Dates {
 }
 
 impl Dates {
+    /// The mtime of a listed date directory. `None` for a date this walk never
+    /// saw, which is every date below its floor.
+    fn mtime_of(&self, date: &str) -> Option<SystemTime> {
+        self.newest.get(date).copied().and_then(ts_time)
+    }
+
     /// The days the walk saw in full, which are the ones safe to cache. A
     /// truncated walk holds only part of its oldest day.
     fn whole(&self) -> &[String] {
@@ -631,8 +645,10 @@ impl SlackResource {
             }
             Err(e) => return Err(backend(e)),
         };
+        let (days, newest) = days_seen(&msgs);
         let dates = Arc::new(Dates {
-            days: days_seen(&msgs),
+            days,
+            newest,
             truncated,
         });
         if cacheable {
@@ -864,37 +880,6 @@ impl SlackResource {
         }
     }
 
-    /// The mtime for each of `dates`: the day's newest message where the listing
-    /// walk left that day cached, its midnight otherwise.
-    ///
-    /// Same rule [`Self::scope_mtime`] applies to one day, so `ls -lt` on a
-    /// conversation and a `stat` of one of its dates agree — the mismatch a
-    /// thread was deliberately spared. They can still part company after the day
-    /// cache evicts an entry: `stat` fetches and reports the real time, a listing
-    /// falls back to midnight rather than fetching every day it names.
-    ///
-    /// One lock for the whole listing. A conversation the walk covered has a
-    /// thousand dates, and taking the lock per date to answer `ls` would be a
-    /// thousand acquisitions for information already in one map.
-    async fn day_mtimes(&self, id: &str, dates: &[String]) -> Vec<Option<SystemTime>> {
-        let days = self.days.lock().await;
-        let newest: HashMap<&str, f64> = days
-            .iter()
-            .filter(|((conv, _), (at, _))| conv == id && at.elapsed() < TTL)
-            .filter_map(|((_, date), (_, day))| day.newest.map(|n| (date.as_str(), n)))
-            .collect();
-        dates
-            .iter()
-            .map(|d| {
-                newest
-                    .get(d.as_str())
-                    .copied()
-                    .and_then(ts_time)
-                    .or_else(|| date_mtime(d))
-            })
-            .collect()
-    }
-
     /// The scope's newest message: a thread's last reply, or a day's last root,
     /// falling back to the day's midnight.
     ///
@@ -912,10 +897,22 @@ impl SlackResource {
                 .find(|t| &t.ts == ts)
                 .and_then(ThreadRef::mtime)
                 .or_else(|| ts.parse::<f64>().ok().and_then(ts_time)),
-            None => {
-                let day = self.day(&s.id, &s.date).await.ok()?;
-                day.newest.and_then(ts_time).or_else(|| date_mtime(&s.date))
-            }
+            // The listing walk's own number, which `readdir` of the conversation
+            // also reads — so the two cannot disagree, and neither fetches to
+            // answer. Only a date below the walk's floor has none, and that one
+            // was fetched to exist at all.
+            None => match self
+                .dates(&s.id)
+                .await
+                .ok()
+                .and_then(|d| d.mtime_of(&s.date))
+            {
+                Some(t) => Some(t),
+                None => {
+                    let day = self.day(&s.id, &s.date).await.ok()?;
+                    day.newest.and_then(ts_time).or_else(|| date_mtime(&s.date))
+                }
+            },
         }
     }
 
@@ -1002,12 +999,10 @@ impl Resource for SlackResource {
                 // into no dates, and that answer costs a request every time.
                 self.conv_exists(&id).await?;
                 let dates = self.dates(&id).await?;
-                let mtimes = self.day_mtimes(&id, &dates.days).await;
                 Ok(dates
                     .days
                     .iter()
-                    .zip(mtimes)
-                    .map(|(d, mtime)| dir(d, mtime))
+                    .map(|d| dir(d, dates.mtime_of(d)))
                     .collect())
             }
             // A day and a thread list the same two children. `threads/` only
@@ -1061,13 +1056,12 @@ impl Resource for SlackResource {
             Node::Threads { id, date } => {
                 // Exists iff its day does — which `readdir` of the conversation
                 // already listed, so this is served from that cached range.
-                self.require_scope(&Scope {
-                    id,
-                    date: date.clone(),
-                    ts: None,
-                })
-                .await?;
-                Ok(stat_dir(date_mtime(&date)))
+                let s = Scope { id, date, ts: None };
+                self.require_scope(&s).await?;
+                // Its day's mtime — the same value `readdir` put on this entry.
+                // One place per level, or `ls -l` and `stat` disagree about the
+                // same directory.
+                Ok(stat_dir(self.scope_mtime(&s).await))
             }
             // A day or a thread directory, and their `files/`: existence comes
             // from listings a walk already fetched, not from producing contents.
@@ -1692,12 +1686,18 @@ fn day_of(m: &Value) -> Option<String> {
 /// This is the whole date listing: no calendar is generated, so a date directory
 /// exists only where there is something to read. [`Dates::whole`] narrows it to
 /// the days safe to cache.
-fn days_seen(msgs: &[Value]) -> Vec<String> {
-    let mut days: Vec<String> = msgs.iter().filter_map(day_of).collect();
+fn days_seen(msgs: &[Value]) -> (Vec<String>, HashMap<String, f64>) {
+    let mut newest: HashMap<String, f64> = HashMap::new();
+    for m in msgs {
+        if let Some(d) = day_of(m) {
+            let ts = ts_of(m);
+            newest.entry(d).and_modify(|n| *n = n.max(ts)).or_insert(ts);
+        }
+    }
+    let mut days: Vec<String> = newest.keys().cloned().collect();
     days.sort_unstable();
-    days.dedup();
     days.reverse();
-    days
+    (days, newest)
 }
 
 /// `(midnight, next midnight)` of `date` as unix seconds, UTC. Both are passed to

@@ -701,10 +701,17 @@ fn at(ts: f64) -> Value {
 const BORN: i64 = 1_514_764_800;
 
 fn dates(msgs: &[Value], truncated: bool) -> Dates {
+    let (days, newest) = days_seen(msgs);
     Dates {
-        days: days_seen(msgs),
+        days,
+        newest,
         truncated,
     }
+}
+
+/// Just the day names a walk saw, newest first.
+fn seen(msgs: &[Value]) -> Vec<String> {
+    days_seen(msgs).0
 }
 
 /// The listing is what the walk saw, not the calendar between `created` and now.
@@ -721,10 +728,51 @@ fn only_days_that_have_messages_are_listed() {
         at(AUG_3_NOON - 5.0 * day),
     ];
     assert_eq!(
-        days_seen(&msgs),
+        seen(&msgs),
         vec!["2026-08-03", "2026-08-01", "2026-07-29"],
         "newest first, and nothing for the silent days between"
     );
+}
+
+/// `ls -l` of a conversation and `stat` of one of its dates read this one
+/// number, so they cannot answer differently about the same directory — the
+/// failure a single call can never show.
+///
+/// The walk has it for every day it listed, including the oldest of a truncated
+/// walk: reading newest-first leaves exactly that day's tail in hand. That day
+/// is the one `prefill` deliberately does not store, and the one whose listing
+/// used to fall back to midnight while `stat` fetched and reported the truth.
+#[test]
+fn every_listed_day_carries_the_walk_s_own_mtime() {
+    let day = 86_400.0;
+    let newest_aug3 = AUG_3_NOON + 3600.0;
+    let newest_aug2 = AUG_3_NOON - day + 60.0;
+    let d = dates(
+        &[
+            at(AUG_3_NOON),
+            at(newest_aug3),
+            at(AUG_3_NOON - day),
+            at(newest_aug2),
+        ],
+        // Truncated: the walk stopped inside 08-02, so nothing prefills it.
+        true,
+    );
+    assert_eq!(d.days, vec!["2026-08-03", "2026-08-02"]);
+
+    // The last message of each day, not the day's midnight.
+    assert_eq!(d.mtime_of("2026-08-03"), ts_time(newest_aug3));
+    assert_eq!(d.mtime_of("2026-08-02"), ts_time(newest_aug2));
+    for name in &d.days {
+        assert_ne!(
+            d.mtime_of(name),
+            date_mtime(name),
+            "{name} fell back to midnight"
+        );
+    }
+
+    // Only a date below the floor has none — the one case worth the fetch it
+    // already costs to exist at all.
+    assert!(d.mtime_of("2019-01-01").is_none());
 }
 
 /// Listing and reachability are different questions, but only where the walk
@@ -836,7 +884,7 @@ fn a_truncated_walk_does_not_cache_its_oldest_day() {
 #[test]
 fn a_message_without_a_timestamp_adds_no_date() {
     let msgs = vec![at(AUG_3_NOON), serde_json::json!({"text": "no ts"})];
-    assert_eq!(days_seen(&msgs), vec!["2026-08-03"]);
+    assert_eq!(seen(&msgs), vec!["2026-08-03"]);
     assert!(day_of(&serde_json::json!({"ts": "0.000000"})).is_none());
 }
 
@@ -1304,9 +1352,22 @@ async fn walk_newest_day(r: &SlackResource, conv: &MountPath) {
     if let Some(d) = dates.first() {
         let day = conv.child(&d.name);
         let done = timed("day listing");
-        let children = names(&r.readdir(&day).await.expect("day"));
+        let entries = r.readdir(&day).await.expect("day");
+        let children = names(&entries);
         done(format!("{children:?}"));
         assert_eq!(children, vec![CHAT_FILE, FILES_DIR, THREADS_DIR]);
+
+        // A directory's mtime has to come from one place: `ls -l` reads it out of
+        // the parent's listing and `stat` recomputes it, and the two disagreeing
+        // about the same directory is a bug no single call can show.
+        for e in entries.iter().filter(|e| matches!(e.kind, FileKind::Dir)) {
+            assert_eq!(
+                r.stat(&day.child(&e.name)).await.expect("stat").mtime,
+                e.mtime,
+                "{}: readdir and stat disagree on mtime",
+                e.name
+            );
+        }
 
         let done = timed("cat chat.jsonl");
         let chat = r
