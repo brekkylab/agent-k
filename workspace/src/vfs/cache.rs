@@ -812,15 +812,20 @@ fn purge_node(inner: &mut Inner, p: &str) {
     inner.entries.remove(p);
 }
 
-/// Drop `p`'s own listing and nothing else — not its entry, and nothing beneath
-/// it.
+/// Expire `p`'s listing and nothing else — not its entry, not its child list, and
+/// nothing beneath it.
 ///
 /// For folding a newly discovered child into an incomplete listing: that child
 /// was just listed, and caching it is the whole point of having read it, so the
 /// sweep must not reach it. [`purge_prefix`] would, since the child's key starts
 /// with `p/`.
+///
+/// Dropping the expiry is the whole job — [`IndexCache::list_dir_entries`] and
+/// [`IndexCache::is_listed`] both gate on it, so the next `readdir` refetches. The
+/// child list has to survive: [`IndexCache::set_dir`] diffs the fresh listing
+/// against it to find a child that disappeared upstream, and without it that
+/// child keeps stat'ing as present.
 fn purge_listing(inner: &mut Inner, p: &str) {
-    inner.children.remove(p);
     inner.expiry.remove(p);
 }
 
@@ -1197,6 +1202,76 @@ mod tests {
         // The parent, and only the parent, re-lists.
         ls("/c/conv").await;
         assert_eq!(hits(), 4, "/c/conv should have been invalidated");
+    }
+
+    // Re-listing a parent must leave its child list in place, because that list is
+    // what `set_dir` diffs to notice a child that disappeared upstream. Dropping
+    // it defeats `relisting_a_dir_drops_vanished_children` — the same guarantee,
+    // with a discovery on the way in.
+    #[tokio::test]
+    async fn a_discovery_leaves_the_parent_able_to_notice_a_vanished_child() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Shrinking {
+            gone: AtomicBool,
+        }
+        #[async_trait]
+        impl Resource for Shrinking {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                Err(ResourceError::NotFound)
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+                let gone = self.gone.load(Ordering::SeqCst);
+                Ok(match p.as_str() {
+                    "/c" if gone => vec![de("b", FileKind::Dir, 0)],
+                    "/c" => vec![de("a", FileKind::Dir, 0), de("b", FileKind::Dir, 0)],
+                    _ => vec![de("chat.jsonl", FileKind::File, 7)],
+                })
+            }
+            async fn stat(&self, p: &MountPath) -> ResourceResult<FileStat> {
+                if p.as_str() == "/c/a" && self.gone.load(Ordering::SeqCst) {
+                    return Err(ResourceError::NotFound);
+                }
+                Ok(FileStat {
+                    kind: FileKind::Dir,
+                    ..Default::default()
+                })
+            }
+            fn listings_complete(&self) -> bool {
+                false
+            }
+        }
+        let inner = Arc::new(Shrinking {
+            gone: AtomicBool::new(false),
+        });
+        let cached = CachedResource::new(inner.clone());
+
+        cached.readdir(&MountPath::new("/c")).await.unwrap();
+        assert!(cached.stat(&MountPath::new("/c/a")).await.is_ok());
+
+        // A child /c never listed, which folds in by re-listing /c.
+        cached
+            .readdir(&MountPath::new("/c/2019-01-01"))
+            .await
+            .unwrap();
+
+        // `a` disappears upstream; the next listing is the only place that can
+        // notice, and it has to.
+        inner.gone.store(true, Ordering::SeqCst);
+        assert_eq!(
+            cached.readdir(&MountPath::new("/c")).await.unwrap().len(),
+            1
+        );
+        assert!(
+            cached.stat(&MountPath::new("/c/a")).await.is_err(),
+            "a vanished child still stats as present"
+        );
     }
 
     fn de(name: &str, kind: FileKind, size: u64) -> DirEntry {
