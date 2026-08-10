@@ -166,10 +166,12 @@ pub trait Resource: Send + Sync {
     /// Whether `readdir` returns a *complete* listing of a directory. When true,
     /// a fresh parent listing that lacks a name proves that name doesn't exist,
     /// so the cache can answer `stat` of a missing child with `NotFound` without
-    /// a network probe (negative caching). Gmail listings come from a TTL-cached
-    /// index (optionally capped via `index_cap`), so a date/message absent from
-    /// a listing may still exist and must be probed — it returns `false`.
-    /// Default: `true`.
+    /// a network probe (negative caching).
+    ///
+    /// Slack is the only provider that returns `false`: its date directories are
+    /// the days one bounded walk of history saw, so a date the walk did not name
+    /// may still exist below where it stopped, and has to be probed rather than
+    /// refused. Default: `true`.
     fn listings_complete(&self) -> bool {
         true
     }

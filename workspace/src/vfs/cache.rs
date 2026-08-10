@@ -579,11 +579,15 @@ impl Resource for CachedResource {
         if let Some(entries) = self.cache.list_dir_entries(path.as_str()) {
             return Ok(entries);
         }
-        // Incremental discovery for incomplete-listing providers (gmail): if we
-        // just resolved a child its parent's (capped) listing didn't include,
-        // drop the parent listing so the next readdir re-runs and folds it in
-        // (the provider remembers visited entries). Checked before set_dir,
-        // which would otherwise mark this path as listed.
+        // Incremental discovery for incomplete-listing providers — slack, the only
+        // one: if we just resolved a child its parent's listing did not name,
+        // expire that listing so it stops standing as the complete answer.
+        // Checked before set_dir, which would otherwise mark this path as listed.
+        //
+        // Whether the re-run then folds the child in is the provider's business.
+        // Slack's does not: a date listing is what one bounded walk saw, and being
+        // asked for an older date does not add it. So today this buys a re-listing
+        // and no new entry — worth revisiting if it stays the only case.
         let discovered = !self.inner.listings_complete()
             && !path.is_root()
             && self.cache.is_listed(parent_of(path.as_str()))
@@ -647,10 +651,9 @@ impl Resource for CachedResource {
             None => {
                 // Negative cache: a fresh parent listing that lacks this path
                 // proves it does not exist — skip the network probe. Only valid
-                // when the provider's listings are complete; some return false
-                // (e.g. Gmail, whose date index is TTL-cached, so a just-arrived
-                // message may not be listed yet), so a missing child may still
-                // exist and must be probed.
+                // when the provider's listings are complete; slack's are not (a
+                // date its history walk did not reach goes unlisted and is still
+                // real), so for it a missing child has to be probed.
                 if !path.is_root()
                     && self.inner.listings_complete()
                     && self.cache.is_listed(parent_of(key))
@@ -704,12 +707,15 @@ impl Resource for CachedResource {
                 self.cache.invalidate_dir(path.as_str());
                 self.cache.invalidate_parent(path.as_str());
             } else {
-                // Incomplete-listing providers (gmail): the unlinked object can
-                // appear in listings far from `path` — the same message shows
-                // under several labels and any number of `.search` dirs — and
-                // this layer can't know which, so drop every cached listing.
-                // Cheap relative to the provider-side invalidation the mutation
-                // already triggered (gmail rebuilds its label indexes anyway).
+                // A provider whose listings are incomplete can show one object in
+                // listings far from `path` — under several labels, or in any
+                // number of `.search` dirs — and this layer cannot know which, so
+                // it drops every cached listing.
+                //
+                // Unreachable today: slack is the only incomplete-listing provider
+                // and it is read-only, so nothing gets here. Kept because the
+                // alternative is a writable one silently leaving the object alive
+                // in a listing nobody thought to invalidate.
                 self.cache.clear();
             }
             self.content_drop(path.as_str());
@@ -1074,9 +1080,10 @@ mod tests {
         assert!(c.total <= 10, "within budget");
     }
 
-    // On an incomplete-listing provider (gmail), an unlink must drop EVERY
-    // cached listing — the object may be listed under paths unrelated to the
-    // unlinked one (other labels, .search dirs) — not just the parent dir.
+    // On an incomplete-listing provider, an unlink must drop EVERY cached listing
+    // — the object may be listed under paths unrelated to the unlinked one (other
+    // labels, .search dirs) — not just the parent dir. No such provider is also
+    // writable today, so this pins the rule rather than a live path.
     #[tokio::test]
     async fn unlink_on_incomplete_listings_drops_every_cached_listing() {
         use std::sync::atomic::{AtomicUsize, Ordering};
