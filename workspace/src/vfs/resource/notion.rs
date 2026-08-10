@@ -165,10 +165,20 @@ impl Resource for NotionResource {
                     .await
                     .map_err(|_| ResourceError::NotFound)?;
                 Ok(FileStat {
-                    kind: if is_json { FileKind::File } else { FileKind::Dir },
+                    kind: if is_json {
+                        FileKind::File
+                    } else {
+                        FileKind::Dir
+                    },
                     size: 0,
                     mtime: page_time(&page, "last_edited_time"),
                     ctime: page_time(&page, "created_time"),
+                    // `read_bytes` renders the page and then slices: a range buys
+                    // nothing here, so a chunked read is only affordable if the first
+                    // chunk keeps the whole rendering. Saying so is what lets the
+                    // content cache hold a page bigger than its ranged-object limit
+                    // instead of re-rendering it once per chunk.
+                    serves_whole: is_json,
                     ..Default::default()
                 })
             }
@@ -506,6 +516,9 @@ fn dir(name: &str) -> DirEntry {
         ctime: None,
         created: None,
         etag: None,
+        content_type: None,
+        size_is_estimate: false,
+        serves_whole: false,
     }
 }
 
@@ -525,6 +538,9 @@ fn dir_t(
         ctime,
         created: None,
         etag: None,
+        content_type: None,
+        size_is_estimate: false,
+        serves_whole: false,
     }
 }
 
@@ -546,6 +562,13 @@ fn file(name: &str, size: u64) -> DirEntry {
         ctime: None,
         created: None,
         etag: None,
+        content_type: None,
+        size_is_estimate: false,
+        // The only file here is `page.json`, rendered whole from the API: a range buys
+        // nothing, so a chunked read has to keep what the first chunk built. `stat`
+        // says the same; saying it in the listing too is what carries it through the
+        // metadata cache.
+        serves_whole: true,
     }
 }
 

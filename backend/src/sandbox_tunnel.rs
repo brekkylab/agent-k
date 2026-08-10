@@ -18,7 +18,7 @@ use workspace::{ForwardFs, TunnelServer};
 /// Guest path the tunnel pump binary is written to.
 const GUEST_TUNNEL_BIN: &str = "/opt/ailoy/vfs-tunnel";
 
-/// Where [`mount_vfs_tunnel_in_guest`] puts the unified workspace tree inside the guest.
+/// Where [`attach_vfs_tunnel_in_guest`] puts the unified workspace tree inside the guest.
 pub const GUEST_MOUNT_ROOT: &str = "/mnt/workspace";
 
 /// The system-prompt section that tells the agent the workspace mount exists.
@@ -61,23 +61,35 @@ pub fn tunnel_available() -> bool {
     !TUNNEL_ELF.is_empty()
 }
 
-/// Start a host [`TunnelServer`] for `fs`, inject + launch the in-guest raw-FUSE
-/// pump in `console`'s sandbox, and mount at `mount_root` with the default read
-/// mode (readahead). Returns the live server (keep it alive for the mount's
-/// lifetime). The guest does NO protocol conversion — it relays raw FUSE bytes
-/// and the host runs the FUSE engine.
-pub async fn mount_vfs_tunnel_in_guest(
-    console: &impl Console,
-    fs: Arc<dyn ForwardFs>,
-    mount_root: &str,
-    rt: Handle,
-) -> anyhow::Result<TunnelServer> {
+/// Start the host [`TunnelServer`] for `fs`.
+///
+/// Separate from [`attach_vfs_tunnel_in_guest`] because the guest can only reach
+/// the server if the sandbox's network policy names its port, and that policy is
+/// fixed when the sandbox is created. So the order is: start the server, read
+/// [`TunnelServer::port`], build or restore the sandbox granting that port, then
+/// attach. Keep the returned server alive for the mount's lifetime — dropping it
+/// tears the mount down.
+pub fn spawn_vfs_tunnel(fs: Arc<dyn ForwardFs>, rt: Handle) -> anyhow::Result<TunnelServer> {
     if !tunnel_available() {
         anyhow::bail!(
             "in-guest VFS tunnel pump was not built into this binary (see backend/build.rs)"
         );
     }
-    let srv = TunnelServer::spawn(fs, rt)?;
+    TunnelServer::spawn(fs, rt)
+}
+
+/// Inject + launch the in-guest raw-FUSE pump in `console`'s sandbox and mount
+/// `srv`'s filesystem at `mount_root` with the default read mode (readahead).
+/// The guest does NO protocol conversion — it relays raw FUSE bytes and the host
+/// runs the FUSE engine.
+///
+/// The sandbox must already allow guest egress to `srv.port()` on the host; see
+/// [`spawn_vfs_tunnel`].
+pub async fn attach_vfs_tunnel_in_guest(
+    console: &impl Console,
+    srv: &TunnelServer,
+    mount_root: &str,
+) -> anyhow::Result<()> {
     // `write` creates the parent dir (/opt/ailoy) itself. The pump self-daemonizes
     // — it creates the mountpoint, clears any stale mount, mounts, and only then
     // backgrounds itself — so this single `exec` returns exactly when the mount
@@ -100,7 +112,7 @@ pub async fn mount_vfs_tunnel_in_guest(
             out.stderr.trim()
         );
     }
-    Ok(srv)
+    Ok(())
 }
 
 #[cfg(test)]

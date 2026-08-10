@@ -1,8 +1,10 @@
-//! Virtual filesystem over external providers (S3, Notion, Gmail).
+//! Virtual filesystem over external providers (S3, Notion, Gmail, GDrive, Slack).
 //!
 //! Vendored from ailoy's `feat/vfs-provider-mounts` branch (commit 61c4c43),
-//! reduced to the **frontend-agnostic core**: the FUSE / sandbox frontends,
-//! the per-agent `AgentVfs` handle, and the Google Drive accessor were dropped.
+//! reduced to the **frontend-agnostic core**: the FUSE / sandbox frontends and
+//! the per-agent `AgentVfs` handle were dropped. (The Google Drive accessor
+//! was also dropped then, and later re-added natively — exporting Workspace
+//! docs to Office formats rather than ailoy's raw-API-JSON presentation.)
 //! agent-k wraps this core in its WebDAV workspace layer (see
 //! [`crate::state`] / [`crate::router::webdav`]) instead of a FUSE mount.
 //!
@@ -17,7 +19,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod accessor;
-mod cache;
+pub(crate) mod cache;
 pub mod error;
 pub mod path;
 pub mod resource;
@@ -26,16 +28,16 @@ pub mod sandbox;
 mod mount;
 
 pub use accessor::{
-    GmailConfig, GmailExchange, NotionConfig, Origins, S3Config, SlackConfig, SlackExchange,
-    exchange_gmail_code, exchange_slack_code,
+    GdriveConfig, GdriveExchange, GmailConfig, GmailExchange, NotionConfig, Origins, S3Config,
+    SlackConfig, SlackExchange, exchange_gdrive_code, exchange_gmail_code, exchange_slack_code,
 };
 pub use error::{ResourceError, ResourceResult};
 pub(crate) use mount::build_mounts;
 pub use mount::{FsConfig, LOCAL_MOUNT, Mount, MountSpec, ProviderConfig};
 pub use path::MountPath;
 pub use resource::{
-    DirEntry, FileKind, FileStat, GmailResource, GmailSyncDelta, GmailSyncState, LocalResource,
-    NotionResource, Resource, S3Resource, SlackResource, account_mirror_dir, mirror_tree,
-    sync_gmail_incremental, sync_gmail_mirror,
+    DirEntry, FileKind, FileStat, GdriveResource, GmailResource, GmailSyncDelta, GmailSyncState,
+    LocalResource, NotionResource, Resource, S3Resource, SlackResource, account_mirror_dir,
+    mirror_tree, sync_gmail_incremental, sync_gmail_mirror,
 };
 pub use sandbox::{ForwardFs, FwdEntry, FwdStat, TunnelServer};

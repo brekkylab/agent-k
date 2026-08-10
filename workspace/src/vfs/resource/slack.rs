@@ -1763,9 +1763,17 @@ fn dir(name: &str, mtime: Option<SystemTime>) -> DirEntry {
         ctime: None,
         created: None,
         etag: None,
+        content_type: None,
+        size_is_estimate: false,
+        serves_whole: false,
     }
 }
 
+/// Every file this mount lists is ranged and exactly sized, so both flags are
+/// `false`. An attachment's length comes from the day's listing and its bytes
+/// over HTTP `Range`; a JSONL node is listed at 0 for the wrapper to resolve —
+/// the render-once convention, not an estimate — and reading a range of one
+/// slices bytes the resource already holds.
 fn file(name: &str, size: u64, mtime: Option<SystemTime>) -> DirEntry {
     DirEntry {
         name: name.to_string(),
@@ -1776,6 +1784,9 @@ fn file(name: &str, size: u64, mtime: Option<SystemTime>) -> DirEntry {
         ctime: None,
         created: None,
         etag: None,
+        content_type: None,
+        size_is_estimate: false,
+        serves_whole: false,
     }
 }
 

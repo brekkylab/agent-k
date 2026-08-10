@@ -426,58 +426,75 @@ impl SessionsState {
                     .map(|m| m.prefix.trim_start_matches('/').to_string())
                     .collect();
 
-                let runenv = if has_runenv {
-                    if !tokio::fs::try_exists(&archive_path).await? {
-                        anyhow::bail!(
-                            "session {id} marked as having a runenv but archive is missing at {}",
-                            archive_path.display()
-                        );
-                    }
-                    // A runenv always runs an in-guest FUSE forwarder (the
-                    // unified workspace mount, below), which reaches the host
-                    // forward server via host.microsandbox.internal and so needs
-                    // guest->host egress. The archive doesn't carry the network
-                    // policy, so re-apply it on restore.
-                    let sandbox =
-                        Sandbox::try_from_archive_with_network(&archive_path, SandboxNetwork::Public).await?;
-                    Some(Arc::new(Mutex::new(sandbox)))
+                if has_runenv && !tokio::fs::try_exists(&archive_path).await? {
+                    anyhow::bail!(
+                        "session {id} marked as having a runenv but archive is missing at {}",
+                        archive_path.display()
+                    );
+                }
+
+                // A runenv always runs an in-guest FUSE pump for the unified
+                // workspace mount, and it reaches the host tunnel server via
+                // host.microsandbox.internal. The server has to exist first: its
+                // port is ephemeral, and the sandbox's network policy — which is
+                // fixed at creation and re-applied on every restore — has to name
+                // that port for the guest to reach it at all. So start the server,
+                // then restore the sandbox granting its port, then attach.
+                //
+                // Held for the whole run: dropping this tears the mount down, so
+                // it is declared before `runenv` and outlives it.
+                let vfs_tunnel = if has_runenv {
+                    let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(
+                        crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
+                    );
+                    Some(crate::sandbox_tunnel::spawn_vfs_tunnel(
+                        unified,
+                        tokio::runtime::Handle::current(),
+                    )?)
                 } else {
                     None
+                };
+
+                let runenv = match &vfs_tunnel {
+                    Some(srv) => {
+                        // The archive carries no network policy, so re-apply it
+                        // here. Only the tunnel port is granted on the host: the
+                        // guest has no business reaching anything else the host
+                        // happens to be listening on.
+                        let sandbox = Sandbox::try_from_archive_with_network(
+                            &archive_path,
+                            SandboxNetwork::Public.with_host_ports([srv.port()]),
+                        )
+                        .await?;
+                        Some(Arc::new(Mutex::new(sandbox)))
+                    }
+                    None => None,
                 };
 
                 // Mount the unified workspace tree into the guest before the
                 // agent runs — local files under `files/` plus the provider
                 // mounts as siblings, the browser-WebDAV view served over FUSE
-                // at /mnt/workspace. The raw-FUSE tunnel host engine is held for
-                // the whole run; dropping it (at the end of this scope) tears the
-                // mount down.
-                let _vfs_forward = match &runenv {
-                    Some(r) => {
-                        let mut sandbox = r.lock().await;
-                        let console = sandbox.start().await?;
-                        let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(
-                            crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
-                        );
-                        let srv = crate::sandbox_tunnel::mount_vfs_tunnel_in_guest(
-                            console,
-                            unified,
-                            crate::sandbox_tunnel::GUEST_MOUNT_ROOT,
-                            tokio::runtime::Handle::current(),
-                        )
-                        .await?;
-                        // Only now that the mount is actually up does the agent
-                        // hear about it. Appending here rather than baking it
-                        // into the stored spec keeps a session whose mount never
-                        // came up from being told to read a path that isn't there.
-                        spec.instruction = Some(format!(
-                            "{}{}",
-                            spec.instruction.take().unwrap_or_default(),
-                            crate::sandbox_tunnel::workspace_prompt(&sources),
-                        ));
-                        Some(srv)
-                    }
-                    None => None,
-                };
+                // at /mnt/workspace. What keeps the mount up is `vfs_tunnel`
+                // above, not anything bound here.
+                if let (Some(r), Some(srv)) = (&runenv, &vfs_tunnel) {
+                    let mut sandbox = r.lock().await;
+                    let console = sandbox.start().await?;
+                    crate::sandbox_tunnel::attach_vfs_tunnel_in_guest(
+                        console,
+                        srv,
+                        crate::sandbox_tunnel::GUEST_MOUNT_ROOT,
+                    )
+                    .await?;
+                    // Only now that the mount is actually up does the agent hear
+                    // about it. Appending here rather than baking it into the
+                    // stored spec keeps a session whose mount never came up from
+                    // being told to read a path that isn't there.
+                    spec.instruction = Some(format!(
+                        "{}{}",
+                        spec.instruction.take().unwrap_or_default(),
+                        crate::sandbox_tunnel::workspace_prompt(&sources),
+                    ));
+                }
 
                 let rows = sqlx::query(
                     "SELECT seq, content FROM messages WHERE session_id = ? ORDER BY seq ASC",

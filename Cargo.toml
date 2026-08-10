@@ -18,7 +18,7 @@ rust-version = "1.95.0"
 
 [workspace.dependencies]
 agent-k = { path = "./agent-k" }
-ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "0767a0872e665a9a505589b8d2b498269453fe9a", features = ["sandbox"] }
+ailoy = { git = "https://github.com/brekkylab/ailoy.git", rev = "2b795e06269ee42a1de852fea0fdc05ba6a8a94c", features = ["sandbox"] }
 
 # Patched fuser (branch feat/macfuse-abi): on macOS, upstream fuser emits macFUSE
 # wire structs (extra crtime/flags in fuse_attr, minor pinned to 19) that a Linux

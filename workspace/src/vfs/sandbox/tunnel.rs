@@ -20,18 +20,19 @@
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fuser::{
     Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo,
     KernelConfig, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, Request,
     SessionACL,
 };
+use subtle::ConstantTimeEq;
 use tokio::runtime::Handle;
 
 use super::{ForwardFs, FwdStat};
@@ -51,10 +52,26 @@ const RELAY_BUF: usize = 2 * 1024 * 1024;
 /// serial direct_io on S3, and no worse on Notion (the workspace VFS resolves
 /// render-on-read sizes, so page-cache reads are never clamped short).
 const MAX_READAHEAD: u32 = 8 * 1024 * 1024;
+/// How long a connection may take to present its token, in total rather than
+/// per read. Every connection costs a thread, so a client that connects and then
+/// stalls — saying nothing, or dribbling bytes to keep a per-read timer alive —
+/// would otherwise hold one. Generous for the only legitimate client: the guest
+/// pump writes its token as the first thing it does after connecting, over a
+/// loopback socket.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Host-side raw-FUSE tunnel server. Bound to an ephemeral port; the guest pump
-/// connects, sends a one-line token, then streams raw FUSE bytes. Aborts its
-/// accept loop on drop.
+/// Host-side raw-FUSE tunnel server. Bound to an ephemeral loopback port; the
+/// guest pump connects, sends a one-line token, then streams raw FUSE bytes.
+/// Aborts its accept loop on drop.
+///
+/// Loopback is enough because microsandbox runs a user-space network stack: the
+/// guest dials `host.microsandbox.internal:<port>`, and the host side of that
+/// connection is opened by the microsandbox process itself, so this server sees
+/// a peer of `127.0.0.1`. Measured with a loopback-only listener and a guest
+/// `nc` against the gateway address: the guest connects and the host observes
+/// `127.0.0.1`. Binding the wildcard address instead would additionally expose
+/// the whole workspace tree — every file this server can read — to any peer on
+/// the same LAN that learns the token.
 pub struct TunnelServer {
     addr: SocketAddr,
     token: String,
@@ -69,7 +86,7 @@ impl Drop for TunnelServer {
 
 impl TunnelServer {
     pub fn spawn(fs: Arc<dyn ForwardFs>, rt: Handle) -> anyhow::Result<Self> {
-        let listener = TcpListener::bind(("0.0.0.0", 0))?;
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let token = uuid::Uuid::new_v4().as_simple().to_string();
@@ -83,13 +100,13 @@ impl TunnelServer {
                     return;
                 }
                 match listener.accept() {
-                    Ok((stream, _)) => {
+                    Ok((stream, peer)) => {
                         let fs = fs.clone();
                         let rt = rt.clone();
                         let token = task_token.clone();
                         thread::spawn(move || {
-                            if let Err(e) = serve_conn(stream, fs, rt, token) {
-                                tracing::debug!("vfs tunnel: connection ended: {e}");
+                            if let Err(e) = serve_conn(stream, fs, rt, token, peer) {
+                                tracing::debug!("vfs tunnel: connection from {peer} ended: {e}");
                             }
                         });
                     }
@@ -116,12 +133,37 @@ impl TunnelServer {
     }
 }
 
+/// Compare a presented token against the expected one without branching on
+/// content, so the time a rejection takes carries no information about how many
+/// leading bytes were right. Length is compared first and in the clear: the
+/// token is a fixed-length UUID, so its length is not a secret.
+fn token_matches(expected: &str, presented: &str) -> bool {
+    let expected = expected.as_bytes();
+    let presented = presented.as_bytes();
+    expected.len() == presented.len() && bool::from(expected.ct_eq(presented))
+}
+
 /// Read the leading one-line token (bytes up to `\n`), one byte at a time so we
 /// never consume any following raw FUSE frame bytes.
-fn read_token_line(stream: &mut TcpStream) -> io::Result<String> {
+///
+/// `deadline` bounds the whole handshake, not each read. `set_read_timeout` sets
+/// `SO_RCVTIMEO`, which applies per `recv` call and so resets on every byte: a
+/// client dribbling one byte just under the timeout holds its thread for the
+/// line limit times the timeout rather than the timeout. Re-deriving the
+/// remaining budget before each byte is what makes the bound the one intended.
+fn read_token_line(stream: &mut TcpStream, deadline: Instant) -> io::Result<String> {
     let mut out = Vec::new();
     let mut b = [0u8; 1];
     loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            // Also the guard for `set_read_timeout`, which rejects a zero duration.
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "token handshake did not complete in time",
+            ));
+        }
+        stream.set_read_timeout(Some(remaining))?;
         stream.read_exact(&mut b)?;
         if b[0] == b'\n' {
             break;
@@ -169,12 +211,29 @@ fn serve_conn(
     fs: Arc<dyn ForwardFs>,
     rt: Handle,
     token: String,
+    peer: SocketAddr,
 ) -> anyhow::Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_nodelay(true).ok();
-    if read_token_line(&mut stream)? != token {
+
+    // Warn rather than debug throughout the handshake: the only client that
+    // should ever reach this port is the guest pump, which is handed the token
+    // directly, so anything that fails here is something else dialing it.
+    let presented = match read_token_line(&mut stream, Instant::now() + HANDSHAKE_TIMEOUT) {
+        Ok(line) => line,
+        Err(e) => {
+            tracing::warn!("vfs tunnel: handshake from {peer} did not complete: {e}");
+            return Err(e.into());
+        }
+    };
+    if !token_matches(&token, &presented) {
+        tracing::warn!("vfs tunnel: rejected connection from {peer}: bad token");
         anyhow::bail!("bad token");
     }
+    // Clear it before the relay below. A mounted tunnel is request-driven and
+    // legitimately idles between requests, and the clone taken for the read
+    // direction shares this socket's options.
+    stream.set_read_timeout(None)?;
 
     // socketpair: fuse_fd -> fuser, shim_fd -> our relay.
     let mut fds = [0i32; 2];
@@ -514,11 +573,12 @@ mod host_engine_test {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use async_trait::async_trait;
 
-    use super::TunnelServer;
+    use super::{HANDSHAKE_TIMEOUT, TunnelServer, token_matches};
     use crate::vfs::sandbox::{ForwardFs, FwdEntry, FwdStat};
 
     struct FakeFs;
@@ -621,5 +681,112 @@ mod host_engine_test {
         assert_eq!(err, 0, "LOOKUP /x should succeed");
 
         println!("host engine served INIT + GETATTR + LOOKUP over TCP tunnel — OK");
+    }
+
+    /// The listener must stay on loopback. Everything this server can read — the
+    /// whole workspace tree, provider mounts included — is behind one token, so a
+    /// wildcard bind would put it in reach of every peer on the LAN. The guest
+    /// still reaches it because microsandbox opens the host side of the
+    /// connection itself.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn listener_is_bound_to_loopback() {
+        let fs: Arc<dyn ForwardFs> = Arc::new(FakeFs);
+        let srv = TunnelServer::spawn(fs, tokio::runtime::Handle::current()).expect("spawn server");
+        assert!(
+            srv.addr.ip().is_loopback(),
+            "tunnel listener must not be reachable off-host, bound to {}",
+            srv.addr
+        );
+    }
+
+    /// A wrong token is refused before any FUSE traffic is served. Paired with
+    /// the successful handshake above, this is what makes the token the gate
+    /// rather than decoration.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wrong_token_is_refused() {
+        let fs: Arc<dyn ForwardFs> = Arc::new(FakeFs);
+        let srv = TunnelServer::spawn(fs, tokio::runtime::Handle::current()).expect("spawn server");
+
+        let mut c = TcpStream::connect(("127.0.0.1", srv.port())).expect("connect");
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // Same length as the real token so the length check is not what refuses it.
+        let wrong: String = srv.token().chars().rev().collect();
+        assert_ne!(wrong, srv.token(), "reversed token must differ");
+        c.write_all(format!("{wrong}\n").as_bytes()).unwrap();
+        c.write_all(&req(26, 1, 0, &init_body())).unwrap();
+
+        // The server drops the connection instead of answering INIT, so the read
+        // ends without a reply.
+        let mut hdr = [0u8; 4];
+        assert!(
+            c.read_exact(&mut hdr).is_err(),
+            "a bad token must not get a FUSE reply"
+        );
+    }
+
+    /// A client that connects and then says nothing must be let go rather than
+    /// holding its thread. Observed from the client side: the server drops the
+    /// connection, so the read returns EOF. Without the deadline the read would
+    /// instead block until the client\'s own timeout, which is what fails here.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_silent_client_is_let_go() {
+        let fs: Arc<dyn ForwardFs> = Arc::new(FakeFs);
+        let srv = TunnelServer::spawn(fs, tokio::runtime::Handle::current()).expect("spawn server");
+
+        let mut c = TcpStream::connect(("127.0.0.1", srv.port())).expect("connect");
+        // Comfortably past the server\'s own deadline, so a client-side timeout
+        // here means the server never imposed one.
+        c.set_read_timeout(Some(HANDSHAKE_TIMEOUT * 4)).unwrap();
+
+        let mut b = [0u8; 1];
+        let n = c.read(&mut b);
+        assert!(
+            matches!(n, Ok(0)),
+            "the server must close a connection that never presents a token, got {n:?}"
+        );
+    }
+
+    /// A client that keeps sending, but never finishes the line, must also be
+    /// let go — and on the same budget as one that says nothing. This is the
+    /// case a per-read timeout misses: `SO_RCVTIMEO` restarts on every byte, so
+    /// dribbling under it once bought the line limit times the timeout.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dribbling_client_is_let_go_on_the_same_budget() {
+        let fs: Arc<dyn ForwardFs> = Arc::new(FakeFs);
+        let srv = TunnelServer::spawn(fs, tokio::runtime::Handle::current()).expect("spawn server");
+
+        let mut c = TcpStream::connect(("127.0.0.1", srv.port())).expect("connect");
+        c.set_read_timeout(Some(HANDSHAKE_TIMEOUT * 4)).unwrap();
+
+        // A byte every fifth of the budget, never a newline. Under a per-read
+        // timeout every one of these would refresh the timer.
+        let started = Instant::now();
+        let writer = thread::spawn(move || {
+            for _ in 0..40 {
+                if c.write_all(b"a").is_err() {
+                    break;
+                }
+                thread::sleep(HANDSHAKE_TIMEOUT / 5);
+            }
+            let mut b = [0u8; 1];
+            let _ = c.read(&mut b);
+        });
+        writer.join().expect("writer thread");
+
+        let held = started.elapsed();
+        assert!(
+            held < HANDSHAKE_TIMEOUT * 2,
+            "the deadline must bound the whole handshake, not each read: held {held:?} against a \
+             {HANDSHAKE_TIMEOUT:?} budget"
+        );
+    }
+
+    #[test]
+    fn token_matches_only_on_exact_equality() {
+        assert!(token_matches("abc123", "abc123"));
+        assert!(!token_matches("abc123", "abc124"));
+        assert!(!token_matches("abc123", "abc12"));
+        assert!(!token_matches("abc123", "abc1234"));
+        assert!(!token_matches("abc123", ""));
     }
 }

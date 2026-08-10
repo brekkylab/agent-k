@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use ::workspace::{GdriveConfig, GmailConfig, NotionConfig, ProviderConfig, S3Config, SlackConfig};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -20,14 +21,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ::workspace::{GmailConfig, NotionConfig, ProviderConfig, S3Config, SlackConfig};
-
+use super::{
+    error::{ApiError, err},
+    workspace::require_owned_workspace,
+};
 use crate::{
     auth::AuthUser,
     state::{AppState, GoogleOAuth, SlackOAuth, WorkspaceMount},
 };
-
-use super::{error::ApiError, error::err, workspace::require_owned_workspace};
 
 /// Provider configuration as supplied when creating a mount (carries secrets).
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -122,6 +123,19 @@ pub enum ProviderSpec {
         code: String,
         redirect_uri: String,
     },
+    /// Google Drive via Google OAuth (read-only mount).
+    ///
+    /// Scope: request `https://www.googleapis.com/auth/drive.readonly` at
+    /// consent (least-privilege for a read-only mount), with
+    /// `access_type=offline` + `prompt=consent` so Google returns a refresh
+    /// token. Like Gmail, the frontend runs the OAuth consent and sends only
+    /// the authorization `code` (+ the `redirect_uri` used at consent); the
+    /// backend exchanges it server-side with the app's [`GoogleOAuth`] client
+    /// credentials, so the browser never handles the client secret.
+    Gdrive {
+        code: String,
+        redirect_uri: String,
+    },
 }
 
 impl ProviderSpec {
@@ -212,6 +226,32 @@ impl ProviderSpec {
                     base_url: slack.base_url.clone(),
                 })
             }
+            ProviderSpec::Gdrive { code, redirect_uri } => {
+                let (client_id, client_secret) = google.credentials().ok_or_else(|| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        "Google Drive is not configured on this server \
+                         (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)",
+                    )
+                })?;
+                let exchanged = ::workspace::exchange_gdrive_code(
+                    client_id,
+                    client_secret,
+                    &code,
+                    &redirect_uri,
+                    &google.origins,
+                )
+                .await
+                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gdrive oauth: {e}")))?;
+                ProviderConfig::Gdrive(GdriveConfig {
+                    client_id: client_id.to_string(),
+                    client_secret: client_secret.to_string(),
+                    refresh_token: exchanged.refresh_token,
+                    // Deployment-level override (mock/gateway), inherited from
+                    // backend config — never from the request.
+                    origins: google.origins.clone(),
+                })
+            }
         })
     }
 }
@@ -244,6 +284,11 @@ pub enum ProviderInfo {
     /// scope report: whether `search:read` in particular was granted is not
     /// visible in a token, so a search can still fail with `missing_scope`.
     Slack { team_name: String, personal: bool },
+    /// Google Drive: every field of the config is a secret, and the account the
+    /// mount is bound to is a property of its refresh token rather than something
+    /// stored beside it — `about.get` answers it, and a listing that called it per
+    /// mount would depend on the network and on every token still being valid.
+    Gdrive {},
 }
 
 impl From<&ProviderConfig> for ProviderInfo {
@@ -263,6 +308,7 @@ impl From<&ProviderConfig> for ProviderInfo {
                 team_name: c.team_name.clone(),
                 personal: c.user_token.as_deref().is_some_and(|t| !t.is_empty()),
             },
+            ProviderConfig::Gdrive(_) => ProviderInfo::Gdrive {},
         }
     }
 }
