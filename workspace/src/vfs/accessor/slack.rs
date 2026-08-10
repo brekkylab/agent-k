@@ -845,7 +845,6 @@ mod tests {
         assert!(!a.search_available());
     }
 
-    /// The soft-fail classification must key off Slack's `error` code, not a
     /// A `Retry-After` past the ordinary cap used to be clamped to it, so five
     /// sub-cap sleeps all landed back inside the window Slack named: 80s of waiting
     /// and then a failure, worse than the 31s the no-header path spends and worse
@@ -880,6 +879,7 @@ mod tests {
         assert_eq!(next_wait(None, MAX_RETRIES, false), None);
     }
 
+    /// The soft-fail classification must key off Slack's `error` code, not a
     /// formatted string, and must NOT swallow token-level failures — those apply
     /// to every conversation, so treating them as "this channel is empty" would
     /// present an empty workspace as a complete one.
