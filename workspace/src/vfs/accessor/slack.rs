@@ -69,6 +69,35 @@ fn next_wait(asked: Option<Duration>, retries: u32, long_spent: bool) -> Option<
     }
 }
 
+/// The one gate on where an attachment download may send the mount's token.
+///
+/// `url_private_download` comes from API data, so a message's file metadata
+/// naming some other host would otherwise leak the token to it. A `base_url`
+/// deployment (mock or gateway) serves files from its own origin, which is then
+/// the only host allowed.
+///
+/// A free function so it can be tested for what it decides rather than by
+/// watching a request fail to leave: every url it accepts is one the caller then
+/// sends a token to, which is not a thing a unit test should be doing.
+fn check_file_host(url: &reqwest::Url, base_url: Option<&str>) -> anyhow::Result<()> {
+    let allowed = base_url.and_then(|b| {
+        reqwest::Url::parse(b)
+            .ok()
+            .and_then(|u| u.host_str().map(String::from))
+    });
+    let host = url.host_str().unwrap_or_default().to_string();
+    let ok = match &allowed {
+        // Mock/gateway deployment: the file host is the configured origin.
+        Some(h) => &host == h,
+        None => host == "slack.com" || host.ends_with(".slack.com"),
+    };
+    anyhow::ensure!(
+        ok,
+        "slack file url host {host:?} is not a Slack host; refusing to send token"
+    );
+    Ok(())
+}
+
 /// The `Retry-After` delay, if present. Slack sends delta-seconds on a 429 and
 /// alongside `error: "ratelimited"`; the HTTP-date form is not honored (treated
 /// as absent → falls back to [`backoff_delay`]).
@@ -666,26 +695,8 @@ impl SlackAccessor {
         {
             return Ok((Vec::new(), true));
         }
-        // Only ever follow Slack's own file hosts: `url_private_download` comes
-        // from API data, and sending the mount's token to whatever host a
-        // message's file metadata names would leak it.
         let parsed = reqwest::Url::parse(url)?;
-        let allowed = self.config.base_url.as_deref().and_then(|b| {
-            reqwest::Url::parse(b)
-                .ok()
-                .and_then(|u| u.host_str().map(String::from))
-        });
-        let host = parsed.host_str().unwrap_or_default().to_string();
-        let ok_host = match &allowed {
-            // Mock/gateway deployment: the file host is the configured origin.
-            Some(h) => &host == h,
-            None => host == "slack.com" || host.ends_with(".slack.com"),
-        };
-        if !ok_host {
-            anyhow::bail!(
-                "slack file url host {host:?} is not a Slack host; refusing to send token"
-            );
-        }
+        check_file_host(&parsed, self.config.base_url.as_deref())?;
         // Same credential as the API calls: a file the person can see in Slack is
         // one their own token can fetch.
         let mut req = self.files.get(parsed).bearer_auth(self.token());
@@ -953,19 +964,34 @@ mod tests {
     /// A file download must refuse to send the mount's token to a host that isn't
     /// Slack's — `url_private_download` is API-supplied data, and the token it
     /// would leak is the person's own Slack access.
-    #[tokio::test]
-    async fn download_refuses_a_non_slack_host() {
-        let a = SlackAccessor::new(&config(Some("xoxp-user"), None)).unwrap();
-        let e = a
-            .download_file("https://evil.example.com/f.pdf", None, 1)
-            .await
-            .expect_err("must refuse");
-        assert!(e.to_string().contains("not a Slack host"), "{e}");
-        // Slack's own hosts pass the check (this one fails later, on connect).
-        let e = a
-            .download_file("https://files.slack.com/nope", None, 1)
-            .await
-            .expect_err("no network in tests");
-        assert!(!e.to_string().contains("not a Slack host"), "{e}");
+    ///
+    /// Asserted on the check rather than through `download_file`, which would send
+    /// the accepted urls: a passing host is exactly the case that leaves the
+    /// machine, so testing it that way means a unit test making real requests to
+    /// Slack and calling the connect failure a result.
+    #[test]
+    fn a_file_download_only_ever_reaches_slack() {
+        let check = |u: &str, base: Option<&str>| {
+            check_file_host(&reqwest::Url::parse(u).expect("a url"), base)
+        };
+        let refused = |u: &str, base: Option<&str>| match check(u, base) {
+            Ok(()) => panic!("{u} was accepted"),
+            Err(e) => assert!(e.to_string().contains("not a Slack host"), "{e}"),
+        };
+
+        assert!(check("https://files.slack.com/f.pdf", None).is_ok());
+        assert!(check("https://slack.com/f.pdf", None).is_ok());
+        refused("https://evil.example.com/f.pdf", None);
+        // A suffix match on the wrong side of the dot, and the `slack.com` name as
+        // someone else's subdomain — the two ways a bare `contains` would let a
+        // lookalike through.
+        refused("https://slack.com.evil.example/f.pdf", None);
+        refused("https://notslack.com/f.pdf", None);
+
+        // A base_url deployment narrows it to that one origin: Slack's own hosts
+        // are no longer where this mount's files come from.
+        let mock = Some("http://localhost:8000");
+        assert!(check("http://localhost:8000/files/f.pdf", mock).is_ok());
+        refused("https://files.slack.com/f.pdf", mock);
     }
 }
