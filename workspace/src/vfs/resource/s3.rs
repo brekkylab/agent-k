@@ -145,6 +145,9 @@ impl Resource for S3Resource {
                     ctime: None,
                     created: None,
                     etag: None,
+                    content_type: None,
+                    size_is_estimate: false,
+                    serves_whole: false,
                 });
             }
         }
@@ -167,6 +170,9 @@ impl Resource for S3Resource {
                     // Carry the listing ETag so a read opened off the cached
                     // stat can pin itself to it (`If-Match`).
                     etag: obj.e_tag.clone(),
+                    content_type: None,
+                    size_is_estimate: false,
+                    serves_whole: false,
                 });
             }
         }
@@ -194,6 +200,10 @@ impl Resource for S3Resource {
                 created: None,
                 etag: meta.e_tag.clone(),
                 version: meta.version.clone(),
+                // The key is the truth (and carries its own extension).
+                content_type: None,
+                size_is_estimate: false,
+                serves_whole: false,
             }),
             Err(OsError::NotFound { .. }) => {
                 let res = self

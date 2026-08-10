@@ -930,7 +930,7 @@ mod tests {
     /// Live mirror round-trip: sync a capped slice of the real mailbox into a
     /// temp mirror, then serve it through the gate resource. Run with:
     ///
-    ///   GMAIL_CLIENT_ID=… GMAIL_CLIENT_SECRET=… GMAIL_REFRESH_TOKEN=… \
+    ///   GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… GOOGLE_REFRESH_TOKEN=… \
     ///   [GMAIL_INDEX_CAP=60] cargo test -p workspace gmail_live -- --ignored --nocapture
     #[tokio::test]
     #[ignore = "requires GMAIL_* env + network"]
@@ -938,7 +938,7 @@ mod tests {
         use crate::vfs::resource::sync_gmail_mirror;
 
         let Some(mut cfg) = live_config() else {
-            eprintln!("set GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN to run");
+            eprintln!("set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN to run");
             return;
         };
         if cfg.index_cap.is_none() {
@@ -1182,8 +1182,10 @@ mod tests {
             client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
             client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
             refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
+            // This one *is* read: it names the mirror directory, so a live run against
+            // two accounts must not have them share a tree.
             account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
-            origins: match std::env::var("GMAIL_BASE_URL") {
+            origins: match std::env::var("GOOGLE_API_BASE_URL") {
                 Ok(host) => crate::vfs::accessor::Origins::behind(&host),
                 Err(_) => Default::default(),
             },
@@ -1193,7 +1195,7 @@ mod tests {
         })
     }
 
-    /// Full-stack probe against a configurable endpoint (`GMAIL_BASE_URL` →
+    /// Full-stack probe against a configurable endpoint (`GOOGLE_API_BASE_URL` →
     /// enterprise mock): labels → year/month navigation → `cat` (asserts real
     /// body text) → attachment bytes → warm relist. With a
     /// base_url set it also checks `rm` against an endpoint lacking trash

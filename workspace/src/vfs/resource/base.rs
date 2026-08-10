@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use crate::vfs::error::{ResourceError, ResourceResult};
 use crate::vfs::path::MountPath;
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FileKind {
     #[default]
@@ -34,6 +33,21 @@ pub struct DirEntry {
     /// one. Carried so the stat fast-path can pin a read to it (`If-Match`)
     /// instead of validating by the coarser mtime.
     pub etag: Option<String>,
+    /// What the entry's *subject* is, when the backend knows better than the
+    /// filename does. A provider that serves a rendering rather than the
+    /// original bytes has to say so somewhere: a Google Doc is served as
+    /// `report.gdoc.json`, so a client guessing from the extension only ever
+    /// learns `application/json`, never which of the three document types it is —
+    /// and the Drive names those come from carry no extension at all. `None` =
+    /// nothing better than the name to go on.
+    pub content_type: Option<String>,
+    /// See [`FileStat::size_is_estimate`]. Carried from the listing so the value
+    /// survives `readdir` → cache → `stat`.
+    pub size_is_estimate: bool,
+    /// See [`FileStat::serves_whole`]. Carried for the same reason: the metadata cache
+    /// answers a `stat` after a `readdir` from this row, and the read strategy inverts
+    /// on this flag.
+    pub serves_whole: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -56,6 +70,30 @@ pub struct FileStat {
     pub etag: Option<String>,
     /// Version id, if the backend is versioned (S3 `VersionId`).
     pub version: Option<String>,
+    /// See [`DirEntry::content_type`].
+    pub content_type: Option<String>,
+    /// `size` is an upper bound, not the real length: the provider cannot know it
+    /// without producing the content (a Drive document conversion). Listings and
+    /// `stat` keep the estimate — sizing every row would fetch every row — but a
+    /// consumer that must be exact, like a WebDAV `GET` filling in
+    /// `Content-Length`, resolves it when the file is opened.
+    pub size_is_estimate: bool,
+    /// Whether asking for *part* of this node is the same work as asking for all of
+    /// it: `true` for one the backend builds on request (a Google Doc, a Notion
+    /// page), where `head -c 100` builds the whole document and returns a hundred
+    /// bytes of it.
+    ///
+    /// The read strategy inverts on this. A ranged node that misses the cache
+    /// re-reads one window, so only small ones are worth keeping; a whole-only node
+    /// re-builds everything, so it is fetched whole and kept up to the entire budget
+    /// — without that, a 10 MB document read in 256 KB chunks builds itself forty
+    /// times.
+    ///
+    /// Independent of [`Self::size_is_estimate`]: a file whose length Drive never
+    /// reported is unsized but still ranged, and reading its placeholder as grounds
+    /// to fetch everything turned a 256 KB read of a 2 GB object into a 2 GB
+    /// download.
+    pub serves_whole: bool,
 }
 
 /// A mounted provider. One instance owns one set of credentials, so the same
@@ -125,8 +163,6 @@ pub trait Resource: Send + Sync {
         ""
     }
 
-
-
     /// Whether `readdir` returns a *complete* listing of a directory. When true,
     /// a fresh parent listing that lacks a name proves that name doesn't exist,
     /// so the cache can answer `stat` of a missing child with `NotFound` without
@@ -136,5 +172,35 @@ pub trait Resource: Send + Sync {
     /// Default: `true`.
     fn listings_complete(&self) -> bool {
         true
+    }
+
+    /// Whether a `stat` may *produce* a file to learn a length the listing could only
+    /// guess at (a 0 or a placeholder — see [`FileStat::size`] and
+    /// [`FileStat::size_is_estimate`]).
+    ///
+    /// `true` (the default) keeps `stat`/`HEAD`/`PROPFIND` exact for providers that
+    /// render on read: Notion's `page.json` is one file per page directory, so one
+    /// render per `ls -l` is a fair trade for a correct length.
+    ///
+    /// `false` is for providers where that trade inverts. Drive serves a document per
+    /// file and each takes seconds to build, so `ls -l` in a folder of them would build
+    /// every one to print a number. Such a provider's listing stands as it is, and the
+    /// length becomes exact when something reads the file. Which placeholder it uses is
+    /// its own choice: Notion reports 0, Drive reports an upper bound marked
+    /// `size_is_estimate`, because a 0 reads as "empty" and search tools skip those.
+    fn resolve_size_on_stat(&self) -> bool {
+        true
+    }
+
+    /// Whether this provider ever fills [`DirEntry::content_type`].
+    ///
+    /// A capability answer, not a per-path one, so a caller can decide *without
+    /// a stat* whether asking is worth it. The WebDAV layer needs exactly that:
+    /// it has to serve the type as a dead property, and dav-server asks for dead
+    /// properties one node at a time — so a provider that never has an answer
+    /// must be able to say so up front rather than pay a `metadata()` per entry
+    /// to return nothing.
+    fn reports_content_type(&self) -> bool {
+        false
     }
 }

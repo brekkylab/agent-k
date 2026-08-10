@@ -99,6 +99,10 @@ pub struct Stat {
     pub created: Option<SystemTime>,
     pub status_changed: Option<SystemTime>,
     pub executable: Option<bool>,
+    /// What the node's subject is, when the provider knows better than the
+    /// filename (a Google Doc is served as `report.gdoc.json`, so the extension
+    /// only ever says `application/json`). `None` = go by the name.
+    pub content_type: Option<String>,
 }
 
 impl Stat {
@@ -135,6 +139,7 @@ fn stat_from_vfs(fs: FileStat) -> Stat {
         created: fs.created,
         status_changed: fs.ctime,
         executable: None,
+        content_type: fs.content_type,
     }
 }
 
@@ -149,6 +154,7 @@ fn dir_stat() -> Stat {
         created: None,
         status_changed: None,
         executable: None,
+        content_type: None,
     }
 }
 
@@ -209,12 +215,34 @@ pub struct File {
 }
 
 impl File {
+    /// Metadata of the open file.
+    ///
+    /// A provider that cannot size a rendered file reports an upper bound (see
+    /// [`FileStat::size_is_estimate`]), which is right for a listing — `ls -l`
+    /// must not render a folder's worth of documents. It is wrong for whoever
+    /// opened the file: a WebDAV `GET` fills `Content-Length` from here, and an
+    /// over-estimate would advertise more bytes than the body carries. So on an
+    /// open handle the estimate is resolved by producing the content once, which
+    /// the caller is about to read anyway (and the metadata cache keeps).
     pub async fn metadata(&mut self) -> FsResult<Stat> {
-        self.resource
+        let st = self
+            .resource
             .stat(&self.path)
             .await
-            .map(stat_from_vfs)
-            .map_err(FsError::from)
+            .map_err(FsError::from)?;
+        if !st.size_is_estimate {
+            return Ok(stat_from_vfs(st));
+        }
+        let len = self
+            .resource
+            .read_bytes(&self.path, None)
+            .await
+            .map_err(FsError::from)?
+            .len() as u64;
+        Ok(Stat {
+            len,
+            ..stat_from_vfs(st)
+        })
     }
 
     pub async fn write_bytes(&mut self, buf: Bytes) -> FsResult<()> {
@@ -309,6 +337,12 @@ pub struct WorkspaceFs {
     hook: Option<Arc<dyn FsHook>>,
 }
 
+/// Concurrent renders while sizing one listing (see
+/// [`WorkspaceFs::read_dir`]). A Drive document takes 1-2s to produce, so a folder
+/// of them is unusable serially; past this the provider's rate limits, not latency,
+/// are the constraint.
+const LISTING_SIZE_CONCURRENCY: usize = 8;
+
 impl WorkspaceFs {
     /// Build from live mounts. Rejects empty/relative or duplicate prefixes and
     /// sorts by prefix length descending so [`Self::route`] does longest-match.
@@ -364,6 +398,16 @@ impl WorkspaceFs {
         }
     }
 
+    /// Whether the mount owning `rel_path` can report a
+    /// [`content_type`](crate::vfs::DirEntry::content_type) at all. A prefix
+    /// lookup — no provider call — so a frontend can skip asking on the mounts
+    /// that would only ever answer "nothing".
+    pub fn reports_content_type(&self, rel_path: &str) -> bool {
+        self.route(rel_path)
+            .map(|(r, _)| r.reports_content_type())
+            .unwrap_or(false)
+    }
+
     /// Route a workspace-relative path to the mount that owns it, by longest
     /// prefix. `None` means the path names no node (the virtual root, or a top
     /// segment that is neither the local mount nor a provider prefix).
@@ -412,7 +456,25 @@ impl WorkspaceFs {
         self.metadata(rel_path).await
     }
 
+    /// List a directory with every length resolved — for callers that report sizes
+    /// (WebDAV `PROPFIND` sends `getcontentlength` for each child).
+    ///
+    /// A provider that cannot size a file without producing it lists a placeholder
+    /// (see [`crate::FileStat::size_is_estimate`]); resolving those means one render
+    /// each, so they run concurrently and the listing costs the slowest rather than
+    /// their sum. Use [`Self::read_dir_unsized`] where the sizes are discarded.
     pub async fn read_dir(&self, rel_path: &str) -> FsResult<DirStream> {
+        self.list(rel_path, true).await
+    }
+
+    /// List a directory without resolving placeholder lengths — for callers that
+    /// only need names and types (the FUSE forwarder's `readdir`, which parses
+    /// exactly those out of the response, and `find`/`ls` above it).
+    pub async fn read_dir_unsized(&self, rel_path: &str) -> FsResult<DirStream> {
+        self.list(rel_path, false).await
+    }
+
+    async fn list(&self, rel_path: &str, with_sizes: bool) -> FsResult<DirStream> {
         // The virtual root lists the mount names as subdirectories.
         if is_root_path(rel_path) {
             let out: Vec<FsResult<DirEntry>> = self
@@ -423,7 +485,36 @@ impl WorkspaceFs {
             return Ok(Box::pin(stream::iter(out)));
         }
         let (resource, vpath) = self.route(rel_path).ok_or(FsError::NotFound)?;
-        let entries = resource.readdir(&vpath).await.map_err(FsError::from)?;
+        let mut entries = resource.readdir(&vpath).await.map_err(FsError::from)?;
+        // Only worth a pass if the provider will actually answer: one that declines
+        // (Drive, whose answer is a document render) returns the same placeholder,
+        // and asking anyway is a stat per entry for a number that cannot change.
+        if with_sizes && resource.resolve_size_on_stat() {
+            let at: Vec<usize> = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.size_is_estimate)
+                .map(|(i, _)| i)
+                .collect();
+            let paths: Vec<MountPath> = at.iter().map(|&i| vpath.child(&entries[i].name)).collect();
+            // `stat` is what resolves a placeholder (the provider renders once and
+            // the cache keeps both bytes and length), so driving it per child is
+            // also what warms the reads that follow.
+            let sized = futures::StreamExt::collect::<Vec<_>>(futures::StreamExt::buffered(
+                stream::iter(paths.into_iter().map(|p| {
+                    let resource = resource.clone();
+                    async move { resource.stat(&p).await.ok() }
+                })),
+                LISTING_SIZE_CONCURRENCY,
+            ))
+            .await;
+            for (i, st) in at.into_iter().zip(sized) {
+                if let Some(st) = st.filter(|st| !st.size_is_estimate) {
+                    entries[i].size = st.size;
+                    entries[i].size_is_estimate = false;
+                }
+            }
+        }
         let out: Vec<FsResult<DirEntry>> = entries
             .into_iter()
             .map(|e| Ok(dir_entry_from_vfs(e)))
@@ -559,8 +650,10 @@ impl ForwardFs for WorkspaceFs {
                 })
                 .collect());
         }
+        // Sizes are dropped by the forwarder (it reads `name` and `is_dir`), so
+        // don't pay to resolve them here.
         let mut stream = self
-            .read_dir(path)
+            .read_dir_unsized(path)
             .await
             .map_err(|e| anyhow::anyhow!("readdir {path}: {e:?}"))?;
         let mut out = Vec::new();
@@ -718,6 +811,7 @@ fn dir_entry_from_vfs(e: crate::vfs::DirEntry) -> DirEntry {
         created: e.created,
         status_changed: e.ctime,
         executable: None,
+        content_type: e.content_type,
     };
     DirEntry {
         name: e.name.into_bytes(),
@@ -789,6 +883,9 @@ mod tests {
                     ctime: None,
                     created: None,
                     etag: None,
+                    content_type: None,
+                    size_is_estimate: false,
+                    serves_whole: false,
                 }])
             } else {
                 Err(ResourceError::NotFound)
@@ -1107,5 +1204,216 @@ mod tests {
         );
         assert!(ForwardFs::mkdir(&fs, "/mock/newdir").await.is_err());
         assert!(ForwardFs::rename(&fs, "/files/a", "/mock/b").await.is_err());
+    }
+    /// The cost split: a listing that reports lengths renders what it cannot size,
+    /// and one that does not report them renders nothing. `find` and the FUSE
+    /// forwarder's `readdir` take the second path — measured against a real Drive,
+    /// resolving six documents cost 2.4s that neither of them reads.
+    #[tokio::test]
+    async fn only_a_listing_that_reports_lengths_pays_to_learn_them() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Folder {
+            reads: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl Resource for Folder {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                Ok(b"rendered".to_vec())
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<ResourceDirEntry>> {
+                Ok(vec![ResourceDirEntry {
+                    name: "doc.gdoc.json".to_string(),
+                    kind: FileKind::File,
+                    size: 64 << 20,
+                    size_is_estimate: true,
+                    serves_whole: false,
+                    mtime: Some(std::time::UNIX_EPOCH),
+                    atime: None,
+                    ctime: None,
+                    created: None,
+                    etag: None,
+                    content_type: None,
+                }])
+            }
+            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+                Ok(FileStat {
+                    kind: FileKind::File,
+                    size: 64 << 20,
+                    size_is_estimate: true,
+                    serves_whole: false,
+                    mtime: Some(std::time::UNIX_EPOCH),
+                    ..Default::default()
+                })
+            }
+        }
+
+        async fn listed(fs: &WorkspaceFs, sized: bool) -> crate::Stat {
+            let mut s = if sized {
+                fs.read_dir("/m").await.unwrap()
+            } else {
+                fs.read_dir_unsized("/m").await.unwrap()
+            };
+            s.next().await.unwrap().unwrap().metadata().unwrap()
+        }
+
+        for sized in [false, true] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let fs = WorkspaceFs::from_mounts(vec![Mount {
+                prefix: "/m".to_string(),
+                resource: Arc::new(crate::vfs::cache::CachedResource::new(Arc::new(Folder {
+                    reads: reads.clone(),
+                }))),
+            }])
+            .unwrap();
+
+            let st = listed(&fs, sized).await;
+            if sized {
+                assert_eq!(st.len, 8, "the rendered length");
+                assert_eq!(reads.load(Ordering::SeqCst), 1, "rendered once");
+            } else {
+                assert_eq!(st.len, 64 << 20, "the placeholder stands");
+                assert_eq!(reads.load(Ordering::SeqCst), 0, "nothing rendered");
+            }
+        }
+    }
+
+    /// An estimated size is fine for a listing and wrong for an open handle: a
+    /// WebDAV `GET` fills `Content-Length` from the handle, so it must be exact,
+    /// while `ls -l` must not render a folder's worth of documents to find out.
+    /// The handle therefore resolves it — once, through whatever cache sits below
+    /// — and a provider that reports real sizes never pays for the check.
+    #[tokio::test]
+    async fn an_open_handle_resolves_an_estimated_size() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Estimating {
+            reads: Arc<AtomicUsize>,
+            estimate: bool,
+        }
+        #[async_trait]
+        impl Resource for Estimating {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                Ok(b"converted".to_vec())
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<ResourceDirEntry>> {
+                Ok(Vec::new())
+            }
+            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+                Ok(FileStat {
+                    kind: FileKind::File,
+                    // An upper bound, far above the 9 bytes a read returns.
+                    size: if self.estimate { 64 << 20 } else { 9 },
+                    size_is_estimate: self.estimate,
+                    serves_whole: false,
+                    ..Default::default()
+                })
+            }
+        }
+
+        for (estimate, want_reads) in [(true, 1), (false, 0)] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let fs = WorkspaceFs::from_mounts(vec![Mount {
+                prefix: "/m".to_string(),
+                resource: Arc::new(Estimating {
+                    reads: reads.clone(),
+                    estimate,
+                }),
+            }])
+            .unwrap();
+
+            // A plain `stat` keeps the estimate and reads nothing.
+            let st = fs.metadata("/m/doc.txt").await.unwrap();
+            assert_eq!(st.len, if estimate { 64 << 20 } else { 9 });
+            assert_eq!(reads.load(Ordering::SeqCst), 0, "stat must not fetch");
+
+            // Opening it and asking makes the length exact.
+            let mut f = fs
+                .open(
+                    "/m/doc.txt",
+                    OpenOptions {
+                        read: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("open");
+            assert_eq!(f.metadata().await.unwrap().len, 9, "estimate={estimate}");
+            assert_eq!(
+                reads.load(Ordering::SeqCst),
+                want_reads,
+                "estimate={estimate}: resolving should{} fetch",
+                if estimate { "" } else { " not" }
+            );
+        }
+    }
+
+    /// The capability gate: whether asking a mount for a subject type is worth a
+    /// call at all. It has to answer from the prefix alone — the WebDAV layer
+    /// consults it per node while building a PROPFIND, so a provider that never
+    /// has an answer must not cost a `metadata()` to say so.
+    #[test]
+    fn reports_content_type_is_answered_by_the_mount_not_a_stat() {
+        struct Typed;
+        #[async_trait]
+        impl Resource for Typed {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                Err(ResourceError::NotFound)
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, _p: &MountPath) -> ResourceResult<Vec<ResourceDirEntry>> {
+                Ok(Vec::new())
+            }
+            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+                Err(ResourceError::NotFound)
+            }
+            fn reports_content_type(&self) -> bool {
+                true
+            }
+        }
+
+        let fs = WorkspaceFs::from_mounts(vec![
+            Mount {
+                prefix: "/typed".to_string(),
+                resource: Arc::new(Typed),
+            },
+            Mount {
+                prefix: "/plain".to_string(),
+                resource: Arc::new(MockResource {
+                    content: b"x".to_vec(),
+                }),
+            },
+        ])
+        .unwrap();
+
+        assert!(fs.reports_content_type("/typed"));
+        assert!(fs.reports_content_type("/typed/deep/file.pdf.json"));
+        // The default: a provider whose filenames already carry the type.
+        assert!(!fs.reports_content_type("/plain/file.txt"));
+        // And nothing at all outside the mounts (the virtual root).
+        assert!(!fs.reports_content_type("/"));
+        assert!(!fs.reports_content_type("/nope/x"));
     }
 }

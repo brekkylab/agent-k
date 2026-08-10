@@ -15,8 +15,8 @@ use dav_server::{
     davpath::DavPath,
     fakels::FakeLs,
     fs::{
-        DavDirEntry, DavFile, DavFileSystem, DavMetaData, FsError, FsFuture, FsResult, FsStream,
-        OpenOptions, ReadDirMeta,
+        DavDirEntry, DavFile, DavFileSystem, DavMetaData, DavProp, FsError, FsFuture, FsResult,
+        FsStream, OpenOptions, ReadDirMeta,
     },
 };
 use futures_util::StreamExt;
@@ -199,6 +199,49 @@ impl DavFileSystem for DavFs {
         })
     }
 
+    /// Whether this node's mount can name its subject's type at all.
+    ///
+    /// dav-server asks per node, and answering `true` everywhere would cost a
+    /// `metadata()` per entry on providers that never have one (local files, S3 —
+    /// their names already carry the type). The mount answers from its own
+    /// capability, a prefix lookup with no provider call.
+    fn have_props<'a>(
+        &'a self,
+        path: &'a DavPath,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        Box::pin(ready(self.0.reports_content_type(&rel_path_string(path))))
+    }
+
+    /// The type of the thing an entry *describes*, as a dead property.
+    ///
+    /// It cannot ride `getcontenttype`: dav-server derives that from the request
+    /// path, and a Drive document's path ends in `.json` because the bytes really
+    /// are JSON — so the live property would answer `application/json` for every
+    /// document, never saying which of the three it is.
+    fn get_props<'a>(&'a self, path: &'a DavPath, do_content: bool) -> FsFuture<'a, Vec<DavProp>> {
+        Box::pin(async move {
+            let meta = self
+                .0
+                .metadata(&rel_path_string(path))
+                .await
+                .map_err(to_dav_err)?;
+            Ok(match meta.content_type {
+                Some(t) => vec![subject_type_prop(do_content.then_some(t))],
+                None => Vec::new(),
+            })
+        })
+    }
+
+    /// Declines, always.
+    ///
+    /// A named `PROPFIND` for this property is already answered by `get_props`, which
+    /// `handle_props` appends on top of whatever the per-property loop produced
+    /// (`handle_props.rs:1226`). Answering here as well emits the element twice in one
+    /// `<D:prop>`; declining leaves exactly one.
+    fn get_prop<'a>(&'a self, _path: &'a DavPath, _prop: DavProp) -> FsFuture<'a, Vec<u8>> {
+        Box::pin(async move { Err(FsError::NotFound) })
+    }
+
     fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
         Box::pin(async move {
             self.0
@@ -348,9 +391,77 @@ impl DavDirEntry for DavDirEntryAdapter {
     }
 }
 
+/// Dead property naming the media type of what an entry describes:
+/// `application/vnd.google-apps.spreadsheet` for a Google Sheet served as
+/// `.gsheet.json`, `application/pdf` for a PDF.
+const SUBJECT_TYPE_PROP: &str = "subject-content-type";
+const PROP_NAMESPACE: &str = "urn:agent-k:workspace";
+const PROP_PREFIX: &str = "W";
+
+/// The property as dav-server wants it: `xml` holds the **whole element**, not the
+/// value. `davprop_to_element` parses this field back with `Element::parse2`, so a
+/// bare mime string fails to parse — the value reaches the client empty and every
+/// node logs an error. `DavProp::new` builds the right shape but interpolates the
+/// value unescaped, and a Drive `mimeType` is whatever the uploader set: one
+/// ampersand loses the property the same way. So build it here, escaped.
+fn subject_type_prop(value: Option<String>) -> DavProp {
+    DavProp {
+        name: SUBJECT_TYPE_PROP.to_string(),
+        prefix: Some(PROP_PREFIX.to_string()),
+        namespace: Some(PROP_NAMESPACE.to_string()),
+        xml: value.map(|v| subject_type_element(&v).into_bytes()),
+    }
+}
+
+/// `<W:subject-content-type xmlns:W="…">application/pdf</W:subject-content-type>`.
+fn subject_type_element(value: &str) -> String {
+    let escaped = value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    format!(
+        "<{PROP_PREFIX}:{SUBJECT_TYPE_PROP} xmlns:{PROP_PREFIX}=\"{PROP_NAMESPACE}\">\
+         {escaped}</{PROP_PREFIX}:{SUBJECT_TYPE_PROP}>"
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_wid;
+    use super::{PROP_NAMESPACE, SUBJECT_TYPE_PROP, parse_wid, subject_type_element};
+
+    /// dav-server parses this field back as an element, so the value alone is not a
+    /// property: it logs an error and ships an empty one. And it interpolates without
+    /// escaping, while a Drive `mimeType` is whatever the uploader typed — one
+    /// ampersand made the property vanish the same way.
+    #[test]
+    fn the_subject_type_property_is_a_whole_escaped_element() {
+        let xml = subject_type_element("application/vnd.google-apps.spreadsheet");
+        assert!(
+            xml.starts_with(&format!("<W:{SUBJECT_TYPE_PROP} ")),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(&format!("xmlns:W=\"{PROP_NAMESPACE}\"")),
+            "{xml}"
+        );
+        assert!(
+            xml.ends_with(&format!(
+                ">application/vnd.google-apps.spreadsheet</W:{SUBJECT_TYPE_PROP}>"
+            )),
+            "{xml}"
+        );
+
+        let escaped = subject_type_element("application/x-tar&gzip");
+        assert!(escaped.contains("x-tar&amp;gzip"), "{escaped}");
+        assert!(
+            !escaped.contains("x-tar&gzip"),
+            "a bare ampersand fails the parse: {escaped}"
+        );
+        for bad in ['<', '>'] {
+            let out = subject_type_element(&format!("text/{bad}plain"));
+            assert!(!out.contains(&format!("/{bad}plain")), "{out}");
+        }
+    }
 
     #[test]
     fn parse_wid_requires_canonical_form() {
