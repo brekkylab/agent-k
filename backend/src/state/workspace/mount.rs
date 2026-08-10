@@ -7,8 +7,8 @@
 //! per-workspace filesystem so mount prefixes route to the provider.
 
 use ::workspace::{
-    FsConfig, GdriveConfig, GmailConfig, LOCAL_MOUNT, MountSpec, NotionConfig, ProviderConfig,
-    S3Config, WorkspaceFs,
+    FsConfig, GdriveConfig, GithubConfig, GmailConfig, LOCAL_MOUNT, MountSpec, NotionConfig,
+    ProviderConfig, S3Config, WorkspaceFs,
 };
 use chrono::{DateTime, Utc};
 use sqlx::{Row as _, SqlitePool, sqlite::SqliteRow};
@@ -72,6 +72,7 @@ impl WorkspaceMount {
             ProviderConfig::Notion(c) => ("notion", serde_json::to_string(c)?),
             ProviderConfig::Gmail(c) => ("gmail", serde_json::to_string(c)?),
             ProviderConfig::Gdrive(c) => ("gdrive", serde_json::to_string(c)?),
+            ProviderConfig::Github(c) => ("github", serde_json::to_string(c)?),
         })
     }
 }
@@ -90,6 +91,9 @@ fn decode_provider(kind: &str, config_json: &str) -> StateResult<ProviderConfig>
         )?)),
         "gdrive" => Ok(ProviderConfig::Gdrive(
             serde_json::from_str::<GdriveConfig>(config_json)?,
+        )),
+        "github" => Ok(ProviderConfig::Github(
+            serde_json::from_str::<GithubConfig>(config_json)?,
         )),
         other => Err(StateError::InvalidData(format!(
             "workspace_mounts.provider: unknown provider {other}"

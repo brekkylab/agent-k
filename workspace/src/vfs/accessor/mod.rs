@@ -5,12 +5,17 @@
 //! credentials into logs. They stay host-only.
 
 mod gdrive;
+mod github;
 mod gmail;
 mod google;
 mod notion;
 mod s3;
 
 pub use gdrive::{GdriveAccessor, GdriveConfig, GdriveExchange, exchange_gdrive_code};
+pub use github::{
+    DEFAULT_INDEX_CAP, EntryKind, GithubAccessor, GithubConfig, GithubSource, IssueRow,
+    MAX_BLOB_BYTES, RepoRow, Tree, TreeEntry,
+};
 pub use gmail::{GmailAccessor, GmailConfig, GmailExchange, encode_b64url, exchange_gmail_code};
 pub use google::Origins;
 pub use notion::{NotionAccessor, NotionConfig};

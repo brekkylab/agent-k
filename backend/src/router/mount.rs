@@ -10,7 +10,9 @@
 
 use std::sync::Arc;
 
-use ::workspace::{GdriveConfig, GmailConfig, NotionConfig, ProviderConfig, S3Config};
+use ::workspace::{
+    GdriveConfig, GithubConfig, GithubSource, GmailConfig, NotionConfig, ProviderConfig, S3Config,
+};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -89,6 +91,48 @@ pub enum ProviderSpec {
         code: String,
         redirect_uri: String,
     },
+    /// GitHub repositories, read through one fine-grained personal access token per owner.
+    ///
+    /// Tokens are pasted by the user rather than obtained by an OAuth consent, and that is
+    /// the least-privilege choice here, not a shortcut: a fine-grained token can be scoped
+    /// to selected repositories with `Contents: read-only`, while `repo` — the only OAuth
+    /// App scope that reaches a private repository — grants read *and write* to every
+    /// repository the user can see. The trade-off is that such a token expires and cannot
+    /// be renewed server-side, so a 401 surfaces as an error telling the user to supply a
+    /// new one (see `GithubAccessor`'s `auth`, the seam a GitHub App would replace).
+    ///
+    /// One token per owner because GitHub imposes it: a fine-grained token names exactly one
+    /// *resource owner*, so reaching two owners' private repositories takes two tokens. Each
+    /// owner becomes a directory in the mount.
+    ///
+    /// `api_base` is deliberately absent: it is where the tokens would be sent, so an
+    /// Enterprise Server origin is a deployment setting rather than a request field.
+    Github {
+        /// One entry per owner. Naming the same owner twice is rejected.
+        sources: Vec<GithubSourceSpec>,
+        /// Ceiling on the `issues/`, `pulls/` and repository listings; omitted = the
+        /// provider default. A performance knob, safe to accept from the client — nothing is
+        /// hidden by it, since anything outside a capped listing is still reachable by name.
+        #[serde(default)]
+        index_cap: Option<usize>,
+    },
+}
+
+/// One owner and the token that reaches it.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GithubSourceSpec {
+    /// The user or organization owning the repositories — the token's resource owner.
+    pub owner: String,
+    /// Fine-grained PAT scoped to `owner`, `Contents: read-only` at minimum (add `Issues`
+    /// and `Pull requests` read for those views).
+    pub token: String,
+    /// Serve only this repository rather than every one the token reaches under `owner`.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Branch to serve, or a full commit SHA to pin to. Requires `repo`: one ref cannot
+    /// describe a set of repositories. Omitted = each repository's default branch.
+    #[serde(default)]
+    pub git_ref: Option<String>,
 }
 
 impl ProviderSpec {
@@ -172,6 +216,24 @@ impl ProviderSpec {
                     origins: oauth.origins.clone(),
                 })
             }
+            ProviderSpec::Github {
+                sources,
+                index_cap,
+            } => ProviderConfig::Github(GithubConfig {
+                sources: sources
+                    .into_iter()
+                    .map(|s| GithubSource {
+                        owner: s.owner,
+                        token: s.token,
+                        repo: s.repo,
+                        git_ref: s.git_ref,
+                    })
+                    .collect(),
+                index_cap,
+                // Deployment setting, never from the request: this is the host the user's
+                // tokens get sent to.
+                api_base: None,
+            }),
         })
     }
 }
@@ -198,6 +260,19 @@ pub enum ProviderInfo {
     /// stored beside it — `about.get` answers it, and a listing that called it per
     /// mount would depend on the network and on every token still being valid.
     Gdrive {},
+    /// GitHub: the tokens are the only secrets, so the owners the mount serves — and what
+    /// each is scoped to — are shown to tell mounts apart.
+    Github { sources: Vec<GithubSourceInfo> },
+}
+
+/// Non-secret view of one GitHub source: everything but its token.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GithubSourceInfo {
+    pub owner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_ref: Option<String>,
 }
 
 impl From<&ProviderConfig> for ProviderInfo {
@@ -214,6 +289,17 @@ impl From<&ProviderConfig> for ProviderInfo {
                 email: c.account_email.clone(),
             },
             ProviderConfig::Gdrive(_) => ProviderInfo::Gdrive {},
+            ProviderConfig::Github(c) => ProviderInfo::Github {
+                sources: c
+                    .sources
+                    .iter()
+                    .map(|s| GithubSourceInfo {
+                        owner: s.owner.clone(),
+                        repo: s.repo.clone(),
+                        git_ref: s.git_ref.clone(),
+                    })
+                    .collect(),
+            },
         }
     }
 }

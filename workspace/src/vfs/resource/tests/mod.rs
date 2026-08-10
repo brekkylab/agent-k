@@ -13,3 +13,4 @@
 //! [`CachedResource`]: crate::vfs::cache::CachedResource
 
 mod gdrive_mounted;
+mod github_mounted;
