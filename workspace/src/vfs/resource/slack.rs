@@ -1533,6 +1533,7 @@ fn message_line(
     bots: &HashMap<String, String>,
 ) -> Vec<u8> {
     let (verified, claimed) = author_names(m, names, bots);
+    let files = m.get("files").map(|_| listed_files(m));
     let mut m = m.clone();
     if let Some(obj) = m.as_object_mut() {
         if let Some(name) = verified {
@@ -1544,6 +1545,9 @@ fn message_line(
         if let Some(text) = obj.get("text").and_then(Value::as_str) {
             let resolved = resolve_mentions(text, names);
             obj.insert("text".into(), Value::String(resolved));
+        }
+        if let Some(f) = files {
+            obj.insert("files".into(), f);
         }
     }
     let mut line = serde_json::to_vec(&m).unwrap_or_default();
@@ -1601,6 +1605,33 @@ fn resolve_mentions(text: &str, names: &HashMap<String, String>) -> String {
 /// A `files/` entry from a message's `files[]` element. `None` when Slack gave no
 /// id or no download URL — a tombstone for a deleted file, or one whose bytes
 /// this token may not fetch, either way nothing to serve.
+/// A message's `files[]`, projected to what the tree serves: the entry name it has
+/// under `files/`, and its length. The name carries the Slack file id already —
+/// `<stem>__<id>.<ext>` — so it is both what correlates a line with the listing and
+/// the path a reader opens.
+///
+/// Slack sends about thirty other keys per attachment, and none of them is how a
+/// reader here gets the bytes — that is `files/<name>`, never a URL. Passing them
+/// through was both the largest thing in a `chat.jsonl` line (70% of it, measured
+/// on a live workspace) and the leakiest: `permalink_public` is a slack-files.com
+/// link that opens with no token at all, on a mount that carries DMs.
+///
+/// Built from [`file_meta`], the same function the `files/` listing uses, so the
+/// two cannot disagree about which attachments a message has or what they are
+/// called. One Slack sends without a usable download url appears in neither.
+fn listed_files(m: &Value) -> Value {
+    let Some(files) = m.get("files").and_then(Value::as_array) else {
+        return Value::Array(Vec::new());
+    };
+    let mut out: Vec<FileMeta> = files.iter().filter_map(file_meta).collect();
+    dedup_names(&mut out, |f| &mut f.vfs_name);
+    Value::Array(
+        out.iter()
+            .map(|f| serde_json::json!({ "name": f.vfs_name, "size": f.size }))
+            .collect(),
+    )
+}
+
 fn file_meta(f: &Value) -> Option<FileMeta> {
     let id = f
         .get("id")

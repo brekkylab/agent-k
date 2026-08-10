@@ -483,6 +483,75 @@ fn an_app_is_named_apart_from_the_people() {
     assert_eq!(v["app_name"], "stale");
 }
 
+/// A message's attachments are named the way `files/` names them and sized the way
+/// it sizes them, and carry nothing else. Slack sends about thirty more keys per
+/// file, none of which is how a reader here gets the bytes — that is the path — and
+/// one of which, `permalink_public`, opens with no token at all.
+#[test]
+fn an_attachment_line_carries_only_what_the_tree_serves() {
+    // Shaped like a real files[] element. Values are placeholders except the four
+    // the projection reads.
+    let m = serde_json::json!({
+        "user": "U0456",
+        "text": "the deck",
+        "files": [{
+            "id": "F0BM1",
+            "name": "Q1 실적.pptx",
+            "size": 83132,
+            "timestamp": 1_785_737_875_i64,
+            "url_private_download": "https://files.slack.com/d/F0BM1",
+            "url_private": "https://files.slack.com/f/F0BM1",
+            "permalink": "https://acme.slack.com/files/U0456/F0BM1",
+            "permalink_public": "https://slack-files.com/T1-F0BM1-abc",
+            "public_url_shared": false,
+            "mimetype": "application/vnd.ms-powerpoint",
+            "user_team": "T1",
+            "username": "",
+            "file_access": "visible",
+        }],
+    });
+    let v: Value = serde_json::from_slice(&message_line(&m, &one_name(), &no_bots())).unwrap();
+
+    let files = v["files"].as_array().expect("an array");
+    assert_eq!(files.len(), 1);
+    let mut keys: Vec<&str> = files[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["name", "size"]);
+    // The same string `files/` lists, so a line and the listing correlate by it,
+    // and the Slack id is visible inside it.
+    assert_eq!(files[0]["name"], "Q1_실적__F0BM1.pptx");
+    assert_eq!(files[0]["size"], 83132);
+
+    // Named one by one: a URL in a line is the field whose leak would matter, and
+    // this mount carries DMs.
+    let json = String::from_utf8(message_line(&m, &one_name(), &no_bots())).unwrap();
+    for gone in [
+        "permalink_public",
+        "slack-files.com",
+        "url_private",
+        "permalink",
+        "public_url_shared",
+        "user_team",
+        "file_access",
+    ] {
+        assert!(!json.contains(gone), "{gone} reached the tree");
+    }
+
+    // A file with no usable download url is in neither the line nor `files/`, so
+    // the two cannot disagree about what a message has.
+    let no_url = serde_json::json!({
+        "user": "U0456",
+        "files": [{"id": "F0BM2", "name": "gone.pdf"}],
+    });
+    let v: Value = serde_json::from_slice(&message_line(&no_url, &one_name(), &no_bots())).unwrap();
+    assert_eq!(v["files"].as_array().expect("an array").len(), 0);
+}
+
 /// A window that hit the page ceiling holds the newest messages and drops the
 /// oldest, so the file would otherwise read as the whole day. The notice says so in
 /// `text`, where a reader renders it, and carries no name — nobody wrote it, and a
