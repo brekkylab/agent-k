@@ -11,7 +11,7 @@
 //! Success here means microsandbox works on this machine and the FUSE forwarder
 //! path (Steps 2–3) is viable locally.
 
-use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder};
+use ailoy::runenv::{Console as _, Machine as _, SandboxBuilder, SandboxNetwork};
 
 #[tokio::test]
 #[ignore = "boots a microsandbox VM; run explicitly to verify sandbox works on this host"]
@@ -32,6 +32,10 @@ async fn sandbox_boots_and_has_fuse() {
         .image("brekkylab/agent-k-libreoffice:latest")
         .cpus(2)
         .memory_mib(1024)
+        // Stated rather than inherited, as at every other sandbox. This one only
+        // execs `echo`, `uname` and a `/dev/fuse` check, so the narrow posture is
+        // what it actually needs.
+        .network(SandboxNetwork::HostOnly)
         .build()
         .await
         .expect("build sandbox (image pull + VM create) — fails here if microsandbox can't run on this host");

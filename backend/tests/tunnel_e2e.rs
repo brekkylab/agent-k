@@ -13,7 +13,9 @@ use workspace::{
     ForwardFs, FsConfig, MountSpec, NotionConfig, ProviderConfig, S3Config, WorkspaceFs,
 };
 
-use agent_k_backend::sandbox_tunnel::{mount_vfs_tunnel_in_guest, tunnel_available};
+use agent_k_backend::sandbox_tunnel::{
+    attach_vfs_tunnel_in_guest, spawn_vfs_tunnel, tunnel_available,
+};
 
 /// Build a provider-only workspace fs (no local files) — enough to serve `/s3`
 /// or `/notion` into the guest for these read checks.
@@ -51,12 +53,15 @@ fn set_dedicated_msb_home() {
     }
 }
 
-fn build_sandbox_builder() -> SandboxBuilder {
+/// `tunnel_port` is the host port the tunnel server is already listening on.
+/// The guest can only reach it if the policy names it, and the policy is fixed
+/// when the sandbox is created — hence the argument.
+fn build_sandbox_builder(tunnel_port: u16) -> SandboxBuilder {
     SandboxBuilder::new()
         .image("brekkylab/agent-k-libreoffice:latest")
         .cpus(2)
         .memory_mib(1024)
-        .network(SandboxNetwork::Public)
+        .network(SandboxNetwork::Public.with_host_ports([tunnel_port]))
 }
 
 /// Guest shell that times a cold stat, a cold `ls -la`, then 3 reads — each
@@ -92,11 +97,14 @@ async fn tunnel_debug() {
     };
     let fs = provider_fs("/s3", ProviderConfig::S3(s3));
 
-    let mut sandbox = build_sandbox_builder().build().await.expect("build sandbox");
-    let console = sandbox.start().await.expect("start VM");
-
     let rt = tokio::runtime::Handle::current();
-    let mounted = mount_vfs_tunnel_in_guest(console, fs.clone(), "/mnt/tunnel", rt).await;
+    let srv = spawn_vfs_tunnel(fs.clone(), rt).expect("spawn tunnel server");
+    let mut sandbox = build_sandbox_builder(srv.port())
+        .build()
+        .await
+        .expect("build sandbox");
+    let console = sandbox.start().await.expect("start VM");
+    let mounted = attach_vfs_tunnel_in_guest(console, &srv, "/mnt/tunnel").await;
     println!("mount result: {:?}", mounted.as_ref().map(|_| "ok"));
 
     // A FUSE op can wedge in uninterruptible D-state (even `timeout` can't kill
@@ -177,11 +185,14 @@ async fn s3_read_throughput() {
     let dir_rel = file_rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("/s3");
     println!("benchmarking against s3:/{file_rel}");
 
-    let mut sandbox = build_sandbox_builder().build().await.expect("build sandbox");
-    let console = sandbox.start().await.expect("start VM");
-
     let rt = tokio::runtime::Handle::current();
-    let _srv = mount_vfs_tunnel_in_guest(console, fs.clone(), "/mnt/ws", rt)
+    let srv = spawn_vfs_tunnel(fs.clone(), rt).expect("spawn tunnel server");
+    let mut sandbox = build_sandbox_builder(srv.port())
+        .build()
+        .await
+        .expect("build sandbox");
+    let console = sandbox.start().await.expect("start VM");
+    attach_vfs_tunnel_in_guest(console, &srv, "/mnt/ws")
         .await
         .expect("mount tunnel");
 
@@ -243,11 +254,14 @@ async fn notion_read_full_content() {
         .len();
     println!("page.json true content = {true_len} bytes (Notion renders on read)");
 
-    let mut sandbox = build_sandbox_builder().build().await.expect("build sandbox");
-    let console = sandbox.start().await.expect("start VM");
-
     let rt = tokio::runtime::Handle::current();
-    let _srv = mount_vfs_tunnel_in_guest(console, make_fs(), "/mnt/ws", rt)
+    let srv = spawn_vfs_tunnel(make_fs(), rt).expect("spawn tunnel server");
+    let mut sandbox = build_sandbox_builder(srv.port())
+        .build()
+        .await
+        .expect("build sandbox");
+    let console = sandbox.start().await.expect("start VM");
+    attach_vfs_tunnel_in_guest(console, &srv, "/mnt/ws")
         .await
         .expect("mount tunnel");
 
@@ -282,6 +296,77 @@ echo -n "head: "; timeout 20 head -c 100 "$f" 2>/dev/null; echo"#
     );
 }
 
+/// The mount works with exactly one host port granted — the tunnel server's.
+///
+/// Needs no provider credentials: a local-files workspace is enough to prove the
+/// path end to end. This is the check that the spawn-then-grant-then-attach order
+/// actually produces a working mount, rather than only compiling.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "boots a VM and mounts the raw FUSE tunnel (needs the built pump ELF + microsandbox)"]
+async fn local_workspace_mounts_with_only_the_tunnel_port_granted() {
+    set_dedicated_msb_home();
+    assert!(tunnel_available(), "tunnel pump ELF not built");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("hello.txt"), b"tunnel-ok").expect("write host file");
+    let fs: Arc<dyn ForwardFs> = Arc::new(WorkspaceFs::local(dir.path().to_path_buf()));
+
+    let rt = tokio::runtime::Handle::current();
+    let srv = spawn_vfs_tunnel(fs, rt).expect("spawn tunnel server");
+    let mut sandbox = build_sandbox_builder(srv.port())
+        .build()
+        .await
+        .expect("build sandbox");
+    let console = sandbox.start().await.expect("start VM");
+    attach_vfs_tunnel_in_guest(console, &srv, "/mnt/ws")
+        .await
+        .expect("mount tunnel with the port granted");
+
+    let r = console
+        .exec_shell("cat /mnt/ws/files/hello.txt".to_string(), Some(30))
+        .await
+        .expect("read through the mount");
+    let _ = sandbox.stop().await;
+    assert_eq!(
+        r.stdout.trim(),
+        "tunnel-ok",
+        "guest could not read the host file through the tunnel: exit={} stderr={}",
+        r.exit_code,
+        r.stderr.trim()
+    );
+}
+
+/// The same setup with the port left out must fail to mount. Without this, the
+/// test above would still pass if the policy granted every host port again, so
+/// this is what pins the grant to one port rather than to "some port".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "boots a VM and mounts the raw FUSE tunnel (needs the built pump ELF + microsandbox)"]
+async fn mount_fails_when_the_tunnel_port_is_not_granted() {
+    set_dedicated_msb_home();
+    assert!(tunnel_available(), "tunnel pump ELF not built");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("hello.txt"), b"tunnel-ok").expect("write host file");
+    let fs: Arc<dyn ForwardFs> = Arc::new(WorkspaceFs::local(dir.path().to_path_buf()));
+
+    let rt = tokio::runtime::Handle::current();
+    let srv = spawn_vfs_tunnel(fs, rt).expect("spawn tunnel server");
+    // Public egress, no host port. Same as the granted case in every other way.
+    let mut sandbox = SandboxBuilder::new()
+        .image("brekkylab/agent-k-libreoffice:latest")
+        .cpus(2)
+        .memory_mib(1024)
+        .network(SandboxNetwork::Public)
+        .build()
+        .await
+        .expect("build sandbox");
+    let console = sandbox.start().await.expect("start VM");
+    let result = attach_vfs_tunnel_in_guest(console, &srv, "/mnt/ws").await;
+    let _ = sandbox.stop().await;
+
+    let err = result.expect_err("mount must fail without the host port granted");
+    println!("mount refused as expected: {err}");
+}
 /// Everything above proves the tree is *readable* from the guest. This proves
 /// the agent actually *goes there* — that
 /// [`workspace_prompt`](agent_k_backend::sandbox_tunnel::workspace_prompt) is
@@ -335,21 +420,22 @@ async fn agent_finds_the_mount_unprompted() {
         .expect("workspace fs"),
     );
 
-    let sandbox = build_sandbox_builder().build().await.expect("build sandbox");
+    // Server first: its port has to be named in the network policy, which is
+    // fixed when the sandbox is created.
+    let srv = spawn_vfs_tunnel(unified, tokio::runtime::Handle::current()).expect("spawn tunnel");
+    let sandbox = build_sandbox_builder(srv.port())
+        .build()
+        .await
+        .expect("build sandbox");
     let sandbox = Arc::new(Mutex::new(sandbox));
 
-    let _srv = {
+    {
         let mut guard = sandbox.lock().await;
         let console = guard.start().await.expect("start VM");
-        mount_vfs_tunnel_in_guest(
-            console,
-            unified,
-            GUEST_MOUNT_ROOT,
-            tokio::runtime::Handle::current(),
-        )
-        .await
-        .expect("mount workspace in guest")
-    };
+        attach_vfs_tunnel_in_guest(console, &srv, GUEST_MOUNT_ROOT)
+            .await
+            .expect("mount workspace in guest");
+    }
 
     // The same spec the backend builds for a coworker session, plus the mount
     // section the session run loop appends once the mount is up.
