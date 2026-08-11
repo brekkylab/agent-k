@@ -7,7 +7,6 @@ mod notion;
 mod s3;
 #[cfg(test)]
 mod tests;
-mod unavailable;
 
 pub use base::{DirEntry, FileKind, FileStat, Resource};
 pub use gdrive::GdriveResource;
@@ -19,4 +18,3 @@ pub use gmail_sync::{
 pub use local::LocalResource;
 pub use notion::NotionResource;
 pub use s3::S3Resource;
-pub(crate) use unavailable::UnavailableResource;

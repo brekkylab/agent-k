@@ -6,14 +6,16 @@
 //! [`Mount`]s. `WorkspaceFs` owns the resulting mounts and does the routing —
 //! there is no separate `Vfs` type.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{ops::Range, path::PathBuf, sync::Arc};
 
 use crate::vfs::{
     accessor::{GdriveConfig, GmailConfig, GoogleClient, NotionConfig, S3Config},
     cache::CachedResource,
+    error::{ResourceError, ResourceResult},
+    path::MountPath,
     resource::{
-        GdriveResource, GmailResource, LocalResource, NotionResource, Resource, S3Resource,
-        UnavailableResource,
+        DirEntry, FileStat, GdriveResource, GmailResource, LocalResource, NotionResource, Resource,
+        S3Resource,
     },
 };
 
@@ -59,7 +61,7 @@ pub struct FsConfig {
     /// it belongs to the installation, not to any one mount, and a stored copy beside
     /// a refresh token would make that row a usable credential on its own. `None`
     /// (tests, library users with no Google mount) mounts such a source as
-    /// [`UnavailableResource`], which fails every op with a reason: a missing env var
+    /// [`Unavailable`], which fails every op: a missing env var
     /// costs the source it configures and not `/files` along with it, without the
     /// source looking empty to whoever reads it.
     pub google_oauth: Option<GoogleClient>,
@@ -72,22 +74,49 @@ pub struct Mount {
     pub resource: Arc<dyn Resource>,
 }
 
-/// Stand a Google mount up in name only, when the deployment has no OAuth client.
+/// A mount that keeps its place in the table and fails everything asked of it.
 ///
-/// The mount keeps its prefix and fails every op with a reason, rather than being left
-/// out of the table: an absent prefix is unroutable, and `NotFound` reads to a caller as
-/// "there is nothing here" rather than "this could not be reached". See
-/// [`UnavailableResource`] for what that costs.
+/// `Backend` and not `NotFound`, which is the whole point: an absent or empty source
+/// reads to a caller as "nothing to do here", and the knowledge index acts on that by
+/// purging what it had already ingested from it. This shape is what a rejected
+/// credential already produces, so it lands in the arm that retries.
+struct Unavailable(&'static str);
+
+#[async_trait::async_trait]
+impl Resource for Unavailable {
+    async fn read_bytes(&self, _: &MountPath, _: Option<Range<u64>>) -> ResourceResult<Vec<u8>> {
+        Err(ResourceError::Backend(anyhow::anyhow!("{}", self.0)))
+    }
+    async fn read_bytes_pinned(
+        &self,
+        p: &MountPath,
+        r: Option<Range<u64>>,
+        _: &FileStat,
+    ) -> ResourceResult<Vec<u8>> {
+        self.read_bytes(p, r).await
+    }
+    async fn write_bytes(&self, _: &MountPath, _: Vec<u8>) -> ResourceResult<()> {
+        Err(ResourceError::Backend(anyhow::anyhow!("{}", self.0)))
+    }
+    async fn readdir(&self, _: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+        Err(ResourceError::Backend(anyhow::anyhow!("{}", self.0)))
+    }
+    async fn stat(&self, _: &MountPath) -> ResourceResult<FileStat> {
+        Err(ResourceError::Backend(anyhow::anyhow!("{}", self.0)))
+    }
+}
+
+/// Stand a Google mount up in name only, when the deployment has no OAuth client. The
+/// message is what an operator gets: `FsError` carries no payload, so it does not travel
+/// past the filesystem boundary.
 fn unavailable_google_mount(provider: &str, prefix: &str) -> Arc<dyn Resource> {
     tracing::warn!(
         "{provider} mount {prefix} cannot serve: no Google OAuth client configured \
          (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)"
     );
-    Arc::new(UnavailableResource::new(format!(
-        "{provider} is connected but this deployment has no Google OAuth client \
-         configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET), so it cannot \
-         authenticate"
-    )))
+    Arc::new(Unavailable(
+        "no Google OAuth client configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)",
+    ))
 }
 
 /// Instantiate the resources described by an [`FsConfig`] into live [`Mount`]s:
