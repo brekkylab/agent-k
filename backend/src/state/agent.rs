@@ -91,10 +91,7 @@ impl Agent {
             .map_err(|e| StateError::InvalidData(format!("agents.spec: {e}")))?;
         Ok(Self {
             id: parse_uuid(row.get::<String, _>("id"), "agents.id")?,
-            workspace_id: parse_uuid(
-                row.get::<String, _>("workspace_id"),
-                "agents.workspace_id",
-            )?,
+            workspace_id: parse_uuid(row.get::<String, _>("workspace_id"), "agents.workspace_id")?,
             name: row.get("name"),
             description: row.get("description"),
             active: row.get("active"),
@@ -258,7 +255,10 @@ mod tests {
         assert_eq!(prior.name, "researcher");
         assert_eq!(state.get(id).await.unwrap().unwrap().name, "researcher v2");
 
-        assert_eq!(state.list_by_workspace(workspace_id).await.unwrap().len(), 1);
+        assert_eq!(
+            state.list_by_workspace(workspace_id).await.unwrap().len(),
+            1
+        );
 
         let removed = state.remove(id).await.unwrap();
         assert_eq!(removed.id, id);

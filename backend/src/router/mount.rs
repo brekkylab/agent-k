@@ -139,9 +139,6 @@ impl ProviderSpec {
                     refresh_token: exchanged.refresh_token,
                     account_email: exchanged.account_email,
                     index_cap,
-                    // Deployment-level override (mock/gateway), inherited from
-                    // backend config — never from the request.
-                    origins: oauth.origins.clone(),
                 })
             }
             ProviderSpec::Gdrive { code, redirect_uri } => {
@@ -163,9 +160,6 @@ impl ProviderSpec {
                 .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gdrive oauth: {e}")))?;
                 ProviderConfig::Gdrive(GdriveConfig {
                     refresh_token: exchanged.refresh_token,
-                    // Deployment-level override (mock/gateway), inherited from
-                    // backend config — never from the request.
-                    origins: oauth.origins.clone(),
                 })
             }
         })

@@ -235,12 +235,6 @@ pub struct GmailConfig {
     /// default) mirrors every message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_cap: Option<usize>,
-    /// Where to reach each Google service, when not production Google (an enterprise
-    /// mock or a gateway). Deployment-level only — the token endpoint receives the
-    /// app's client secret, so this is NOT part of the mount-create API; the backend
-    /// injects it from its own config.
-    #[serde(default, skip_serializing_if = "Origins::is_default")]
-    pub origins: Origins,
 }
 
 /// Holds Google OAuth credentials (one refresh token) and a cached access
@@ -267,8 +261,8 @@ pub struct GmailAccessor {
 
 impl GmailAccessor {
     pub fn new(config: &GmailConfig, oauth: &GoogleClient) -> anyhow::Result<Self> {
-        let (api_base, token_url) = endpoints(&config.origins);
-        let gmail_origin = config
+        let (api_base, token_url) = endpoints(&oauth.origins);
+        let gmail_origin = oauth
             .origins
             .gmail
             .as_deref()

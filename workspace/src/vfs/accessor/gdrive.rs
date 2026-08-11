@@ -252,12 +252,6 @@ pub struct GdriveConfig {
     /// The mount's own half of the credential. Useless without the deployment's
     /// [`GoogleClient`], which is why that one is injected rather than stored here.
     pub refresh_token: String,
-    /// Where to reach each Google service, when not production Google (an enterprise
-    /// mock or a gateway). Deployment-level only — the token endpoint receives the
-    /// app's client secret, so this is NOT part of the mount-create API; the backend
-    /// injects it from its own config.
-    #[serde(default, skip_serializing_if = "Origins::is_default")]
-    pub origins: Origins,
 }
 
 /// Holds Google OAuth credentials (one refresh token) and a cached access
@@ -279,7 +273,7 @@ pub struct GdriveAccessor {
 
 impl GdriveAccessor {
     pub fn new(config: &GdriveConfig, oauth: &GoogleClient) -> anyhow::Result<Self> {
-        let urls = endpoints(&config.origins);
+        let urls = endpoints(&oauth.origins);
         Ok(Self {
             // Bound every request: a hung upstream call behind a filesystem op
             // would otherwise wedge the op (and any process touching the mount)

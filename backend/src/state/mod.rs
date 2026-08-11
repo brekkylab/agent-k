@@ -95,6 +95,7 @@ impl GoogleOAuth {
         Some(::workspace::GoogleClient {
             client_id: id.to_string(),
             client_secret: secret.to_string(),
+            origins: self.origins.clone(),
         })
     }
 }

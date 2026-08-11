@@ -39,6 +39,16 @@ impl Mock {
     fn config(&self) -> GdriveConfig {
         GdriveConfig {
             refresh_token: "rt".into(),
+        }
+    }
+
+    /// The deployment's client, pointed at this mock. It carries the origins now, so
+    /// where a request goes is decided by what the caller injects rather than by the
+    /// mount's stored config.
+    fn oauth(&self) -> GoogleClient {
+        GoogleClient {
+            client_id: "cid".into(),
+            client_secret: "cs".into(),
             origins: Origins::behind(&self.addr),
         }
     }
@@ -313,18 +323,13 @@ async fn start_scripted(listing: Value, blobs: HashMap<String, Vec<u8>>, script:
     }
 }
 
-/// The deployment's OAuth client, which the mock accepts whatever it says. Supplied
-/// per construction because it is not part of a mount's config.
-fn oauth() -> GoogleClient {
-    GoogleClient {
-        client_id: "cid".into(),
-        client_secret: "cs".into(),
-    }
-}
-
-/// The provider as `build_mounts` assembles it.
-fn mounted(cfg: &GdriveConfig) -> CachedResource {
-    CachedResource::new(Arc::new(GdriveResource::new(cfg, &oauth()).unwrap()))
+/// The provider as `build_mounts` assembles it. Only the client varies between these
+/// tests: a mount's own config is a refresh token and nothing else.
+fn mounted(oauth: &GoogleClient) -> CachedResource {
+    let cfg = GdriveConfig {
+        refresh_token: "rt".into(),
+    };
+    CachedResource::new(Arc::new(GdriveResource::new(&cfg, oauth).unwrap()))
 }
 
 fn row(name: &str, id: &str, mime: &str, size: Option<&str>) -> Value {
@@ -357,7 +362,7 @@ async fn an_unsized_file_is_measured_then_read_by_the_window() {
         HashMap::from([("P1".to_string(), vec![b'a'; REAL])]),
     )
     .await;
-    let fs = mounted(&mock.config());
+    let fs = mounted(&mock.oauth());
     let dir = MountPath::new("/My Drive");
     let file = MountPath::new("/My Drive/big.pdf");
 
@@ -414,7 +419,7 @@ async fn an_open_handle_reports_the_real_length_of_an_unsized_file() {
     let fs = crate::WorkspaceFs::from_config(crate::vfs::FsConfig {
         local_root: None,
         mirror_root: None,
-        google_oauth: Some(oauth()),
+        google_oauth: Some(mock.oauth()),
         mounts: vec![crate::vfs::MountSpec {
             prefix: "/gdrive".into(),
             provider: crate::vfs::ProviderConfig::Gdrive(mock.config()),
@@ -454,7 +459,7 @@ async fn a_document_is_built_once_and_served_from_the_cache() {
         HashMap::new(),
     )
     .await;
-    let fs = mounted(&mock.config());
+    let fs = mounted(&mock.oauth());
     let listed = fs.readdir(&MountPath::new("/My Drive")).await.unwrap();
     assert_eq!(listed[0].name, "notes.gdoc.json");
     assert!(listed[0].size_is_estimate);
@@ -500,7 +505,7 @@ async fn an_oversized_document_stops_being_read() {
         Some(PAD),
     )
     .await;
-    let fs = mounted(&mock.config());
+    let fs = mounted(&mock.oauth());
     let path = MountPath::new("/My Drive/huge.gdoc.json");
     let st = fs.stat(&path).await.unwrap();
 
@@ -536,7 +541,7 @@ async fn a_failed_shared_drive_listing_is_not_cached_as_an_answer() {
         },
     )
     .await;
-    let fs = mounted(&mock.config());
+    let fs = mounted(&mock.oauth());
     let root = MountPath::new("/");
 
     let t0 = std::time::Instant::now();
@@ -568,7 +573,7 @@ async fn a_failed_shared_drive_listing_is_not_cached_as_an_answer() {
     // rather than inheriting the failure. Within one mount the wrapper's own listing
     // cache still answers for its TTL — that layer has no per-listing way to say "this
     // one is incomplete", which is what it would take to recover sooner.
-    let fresh = mounted(&mock.config());
+    let fresh = mounted(&mock.oauth());
     mock.reset();
     let _ = fresh.readdir(&root).await.unwrap();
     assert_eq!(
@@ -591,7 +596,7 @@ async fn an_empty_window_does_not_fetch_the_object() {
         HashMap::from([("P1".to_string(), vec![b'a'; REAL])]),
     )
     .await;
-    let fs = mounted(&mock.config());
+    let fs = mounted(&mock.oauth());
     let file = MountPath::new("/My Drive/big.pdf");
     let st = fs.stat(&file).await.unwrap();
 
@@ -621,7 +626,7 @@ async fn a_listing_cache_does_not_grow_without_bound() {
         HashMap::new(),
     )
     .await;
-    let inner = Arc::new(GdriveResource::new(&mock.config(), &oauth()).unwrap());
+    let inner = Arc::new(GdriveResource::new(&mock.config(), &mock.oauth()).unwrap());
     let fs = CachedResource::new(inner.clone());
 
     // The root plus one folder listing.
@@ -663,8 +668,9 @@ async fn one_service_can_move_without_moving_the_others() {
     // Gateway B: Sheets only, on a different port.
     let b = start(json!([]), HashMap::new()).await;
 
-    let fs = mounted(&GdriveConfig {
-        refresh_token: "rt".into(),
+    let fs = mounted(&GoogleClient {
+        client_id: "cid".into(),
+        client_secret: "cs".into(),
         origins: Origins {
             drive: Some(format!("{}/drive", a.addr)),
             oauth: Some(format!("{}/oauth2", a.addr)),
@@ -723,7 +729,7 @@ async fn a_backwards_window_does_not_take_the_process_down() {
         HashMap::from([("B1".to_string(), vec![b'z'; REAL])]),
     )
     .await;
-    let fs = mounted(&mock.config());
+    let fs = mounted(&mock.oauth());
     let file = MountPath::new("/My Drive/big.bin");
     let st = fs.stat(&file).await.unwrap();
     assert!(
@@ -778,7 +784,7 @@ async fn a_token_is_replaced_before_it_expires_not_after() {
     let listing = || json!([row("a.txt", "F1", "text/plain", Some("3"))]);
 
     let long = start(listing(), HashMap::new()).await;
-    let r = GdriveResource::new(&long.config(), &oauth()).unwrap();
+    let r = GdriveResource::new(&long.config(), &long.oauth()).unwrap();
     r.readdir(&MountPath::new("/My Drive")).await.unwrap();
     assert_eq!(
         long.hits("/drive/v3/"),
@@ -800,7 +806,7 @@ async fn a_token_is_replaced_before_it_expires_not_after() {
         },
     )
     .await;
-    let r = GdriveResource::new(&short.config(), &oauth()).unwrap();
+    let r = GdriveResource::new(&short.config(), &short.oauth()).unwrap();
     r.readdir(&MountPath::new("/My Drive")).await.unwrap();
     assert_eq!(short.hits("/drive/v3/"), 2, "the same two API calls");
     assert_eq!(
@@ -825,7 +831,7 @@ async fn a_401_refreshes_and_retries_transparently() {
         },
     )
     .await;
-    let r = GdriveResource::new(&mock.config(), &oauth()).unwrap();
+    let r = GdriveResource::new(&mock.config(), &mock.oauth()).unwrap();
 
     let entries = r
         .readdir(&MountPath::new("/My Drive"))
@@ -859,7 +865,7 @@ async fn a_persistent_401_gives_up_after_one_re_auth() {
         },
     )
     .await;
-    let r = GdriveResource::new(&mock.config(), &oauth()).unwrap();
+    let r = GdriveResource::new(&mock.config(), &mock.oauth()).unwrap();
 
     assert!(
         r.readdir(&MountPath::new("/My Drive")).await.is_err(),
@@ -872,5 +878,46 @@ async fn a_persistent_401_gives_up_after_one_re_auth() {
         2,
         "one attempt, one replay: {:?}",
         mock.hits("/drive/v3/files")
+    );
+}
+
+/// A stored row cannot redirect where the client secret is sent.
+///
+/// The token endpoint is derived from the injected client, not from the mount's config,
+/// so a row carrying its own `origins` is inert. That is the point of moving the field:
+/// while it was read from the row, anyone able to write one could name the host that the
+/// refresh POST (`client_id`, `client_secret`, `refresh_token`) went to.
+#[tokio::test]
+async fn a_row_cannot_name_the_host_the_secret_goes_to() {
+    let real = start(
+        json!([row("a.txt", "F1", "text/plain", Some("3"))]),
+        HashMap::new(),
+    )
+    .await;
+    // Stands in for an attacker-controlled endpoint: it serves nothing, so anything
+    // reaching it fails loudly instead of quietly succeeding.
+    let hostile = start(json!([]), HashMap::new()).await;
+
+    // The shape an old or tampered row has. `origins` is no longer a field, so this is
+    // what serde sees and discards.
+    let stored = json!({
+        "refresh_token": "rt",
+        "origins": { "oauth": format!("{}/oauth2", hostile.addr) },
+    })
+    .to_string();
+    let cfg: GdriveConfig = serde_json::from_str(&stored).expect("an unknown field is ignored");
+
+    let fs = CachedResource::new(Arc::new(GdriveResource::new(&cfg, &real.oauth()).unwrap()));
+    let listed = fs.readdir(&MountPath::new("/My Drive")).await.unwrap();
+    assert_eq!(listed.len(), 1, "served from the injected origin");
+
+    assert!(
+        real.token_requests() > 0,
+        "the token went to the injected endpoint"
+    );
+    assert_eq!(
+        hostile.seen.lock().unwrap().len(),
+        0,
+        "and the row's endpoint was never contacted"
     );
 }

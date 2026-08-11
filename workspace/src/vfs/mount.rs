@@ -187,7 +187,6 @@ mod tests {
             provider: ProviderConfig::Gmail(GmailConfig {
                 refresh_token: "rt".into(),
                 account_email: "a@b.c".into(),
-                origins: Default::default(),
                 index_cap: None,
             }),
         }
@@ -198,7 +197,6 @@ mod tests {
             prefix: "/gdrive".into(),
             provider: ProviderConfig::Gdrive(GdriveConfig {
                 refresh_token: "rt".into(),
-                origins: Default::default(),
             }),
         }
     }
@@ -290,6 +288,7 @@ mod tests {
             google_oauth: Some(GoogleClient {
                 client_id: "cid".into(),
                 client_secret: "cs".into(),
+                origins: Default::default(),
             }),
             mounts: vec![gmail_spec(), gdrive_spec()],
         })

@@ -1182,16 +1182,16 @@ mod tests {
         let oauth = GoogleClient {
             client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
             client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
+            origins: match std::env::var("GOOGLE_API_BASE_URL") {
+                Ok(host) => crate::vfs::accessor::Origins::behind(&host),
+                Err(_) => Default::default(),
+            },
         };
         let config = GmailConfig {
             refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
             // This one *is* read: it names the mirror directory, so a live run against
             // two accounts must not have them share a tree.
             account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
-            origins: match std::env::var("GOOGLE_API_BASE_URL") {
-                Ok(host) => crate::vfs::accessor::Origins::behind(&host),
-                Err(_) => Default::default(),
-            },
             index_cap: std::env::var("GMAIL_INDEX_CAP")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -1210,13 +1210,13 @@ mod tests {
             &GmailConfig {
                 refresh_token: "tok".into(),
                 account_email: "t@example.com".into(),
-                origins: Default::default(),
                 index_cap: None,
             },
             None,
             &GoogleClient {
                 client_id: "id".into(),
                 client_secret: "sec".into(),
+                origins: Default::default(),
             },
         )
         .unwrap();

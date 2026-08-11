@@ -1305,11 +1305,11 @@ mod tests {
         let r = GdriveResource::new(
             &GdriveConfig {
                 refresh_token: "x".into(),
-                origins: crate::vfs::accessor::Origins::behind("http://127.0.0.1:1"),
             },
             &GoogleClient {
                 client_id: "x".into(),
                 client_secret: "x".into(),
+                origins: crate::vfs::accessor::Origins::behind("http://127.0.0.1:1"),
             },
         )
         .unwrap();
@@ -1539,14 +1539,14 @@ mod tests {
             GdriveConfig {
                 refresh_token: std::env::var("GOOGLE_MOCK_TOKEN")
                     .unwrap_or_else(|_| "admin-service-token".into()),
-                origins: crate::vfs::accessor::Origins::behind(
-                    &std::env::var("GOOGLE_API_BASE_URL").ok()?,
-                ),
             },
             // A mock accepts any client; what matters is that one is supplied at all.
             GoogleClient {
                 client_id: "mock".into(),
                 client_secret: "mock".into(),
+                origins: crate::vfs::accessor::Origins::behind(
+                    &std::env::var("GOOGLE_API_BASE_URL").ok()?,
+                ),
             },
         ))
     }
@@ -1669,11 +1669,11 @@ mod tests {
         Some((
             GdriveConfig {
                 refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
-                origins: Default::default(),
             },
             GoogleClient {
                 client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
                 client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
+                origins: Default::default(),
             },
         ))
     }

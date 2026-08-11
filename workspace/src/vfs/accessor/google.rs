@@ -27,6 +27,11 @@ pub(crate) const OAUTH_ORIGIN: &str = "https://oauth2.googleapis.com";
 pub struct GoogleClient {
     pub client_id: String,
     pub client_secret: String,
+    /// Where each Google service is reached, including the token endpoint this pair is
+    /// POSTed to. Deployment config like the pair itself, and carried here for the same
+    /// reason: read from a mount's row, it decides where the secret gets sent, so anyone
+    /// who can write a row could point it at a host of their choosing.
+    pub origins: Origins,
 }
 
 /// Where to reach each Google service. `None` = the real host.

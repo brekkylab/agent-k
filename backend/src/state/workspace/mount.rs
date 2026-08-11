@@ -260,6 +260,7 @@ mod tests {
         ::workspace::GoogleClient {
             client_id: "deployment-client".into(),
             client_secret: "deployment-secret".into(),
+            origins: Default::default(),
         }
     }
 
@@ -370,7 +371,6 @@ mod tests {
             ProviderConfig::Gmail(GmailConfig {
                 refresh_token: "r".into(),
                 account_email: email.into(),
-                origins: Default::default(),
                 index_cap: None,
             })
         };
@@ -414,7 +414,6 @@ mod tests {
         let (state, _tmp, wid) = fresh_state().await;
         let provider = ProviderConfig::Gdrive(GdriveConfig {
             refresh_token: "rt".into(),
-            origins: Default::default(),
         });
         state
             .create_mount(WorkspaceMount::new(wid, "gdrive".into(), provider))
