@@ -159,15 +159,26 @@ pub struct SessionsState {
     runs: Arc<Mutex<HashMap<Uuid, ActiveRun>>>,
 
     events: EventQueue,
+
+    /// The deployment's Google OAuth client, cloned into each spawned run so it can
+    /// assemble a workspace with Gmail or Drive mounts. Deployment config, so it is
+    /// held here rather than read back from a mount row.
+    google_oauth: Option<::workspace::GoogleClient>,
 }
 
 impl SessionsState {
-    pub fn new(db: SqlitePool, data_root: PathBuf, events: EventQueue) -> Self {
+    pub fn new(
+        db: SqlitePool,
+        data_root: PathBuf,
+        events: EventQueue,
+        google_oauth: Option<::workspace::GoogleClient>,
+    ) -> Self {
         Self {
             db,
             data_root,
             runs: Arc::new(Mutex::new(HashMap::new())),
             events,
+            google_oauth,
         }
     }
 
@@ -386,6 +397,7 @@ impl SessionsState {
         let data_root = self.data_root.clone();
         let events = self.events.clone();
         let runs = self.runs.clone();
+        let google_oauth = self.google_oauth.clone();
 
         tokio::spawn(async move {
             let session_key = id.to_string();
@@ -417,7 +429,7 @@ impl SessionsState {
 
                 // The workspace's external-provider mounts, if any. Mounted into
                 // the guest below so the agent reads them as files.
-                let vfs = crate::state::build_workspace_vfs(&db, workspace_id).await?;
+                let vfs = crate::state::build_workspace_vfs(&db, workspace_id, google_oauth.clone()).await?;
                 // Named in the prompt below so the agent knows which sources are
                 // connected without spending a readdir to find out.
                 let sources: Vec<String> = vfs

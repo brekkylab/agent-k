@@ -9,7 +9,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::vfs::{
-    accessor::{GdriveAccessor, GdriveConfig},
+    accessor::{GdriveAccessor, GdriveConfig, GoogleClient},
     error::{ResourceError, ResourceResult},
     path::MountPath,
     resource::{DirEntry, FileKind, FileStat, Resource},
@@ -245,9 +245,9 @@ pub struct GdriveResource {
 }
 
 impl GdriveResource {
-    pub fn new(config: &GdriveConfig) -> anyhow::Result<Self> {
+    pub fn new(config: &GdriveConfig, oauth: &GoogleClient) -> anyhow::Result<Self> {
         Ok(Self {
-            accessor: GdriveAccessor::new(config)?,
+            accessor: GdriveAccessor::new(config, oauth)?,
             probed: Mutex::new(HashMap::new()),
             dir_cache: Mutex::new(HashMap::new()),
         })
@@ -1302,12 +1302,16 @@ mod tests {
     /// nothing — a search for "" would otherwise return the whole Drive.
     #[tokio::test]
     async fn search_rejects_what_it_cannot_answer() {
-        let r = GdriveResource::new(&GdriveConfig {
-            client_id: "x".into(),
-            client_secret: "x".into(),
-            refresh_token: "x".into(),
-            origins: crate::vfs::accessor::Origins::behind("http://127.0.0.1:1"),
-        })
+        let r = GdriveResource::new(
+            &GdriveConfig {
+                refresh_token: "x".into(),
+                origins: crate::vfs::accessor::Origins::behind("http://127.0.0.1:1"),
+            },
+            &GoogleClient {
+                client_id: "x".into(),
+                client_secret: "x".into(),
+            },
+        )
         .unwrap();
         assert!(matches!(
             r.command("page-create", b"{}").await,
@@ -1530,16 +1534,21 @@ mod tests {
     /// The token var is deliberately not `GOOGLE_REFRESH_TOKEN`: sharing it with
     /// [`live_config`] means one shell with both set sends a real Google token to the
     /// mock, which then fails for a reason that looks like a code bug.
-    fn mock_config() -> Option<GdriveConfig> {
-        Some(GdriveConfig {
-            client_id: "mock".into(),
-            client_secret: "mock".into(),
-            refresh_token: std::env::var("GOOGLE_MOCK_TOKEN")
-                .unwrap_or_else(|_| "admin-service-token".into()),
-            origins: crate::vfs::accessor::Origins::behind(
-                &std::env::var("GOOGLE_API_BASE_URL").ok()?,
-            ),
-        })
+    fn mock_config() -> Option<(GdriveConfig, GoogleClient)> {
+        Some((
+            GdriveConfig {
+                refresh_token: std::env::var("GOOGLE_MOCK_TOKEN")
+                    .unwrap_or_else(|_| "admin-service-token".into()),
+                origins: crate::vfs::accessor::Origins::behind(
+                    &std::env::var("GOOGLE_API_BASE_URL").ok()?,
+                ),
+            },
+            // A mock accepts any client; what matters is that one is supplied at all.
+            GoogleClient {
+                client_id: "mock".into(),
+                client_secret: "mock".into(),
+            },
+        ))
     }
 
     /// Tree round-trip against an enterprise-mock, local or hosted. Ignored by
@@ -1562,11 +1571,11 @@ mod tests {
         const WALK_DIRS: usize = 12;
         const WALK_FILES: usize = 200;
 
-        let Some(cfg) = mock_config() else {
+        let Some((cfg, oauth)) = mock_config() else {
             eprintln!("set GOOGLE_API_BASE_URL (e.g. http://localhost:8000) to run");
             return;
         };
-        let r = GdriveResource::new(&cfg).unwrap();
+        let r = GdriveResource::new(&cfg, &oauth).unwrap();
 
         let root = r.readdir(&MountPath::root()).await.expect("root readdir");
         eprintln!(
@@ -1656,13 +1665,17 @@ mod tests {
         }
     }
 
-    fn live_config() -> Option<GdriveConfig> {
-        Some(GdriveConfig {
-            client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
-            client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
-            refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
-            origins: Default::default(),
-        })
+    fn live_config() -> Option<(GdriveConfig, GoogleClient)> {
+        Some((
+            GdriveConfig {
+                refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
+                origins: Default::default(),
+            },
+            GoogleClient {
+                client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
+                client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
+            },
+        ))
     }
 
     /// Live tree round-trip against real Google Drive: the root sections, both
@@ -1674,11 +1687,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires GOOGLE_* env + network"]
     async fn gdrive_live_tree_and_reads() {
-        let Some(cfg) = live_config() else {
+        let Some((cfg, oauth)) = live_config() else {
             eprintln!("set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN to run");
             return;
         };
-        let r = GdriveResource::new(&cfg).unwrap();
+        let r = GdriveResource::new(&cfg, &oauth).unwrap();
 
         let root = r.readdir(&MountPath::root()).await.expect("root readdir");
         eprintln!(
@@ -1731,11 +1744,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires GOOGLE_* env + network"]
     async fn gdrive_live_native_json_is_served() {
-        let Some(cfg) = live_config() else {
+        let Some((cfg, oauth)) = live_config() else {
             eprintln!("set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN to run");
             return;
         };
-        let r = GdriveResource::new(&cfg).unwrap();
+        let r = GdriveResource::new(&cfg, &oauth).unwrap();
 
         let mut seen = 0usize;
         for section in [SHARED_WITH_ME_NAME, MY_DRIVE_NAME] {
@@ -1831,11 +1844,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires GOOGLE_* env + network"]
     async fn gdrive_live_a_token_names_its_own_account() {
-        let Some(cfg) = live_config() else {
+        let Some((cfg, oauth)) = live_config() else {
             eprintln!("set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN to run");
             return;
         };
-        let email = GdriveAccessor::new(&cfg)
+        let email = GdriveAccessor::new(&cfg, &oauth)
             .unwrap()
             .account_email()
             .await
@@ -1856,11 +1869,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires GOOGLE_* env + network"]
     async fn gdrive_live_search_reaches_inside_a_pdf() {
-        let Some(cfg) = live_config() else {
+        let Some((cfg, oauth)) = live_config() else {
             eprintln!("set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN to run");
             return;
         };
-        let r = GdriveResource::new(&cfg).unwrap();
+        let r = GdriveResource::new(&cfg, &oauth).unwrap();
         let phrase = std::env::var("GOOGLE_SEARCH_PHRASE").unwrap_or_else(|_| "cloud".into());
         let t0 = std::time::Instant::now();
         let out = r
@@ -1892,11 +1905,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires GOOGLE_* env + network"]
     async fn gdrive_live_originals_read_by_range() {
-        let Some(cfg) = live_config() else {
+        let Some((cfg, oauth)) = live_config() else {
             eprintln!("set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN to run");
             return;
         };
-        let r = GdriveResource::new(&cfg).unwrap();
+        let r = GdriveResource::new(&cfg, &oauth).unwrap();
 
         for section in [MY_DRIVE_NAME, SHARED_WITH_ME_NAME] {
             let entries = r

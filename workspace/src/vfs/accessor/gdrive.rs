@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::google::{OAUTH_ORIGIN, Origins};
+use super::google::{GoogleClient, OAUTH_ORIGIN, Origins};
 use tokio::sync::Mutex;
 
 /// The origin each service lives on, without the version suffix this code appends —
@@ -249,8 +249,8 @@ pub async fn exchange_gdrive_code(
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GdriveConfig {
-    pub client_id: String,
-    pub client_secret: String,
+    /// The mount's own half of the credential. Useless without the deployment's
+    /// [`GoogleClient`], which is why that one is injected rather than stored here.
     pub refresh_token: String,
     /// Where to reach each Google service, when not production Google (an enterprise
     /// mock or a gateway). Deployment-level only — the token endpoint receives the
@@ -267,6 +267,9 @@ pub struct GdriveConfig {
 pub struct GdriveAccessor {
     client: reqwest::Client,
     config: GdriveConfig,
+    /// The deployment's OAuth client, supplied by the caller. Not part of
+    /// [`GdriveConfig`], so it never reaches the mount's persisted row.
+    oauth: GoogleClient,
     /// Every API host, resolved once from [`GdriveConfig::origins`].
     urls: Endpoints,
     /// Cached OAuth access token + its expiry. Refreshed proactively before
@@ -275,7 +278,7 @@ pub struct GdriveAccessor {
 }
 
 impl GdriveAccessor {
-    pub fn new(config: &GdriveConfig) -> anyhow::Result<Self> {
+    pub fn new(config: &GdriveConfig, oauth: &GoogleClient) -> anyhow::Result<Self> {
         let urls = endpoints(&config.origins);
         Ok(Self {
             // Bound every request: a hung upstream call behind a filesystem op
@@ -287,6 +290,7 @@ impl GdriveAccessor {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
             config: config.clone(),
+            oauth: oauth.clone(),
             urls,
             access_token: Mutex::new(None),
         })
@@ -305,8 +309,8 @@ impl GdriveAccessor {
             .client
             .post(&self.urls.token)
             .form(&[
-                ("client_id", self.config.client_id.as_str()),
-                ("client_secret", self.config.client_secret.as_str()),
+                ("client_id", self.oauth.client_id.as_str()),
+                ("client_secret", self.oauth.client_secret.as_str()),
                 ("refresh_token", self.config.refresh_token.as_str()),
                 ("grant_type", "refresh_token"),
             ])

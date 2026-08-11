@@ -83,6 +83,20 @@ impl GoogleOAuth {
             _ => None,
         }
     }
+
+    /// The same pair in the form the workspace crate takes it, to hand to a Gmail or
+    /// Drive mount at build time.
+    ///
+    /// Passing it per build is the point: an access token lasts an hour, so these are
+    /// needed for as long as a mount lives, and the alternative — storing a copy in
+    /// each mount's row — would put a working credential next to every refresh token.
+    pub fn client(&self) -> Option<::workspace::GoogleClient> {
+        let (id, secret) = self.credentials()?;
+        Some(::workspace::GoogleClient {
+            client_id: id.to_string(),
+            client_secret: secret.to_string(),
+        })
+    }
 }
 
 pub struct AppState {
@@ -121,9 +135,14 @@ impl AppState {
         let events = EventQueue::new();
 
         Ok(Self {
-            workspaces: WorkspacesState::new(db.clone(), data_root.clone()),
+            workspaces: WorkspacesState::new(db.clone(), data_root.clone(), google_oauth.client()),
             agents: AgentsState::new(db.clone()),
-            sessions: SessionsState::new(db.clone(), data_root, events.clone()),
+            sessions: SessionsState::new(
+                db.clone(),
+                data_root,
+                events.clone(),
+                google_oauth.client(),
+            ),
             users: UsersState::new(db),
             events,
             jwt,

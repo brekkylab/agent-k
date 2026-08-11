@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::vfs::{
-    accessor::{GdriveConfig, Origins},
+    accessor::{GdriveConfig, GoogleClient, Origins},
     cache::CachedResource,
     path::MountPath,
     resource::{GdriveResource, Resource},
@@ -38,8 +38,6 @@ struct Mock {
 impl Mock {
     fn config(&self) -> GdriveConfig {
         GdriveConfig {
-            client_id: "cid".into(),
-            client_secret: "cs".into(),
             refresh_token: "rt".into(),
             origins: Origins::behind(&self.addr),
         }
@@ -264,9 +262,18 @@ async fn start_full(
     }
 }
 
+/// The deployment's OAuth client, which the mock accepts whatever it says. Supplied
+/// per construction because it is not part of a mount's config.
+fn oauth() -> GoogleClient {
+    GoogleClient {
+        client_id: "cid".into(),
+        client_secret: "cs".into(),
+    }
+}
+
 /// The provider as `build_mounts` assembles it.
 fn mounted(cfg: &GdriveConfig) -> CachedResource {
-    CachedResource::new(Arc::new(GdriveResource::new(cfg).unwrap()))
+    CachedResource::new(Arc::new(GdriveResource::new(cfg, &oauth()).unwrap()))
 }
 
 fn row(name: &str, id: &str, mime: &str, size: Option<&str>) -> Value {
@@ -356,6 +363,7 @@ async fn an_open_handle_reports_the_real_length_of_an_unsized_file() {
     let fs = crate::WorkspaceFs::from_config(crate::vfs::FsConfig {
         local_root: None,
         mirror_root: None,
+        google_oauth: Some(oauth()),
         mounts: vec![crate::vfs::MountSpec {
             prefix: "/gdrive".into(),
             provider: crate::vfs::ProviderConfig::Gdrive(mock.config()),
@@ -560,7 +568,7 @@ async fn a_listing_cache_does_not_grow_without_bound() {
         HashMap::new(),
     )
     .await;
-    let inner = Arc::new(GdriveResource::new(&mock.config()).unwrap());
+    let inner = Arc::new(GdriveResource::new(&mock.config(), &oauth()).unwrap());
     let fs = CachedResource::new(inner.clone());
 
     // The root plus one folder listing.
@@ -603,8 +611,6 @@ async fn one_service_can_move_without_moving_the_others() {
     let b = start(json!([]), HashMap::new()).await;
 
     let fs = mounted(&GdriveConfig {
-        client_id: "cid".into(),
-        client_secret: "cs".into(),
         refresh_token: "rt".into(),
         origins: Origins {
             drive: Some(format!("{}/drive", a.addr)),

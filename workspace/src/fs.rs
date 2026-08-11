@@ -381,6 +381,7 @@ impl WorkspaceFs {
         Self::from_config(FsConfig {
             local_root: Some(root),
             mirror_root: None,
+            google_oauth: None,
             mounts: Vec::new(),
         })
         .expect("local-only fs is always valid")

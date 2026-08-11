@@ -182,7 +182,8 @@ impl WorkspacesState {
     /// Build the workspace's filesystem: the local `/files` mount plus any
     /// configured provider mounts.
     pub(super) async fn build_fs(&self, workspace_id: Uuid) -> StateResult<WorkspaceFs> {
-        let mut config = build_workspace_vfs(&self.db, workspace_id).await?;
+        let mut config =
+            build_workspace_vfs(&self.db, workspace_id, self.google_oauth.clone()).await?;
         config.local_root = Some(self.get_root(workspace_id));
         config.mirror_root = Some(self.mirror_root());
         WorkspaceFs::from_config(config)
@@ -192,11 +193,18 @@ impl WorkspacesState {
 
 /// Load a workspace's provider mounts into an [`FsConfig`], with `local_root`
 /// left unset — the caller fills it, since only it knows the on-disk file root.
+///
+/// `google_oauth` is the deployment's OAuth client, required by a Gmail or Drive
+/// mount and taken as an argument rather than read from a row: it belongs to the
+/// installation, and a copy stored beside each mount's refresh token would make that
+/// row usable on its own. A caller with none passes `None`, and a Google mount then
+/// fails to build instead of serving broken.
 /// Standalone (takes the pool) so both [`WorkspacesState::build_fs`] and the
 /// session run loop (which only holds the pool) can build it.
 pub(crate) async fn build_workspace_vfs(
     db: &SqlitePool,
     workspace_id: Uuid,
+    google_oauth: Option<::workspace::GoogleClient>,
 ) -> StateResult<FsConfig> {
     let rows = sqlx::query(
         "SELECT id, workspace_id, prefix, provider, config, created_at, updated_at \
@@ -212,6 +220,7 @@ pub(crate) async fn build_workspace_vfs(
     Ok(FsConfig {
         local_root: None,
         mirror_root: None,
+        google_oauth,
         mounts: mounts
             .into_iter()
             .map(|m| MountSpec {
@@ -245,6 +254,15 @@ mod tests {
 
     /// Fresh in-memory DB with a seeded user + workspace; returns the state and
     /// the workspace id.
+    /// A deployment OAuth client, as `AppState` would supply it. No network is
+    /// reached in these tests; what matters is that one exists to be injected.
+    fn test_oauth() -> ::workspace::GoogleClient {
+        ::workspace::GoogleClient {
+            client_id: "deployment-client".into(),
+            client_secret: "deployment-secret".into(),
+        }
+    }
+
     async fn fresh_state() -> (WorkspacesState, tempfile::TempDir, Uuid) {
         let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
@@ -274,7 +292,7 @@ mod tests {
         .await
         .unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
+        let state = WorkspacesState::new(pool, tmp.path().to_path_buf(), Some(test_oauth()));
         (state, tmp, uid)
     }
 
@@ -350,8 +368,6 @@ mod tests {
         let (state, _tmp, wid) = fresh_state().await;
         let gmail = |email: &str| {
             ProviderConfig::Gmail(GmailConfig {
-                client_id: "c".into(),
-                client_secret: "s".into(),
                 refresh_token: "r".into(),
                 account_email: email.into(),
                 origins: Default::default(),
@@ -397,8 +413,6 @@ mod tests {
     async fn gdrive_mount_round_trips_and_builds() {
         let (state, _tmp, wid) = fresh_state().await;
         let provider = ProviderConfig::Gdrive(GdriveConfig {
-            client_id: "cid".into(),
-            client_secret: "cs".into(),
             refresh_token: "rt".into(),
             origins: Default::default(),
         });
@@ -409,12 +423,22 @@ mod tests {
 
         let listed = state.list_mounts(wid).await.unwrap();
         match &listed[0].provider {
-            ProviderConfig::Gdrive(c) => {
-                assert_eq!(c.refresh_token, "rt");
-                assert_eq!(c.client_id, "cid");
-            }
+            ProviderConfig::Gdrive(c) => assert_eq!(c.refresh_token, "rt"),
             _ => panic!("expected Gdrive"),
         }
+
+        // What actually reaches the row. The deployment's client secret must not be
+        // among it: a stored copy beside the refresh token would make one leaked row
+        // a working Google credential, and it is injected at build time instead.
+        let stored: String = sqlx::query_scalar("SELECT config FROM workspace_mounts")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert!(stored.contains("rt"), "the mount's own half is stored");
+        assert!(
+            !stored.contains("deployment-secret") && !stored.contains("deployment-client"),
+            "no deployment credential in the row: {stored}"
+        );
 
         // Assembles alongside `/files` (no network — client construction only).
         let vfs = state.build_fs(wid).await.unwrap();

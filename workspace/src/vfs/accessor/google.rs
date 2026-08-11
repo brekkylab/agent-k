@@ -1,4 +1,5 @@
-//! What the Google providers share: where each of Google's services can be reached.
+//! What the Google providers share: the deployment's OAuth client, and where each of
+//! Google's services can be reached.
 //!
 //! Gmail, Drive, Docs, Sheets and Slides are five APIs on five hosts, and a deployment
 //! that is not production Google may put any of them anywhere. That belongs to no one
@@ -9,6 +10,24 @@ use serde::{Deserialize, Serialize};
 
 /// The OAuth origin, shared by every provider here: one token endpoint serves them all.
 pub(crate) const OAUTH_ORIGIN: &str = "https://oauth2.googleapis.com";
+
+/// The deployment's Google OAuth client: one confidential client for the whole
+/// installation, held by whoever is running this and supplied per mount at build time.
+///
+/// Google needs both halves on every refresh, not just at consent — an access token
+/// lasts an hour, and the refresh grant is rejected without them (`client_secret is
+/// missing` / `The provided client secret is invalid`). So this is genuinely runtime
+/// state, which is exactly why it must not be stored: a mount row holds a refresh
+/// token, and a refresh token on its own mints nothing. Keeping the client secret
+/// beside it in the same row would turn one leaked row into a working credential.
+///
+/// Deliberately not `Serialize`/`Deserialize`: a mount's persisted config cannot
+/// contain this, and the compiler is what enforces that rather than a comment.
+#[derive(Clone)]
+pub struct GoogleClient {
+    pub client_id: String,
+    pub client_secret: String,
+}
 
 /// Where to reach each Google service. `None` = the real host.
 ///

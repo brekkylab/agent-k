@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::vfs::accessor::{GmailAccessor, GmailConfig};
+use crate::vfs::accessor::{GmailAccessor, GmailConfig, GoogleClient};
 
 use super::gmail::{
     GMAIL_SUFFIX, attach_dir_name, attachments, epoch_ms_to_date, id_from_name, msg_filename,
@@ -121,8 +121,9 @@ pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> PathBuf {
 pub async fn sync_gmail_mirror(
     config: &GmailConfig,
     root: &Path,
+    oauth: &GoogleClient,
 ) -> anyhow::Result<GmailSyncState> {
-    let accessor = GmailAccessor::new(config)?;
+    let accessor = GmailAccessor::new(config, oauth)?;
     let writer = MirrorWriter::open(root)?;
     let labels = fetch_label_map(&accessor).await?;
 
@@ -282,6 +283,7 @@ pub struct GmailSyncDelta {
 pub async fn sync_gmail_incremental(
     config: &GmailConfig,
     root: &Path,
+    oauth: &GoogleClient,
 ) -> anyhow::Result<GmailSyncDelta> {
     let prior = GmailSyncState::load(root);
     let cursor = match prior
@@ -291,14 +293,14 @@ pub async fn sync_gmail_incremental(
     {
         Some(c) => c,
         None => {
-            sync_gmail_mirror(config, root).await?;
+            sync_gmail_mirror(config, root, oauth).await?;
             return Ok(GmailSyncDelta {
                 full_resync: true,
                 ..Default::default()
             });
         }
     };
-    let accessor = GmailAccessor::new(config)?;
+    let accessor = GmailAccessor::new(config, oauth)?;
 
     // Page the journal, folding records into net per-message effects.
     let mut added = HashSet::new();
@@ -312,7 +314,7 @@ pub async fn sync_gmail_incremental(
             .await?
         else {
             tracing::info!("gmail sync: history cursor {cursor} expired; full resync");
-            sync_gmail_mirror(config, root).await?;
+            sync_gmail_mirror(config, root, oauth).await?;
             return Ok(GmailSyncDelta {
                 full_resync: true,
                 ..Default::default()

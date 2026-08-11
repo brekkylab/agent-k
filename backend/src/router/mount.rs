@@ -136,8 +136,6 @@ impl ProviderSpec {
                 .await
                 .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gmail oauth: {e}")))?;
                 ProviderConfig::Gmail(GmailConfig {
-                    client_id: client_id.to_string(),
-                    client_secret: client_secret.to_string(),
                     refresh_token: exchanged.refresh_token,
                     account_email: exchanged.account_email,
                     index_cap,
@@ -164,8 +162,6 @@ impl ProviderSpec {
                 .await
                 .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gdrive oauth: {e}")))?;
                 ProviderConfig::Gdrive(GdriveConfig {
-                    client_id: client_id.to_string(),
-                    client_secret: client_secret.to_string(),
                     refresh_token: exchanged.refresh_token,
                     // Deployment-level override (mock/gateway), inherited from
                     // backend config — never from the request.

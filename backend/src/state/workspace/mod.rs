@@ -88,18 +88,31 @@ pub struct WorkspacesState {
     /// Per-account single-flight driver for Gmail mirror syncs (see
     /// [`gmail_sync`]); spawned at mount creation and on frontend request.
     gmail_sync: GmailSyncRunner,
+    /// The deployment's Google OAuth client, handed to every Gmail/Drive mount this
+    /// builds. Not stored per mount: see [`build_workspace_vfs`](mount::build_workspace_vfs).
+    google_oauth: Option<::workspace::GoogleClient>,
 }
 
 impl WorkspacesState {
-    pub fn new(db: SqlitePool, data_root: PathBuf) -> Self {
-        let resyncer = Resyncer::new(db.clone(), data_root.clone());
+    pub fn new(
+        db: SqlitePool,
+        data_root: PathBuf,
+        google_oauth: Option<::workspace::GoogleClient>,
+    ) -> Self {
+        let resyncer = Resyncer::new(db.clone(), data_root.clone(), google_oauth.clone());
         Self {
             db,
             data_root,
             fs_cache: Mutex::new(HashMap::new()),
             resyncer,
             gmail_sync: GmailSyncRunner::default(),
+            google_oauth,
         }
+    }
+
+    /// The deployment's Google OAuth client, if one is configured.
+    pub(super) fn google_oauth(&self) -> Option<::workspace::GoogleClient> {
+        self.google_oauth.clone()
     }
 
     /// The workspace's assembled [`WorkspaceFs`], built once and cached (see
@@ -284,9 +297,7 @@ impl FsHook for KnowledgeHook {
                 super::knowledge::is_under_knowledge(p)
             }
         };
-        if touched
-            && let Some(r) = &self.resyncer
-        {
+        if touched && let Some(r) = &self.resyncer {
             r.spawn_resync(self.wid);
         }
     }
@@ -372,7 +383,7 @@ mod tests {
         let owner = user("owner");
         insert_user(&pool, &owner).await;
         let tmp = tempfile::tempdir().unwrap();
-        let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
+        let state = WorkspacesState::new(pool, tmp.path().to_path_buf(), None);
 
         let ws = Workspace::with_id(Uuid::new_v4(), owner.id, "Alpha".into());
         let id = ws.id;
@@ -407,7 +418,7 @@ mod tests {
         let owner = user("owner");
         insert_user(&pool, &owner).await;
         let tmp = tempfile::tempdir().unwrap();
-        let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
+        let state = WorkspacesState::new(pool, tmp.path().to_path_buf(), None);
 
         let uid = owner.id;
         // A default workspace (id == uid) and a non-default one, both owned by uid.
@@ -448,7 +459,7 @@ mod tests {
         let u = user("tester");
         insert_user(&pool, &u).await;
         let tmp = tempfile::tempdir().unwrap();
-        let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
+        let state = WorkspacesState::new(pool, tmp.path().to_path_buf(), None);
 
         let user_id = u.id;
         let ws = state.create_default(&u).await.unwrap();
@@ -479,7 +490,7 @@ mod tests {
         let u = user("healme");
         insert_user(&pool, &u).await;
         let tmp = tempfile::tempdir().unwrap();
-        let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
+        let state = WorkspacesState::new(pool, tmp.path().to_path_buf(), None);
 
         state.create_default(&u).await.unwrap();
         // Simulate an interrupted deletion: files gone, row still present.

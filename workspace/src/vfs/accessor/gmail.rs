@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::google::{OAUTH_ORIGIN, Origins};
+use super::google::{GoogleClient, OAUTH_ORIGIN, Origins};
 
 /// This service's origin, without the version suffix [`endpoints`] appends.
 const GMAIL_ORIGIN: &str = "https://gmail.googleapis.com/gmail";
@@ -222,8 +222,8 @@ async fn fetch_profile_email(access_token: &str, api_base: &str) -> Option<Strin
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GmailConfig {
-    pub client_id: String,
-    pub client_secret: String,
+    /// The mount's own half of the credential. Useless without the deployment's
+    /// [`GoogleClient`], which is why that one is injected rather than stored here.
     pub refresh_token: String,
     /// The account's email address, resolved at mount-create
     /// ([`exchange_gmail_code`]). Identifies the account across re-consents
@@ -249,6 +249,9 @@ pub struct GmailConfig {
 pub struct GmailAccessor {
     client: reqwest::Client,
     config: GmailConfig,
+    /// The deployment's OAuth client, supplied by the caller. Not part of
+    /// [`GmailConfig`], so it never reaches the mount's persisted row.
+    oauth: GoogleClient,
     /// Resolved API origin (`…/gmail/v1`) — real Google or the config's
     /// `base_url` (see [`endpoints`]).
     api_base: String,
@@ -263,7 +266,7 @@ pub struct GmailAccessor {
 }
 
 impl GmailAccessor {
-    pub fn new(config: &GmailConfig) -> anyhow::Result<Self> {
+    pub fn new(config: &GmailConfig, oauth: &GoogleClient) -> anyhow::Result<Self> {
         let (api_base, token_url) = endpoints(&config.origins);
         let gmail_origin = config
             .origins
@@ -282,6 +285,7 @@ impl GmailAccessor {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
             config: config.clone(),
+            oauth: oauth.clone(),
             api_base,
             token_url,
             gmail_origin,
@@ -302,8 +306,8 @@ impl GmailAccessor {
             .client
             .post(&self.token_url)
             .form(&[
-                ("client_id", self.config.client_id.as_str()),
-                ("client_secret", self.config.client_secret.as_str()),
+                ("client_id", self.oauth.client_id.as_str()),
+                ("client_secret", self.oauth.client_secret.as_str()),
                 ("refresh_token", self.config.refresh_token.as_str()),
                 ("grant_type", "refresh_token"),
             ])
