@@ -59,6 +59,26 @@ impl Mock {
         *self.body_bytes.lock().unwrap()
     }
 
+    /// How many requests hit a path containing `needle`.
+    fn hits(&self, needle: &str) -> usize {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.target.contains(needle))
+            .count()
+    }
+
+    /// How many times the token endpoint was asked for a new access token.
+    fn token_requests(&self) -> usize {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.target.contains("/oauth2/token"))
+            .count()
+    }
+
     fn reset(&self) {
         self.seen.lock().unwrap().clear();
         *self.body_bytes.lock().unwrap() = 0;
@@ -78,6 +98,24 @@ fn parse_range(h: &str) -> Option<(u64, Option<u64>)> {
     Some((s.parse().ok()?, e.parse().ok()))
 }
 
+/// What the mock does differently from the happy path. All-default serves a token, one
+/// folder listing, and one blob with `Range` support.
+#[derive(Default, Clone)]
+struct Script {
+    /// A document route answers with this many bytes of JSON and no `Content-Length`,
+    /// the way the real Docs API does.
+    document_pad: Option<usize>,
+    /// `/drives` answers with this status instead of a listing.
+    drives_status: Option<u16>,
+    /// The lifetime the token endpoint claims, in seconds. Default 3600, as Google
+    /// reports; a value under the accessor's 60s margin makes every call refresh.
+    token_ttl: Option<u64>,
+    /// Answer this many non-token requests with 401 before serving normally. Google
+    /// does this when an access token is dropped early, and it is what the accessor's
+    /// one-shot re-auth exists for.
+    unauthorized: usize,
+}
+
 /// Serve a token, one folder listing, and one blob with `Range` support. A document
 /// route answers with `pad` bytes of JSON and no `Content-Length`, the way the real
 /// Docs API does.
@@ -86,37 +124,35 @@ async fn start_with_document(
     blobs: HashMap<String, Vec<u8>>,
     document_pad: Option<usize>,
 ) -> Mock {
-    start_inner(listing, blobs, document_pad).await
+    start_scripted(
+        listing,
+        blobs,
+        Script {
+            document_pad,
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Serve a token, one folder listing, and one blob with `Range` support.
 async fn start(listing: Value, blobs: HashMap<String, Vec<u8>>) -> Mock {
-    start_inner(listing, blobs, None).await
+    start_scripted(listing, blobs, Script::default()).await
 }
 
-async fn start_inner(
-    listing: Value,
-    blobs: HashMap<String, Vec<u8>>,
-    document_pad: Option<usize>,
-) -> Mock {
-    start_full(listing, blobs, document_pad, None).await
-}
-
-/// `drives_status` answers `/drives` with that status instead of a listing.
-async fn start_full(
-    listing: Value,
-    blobs: HashMap<String, Vec<u8>>,
-    document_pad: Option<usize>,
-    drives_status: Option<u16>,
-) -> Mock {
+async fn start_scripted(listing: Value, blobs: HashMap<String, Vec<u8>>, script: Script) -> Mock {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
     let body_bytes = Arc::new(Mutex::new(0u64));
     let (log, written, blobs) = (seen.clone(), body_bytes.clone(), Arc::new(blobs));
     let listing = Arc::new(listing);
-    let document_pad = Arc::new(document_pad);
-    let drives_status = Arc::new(drives_status);
+    let document_pad = Arc::new(script.document_pad);
+    let drives_status = Arc::new(script.drives_status);
+    let token_ttl = Arc::new(script.token_ttl.unwrap_or(3600));
+    // Shared, not per-connection: every request opens its own socket, so the count of
+    // 401s still owed has to outlive the connection that consumed one.
+    let unauthorized = Arc::new(Mutex::new(script.unauthorized));
     tokio::spawn(async move {
         while let Ok((mut sock, _)) = listener.accept().await {
             let (log, written, blobs, listing, document_pad, drives_status) = (
@@ -127,6 +163,7 @@ async fn start_full(
                 document_pad.clone(),
                 drives_status.clone(),
             );
+            let (token_ttl, unauthorized) = (token_ttl.clone(), unauthorized.clone());
             tokio::spawn(async move {
                 let mut buf = Vec::new();
                 let mut tmp = [0u8; 4096];
@@ -209,12 +246,26 @@ async fn start_full(
                     let _ = sock.shutdown().await;
                     return;
                 }
+                // Owed a 401? Spend one. Decided before any route so the replay meets
+                // the same request the first attempt made.
+                let spend_a_401 = method != "POST" && {
+                    let mut owed = unauthorized.lock().unwrap();
+                    let spend = *owed > 0;
+                    *owed = owed.saturating_sub(1);
+                    spend
+                };
                 let (out, body_len) = if method == "POST" && path.ends_with("/oauth2/token") {
                     reply(
                         200,
-                        json!({"access_token": "at", "expires_in": 3600})
+                        json!({"access_token": "at", "expires_in": *token_ttl})
                             .to_string()
                             .into_bytes(),
+                        None,
+                    )
+                } else if spend_a_401 {
+                    reply(
+                        401,
+                        br#"{"error":{"code":401,"message":"Invalid Credentials"}}"#.to_vec(),
                         None,
                     )
                 } else if path.ends_with("/drives") {
@@ -476,11 +527,13 @@ async fn an_oversized_document_stops_being_read() {
 /// ladder, which put half a minute of backoff in front of the first `ls` of a mount.
 #[tokio::test]
 async fn a_failed_shared_drive_listing_is_not_cached_as_an_answer() {
-    let mock = start_full(
+    let mock = start_scripted(
         json!([row("a.txt", "F1", "text/plain", Some("3"))]),
         HashMap::new(),
-        None,
-        Some(500),
+        Script {
+            drives_status: Some(500),
+            ..Default::default()
+        },
     )
     .await;
     let fs = mounted(&mock.config());
@@ -699,4 +752,125 @@ async fn a_backwards_window_does_not_take_the_process_down() {
 /// doing the slicing.
 fn whole_or_small_enough(st: &crate::vfs::resource::FileStat) -> bool {
     st.serves_whole || st.size == 0 || (!st.size_is_estimate && st.size <= 8 << 20)
+}
+
+// --- Access-token refresh -------------------------------------------------------
+//
+// A Google access token lasts an hour, so a mount outlives its own credential and the
+// accessor has to replace it mid-life. Two mechanisms do that, and neither was covered:
+// the token is dropped 60s *before* it expires, and a 401 buys exactly one re-auth.
+//
+// These drive the bare `GdriveResource`: refresh belongs to the accessor, and going
+// through the wrapper would serve the second listing from its cache and never reach the
+// network at all.
+
+/// A live token is reused across calls; one near expiry is replaced before it can fail.
+///
+/// The margin is the point. With a 30s lifetime the token is still perfectly valid, and
+/// the accessor refreshes anyway, which is what keeps an hour-old mount from answering a
+/// burst of reads with 401s.
+///
+/// One `readdir` of a section is two API calls (the shared-drive listing, then the
+/// folder listing), and they are what the counts below compare: a long-lived token is
+/// fetched once and shared by both, a short-lived one is refetched for each.
+#[tokio::test]
+async fn a_token_is_replaced_before_it_expires_not_after() {
+    let listing = || json!([row("a.txt", "F1", "text/plain", Some("3"))]);
+
+    let long = start(listing(), HashMap::new()).await;
+    let r = GdriveResource::new(&long.config(), &oauth()).unwrap();
+    r.readdir(&MountPath::new("/My Drive")).await.unwrap();
+    assert_eq!(
+        long.hits("/drive/v3/"),
+        2,
+        "two API calls, as described above"
+    );
+    assert_eq!(
+        long.token_requests(),
+        1,
+        "an hour-long token is fetched once and shared"
+    );
+
+    let short = start_scripted(
+        listing(),
+        HashMap::new(),
+        Script {
+            token_ttl: Some(30), // inside the 60s margin, but not expired
+            ..Default::default()
+        },
+    )
+    .await;
+    let r = GdriveResource::new(&short.config(), &oauth()).unwrap();
+    r.readdir(&MountPath::new("/My Drive")).await.unwrap();
+    assert_eq!(short.hits("/drive/v3/"), 2, "the same two API calls");
+    assert_eq!(
+        short.token_requests(),
+        2,
+        "each one refreshed first: inside the margin, before it could 401"
+    );
+}
+
+/// A 401 refreshes and replays the same request, so the caller never sees it.
+///
+/// This is the belt to the proactive braces: a token can be dropped early, or a clock
+/// can disagree, and a read should survive that rather than surface it.
+#[tokio::test]
+async fn a_401_refreshes_and_retries_transparently() {
+    let mock = start_scripted(
+        json!([row("a.txt", "F1", "text/plain", Some("3"))]),
+        HashMap::new(),
+        Script {
+            unauthorized: 1,
+            ..Default::default()
+        },
+    )
+    .await;
+    let r = GdriveResource::new(&mock.config(), &oauth()).unwrap();
+
+    let entries = r
+        .readdir(&MountPath::new("/My Drive"))
+        .await
+        .expect("the retry carries the read through");
+    assert_eq!(
+        entries.len(),
+        1,
+        "the replayed request returned the listing"
+    );
+    assert_eq!(
+        mock.token_requests(),
+        2,
+        "the 401 dropped the cached token and one was fetched to replace it"
+    );
+}
+
+/// A 401 that survives the new token fails instead of looping.
+///
+/// Retrying re-auth per 401 would spin forever against a revoked grant, hammering
+/// Google's token endpoint on every filesystem call. The guarantee is per request: one
+/// re-auth, one replay, then the error goes to the caller.
+#[tokio::test]
+async fn a_persistent_401_gives_up_after_one_re_auth() {
+    let mock = start_scripted(
+        json!([row("a.txt", "F1", "text/plain", Some("3"))]),
+        HashMap::new(),
+        Script {
+            unauthorized: usize::MAX, // never stops rejecting
+            ..Default::default()
+        },
+    )
+    .await;
+    let r = GdriveResource::new(&mock.config(), &oauth()).unwrap();
+
+    assert!(
+        r.readdir(&MountPath::new("/My Drive")).await.is_err(),
+        "a credential that refreshing cannot fix surfaces as an error"
+    );
+    // The folder listing is the request that fails the read: attempted once, replayed
+    // once with a new token, then abandoned. Anything higher means it is looping.
+    assert_eq!(
+        mock.hits("/drive/v3/files"),
+        2,
+        "one attempt, one replay: {:?}",
+        mock.hits("/drive/v3/files")
+    );
 }
