@@ -252,8 +252,6 @@ mod tests {
 
     use super::*;
 
-    /// Fresh in-memory DB with a seeded user + workspace; returns the state and
-    /// the workspace id.
     /// A deployment OAuth client, as `AppState` would supply it. No network is
     /// reached in these tests; what matters is that one exists to be injected.
     fn test_oauth() -> ::workspace::GoogleClient {
@@ -264,6 +262,8 @@ mod tests {
         }
     }
 
+    /// Fresh in-memory DB with a seeded user + workspace; returns the state and
+    /// the workspace id.
     async fn fresh_state() -> (WorkspacesState, tempfile::TempDir, Uuid) {
         let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
@@ -407,43 +407,70 @@ mod tests {
         assert!(!acct.exists(), "mirror removed with its last mount");
     }
 
-    /// A gdrive mount round-trips through encode/decode with its credentials intact,
-    /// and builds into the VFS.
+    /// A Google mount round-trips through encode/decode with its own credential intact,
+    /// carries none of the deployment's, and builds into the VFS.
     #[tokio::test]
-    async fn gdrive_mount_round_trips_and_builds() {
+    async fn a_google_mount_stores_its_own_half_and_none_of_the_deployments() {
         let (state, _tmp, wid) = fresh_state().await;
-        let provider = ProviderConfig::Gdrive(GdriveConfig {
-            refresh_token: "rt".into(),
-        });
-        state
-            .create_mount(WorkspaceMount::new(wid, "gdrive".into(), provider))
-            .await
-            .unwrap();
+        let providers = [
+            (
+                "gdrive",
+                ProviderConfig::Gdrive(GdriveConfig {
+                    refresh_token: "rt".into(),
+                }),
+            ),
+            (
+                "gmail",
+                ProviderConfig::Gmail(GmailConfig {
+                    refresh_token: "rt".into(),
+                    account_email: "a@b.c".into(),
+                    index_cap: None,
+                }),
+            ),
+        ];
+        for (prefix, provider) in providers {
+            let mount = WorkspaceMount::new(wid, prefix.into(), provider);
+            let id = mount.id;
+            state.create_mount(mount).await.unwrap();
 
-        let listed = state.list_mounts(wid).await.unwrap();
-        match &listed[0].provider {
-            ProviderConfig::Gdrive(c) => assert_eq!(c.refresh_token, "rt"),
-            _ => panic!("expected Gdrive"),
+            // What actually reaches the row, read back by id rather than assuming the
+            // table holds one. The deployment's client and its endpoints must not be
+            // among it: a stored copy beside the refresh token would make one leaked row
+            // a working Google credential, and a stored endpoint would let a row that
+            // could be written name where that credential gets sent.
+            let stored: String =
+                sqlx::query_scalar("SELECT config FROM workspace_mounts WHERE id = ?")
+                    .bind(id.to_string())
+                    .fetch_one(&state.db)
+                    .await
+                    .unwrap();
+            assert!(
+                stored.contains("rt"),
+                "{prefix}: the mount's own half is stored"
+            );
+            for forbidden in ["deployment-secret", "deployment-client", "origins"] {
+                assert!(
+                    !stored.contains(forbidden),
+                    "{prefix}: {forbidden} in the row: {stored}"
+                );
+            }
         }
 
-        // What actually reaches the row. The deployment's client secret must not be
-        // among it: a stored copy beside the refresh token would make one leaked row
-        // a working Google credential, and it is injected at build time instead.
-        let stored: String = sqlx::query_scalar("SELECT config FROM workspace_mounts")
-            .fetch_one(&state.db)
-            .await
-            .unwrap();
-        assert!(stored.contains("rt"), "the mount's own half is stored");
-        assert!(
-            !stored.contains("deployment-secret") && !stored.contains("deployment-client"),
-            "no deployment credential in the row: {stored}"
-        );
+        let listed = state.list_mounts(wid).await.unwrap();
+        assert_eq!(listed.len(), 2, "both mounts round-tripped");
 
         // Assembles alongside `/files` (no network — client construction only).
         let vfs = state.build_fs(wid).await.unwrap();
         let mut names = vfs.mount_names();
         names.sort();
-        assert_eq!(names, vec!["files".to_string(), "gdrive".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "files".to_string(),
+                "gdrive".to_string(),
+                "gmail".to_string()
+            ]
+        );
     }
 
     #[tokio::test]

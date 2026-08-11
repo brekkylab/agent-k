@@ -140,13 +140,11 @@ pub struct GmailExchange {
 /// `access_type=offline` + `prompt=consent`. `origins` overrides the Google hosts
 /// (mock/gateway deployments — see [`GmailConfig::origins`]); default = production.
 pub async fn exchange_gmail_code(
-    client_id: &str,
-    client_secret: &str,
+    oauth: &GoogleClient,
     code: &str,
     redirect_uri: &str,
-    origins: &Origins,
 ) -> anyhow::Result<GmailExchange> {
-    let (api_base, token_url) = endpoints(origins);
+    let (api_base, token_url) = endpoints(&oauth.origins);
     // Bounded: this runs inside the create_mount HTTP handler, and a bare
     // reqwest client has NO default timeout — a hung upstream would hang the
     // mount creation indefinitely.
@@ -158,8 +156,8 @@ pub async fn exchange_gmail_code(
     let resp = client
         .post(&token_url)
         .form(&[
-            ("client_id", client_id),
-            ("client_secret", client_secret),
+            ("client_id", oauth.client_id.as_str()),
+            ("client_secret", oauth.client_secret.as_str()),
             ("code", code),
             ("redirect_uri", redirect_uri),
             ("grant_type", "authorization_code"),

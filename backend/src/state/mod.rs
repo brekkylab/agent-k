@@ -76,27 +76,21 @@ pub struct GoogleOAuth {
 }
 
 impl GoogleOAuth {
-    /// `(client_id, client_secret)` when both are configured.
-    pub fn credentials(&self) -> Option<(&str, &str)> {
+    /// This deployment's client in the form the workspace crate takes it, or `None` when
+    /// it is not configured. The only way the pair leaves this struct.
+    ///
+    /// Handing it over per build is the point: an access token lasts an hour, so these
+    /// are needed for as long as a mount lives, and the alternative, a copy in each
+    /// mount's row, would put a working credential next to every refresh token.
+    pub fn client(&self) -> Option<::workspace::GoogleClient> {
         match (&self.client_id, &self.client_secret) {
-            (Some(id), Some(secret)) => Some((id.as_str(), secret.as_str())),
+            (Some(id), Some(secret)) => Some(::workspace::GoogleClient {
+                client_id: id.clone(),
+                client_secret: secret.clone(),
+                origins: self.origins.clone(),
+            }),
             _ => None,
         }
-    }
-
-    /// The same pair in the form the workspace crate takes it, to hand to a Gmail or
-    /// Drive mount at build time.
-    ///
-    /// Passing it per build is the point: an access token lasts an hour, so these are
-    /// needed for as long as a mount lives, and the alternative — storing a copy in
-    /// each mount's row — would put a working credential next to every refresh token.
-    pub fn client(&self) -> Option<::workspace::GoogleClient> {
-        let (id, secret) = self.credentials()?;
-        Some(::workspace::GoogleClient {
-            client_id: id.to_string(),
-            client_secret: secret.to_string(),
-            origins: self.origins.clone(),
-        })
     }
 }
 

@@ -202,13 +202,11 @@ pub struct GdriveExchange {
 /// (mock/gateway deployments — see [`GdriveConfig::origins`]); default =
 /// production.
 pub async fn exchange_gdrive_code(
-    client_id: &str,
-    client_secret: &str,
+    oauth: &GoogleClient,
     code: &str,
     redirect_uri: &str,
-    origins: &Origins,
 ) -> anyhow::Result<GdriveExchange> {
-    let urls = endpoints(origins);
+    let urls = endpoints(&oauth.origins);
     // Bounded: this runs inside the create_mount HTTP handler, and a bare
     // reqwest client has NO default timeout — a hung upstream would hang the
     // mount creation indefinitely.
@@ -220,8 +218,8 @@ pub async fn exchange_gdrive_code(
     let resp = client
         .post(&urls.token)
         .form(&[
-            ("client_id", client_id),
-            ("client_secret", client_secret),
+            ("client_id", oauth.client_id.as_str()),
+            ("client_secret", oauth.client_secret.as_str()),
             ("code", code),
             ("redirect_uri", redirect_uri),
             ("grant_type", "authorization_code"),
