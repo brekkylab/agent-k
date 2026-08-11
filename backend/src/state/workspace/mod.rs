@@ -297,7 +297,9 @@ impl FsHook for KnowledgeHook {
                 super::knowledge::is_under_knowledge(p)
             }
         };
-        if touched && let Some(r) = &self.resyncer {
+        if touched
+            && let Some(r) = &self.resyncer
+        {
             r.spawn_resync(self.wid);
         }
     }

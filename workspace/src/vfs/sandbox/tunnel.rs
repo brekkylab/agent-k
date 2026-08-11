@@ -613,6 +613,9 @@ mod host_engine_test {
                     atime: None,
                     ctime: None,
                 },
+                // A source that could not be reached, as distinct from one that is not
+                // there. `lookup`/`getattr` must not report these the same way.
+                "/broken" => return Err(anyhow::anyhow!("provider unreachable")),
                 _ => FwdStat::missing(),
             })
         }
@@ -687,6 +690,23 @@ mod host_engine_test {
         c.write_all(&req(1, 3, 1, b"x\0")).unwrap();
         let (err, _) = read_reply(&mut c);
         assert_eq!(err, 0, "LOOKUP /x should succeed");
+
+        // A path that is not there, and one the source could not answer for. These have to
+        // arrive as different errnos: a mount whose credentials are missing fails every
+        // stat, and reporting that as ENOENT is what let the guest read an unreachable
+        // source as an empty one. Asserted here rather than only against `ForwardFs`,
+        // because the mapping lives in these handlers.
+        c.write_all(&req(1, 4, 1, b"nope\0")).unwrap();
+        let (err, _) = read_reply(&mut c);
+        assert_eq!(-err, libc::ENOENT, "LOOKUP of an absent name is ENOENT");
+
+        c.write_all(&req(1, 5, 1, b"broken\0")).unwrap();
+        let (err, _) = read_reply(&mut c);
+        assert_eq!(
+            -err,
+            libc::EIO,
+            "LOOKUP of an unreachable source is EIO, not ENOENT"
+        );
 
         println!("host engine served INIT + GETATTR + LOOKUP over TCP tunnel — OK");
     }

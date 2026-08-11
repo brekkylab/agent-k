@@ -61,9 +61,8 @@ pub struct FsConfig {
     /// it belongs to the installation, not to any one mount, and a stored copy beside
     /// a refresh token would make that row a usable credential on its own. `None`
     /// (tests, library users with no Google mount) mounts such a source as one that fails
-    /// every read: a missing env var
-    /// costs the source it configures and not `/files` along with it, without the
-    /// source looking empty to whoever reads it.
+    /// every read, so a missing env var costs the source it configures rather than `/files`
+    /// along with it, and without that source looking empty to whoever reads it.
     pub google_oauth: Option<GoogleClient>,
     pub mounts: Vec<MountSpec>,
 }
@@ -76,8 +75,9 @@ pub struct Mount {
 
 /// A mount that keeps its place in the table and fails every read of it.
 ///
-/// Reads are what matters here; the mutating ops keep the trait's `Unsupported`, which a
-/// read-only mount would answer anyway.
+/// Five of the trait's fourteen methods. `write_bytes` is required, so it answers the same
+/// failure; the optional mutating ops keep the trait's `Unsupported`, which a read-only
+/// mount would answer anyway.
 ///
 /// `Backend` and not `NotFound`, which is the whole point: an absent or empty source
 /// reads to a caller as "nothing to do here", and the knowledge index acts on that by
@@ -311,7 +311,11 @@ mod tests {
             google_oauth: Some(GoogleClient {
                 client_id: "cid".into(),
                 client_secret: "cs".into(),
-                origins: Default::default(),
+                // A closed port, not production Google. Reading through a Drive mount
+                // reaches the token endpoint, and a unit test has no business making an
+                // outbound request to a third party: with the default origins this took
+                // seconds and would pay a 10s connect timeout wherever egress is blocked.
+                origins: crate::vfs::accessor::Origins::behind("http://127.0.0.1:1"),
             }),
             mounts: vec![gmail_spec(), gdrive_spec()],
         })

@@ -271,6 +271,21 @@ mod tests {
         const M4: &str =
             include_str!("../../../migrations/0004_drop_deployment_origins_from_mounts.sql");
 
+        // Nothing in the executed SQL that can fail a boot: a VACUUM needs free space equal
+        // to the database and, on failure, is never recorded, so every restart repeats it.
+        // Comments are stripped first, since the file explains at length why it has neither.
+        let statements: String = M4
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for banned in ["VACUUM", "no-transaction"] {
+            assert!(
+                !statements.contains(banned),
+                "{banned} does not belong in a migration; see the file's own comment"
+            );
+        }
+
         let (state, _tmp, wid) = fresh_state().await;
         // Written by hand in the shapes the old code produced, plus the shapes that must be
         // left alone. `create_mount` cannot produce these any more, which is the point.
