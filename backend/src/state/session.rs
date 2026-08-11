@@ -430,13 +430,9 @@ impl SessionsState {
                 // The workspace's external-provider mounts, if any. Mounted into
                 // the guest below so the agent reads them as files.
                 let vfs = crate::state::build_workspace_vfs(&db, workspace_id, google_oauth.clone()).await?;
-                // Named in the prompt below so the agent knows which sources are
-                // connected without spending a readdir to find out.
-                let sources: Vec<String> = vfs
-                    .mounts
-                    .iter()
-                    .map(|m| m.prefix.trim_start_matches('/').to_string())
-                    .collect();
+                // Filled from the assembled mount table below, not from these specs: a
+                // spec is what was configured, and only the table says what came up.
+                let mut sources: Vec<String> = Vec::new();
 
                 if has_runenv && !tokio::fs::try_exists(&archive_path).await? {
                     anyhow::bail!(
@@ -456,9 +452,17 @@ impl SessionsState {
                 // Held for the whole run: dropping this tears the mount down, so
                 // it is declared before `runenv` and outlives it.
                 let vfs_tunnel = if has_runenv {
-                    let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(
-                        crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?,
-                    );
+                    let fs = crate::state::workspace_fs(&data_root, workspace_id, vfs.clone())?;
+                    // Named in the prompt below so the agent knows which sources are
+                    // connected without spending a readdir to find out. `/files` is
+                    // described there on its own, so only the providers are listed.
+                    let local = ::workspace::LOCAL_MOUNT.trim_start_matches('/');
+                    sources = fs
+                        .mount_names()
+                        .into_iter()
+                        .filter(|n| n != local)
+                        .collect();
+                    let unified: Arc<dyn ::workspace::ForwardFs> = Arc::new(fs);
                     Some(crate::sandbox_tunnel::spawn_vfs_tunnel(
                         unified,
                         tokio::runtime::Handle::current(),
