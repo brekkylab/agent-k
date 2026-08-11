@@ -532,7 +532,8 @@ mod tests {
             .unwrap();
 
         // A fabricated mirror as the sync would leave it.
-        let acct = ::workspace::account_mirror_dir(&state.mirror_root(), "sync.test@x.com");
+        let acct =
+            ::workspace::account_mirror_dir(&state.mirror_root(), "sync.test@x.com").unwrap();
         std::fs::create_dir_all(acct.join("tree/INBOX")).unwrap();
         std::fs::write(acct.join("state.json"), b"{}").unwrap();
 
@@ -543,6 +544,48 @@ mod tests {
         // Last removal: mirror dir is deleted wholesale.
         state.remove_mount(m2.id).await.unwrap();
         assert!(!acct.exists(), "mirror removed with its last mount");
+    }
+
+    /// A row whose account key traverses upward destroys nothing.
+    ///
+    /// The key is a directory name built from `account_email`, and `.` must stay allowed
+    /// because addresses contain it, so `..` used to survive the character map intact.
+    /// `remove_dir_all` on `<mirror>/gmail/..` resolves to `<mirror>` and empties every
+    /// account's tree on its way to failing the final rmdir. The value is not user-suppliable
+    /// (it comes from Gmail's own profile response), so this is about a row that was written
+    /// directly or by a hostile configured origin.
+    #[tokio::test]
+    async fn a_traversing_account_key_cannot_delete_other_mirrors() {
+        let (state, _tmp, wid) = fresh_state().await;
+
+        // A real account's mirror, and an unrelated neighbour under the same root.
+        let victim = ::workspace::account_mirror_dir(&state.mirror_root(), "victim@x.com").unwrap();
+        std::fs::create_dir_all(victim.join("tree/INBOX")).unwrap();
+        std::fs::write(victim.join("tree/INBOX/1.json"), b"{}").unwrap();
+        let neighbour = state.mirror_root().join("gdrive-someday");
+        std::fs::create_dir_all(&neighbour).unwrap();
+
+        // The row a `..` key would produce. `create_mount` accepts it: nothing validates the
+        // field, and this test is about what removal then does.
+        let mount = WorkspaceMount::new(
+            wid,
+            "evil".into(),
+            ProviderConfig::Gmail(GmailConfig {
+                refresh_token: "r".into(),
+                account_email: "..".into(),
+                index_cap: None,
+            }),
+        );
+        let id = mount.id;
+        state.create_mount(mount).await.unwrap();
+        state.remove_mount(id).await.unwrap();
+
+        assert!(
+            victim.join("tree/INBOX/1.json").exists(),
+            "another account's mail must survive"
+        );
+        assert!(neighbour.exists(), "an unrelated sibling must survive");
+        assert!(state.mirror_root().exists(), "the mirror root must survive");
     }
 
     /// A Google mount round-trips through encode/decode with its own credential intact,

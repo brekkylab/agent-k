@@ -45,7 +45,12 @@ impl GmailResource {
         mirror_root: Option<&std::path::Path>,
         oauth: &GoogleClient,
     ) -> anyhow::Result<Self> {
-        let tree = mirror_root.map(|r| mirror_tree(&account_mirror_dir(r, &config.account_email)));
+        // A row whose account key cannot name a directory fails the mount rather than
+        // serving something: the key decides which mailbox is served, so falling back to a
+        // sanitized guess would hand over whichever tree that guess collided with.
+        let tree = mirror_root
+            .map(|r| account_mirror_dir(r, &config.account_email).map(|d| mirror_tree(&d)))
+            .transpose()?;
         if let Some(t) = &tree {
             // Pre-sync, the tree may not exist yet; an empty dir serves an
             // empty (but valid) mailbox instead of erroring.
@@ -946,7 +951,7 @@ mod tests {
             cfg.index_cap = Some(60); // keep the live probe cheap by default
         }
         let deploy = tempfile::tempdir().unwrap();
-        let acct = account_mirror_dir(deploy.path(), &cfg.account_email);
+        let acct = account_mirror_dir(deploy.path(), &cfg.account_email).unwrap();
 
         let t0 = std::time::Instant::now();
         let state = sync_gmail_mirror(&cfg, &acct, &oauth).await.expect("sync");
