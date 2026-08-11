@@ -197,8 +197,10 @@ impl WorkspacesState {
 /// `google_oauth` is the deployment's OAuth client, required by a Gmail or Drive
 /// mount and taken as an argument rather than read from a row: it belongs to the
 /// installation, and a copy stored beside each mount's refresh token would make that
-/// row usable on its own. A caller with none passes `None`, and a Google mount then
-/// fails to build instead of serving broken.
+/// row usable on its own. A caller with none passes `None`, and such a mount is then
+/// assembled as a source that fails every operation, so it is neither absent nor
+/// silently empty.
+///
 /// Standalone (takes the pool) so both [`WorkspacesState::build_fs`] and the
 /// session run loop (which only holds the pool) can build it.
 pub(crate) async fn build_workspace_vfs(
@@ -375,7 +377,11 @@ mod tests {
         ::workspace::GoogleClient {
             client_id: "deployment-client".into(),
             client_secret: "deployment-secret".into(),
-            origins: Default::default(),
+            // Deliberately not the default: while `origins` lived on the stored config it
+            // was `skip_serializing_if = "Origins::is_default"`, so a default value never
+            // appeared in the JSON and the row guard below would have passed even if the
+            // field came back exactly as it was.
+            origins: ::workspace::Origins::behind("http://deployment-origin.invalid"),
         }
     }
 
@@ -565,7 +571,12 @@ mod tests {
                 stored.contains("rt"),
                 "{prefix}: the mount's own half is stored"
             );
-            for forbidden in ["deployment-secret", "deployment-client", "origins"] {
+            for forbidden in [
+                "deployment-secret",
+                "deployment-client",
+                "deployment-origin",
+                "origins",
+            ] {
                 assert!(
                     !stored.contains(forbidden),
                     "{prefix}: {forbidden} in the row: {stored}"

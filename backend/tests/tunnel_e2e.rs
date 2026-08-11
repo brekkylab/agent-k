@@ -120,10 +120,7 @@ async fn tunnel_debug() {
         )
         .await
         .expect("log exec");
-    println!(
-        "\n---- tunnel debug (log only) ----\n{}",
-        log.stdout.trim_end()
-    );
+    println!("\n---- tunnel debug (log only) ----\n{}", log.stdout.trim_end());
     if !log.stderr.trim().is_empty() {
         println!("stderr: {}", log.stderr.trim_end());
     }

@@ -198,8 +198,8 @@ pub struct GdriveExchange {
 /// Exchange an OAuth authorization `code` for a refresh token (confidential
 /// client, server-side). Run at mount-create so the browser never handles the
 /// client secret. Google only returns a refresh token when the consent used
-/// `access_type=offline` + `prompt=consent`. `origins` overrides the Google hosts
-/// (mock/gateway deployments — see [`GdriveConfig::origins`]); default =
+/// `access_type=offline` + `prompt=consent`. Where Google is reached comes from
+/// [`GoogleClient::origins`] (mock/gateway deployments); default =
 /// production.
 pub async fn exchange_gdrive_code(
     oauth: &GoogleClient,
@@ -262,7 +262,7 @@ pub struct GdriveAccessor {
     /// The deployment's OAuth client, supplied by the caller. Not part of
     /// [`GdriveConfig`], so it never reaches the mount's persisted row.
     oauth: GoogleClient,
-    /// Every API host, resolved once from [`GdriveConfig::origins`].
+    /// Every API host, resolved once from [`GoogleClient::origins`].
     urls: Endpoints,
     /// Cached OAuth access token + its expiry. Refreshed proactively before
     /// expiry and on a 401 (see [`Self::send_with_refresh`]).

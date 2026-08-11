@@ -60,8 +60,8 @@ pub struct FsConfig {
     /// refresh their access tokens. Deliberately not part of a mount's stored config:
     /// it belongs to the installation, not to any one mount, and a stored copy beside
     /// a refresh token would make that row a usable credential on its own. `None`
-    /// (tests, library users with no Google mount) mounts such a source as
-    /// [`Unavailable`], which fails every op: a missing env var
+    /// (tests, library users with no Google mount) mounts such a source as one that fails
+    /// every read: a missing env var
     /// costs the source it configures and not `/files` along with it, without the
     /// source looking empty to whoever reads it.
     pub google_oauth: Option<GoogleClient>,
@@ -74,7 +74,10 @@ pub struct Mount {
     pub resource: Arc<dyn Resource>,
 }
 
-/// A mount that keeps its place in the table and fails everything asked of it.
+/// A mount that keeps its place in the table and fails every read of it.
+///
+/// Reads are what matters here; the mutating ops keep the trait's `Unsupported`, which a
+/// read-only mount would answer anyway.
 ///
 /// `Backend` and not `NotFound`, which is the whole point: an absent or empty source
 /// reads to a caller as "nothing to do here", and the knowledge index acts on that by

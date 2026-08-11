@@ -137,8 +137,8 @@ pub struct GmailExchange {
 /// Exchange an OAuth authorization `code` for a refresh token (confidential
 /// client, server-side). Run at mount-create so the browser never handles the
 /// client secret. Google only returns a refresh token when the consent used
-/// `access_type=offline` + `prompt=consent`. `origins` overrides the Google hosts
-/// (mock/gateway deployments — see [`GmailConfig::origins`]); default = production.
+/// `access_type=offline` + `prompt=consent`. Where Google is reached comes from
+/// [`GoogleClient::origins`] (mock/gateway deployments); default = production.
 pub async fn exchange_gmail_code(
     oauth: &GoogleClient,
     code: &str,

@@ -202,10 +202,11 @@ impl UsersState {
     }
 
     pub async fn count_admins(&self) -> StateResult<i64> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1")
-                .fetch_one(&self.db)
-                .await?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1",
+        )
+        .fetch_one(&self.db)
+        .await?;
         Ok(count)
     }
 }
