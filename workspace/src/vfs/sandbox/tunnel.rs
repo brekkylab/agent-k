@@ -254,9 +254,8 @@ fn serve_conn(
     let up = thread::spawn(move || {
         while let Ok(msg) = read_frame(&mut tcp_rx) {
             // SAFETY: sending `msg.len()` bytes from an owned buffer.
-            let n = unsafe {
-                libc::send(shim_fd, msg.as_ptr() as *const libc::c_void, msg.len(), 0)
-            };
+            let n =
+                unsafe { libc::send(shim_fd, msg.as_ptr() as *const libc::c_void, msg.len(), 0) };
             if n != msg.len() as isize {
                 break;
             }
@@ -445,7 +444,10 @@ impl Filesystem for TunnelFs {
                     let ino = inodes.intern(&path);
                     reply.entry(&TTL, &attr_from_stat(ino, &s), Generation(0));
                 }
-                _ => reply.error(Errno::ENOENT),
+                Ok(_) => reply.error(Errno::ENOENT),
+                // Reachable-but-failing, the way `readdir` and `read` already report it. A
+                // source whose credentials are missing must not look like an absent one.
+                Err(_) => reply.error(Errno::EIO),
             }
         });
     }
@@ -461,7 +463,8 @@ impl Filesystem for TunnelFs {
             }
             match fs.stat(&path).await {
                 Ok(s) if s.exists => reply.attr(&TTL, &attr_from_stat(ino.0, &s)),
-                _ => reply.error(Errno::ENOENT),
+                Ok(_) => reply.error(Errno::ENOENT),
+                Err(_) => reply.error(Errno::EIO),
             }
         });
     }
@@ -613,7 +616,12 @@ mod host_engine_test {
                 _ => FwdStat::missing(),
             })
         }
-        async fn read(&self, _p: &str, _o: Option<u64>, _s: Option<u64>) -> anyhow::Result<Vec<u8>> {
+        async fn read(
+            &self,
+            _p: &str,
+            _o: Option<u64>,
+            _s: Option<u64>,
+        ) -> anyhow::Result<Vec<u8>> {
             Ok(b"hello".to_vec())
         }
     }

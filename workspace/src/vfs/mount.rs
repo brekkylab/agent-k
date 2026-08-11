@@ -270,17 +270,37 @@ mod tests {
             .metadata("/gmail/INBOX")
             .await
             .expect_err("an unauthenticated source does not answer");
+        // Mirrors `add_target`'s own condition rather than naming a variant: it swallows
+        // `NotFound | Forbidden` and bails on everything else, so which side of that line
+        // this lands on is the whole invariant. Asserting `GeneralFailure` specifically
+        // would fail on a harmless remapping.
         assert!(
-            matches!(err, crate::fs::FsError::GeneralFailure),
-            "got {err:?}; NotFound here would let the knowledge index purge the source"
+            !matches!(
+                err,
+                crate::fs::FsError::NotFound | crate::fs::FsError::Forbidden
+            ),
+            "got {err:?}; on that side the knowledge index purges what it ingested here"
         );
         // And the prefix is still listed, so nothing has to infer the source is gone.
         assert!(fs.mount_names().iter().any(|n| n == "gmail"));
+
+        // The same distinction one layer down, where the guest sees it. `ForwardFs::stat`
+        // used to fold every error into `exists: false`, which `lookup` reports as ENOENT,
+        // so an unreachable source read as an absent one inside the sandbox.
+        use crate::vfs::ForwardFs;
+        assert!(
+            ForwardFs::stat(&fs, "/gmail/INBOX").await.is_err(),
+            "an unreachable path must not be reported to the guest as simply missing"
+        );
+        let absent = ForwardFs::stat(&fs, "/files/nope")
+            .await
+            .expect("a path that is genuinely not there is still an answer");
+        assert!(!absent.exists);
     }
 
     /// With one configured, the same table carries both Google sources.
-    #[test]
-    fn a_configured_client_mounts_both_google_sources() {
+    #[tokio::test]
+    async fn a_configured_client_mounts_both_google_sources() {
         let tmp = tempfile::tempdir().unwrap();
         let mounts = build_mounts(FsConfig {
             local_root: Some(tmp.path().to_path_buf()),
@@ -297,5 +317,18 @@ mod tests {
         let mut prefixes: Vec<_> = mounts.iter().map(|m| m.prefix.clone()).collect();
         prefixes.sort();
         assert_eq!(prefixes, vec!["/files", "/gdrive", "/gmail"]);
+
+        // Reading through them, not just counting names: with only the prefixes asserted,
+        // an arm that ignored the client and mounted the unavailable stand-in anyway went
+        // unnoticed. The stand-in says what it is, and a real provider never does.
+        for m in mounts.iter().filter(|m| m.prefix != LOCAL_MOUNT) {
+            if let Err(e) = m.resource.readdir(&MountPath::new("/")).await {
+                assert!(
+                    !e.to_string().contains("GOOGLE_CLIENT_ID"),
+                    "{} was mounted unavailable despite a configured client",
+                    m.prefix
+                );
+            }
+        }
     }
 }
