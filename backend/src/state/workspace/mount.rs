@@ -266,15 +266,15 @@ mod tests {
     /// the suite would notice.
     #[tokio::test]
     async fn the_migrations_strip_deployment_config_from_rows_the_old_code_wrote() {
-        const M3: &str =
-            include_str!("../../../migrations/0003_drop_google_client_credentials.sql");
-        const M4: &str =
-            include_str!("../../../migrations/0004_drop_deployment_origins_from_mounts.sql");
+        const M5: &str =
+            include_str!("../../../migrations/0005_drop_google_client_credentials.sql");
+        const M6: &str =
+            include_str!("../../../migrations/0006_drop_deployment_origins_from_mounts.sql");
 
         // Nothing in the executed SQL that can fail a boot: a VACUUM needs free space equal
         // to the database and, on failure, is never recorded, so every restart repeats it.
         // Comments are stripped first, since the file explains at length why it has neither.
-        let statements: String = M4
+        let statements: String = M6
             .lines()
             .filter(|l| !l.trim_start().starts_with("--"))
             .collect::<Vec<_>>()
@@ -334,7 +334,7 @@ mod tests {
             .unwrap();
         }
 
-        for sql in [M3, M4] {
+        for sql in [M5, M6] {
             sqlx::raw_sql(sql).execute(&state.db).await.unwrap();
         }
 
@@ -375,7 +375,7 @@ mod tests {
                 .fetch_all(&state.db)
                 .await
                 .unwrap();
-        for sql in [M3, M4] {
+        for sql in [M5, M6] {
             sqlx::raw_sql(sql).execute(&state.db).await.unwrap();
         }
         let again: Vec<String> =
