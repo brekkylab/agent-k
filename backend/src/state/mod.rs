@@ -76,10 +76,19 @@ pub struct GoogleOAuth {
 }
 
 impl GoogleOAuth {
-    /// `(client_id, client_secret)` when both are configured.
-    pub fn credentials(&self) -> Option<(&str, &str)> {
+    /// This deployment's client in the form the workspace crate takes it, or `None` when
+    /// it is not configured. The only way the pair leaves this struct.
+    ///
+    /// Handing it over per build is the point: an access token lasts an hour, so these
+    /// are needed for as long as a mount lives, and the alternative, a copy in each
+    /// mount's row, would put a working credential next to every refresh token.
+    pub fn client(&self) -> Option<::workspace::GoogleClient> {
         match (&self.client_id, &self.client_secret) {
-            (Some(id), Some(secret)) => Some((id.as_str(), secret.as_str())),
+            (Some(id), Some(secret)) => Some(::workspace::GoogleClient {
+                client_id: id.clone(),
+                client_secret: secret.clone(),
+                origins: self.origins.clone(),
+            }),
             _ => None,
         }
     }
@@ -121,9 +130,14 @@ impl AppState {
         let events = EventQueue::new();
 
         Ok(Self {
-            workspaces: WorkspacesState::new(db.clone(), data_root.clone()),
+            workspaces: WorkspacesState::new(db.clone(), data_root.clone(), google_oauth.client()),
             agents: AgentsState::new(db.clone()),
-            sessions: SessionsState::new(db.clone(), data_root, events.clone()),
+            sessions: SessionsState::new(
+                db.clone(),
+                data_root,
+                events.clone(),
+                google_oauth.client(),
+            ),
             users: UsersState::new(db),
             events,
             jwt,

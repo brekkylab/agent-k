@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::vfs::accessor::{GmailAccessor, GmailConfig};
+use crate::vfs::accessor::{GmailAccessor, GmailConfig, GoogleClient};
 
 use super::gmail::{
     GMAIL_SUFFIX, attach_dir_name, attachments, epoch_ms_to_date, id_from_name, msg_filename,
@@ -98,7 +98,18 @@ pub fn mirror_tree(root: &Path) -> PathBuf {
 /// plain email names the directory (an identifier, not a secret — readable
 /// for ops, and stable across re-consents unlike anything token-derived).
 /// Both the sync worker and the serving resource derive paths through this.
-pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> PathBuf {
+/// The directory name a mount's mirror lives under, validated.
+///
+/// The key has to name one leaf directory and nothing else. `.` is in the allowed set below
+/// (addresses contain it), so `..` survives the character map intact, and the destructive
+/// consumer is `remove_dir_all` on mount removal: `<root>/gmail/..` resolves to `<root>` and
+/// takes every account's mirror with it. A leading dot is that whole family, so it is
+/// refused rather than substituted -- rewriting it would silently land two accounts on one
+/// tree, and the key is what decides which mailbox gets served.
+///
+/// Separate from [`account_mirror_dir`] so a caller can check the key without having a
+/// mirror root to join it to: whether the value is usable does not depend on that.
+pub fn account_key(account_email: &str) -> anyhow::Result<String> {
     let safe: String = account_email
         .trim()
         .to_lowercase()
@@ -111,8 +122,23 @@ pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> PathBuf {
             }
         })
         .collect();
-    mirror_root.join("gmail").join(safe)
+    anyhow::ensure!(
+        !safe.is_empty()
+            && !safe.starts_with('.')
+            && safe.contains('@')
+            && safe.len() <= MAX_ACCOUNT_KEY,
+        "unusable gmail account key {account_email:?}"
+    );
+    Ok(safe)
 }
+
+pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> anyhow::Result<PathBuf> {
+    Ok(mirror_root.join("gmail").join(account_key(account_email)?))
+}
+
+/// The longest address RFC 5321 allows, which is also comfortably inside every filesystem's
+/// component limit.
+const MAX_ACCOUNT_KEY: usize = 254;
 
 /// Mirror the whole mailbox (bounded by [`GmailConfig::index_cap`] if set)
 /// under `root`. Safe to re-run: already-written ids are skipped via the done
@@ -121,8 +147,9 @@ pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> PathBuf {
 pub async fn sync_gmail_mirror(
     config: &GmailConfig,
     root: &Path,
+    oauth: &GoogleClient,
 ) -> anyhow::Result<GmailSyncState> {
-    let accessor = GmailAccessor::new(config)?;
+    let accessor = GmailAccessor::new(config, oauth)?;
     let writer = MirrorWriter::open(root)?;
     let labels = fetch_label_map(&accessor).await?;
 
@@ -282,6 +309,7 @@ pub struct GmailSyncDelta {
 pub async fn sync_gmail_incremental(
     config: &GmailConfig,
     root: &Path,
+    oauth: &GoogleClient,
 ) -> anyhow::Result<GmailSyncDelta> {
     let prior = GmailSyncState::load(root);
     let cursor = match prior
@@ -291,14 +319,14 @@ pub async fn sync_gmail_incremental(
     {
         Some(c) => c,
         None => {
-            sync_gmail_mirror(config, root).await?;
+            sync_gmail_mirror(config, root, oauth).await?;
             return Ok(GmailSyncDelta {
                 full_resync: true,
                 ..Default::default()
             });
         }
     };
-    let accessor = GmailAccessor::new(config)?;
+    let accessor = GmailAccessor::new(config, oauth)?;
 
     // Page the journal, folding records into net per-message effects.
     let mut added = HashSet::new();
@@ -312,7 +340,7 @@ pub async fn sync_gmail_incremental(
             .await?
         else {
             tracing::info!("gmail sync: history cursor {cursor} expired; full resync");
-            sync_gmail_mirror(config, root).await?;
+            sync_gmail_mirror(config, root, oauth).await?;
             return Ok(GmailSyncDelta {
                 full_resync: true,
                 ..Default::default()
@@ -727,6 +755,55 @@ fn prune_empty(root: &Path, dir: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The mirror key must name one leaf directory, because the only thing that consumes it
+    /// destructively is `remove_dir_all` on mount removal.
+    ///
+    /// `.` has to stay in the allowed set (addresses contain it), which is what lets `..`
+    /// through the character map unchanged. Measured before this was refused: the resulting
+    /// `<root>/gmail/..` resolves to `<root>`, and removing it emptied every account's mirror
+    /// plus an unrelated sibling directory before failing its final rmdir. So the rule is
+    /// refuse, not rewrite: rewriting would quietly land two accounts on one tree.
+    #[test]
+    fn a_key_that_does_not_name_a_leaf_is_refused() {
+        let root = std::path::Path::new("/m");
+        for bad in [
+            "..",
+            "  ..  ",
+            ".",
+            "./..",
+            "../..",
+            "",
+            "   ",
+            ".hidden@x.com",
+            "no-at-sign",
+        ] {
+            assert!(
+                account_mirror_dir(root, bad).is_err(),
+                "{bad:?} must not be usable as a mirror key"
+            );
+        }
+        // Nothing above is refused for being merely unusual: ordinary addresses still work,
+        // including the shapes the character map exists to preserve.
+        for good in [
+            "a@b.c",
+            "First.Last+tag@example.co.uk",
+            "  Mixed.Case@X.COM  ",
+            "user_name-1@x.com",
+        ] {
+            let dir = account_mirror_dir(root, good).expect("{good:?} is a usable key");
+            let leaf = dir.file_name().unwrap().to_string_lossy().into_owned();
+            assert_eq!(dir.parent().unwrap(), root.join("gmail"));
+            assert_eq!(
+                leaf,
+                leaf.to_lowercase(),
+                "keys are folded, so one account is one dir"
+            );
+            assert!(!leaf.starts_with('.') && leaf.contains('@'));
+        }
+        // A name too long for a filesystem component would fail at mkdir time instead.
+        assert!(account_mirror_dir(root, &format!("{}@x.com", "a".repeat(250))).is_err());
+    }
 
     fn raw_msg(
         id: &str,

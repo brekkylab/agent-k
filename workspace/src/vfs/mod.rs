@@ -28,8 +28,8 @@ pub mod sandbox;
 mod mount;
 
 pub use accessor::{
-    GdriveConfig, GdriveExchange, GmailConfig, GmailExchange, NotionConfig, Origins, S3Config,
-    exchange_gdrive_code, exchange_gmail_code,
+    GdriveConfig, GdriveExchange, GmailConfig, GmailExchange, GoogleClient, NotionConfig, Origins,
+    S3Config, exchange_gdrive_code, exchange_gmail_code,
 };
 pub use error::{ResourceError, ResourceResult};
 pub(crate) use mount::build_mounts;

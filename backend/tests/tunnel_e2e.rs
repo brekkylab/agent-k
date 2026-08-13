@@ -23,6 +23,7 @@ fn provider_fs(prefix: &str, provider: ProviderConfig) -> Arc<dyn ForwardFs> {
     let config = FsConfig {
         local_root: None,
         mirror_root: None,
+        google_oauth: None,
         mounts: vec![MountSpec {
             prefix: prefix.into(),
             provider,
@@ -415,6 +416,7 @@ async fn agent_finds_the_mount_unprompted() {
         WorkspaceFs::from_config(FsConfig {
             local_root: Some(files),
             mirror_root: None,
+            google_oauth: None,
             mounts: vec![],
         })
         .expect("workspace fs"),

@@ -119,57 +119,35 @@ impl ProviderSpec {
                 redirect_uri,
                 index_cap,
             } => {
-                let (client_id, client_secret) = oauth.credentials().ok_or_else(|| {
+                let client = oauth.client().ok_or_else(|| {
                     err(
                         StatusCode::BAD_REQUEST,
                         "Gmail is not configured on this server \
                          (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)",
                     )
                 })?;
-                let exchanged = ::workspace::exchange_gmail_code(
-                    client_id,
-                    client_secret,
-                    &code,
-                    &redirect_uri,
-                    &oauth.origins,
-                )
-                .await
-                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gmail oauth: {e}")))?;
+                let exchanged = ::workspace::exchange_gmail_code(&client, &code, &redirect_uri)
+                    .await
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gmail oauth: {e}")))?;
                 ProviderConfig::Gmail(GmailConfig {
-                    client_id: client_id.to_string(),
-                    client_secret: client_secret.to_string(),
                     refresh_token: exchanged.refresh_token,
                     account_email: exchanged.account_email,
                     index_cap,
-                    // Deployment-level override (mock/gateway), inherited from
-                    // backend config — never from the request.
-                    origins: oauth.origins.clone(),
                 })
             }
             ProviderSpec::Gdrive { code, redirect_uri } => {
-                let (client_id, client_secret) = oauth.credentials().ok_or_else(|| {
+                let client = oauth.client().ok_or_else(|| {
                     err(
                         StatusCode::BAD_REQUEST,
                         "Google Drive is not configured on this server \
                          (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)",
                     )
                 })?;
-                let exchanged = ::workspace::exchange_gdrive_code(
-                    client_id,
-                    client_secret,
-                    &code,
-                    &redirect_uri,
-                    &oauth.origins,
-                )
-                .await
-                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gdrive oauth: {e}")))?;
+                let exchanged = ::workspace::exchange_gdrive_code(&client, &code, &redirect_uri)
+                    .await
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gdrive oauth: {e}")))?;
                 ProviderConfig::Gdrive(GdriveConfig {
-                    client_id: client_id.to_string(),
-                    client_secret: client_secret.to_string(),
                     refresh_token: exchanged.refresh_token,
-                    // Deployment-level override (mock/gateway), inherited from
-                    // backend config — never from the request.
-                    origins: oauth.origins.clone(),
                 })
             }
         })

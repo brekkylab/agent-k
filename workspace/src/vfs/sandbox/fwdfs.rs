@@ -22,9 +22,12 @@ pub struct FwdEntry {
     pub mtime: Option<u64>,
 }
 
-/// A stat result. `exists == false` collapses every "no such node" outcome
-/// (missing path, unroutable prefix, backend stat error) into a single answer
-/// the FUSE forwarder turns into `ENOENT`.
+/// A stat result. `exists == false` means the node is not there -- a missing path or an
+/// unroutable prefix -- and the FUSE forwarder answers `ENOENT`.
+///
+/// A source that could not be reached is *not* this: the implementation returns `Err`, and
+/// the forwarder answers `EIO`. Folding the two together is what let an unauthenticated
+/// mount read to the guest as an empty one.
 #[derive(Clone, Copy, Debug)]
 pub struct FwdStat {
     pub exists: bool,

@@ -49,8 +49,19 @@ impl GmailSyncRunner {
     /// Returns whether this call started a new run. Progress is observable via
     /// the mirror's `state.json` ([`GmailSyncState::load`]); the outcome is
     /// logged, not returned — callers poll status instead of awaiting.
-    pub fn spawn(&self, config: GmailConfig, mirror_root: &Path) -> bool {
-        let acct = account_mirror_dir(mirror_root, &config.account_email);
+    pub fn spawn(
+        &self,
+        config: GmailConfig,
+        mirror_root: &Path,
+        oauth: ::workspace::GoogleClient,
+    ) -> bool {
+        let Ok(acct) = account_mirror_dir(mirror_root, &config.account_email) else {
+            tracing::warn!(
+                "gmail sync not started: {:?} cannot name a mirror directory",
+                config.account_email
+            );
+            return false;
+        };
         let mut active = self.active.lock().unwrap();
         if active.get(&acct).is_some_and(|h| !h.is_finished()) {
             return false;
@@ -58,7 +69,7 @@ impl GmailSyncRunner {
         let dir = acct.clone();
         let handle = tokio::spawn(async move {
             let email = config.account_email.clone();
-            match sync_gmail_incremental(&config, &dir).await {
+            match sync_gmail_incremental(&config, &dir, &oauth).await {
                 Ok(d) => tracing::info!(
                     "gmail sync [{email}]: +{} -{} ~{} (full_resync={})",
                     d.added,
@@ -88,13 +99,26 @@ impl WorkspacesState {
     /// run started (`false` = one is already in flight; that run's result is
     /// equivalent, so callers just report it).
     pub fn spawn_gmail_sync(&self, config: &GmailConfig) -> bool {
-        self.gmail_sync.spawn(config.clone(), &self.mirror_root())
+        // No OAuth client configured means no sync can authenticate; report "not
+        // started" rather than spawning a run that would only fail on its first call.
+        let Some(oauth) = self.google_oauth() else {
+            tracing::warn!(
+                "gmail sync not started: no Google OAuth client configured \
+                 (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)"
+            );
+            return false;
+        };
+        self.gmail_sync
+            .spawn(config.clone(), &self.mirror_root(), oauth)
     }
 
     /// `(persisted sync state, run currently active)` for a Gmail mount's
     /// account mirror. State is `None` until the first run writes it.
     pub fn gmail_sync_status(&self, config: &GmailConfig) -> (Option<GmailSyncState>, bool) {
-        let acct = account_mirror_dir(&self.mirror_root(), &config.account_email);
+        // A key that cannot name a directory has no mirror and no run.
+        let Ok(acct) = account_mirror_dir(&self.mirror_root(), &config.account_email) else {
+            return (None, false);
+        };
         (
             GmailSyncState::load(&acct),
             self.gmail_sync.is_running(&acct),
@@ -108,7 +132,17 @@ impl WorkspacesState {
     /// are logged, not returned — the mount row is already gone, and a
     /// leftover dir is re-adopted (resumed) if the account is ever re-mounted.
     pub(super) async fn gc_gmail_mirror(&self, account_email: &str) -> StateResult<()> {
-        let acct = account_mirror_dir(&self.mirror_root(), account_email);
+        // Refuse before deleting anything. This is the one caller that removes a directory
+        // tree, so a key that does not name a leaf must stop here: `<root>/gmail/..` resolves
+        // to `<root>` and `remove_dir_all` empties every account's mirror on the way to
+        // failing its final rmdir.
+        let acct = match account_mirror_dir(&self.mirror_root(), account_email) {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!("gmail mirror gc refused for {account_email:?}: {e}");
+                return Ok(());
+            }
+        };
 
         // Still referenced? Compare via the mirror dir each config maps to,
         // the same identity the sync and the resource use.
@@ -117,7 +151,10 @@ impl WorkspacesState {
             .await?;
         for row in &rows {
             let cfg: GmailConfig = serde_json::from_str(&row.get::<String, _>("config"))?;
-            if account_mirror_dir(&self.mirror_root(), &cfg.account_email) == acct {
+            // A row whose key is unusable references no mirror, so it cannot be the
+            // reference that keeps this one alive.
+            if account_mirror_dir(&self.mirror_root(), &cfg.account_email).is_ok_and(|d| d == acct)
+            {
                 return Ok(());
             }
         }

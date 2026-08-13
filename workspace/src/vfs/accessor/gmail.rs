@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::google::{OAUTH_ORIGIN, Origins};
+use super::google::{GoogleClient, OAUTH_ORIGIN, Origins};
 
 /// This service's origin, without the version suffix [`endpoints`] appends.
 const GMAIL_ORIGIN: &str = "https://gmail.googleapis.com/gmail";
@@ -137,16 +137,14 @@ pub struct GmailExchange {
 /// Exchange an OAuth authorization `code` for a refresh token (confidential
 /// client, server-side). Run at mount-create so the browser never handles the
 /// client secret. Google only returns a refresh token when the consent used
-/// `access_type=offline` + `prompt=consent`. `origins` overrides the Google hosts
-/// (mock/gateway deployments — see [`GmailConfig::origins`]); default = production.
+/// `access_type=offline` + `prompt=consent`. Where Google is reached comes from
+/// [`GoogleClient::origins`] (mock/gateway deployments); default = production.
 pub async fn exchange_gmail_code(
-    client_id: &str,
-    client_secret: &str,
+    oauth: &GoogleClient,
     code: &str,
     redirect_uri: &str,
-    origins: &Origins,
 ) -> anyhow::Result<GmailExchange> {
-    let (api_base, token_url) = endpoints(origins);
+    let (api_base, token_url) = endpoints(&oauth.origins);
     // Bounded: this runs inside the create_mount HTTP handler, and a bare
     // reqwest client has NO default timeout — a hung upstream would hang the
     // mount creation indefinitely.
@@ -158,8 +156,8 @@ pub async fn exchange_gmail_code(
     let resp = client
         .post(&token_url)
         .form(&[
-            ("client_id", client_id),
-            ("client_secret", client_secret),
+            ("client_id", oauth.client_id.as_str()),
+            ("client_secret", oauth.client_secret.as_str()),
             ("code", code),
             ("redirect_uri", redirect_uri),
             ("grant_type", "authorization_code"),
@@ -222,8 +220,8 @@ async fn fetch_profile_email(access_token: &str, api_base: &str) -> Option<Strin
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GmailConfig {
-    pub client_id: String,
-    pub client_secret: String,
+    /// The mount's own half of the credential. Useless without the deployment's
+    /// [`GoogleClient`], which is why that one is injected rather than stored here.
     pub refresh_token: String,
     /// The account's email address, resolved at mount-create
     /// ([`exchange_gmail_code`]). Identifies the account across re-consents
@@ -235,12 +233,6 @@ pub struct GmailConfig {
     /// default) mirrors every message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_cap: Option<usize>,
-    /// Where to reach each Google service, when not production Google (an enterprise
-    /// mock or a gateway). Deployment-level only — the token endpoint receives the
-    /// app's client secret, so this is NOT part of the mount-create API; the backend
-    /// injects it from its own config.
-    #[serde(default, skip_serializing_if = "Origins::is_default")]
-    pub origins: Origins,
 }
 
 /// Holds Google OAuth credentials (one refresh token) and a cached access
@@ -249,6 +241,9 @@ pub struct GmailConfig {
 pub struct GmailAccessor {
     client: reqwest::Client,
     config: GmailConfig,
+    /// The deployment's OAuth client, supplied by the caller. Not part of
+    /// [`GmailConfig`], so it never reaches the mount's persisted row.
+    oauth: GoogleClient,
     /// Resolved API origin (`…/gmail/v1`) — real Google or the config's
     /// `base_url` (see [`endpoints`]).
     api_base: String,
@@ -263,9 +258,9 @@ pub struct GmailAccessor {
 }
 
 impl GmailAccessor {
-    pub fn new(config: &GmailConfig) -> anyhow::Result<Self> {
-        let (api_base, token_url) = endpoints(&config.origins);
-        let gmail_origin = config
+    pub fn new(config: &GmailConfig, oauth: &GoogleClient) -> anyhow::Result<Self> {
+        let (api_base, token_url) = endpoints(&oauth.origins);
+        let gmail_origin = oauth
             .origins
             .gmail
             .as_deref()
@@ -282,6 +277,7 @@ impl GmailAccessor {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
             config: config.clone(),
+            oauth: oauth.clone(),
             api_base,
             token_url,
             gmail_origin,
@@ -302,8 +298,8 @@ impl GmailAccessor {
             .client
             .post(&self.token_url)
             .form(&[
-                ("client_id", self.config.client_id.as_str()),
-                ("client_secret", self.config.client_secret.as_str()),
+                ("client_id", self.oauth.client_id.as_str()),
+                ("client_secret", self.oauth.client_secret.as_str()),
                 ("refresh_token", self.config.refresh_token.as_str()),
                 ("grant_type", "refresh_token"),
             ])

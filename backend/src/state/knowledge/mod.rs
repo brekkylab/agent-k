@@ -107,15 +107,24 @@ impl WsIndex {
 pub struct Resyncer {
     db: SqlitePool,
     data_root: PathBuf,
+    /// The deployment's Google OAuth client, needed to assemble a workspace whose
+    /// mounts include Gmail or Drive. Held rather than looked up because it is
+    /// deployment config, not per-workspace state.
+    google_oauth: Option<::workspace::GoogleClient>,
     /// One [`WsIndex`] per workspace (store + lock + memo + coalescing gate).
     indexes: Arc<DashMap<Uuid, Arc<WsIndex>>>,
 }
 
 impl Resyncer {
-    pub fn new(db: SqlitePool, data_root: PathBuf) -> Self {
+    pub fn new(
+        db: SqlitePool,
+        data_root: PathBuf,
+        google_oauth: Option<::workspace::GoogleClient>,
+    ) -> Self {
         Self {
             db,
             data_root,
+            google_oauth,
             indexes: Arc::new(DashMap::new()),
         }
     }
@@ -155,7 +164,7 @@ impl Resyncer {
     /// is gone. Not self-serializing — callers run it under `ws.lock` via
     /// [`coalesce`] (or [`forget`](Self::forget)).
     async fn reconcile(&self, wid: Uuid, ws: &WsIndex) -> anyhow::Result<()> {
-        let config = build_workspace_vfs(&self.db, wid).await?;
+        let config = build_workspace_vfs(&self.db, wid, self.google_oauth.clone()).await?;
         let fs = workspace_fs(&self.data_root, wid, config)?;
 
         let targets = collect_targets(&fs, MAX_FILE_BYTES).await?;
@@ -709,6 +718,7 @@ mod tests {
         WorkspaceFs::from_config(FsConfig {
             local_root: Some(root.to_path_buf()),
             mirror_root: None,
+            google_oauth: None,
             mounts: vec![],
         })
         .unwrap()
@@ -954,7 +964,7 @@ mod tests {
     async fn forget_evicts_workspace_state() {
         let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        let r = Resyncer::new(pool, tmp.path().to_path_buf());
+        let r = Resyncer::new(pool, tmp.path().to_path_buf(), None);
         let wid = Uuid::new_v4();
 
         r.ws_for(wid);

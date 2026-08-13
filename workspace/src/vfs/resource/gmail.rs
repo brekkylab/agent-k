@@ -6,13 +6,13 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::vfs::{
-    accessor::{GmailAccessor, GmailConfig, encode_b64url},
+    accessor::{GmailAccessor, GmailConfig, GoogleClient, encode_b64url},
     error::{ResourceError, ResourceResult},
     path::MountPath,
     resource::{DirEntry, FileKind, FileStat, LocalResource, Resource},
 };
 
-use super::gmail_sync::{account_mirror_dir, mirror_tree};
+use super::gmail_sync::{account_key, account_mirror_dir, mirror_tree};
 
 pub(super) const GMAIL_SUFFIX: &str = ".json";
 
@@ -43,15 +43,21 @@ impl GmailResource {
     pub fn new(
         config: &GmailConfig,
         mirror_root: Option<&std::path::Path>,
+        oauth: &GoogleClient,
     ) -> anyhow::Result<Self> {
-        let tree = mirror_root.map(|r| mirror_tree(&account_mirror_dir(r, &config.account_email)));
+        // Checked whether or not there is a mirror root to join it to: the key is what a
+        // later sync or GC would use, and a value that cannot name a directory is not
+        // something to serve around. `build_mounts` turns this into an unavailable mount, so
+        // the cost lands on the source it configures rather than the whole workspace.
+        let key = account_key(&config.account_email)?;
+        let tree = mirror_root.map(|r| mirror_tree(&r.join("gmail").join(&key)));
         if let Some(t) = &tree {
             // Pre-sync, the tree may not exist yet; an empty dir serves an
             // empty (but valid) mailbox instead of erroring.
             std::fs::create_dir_all(t)?;
         }
         Ok(Self {
-            accessor: GmailAccessor::new(config)?,
+            accessor: GmailAccessor::new(config, oauth)?,
             local: tree.clone().map(LocalResource::new),
             tree,
             labels: tokio::sync::Mutex::new(None),
@@ -937,7 +943,7 @@ mod tests {
     async fn gmail_live_mirror() {
         use crate::vfs::resource::sync_gmail_mirror;
 
-        let Some(mut cfg) = live_config() else {
+        let Some((mut cfg, oauth)) = live_config() else {
             eprintln!("set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN to run");
             return;
         };
@@ -945,10 +951,10 @@ mod tests {
             cfg.index_cap = Some(60); // keep the live probe cheap by default
         }
         let deploy = tempfile::tempdir().unwrap();
-        let acct = account_mirror_dir(deploy.path(), &cfg.account_email);
+        let acct = account_mirror_dir(deploy.path(), &cfg.account_email).unwrap();
 
         let t0 = std::time::Instant::now();
-        let state = sync_gmail_mirror(&cfg, &acct).await.expect("sync");
+        let state = sync_gmail_mirror(&cfg, &acct, &oauth).await.expect("sync");
         eprintln!(
             "sync: {}/{} messages in {:?} (completed={})",
             state.fetched,
@@ -958,7 +964,7 @@ mod tests {
         );
         assert!(state.completed);
 
-        let r = GmailResource::new(&cfg, Some(deploy.path())).unwrap();
+        let r = GmailResource::new(&cfg, Some(deploy.path()), &oauth).unwrap();
         let labels = r.readdir(&MountPath::new("/")).await.expect("labels");
         eprintln!(
             "labels ({}): {:?}",
@@ -1016,7 +1022,7 @@ mod tests {
         let seeded = GmailSyncState::load(&acct).expect("state");
         assert!(seeded.history_id.is_some(), "full sync seeds the cursor");
         let t1 = std::time::Instant::now();
-        let delta = sync_gmail_incremental(&cfg, &acct)
+        let delta = sync_gmail_incremental(&cfg, &acct, &oauth)
             .await
             .expect("incremental");
         eprintln!(
@@ -1036,7 +1042,7 @@ mod tests {
         // log, then the label sweep re-checks placements — the mirror must
         // come through complete with a fresh cursor.
         let t2 = std::time::Instant::now();
-        let resync = sync_gmail_mirror(&cfg, &acct)
+        let resync = sync_gmail_mirror(&cfg, &acct, &oauth)
             .await
             .expect("fallback resync");
         eprintln!(
@@ -1177,22 +1183,29 @@ mod tests {
         assert_eq!(id_from_name(&attach_dir_name("Hi there", "ID42")), "ID42");
     }
 
-    fn live_config() -> Option<GmailConfig> {
-        Some(GmailConfig {
+    fn live_config() -> Option<(GmailConfig, GoogleClient)> {
+        let oauth = GoogleClient {
             client_id: std::env::var("GOOGLE_CLIENT_ID").ok()?,
             client_secret: std::env::var("GOOGLE_CLIENT_SECRET").ok()?,
-            refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
-            // This one *is* read: it names the mirror directory, so a live run against
-            // two accounts must not have them share a tree.
-            account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
             origins: match std::env::var("GOOGLE_API_BASE_URL") {
                 Ok(host) => crate::vfs::accessor::Origins::behind(&host),
                 Err(_) => Default::default(),
             },
+        };
+        let config = GmailConfig {
+            refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
+            // This one *is* read: it names the mirror directory, so a live run against
+            // two accounts must not have them share a tree. The fallback has to be a usable
+            // key -- `account_key` refuses anything without an `@`, and a bare "live-test"
+            // made this test panic in its own setup with `GMAIL_EMAIL` unset, pointing at a
+            // line that had nothing to do with what it was testing.
+            account_email: std::env::var("GMAIL_EMAIL")
+                .unwrap_or_else(|_| "live-test@example.invalid".into()),
             index_cap: std::env::var("GMAIL_INDEX_CAP")
                 .ok()
                 .and_then(|v| v.parse().ok()),
-        })
+        };
+        Some((config, oauth))
     }
 
     /// Full-stack probe against a configurable endpoint (`GOOGLE_API_BASE_URL` →
@@ -1204,14 +1217,16 @@ mod tests {
     async fn unlink_accepts_only_message_files_no_network_needed() {
         let r = GmailResource::new(
             &GmailConfig {
-                client_id: "id".into(),
-                client_secret: "sec".into(),
                 refresh_token: "tok".into(),
                 account_email: "t@example.com".into(),
-                origins: Default::default(),
                 index_cap: None,
             },
             None,
+            &GoogleClient {
+                client_id: "id".into(),
+                client_secret: "sec".into(),
+                origins: Default::default(),
+            },
         )
         .unwrap();
         // Every shape that isn't a message file is rejected by the path match

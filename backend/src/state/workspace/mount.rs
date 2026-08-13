@@ -182,7 +182,8 @@ impl WorkspacesState {
     /// Build the workspace's filesystem: the local `/files` mount plus any
     /// configured provider mounts.
     pub(super) async fn build_fs(&self, workspace_id: Uuid) -> StateResult<WorkspaceFs> {
-        let mut config = build_workspace_vfs(&self.db, workspace_id).await?;
+        let mut config =
+            build_workspace_vfs(&self.db, workspace_id, self.google_oauth.clone()).await?;
         config.local_root = Some(self.get_root(workspace_id));
         config.mirror_root = Some(self.mirror_root());
         WorkspaceFs::from_config(config)
@@ -192,11 +193,20 @@ impl WorkspacesState {
 
 /// Load a workspace's provider mounts into an [`FsConfig`], with `local_root`
 /// left unset — the caller fills it, since only it knows the on-disk file root.
+///
+/// `google_oauth` is the deployment's OAuth client, required by a Gmail or Drive
+/// mount and taken as an argument rather than read from a row: it belongs to the
+/// installation, and a copy stored beside each mount's refresh token would make that
+/// row usable on its own. A caller with none passes `None`, and such a mount is then
+/// assembled as a source that fails every operation, so it is neither absent nor
+/// silently empty.
+///
 /// Standalone (takes the pool) so both [`WorkspacesState::build_fs`] and the
 /// session run loop (which only holds the pool) can build it.
 pub(crate) async fn build_workspace_vfs(
     db: &SqlitePool,
     workspace_id: Uuid,
+    google_oauth: Option<::workspace::GoogleClient>,
 ) -> StateResult<FsConfig> {
     let rows = sqlx::query(
         "SELECT id, workspace_id, prefix, provider, config, created_at, updated_at \
@@ -212,6 +222,7 @@ pub(crate) async fn build_workspace_vfs(
     Ok(FsConfig {
         local_root: None,
         mirror_root: None,
+        google_oauth,
         mounts: mounts
             .into_iter()
             .map(|m| MountSpec {
@@ -242,6 +253,152 @@ mod tests {
     use ::workspace::S3Config;
 
     use super::*;
+
+    /// The credential-stripping migrations, run against rows written by the old code.
+    ///
+    /// `include_str!` rather than `migrate!` so the SQL is exercised directly: a fresh test
+    /// database is migrated from empty, so nothing here would otherwise ever see a row in
+    /// the shape these statements exist to fix. It also ties the test to the filenames, so
+    /// renaming one breaks the build rather than silently skipping the check.
+    ///
+    /// What this guards is a typo: a wrong `json_remove` path or a `WHERE` clause that
+    /// misses rows would leave real credentials in place on upgrade, and nothing else in
+    /// the suite would notice.
+    #[tokio::test]
+    async fn the_migrations_strip_deployment_config_from_rows_the_old_code_wrote() {
+        const M5: &str =
+            include_str!("../../../migrations/0005_drop_google_client_credentials.sql");
+        const M6: &str =
+            include_str!("../../../migrations/0006_drop_deployment_origins_from_mounts.sql");
+
+        // Nothing in the executed SQL that can fail a boot: a VACUUM needs free space equal
+        // to the database and, on failure, is never recorded, so every restart repeats it.
+        // Comments are stripped first, since the file explains at length why it has neither.
+        let statements: String = M6
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for banned in ["VACUUM", "no-transaction"] {
+            assert!(
+                !statements.contains(banned),
+                "{banned} does not belong in a migration; see the file's own comment"
+            );
+        }
+
+        let (state, _tmp, wid) = fresh_state().await;
+        // Written by hand in the shapes the old code produced, plus the shapes that must be
+        // left alone. `create_mount` cannot produce these any more, which is the point.
+        let rows = [
+            (
+                "a",
+                "gmail",
+                r#"{"client_id":"CID","client_secret":"CS","refresh_token":"RT","account_email":"u@x.com","index_cap":60,"origins":{"oauth":"http://evil/oauth2"}}"#,
+            ),
+            (
+                "b",
+                "gdrive",
+                r#"{"client_id":"CID","client_secret":"CS","refresh_token":"RT2"}"#,
+            ),
+            (
+                "c",
+                "gdrive",
+                r#"{"refresh_token":"RT3","origins":{"drive":"http://x"}}"#,
+            ),
+            (
+                "d",
+                "gmail",
+                r#"{"refresh_token":"RT4","account_email":"v@x.com"}"#,
+            ),
+            (
+                "e",
+                "s3",
+                r#"{"access_key_id":"AK","secret_access_key":"SK","bucket":"b"}"#,
+            ),
+            ("f", "gmail", "not json at all"),
+            ("g", "gdrive", "[1,2,3]"),
+        ];
+        for (id, provider, config) in rows {
+            sqlx::query(
+                "INSERT INTO workspace_mounts \
+                 (id, workspace_id, prefix, provider, config, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, ?, 't0', 't0')",
+            )
+            .bind(id)
+            .bind(wid.to_string())
+            .bind(format!("p-{id}"))
+            .bind(provider)
+            .bind(config)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        }
+
+        for sql in [M5, M6] {
+            sqlx::raw_sql(sql).execute(&state.db).await.unwrap();
+        }
+
+        let after = |id: &str| {
+            let db = state.db.clone();
+            let id = id.to_string();
+            async move {
+                sqlx::query_scalar::<_, String>("SELECT config FROM workspace_mounts WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&db)
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // The deployment's three keys go; the mount's own fields survive byte for byte.
+        assert_eq!(
+            after("a").await,
+            r#"{"refresh_token":"RT","account_email":"u@x.com","index_cap":60}"#
+        );
+        assert_eq!(after("b").await, r#"{"refresh_token":"RT2"}"#);
+        assert_eq!(after("c").await, r#"{"refresh_token":"RT3"}"#);
+        // Already clean, another provider, and configs that are not JSON objects: untouched.
+        assert_eq!(
+            after("d").await,
+            r#"{"refresh_token":"RT4","account_email":"v@x.com"}"#
+        );
+        assert!(
+            after("e").await.contains("secret_access_key"),
+            "s3 is not ours to touch"
+        );
+        assert_eq!(after("f").await, "not json at all");
+        assert_eq!(after("g").await, "[1,2,3]");
+
+        // Re-running changes nothing, so a partial application converges.
+        let before: Vec<String> =
+            sqlx::query_scalar("SELECT config FROM workspace_mounts ORDER BY id")
+                .fetch_all(&state.db)
+                .await
+                .unwrap();
+        for sql in [M5, M6] {
+            sqlx::raw_sql(sql).execute(&state.db).await.unwrap();
+        }
+        let again: Vec<String> =
+            sqlx::query_scalar("SELECT config FROM workspace_mounts ORDER BY id")
+                .fetch_all(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(before, again);
+    }
+
+    /// A deployment OAuth client, as `AppState` would supply it. No network is
+    /// reached in these tests; what matters is that one exists to be injected.
+    fn test_oauth() -> ::workspace::GoogleClient {
+        ::workspace::GoogleClient {
+            client_id: "deployment-client".into(),
+            client_secret: "deployment-secret".into(),
+            // Deliberately not the default: while `origins` lived on the stored config it
+            // was `skip_serializing_if = "Origins::is_default"`, so a default value never
+            // appeared in the JSON and the row guard below would have passed even if the
+            // field came back exactly as it was.
+            origins: ::workspace::Origins::behind("http://deployment-origin.invalid"),
+        }
+    }
 
     /// Fresh in-memory DB with a seeded user + workspace; returns the state and
     /// the workspace id.
@@ -274,7 +431,7 @@ mod tests {
         .await
         .unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        let state = WorkspacesState::new(pool, tmp.path().to_path_buf());
+        let state = WorkspacesState::new(pool, tmp.path().to_path_buf(), Some(test_oauth()));
         (state, tmp, uid)
     }
 
@@ -350,11 +507,8 @@ mod tests {
         let (state, _tmp, wid) = fresh_state().await;
         let gmail = |email: &str| {
             ProviderConfig::Gmail(GmailConfig {
-                client_id: "c".into(),
-                client_secret: "s".into(),
                 refresh_token: "r".into(),
                 account_email: email.into(),
-                origins: Default::default(),
                 index_cap: None,
             })
         };
@@ -378,7 +532,8 @@ mod tests {
             .unwrap();
 
         // A fabricated mirror as the sync would leave it.
-        let acct = ::workspace::account_mirror_dir(&state.mirror_root(), "sync.test@x.com");
+        let acct =
+            ::workspace::account_mirror_dir(&state.mirror_root(), "sync.test@x.com").unwrap();
         std::fs::create_dir_all(acct.join("tree/INBOX")).unwrap();
         std::fs::write(acct.join("state.json"), b"{}").unwrap();
 
@@ -391,36 +546,117 @@ mod tests {
         assert!(!acct.exists(), "mirror removed with its last mount");
     }
 
-    /// A gdrive mount round-trips through encode/decode with its credentials intact,
-    /// and builds into the VFS.
+    /// A row whose account key traverses upward destroys nothing.
+    ///
+    /// The key is a directory name built from `account_email`, and `.` must stay allowed
+    /// because addresses contain it, so `..` used to survive the character map intact.
+    /// `remove_dir_all` on `<mirror>/gmail/..` resolves to `<mirror>` and empties every
+    /// account's tree on its way to failing the final rmdir. The value is not user-suppliable
+    /// (it comes from Gmail's own profile response), so this is about a row that was written
+    /// directly or by a hostile configured origin.
     #[tokio::test]
-    async fn gdrive_mount_round_trips_and_builds() {
+    async fn a_traversing_account_key_cannot_delete_other_mirrors() {
         let (state, _tmp, wid) = fresh_state().await;
-        let provider = ProviderConfig::Gdrive(GdriveConfig {
-            client_id: "cid".into(),
-            client_secret: "cs".into(),
-            refresh_token: "rt".into(),
-            origins: Default::default(),
-        });
-        state
-            .create_mount(WorkspaceMount::new(wid, "gdrive".into(), provider))
-            .await
-            .unwrap();
+
+        // A real account's mirror, and an unrelated neighbour under the same root.
+        let victim = ::workspace::account_mirror_dir(&state.mirror_root(), "victim@x.com").unwrap();
+        std::fs::create_dir_all(victim.join("tree/INBOX")).unwrap();
+        std::fs::write(victim.join("tree/INBOX/1.json"), b"{}").unwrap();
+        let neighbour = state.mirror_root().join("gdrive-someday");
+        std::fs::create_dir_all(&neighbour).unwrap();
+
+        // The row a `..` key would produce. `create_mount` accepts it: nothing validates the
+        // field, and this test is about what removal then does.
+        let mount = WorkspaceMount::new(
+            wid,
+            "evil".into(),
+            ProviderConfig::Gmail(GmailConfig {
+                refresh_token: "r".into(),
+                account_email: "..".into(),
+                index_cap: None,
+            }),
+        );
+        let id = mount.id;
+        state.create_mount(mount).await.unwrap();
+        state.remove_mount(id).await.unwrap();
+
+        assert!(
+            victim.join("tree/INBOX/1.json").exists(),
+            "another account's mail must survive"
+        );
+        assert!(neighbour.exists(), "an unrelated sibling must survive");
+        assert!(state.mirror_root().exists(), "the mirror root must survive");
+    }
+
+    /// A Google mount round-trips through encode/decode with its own credential intact,
+    /// carries none of the deployment's, and builds into the VFS.
+    #[tokio::test]
+    async fn a_google_mount_stores_its_own_half_and_none_of_the_deployments() {
+        let (state, _tmp, wid) = fresh_state().await;
+        let providers = [
+            (
+                "gdrive",
+                ProviderConfig::Gdrive(GdriveConfig {
+                    refresh_token: "rt".into(),
+                }),
+            ),
+            (
+                "gmail",
+                ProviderConfig::Gmail(GmailConfig {
+                    refresh_token: "rt".into(),
+                    account_email: "a@b.c".into(),
+                    index_cap: None,
+                }),
+            ),
+        ];
+        for (prefix, provider) in providers {
+            let mount = WorkspaceMount::new(wid, prefix.into(), provider);
+            let id = mount.id;
+            state.create_mount(mount).await.unwrap();
+
+            // What actually reaches the row, read back by id rather than assuming the
+            // table holds one. The deployment's client and its endpoints must not be
+            // among it: a stored copy beside the refresh token would make one leaked row
+            // a working Google credential, and a stored endpoint would let a row that
+            // could be written name where that credential gets sent.
+            let stored: String =
+                sqlx::query_scalar("SELECT config FROM workspace_mounts WHERE id = ?")
+                    .bind(id.to_string())
+                    .fetch_one(&state.db)
+                    .await
+                    .unwrap();
+            assert!(
+                stored.contains("rt"),
+                "{prefix}: the mount's own half is stored"
+            );
+            for forbidden in [
+                "deployment-secret",
+                "deployment-client",
+                "deployment-origin",
+                "origins",
+            ] {
+                assert!(
+                    !stored.contains(forbidden),
+                    "{prefix}: {forbidden} in the row: {stored}"
+                );
+            }
+        }
 
         let listed = state.list_mounts(wid).await.unwrap();
-        match &listed[0].provider {
-            ProviderConfig::Gdrive(c) => {
-                assert_eq!(c.refresh_token, "rt");
-                assert_eq!(c.client_id, "cid");
-            }
-            _ => panic!("expected Gdrive"),
-        }
+        assert_eq!(listed.len(), 2, "both mounts round-tripped");
 
         // Assembles alongside `/files` (no network — client construction only).
         let vfs = state.build_fs(wid).await.unwrap();
         let mut names = vfs.mount_names();
         names.sort();
-        assert_eq!(names, vec!["files".to_string(), "gdrive".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "files".to_string(),
+                "gdrive".to_string(),
+                "gmail".to_string()
+            ]
+        );
     }
 
     #[tokio::test]

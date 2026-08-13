@@ -381,6 +381,7 @@ impl WorkspaceFs {
         Self::from_config(FsConfig {
             local_root: Some(root),
             mirror_root: None,
+            google_oauth: None,
             mounts: Vec::new(),
         })
         .expect("local-only fs is always valid")
@@ -693,8 +694,12 @@ impl ForwardFs for WorkspaceFs {
                 atime: st.accessed.and_then(secs_since_epoch),
                 ctime: st.status_changed.and_then(secs_since_epoch),
             },
-            // Any stat failure (missing path, provider error) reads as ENOENT.
-            Err(_) => FwdStat::missing(),
+            // A path that is not there is an answer. A source that could not be reached is
+            // not, and collapsing the two told the guest an unauthenticated mount was
+            // empty: `lookup` turns `!exists` into ENOENT, so `ls` reported the source
+            // missing rather than broken. Anything else propagates and becomes EIO.
+            Err(FsError::NotFound | FsError::Forbidden) => FwdStat::missing(),
+            Err(e) => return Err(anyhow::anyhow!("stat {path}: {e:?}")),
         })
     }
 

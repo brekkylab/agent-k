@@ -6,13 +6,16 @@
 //! [`Mount`]s. `WorkspaceFs` owns the resulting mounts and does the routing —
 //! there is no separate `Vfs` type.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{ops::Range, path::PathBuf, sync::Arc};
 
 use crate::vfs::{
-    accessor::{GdriveConfig, GmailConfig, NotionConfig, S3Config},
+    accessor::{GdriveConfig, GmailConfig, GoogleClient, NotionConfig, S3Config},
     cache::CachedResource,
+    error::{ResourceError, ResourceResult},
+    path::MountPath,
     resource::{
-        GdriveResource, GmailResource, LocalResource, NotionResource, Resource, S3Resource,
+        DirEntry, FileStat, GdriveResource, GmailResource, LocalResource, NotionResource, Resource,
+        S3Resource,
     },
 };
 
@@ -53,6 +56,14 @@ pub struct FsConfig {
     /// mount so the guest never sees sync state. `None` (tests, library
     /// users) serves such mounts empty.
     pub mirror_root: Option<PathBuf>,
+    /// The deployment's Google OAuth client, needed by the Gmail and Drive mounts to
+    /// refresh their access tokens. Deliberately not part of a mount's stored config:
+    /// it belongs to the installation, not to any one mount, and a stored copy beside
+    /// a refresh token would make that row a usable credential on its own. `None`
+    /// (tests, library users with no Google mount) mounts such a source as one that fails
+    /// every read, so a missing env var costs the source it configures rather than `/files`
+    /// along with it, and without that source looking empty to whoever reads it.
+    pub google_oauth: Option<GoogleClient>,
     pub mounts: Vec<MountSpec>,
 }
 
@@ -60,6 +71,55 @@ pub struct FsConfig {
 pub struct Mount {
     pub prefix: String,
     pub resource: Arc<dyn Resource>,
+}
+
+/// A mount that keeps its place in the table and fails every read of it.
+///
+/// Five of the trait's fourteen methods. `write_bytes` is required, so it answers the same
+/// failure; the optional mutating ops keep the trait's `Unsupported`, which a read-only
+/// mount would answer anyway.
+///
+/// `Backend` and not `NotFound`, which is the whole point: an absent or empty source
+/// reads to a caller as "nothing to do here", and the knowledge index acts on that by
+/// purging what it had already ingested from it. This shape is what a rejected
+/// credential already produces, so it lands in the arm that retries.
+struct Unavailable(&'static str);
+
+#[async_trait::async_trait]
+impl Resource for Unavailable {
+    async fn read_bytes(&self, _: &MountPath, _: Option<Range<u64>>) -> ResourceResult<Vec<u8>> {
+        Err(ResourceError::Backend(anyhow::anyhow!("{}", self.0)))
+    }
+    async fn read_bytes_pinned(
+        &self,
+        p: &MountPath,
+        r: Option<Range<u64>>,
+        _: &FileStat,
+    ) -> ResourceResult<Vec<u8>> {
+        self.read_bytes(p, r).await
+    }
+    async fn write_bytes(&self, _: &MountPath, _: Vec<u8>) -> ResourceResult<()> {
+        Err(ResourceError::Backend(anyhow::anyhow!("{}", self.0)))
+    }
+    async fn readdir(&self, _: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+        Err(ResourceError::Backend(anyhow::anyhow!("{}", self.0)))
+    }
+    async fn stat(&self, _: &MountPath) -> ResourceResult<FileStat> {
+        Err(ResourceError::Backend(anyhow::anyhow!("{}", self.0)))
+    }
+}
+
+/// Stand a Google mount up in name only, when the deployment has no OAuth client. The
+/// message is what an operator gets: `FsError` carries no payload, so it does not travel
+/// past the filesystem boundary.
+fn unavailable_google_mount(provider: &str, prefix: &str) -> Arc<dyn Resource> {
+    tracing::warn!(
+        "{provider} mount {prefix} cannot serve: no Google OAuth client configured \
+         (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)"
+    );
+    Arc::new(Unavailable(
+        "no Google OAuth client configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)",
+    ))
 }
 
 /// Instantiate the resources described by an [`FsConfig`] into live [`Mount`]s:
@@ -77,21 +137,54 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
         });
     }
     let mirror_root = config.mirror_root;
+    let google_oauth = config.google_oauth;
     for spec in config.mounts {
         let provider: Arc<dyn Resource> = match spec.provider {
             ProviderConfig::S3(c) => Arc::new(S3Resource::new(&c)?),
             ProviderConfig::Notion(c) => Arc::new(NotionResource::new(&c)?),
             ProviderConfig::Gmail(c) => {
+                let Some(oauth) = google_oauth.as_ref() else {
+                    mounts.push(Mount {
+                        resource: unavailable_google_mount("Gmail", &spec.prefix),
+                        prefix: spec.prefix,
+                    });
+                    continue;
+                };
                 // Serves local mirror files — live and cheap like the local
                 // mount, so it skips the metadata cache (whose listing TTL
                 // would hide mail the sync just wrote).
+                //
+                // A row this cannot be built from costs its own mount and nothing else. The
+                // reachable case is an account key that does not name a directory, and
+                // failing here instead would take `/files` and every other provider down
+                // with it, in a workspace whose only fault is one bad row -- the outcome the
+                // missing-client branch above exists to avoid.
+                let resource: Arc<dyn Resource> =
+                    match GmailResource::new(&c, mirror_root.as_deref(), oauth) {
+                        Ok(r) => Arc::new(r),
+                        Err(e) => {
+                            tracing::warn!("Gmail mount {} cannot serve: {e}", spec.prefix);
+                            Arc::new(Unavailable(
+                                "this Gmail mount could not be built; see the server log",
+                            ))
+                        }
+                    };
                 mounts.push(Mount {
                     prefix: spec.prefix,
-                    resource: Arc::new(GmailResource::new(&c, mirror_root.as_deref())?),
+                    resource,
                 });
                 continue;
             }
-            ProviderConfig::Gdrive(c) => Arc::new(GdriveResource::new(&c)?),
+            ProviderConfig::Gdrive(c) => {
+                let Some(oauth) = google_oauth.as_ref() else {
+                    mounts.push(Mount {
+                        resource: unavailable_google_mount("Drive", &spec.prefix),
+                        prefix: spec.prefix,
+                    });
+                    continue;
+                };
+                Arc::new(GdriveResource::new(&c, oauth)?)
+            }
         };
         // Wrap remote providers in the metadata index cache so `stat` after a
         // `readdir` (e.g. `ls -la`) is served from memory.
@@ -101,4 +194,216 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
         });
     }
     Ok(mounts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gmail_spec() -> MountSpec {
+        MountSpec {
+            prefix: "/gmail".into(),
+            provider: ProviderConfig::Gmail(GmailConfig {
+                refresh_token: "rt".into(),
+                account_email: "a@b.c".into(),
+                index_cap: None,
+            }),
+        }
+    }
+
+    fn gdrive_spec() -> MountSpec {
+        MountSpec {
+            prefix: "/gdrive".into(),
+            provider: ProviderConfig::Gdrive(GdriveConfig {
+                refresh_token: "rt".into(),
+            }),
+        }
+    }
+
+    /// A deployment with no OAuth client keeps its Google mounts, failing, and keeps
+    /// `/files` working.
+    ///
+    /// Three shapes were possible and the other two are worse. Failing the build takes
+    /// `/files` down too, in every workspace holding such a mount. Dropping the mount
+    /// makes its prefix unroutable, so every op answers `NotFound` and a caller that
+    /// reads that as "nothing here" acts on it: the knowledge index purges every
+    /// document it had ingested from the source, and a session prompt lists a source the
+    /// tree does not contain.
+    #[tokio::test]
+    async fn a_missing_oauth_client_keeps_the_mount_and_fails_it_loudly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mounts = build_mounts(FsConfig {
+            local_root: Some(tmp.path().to_path_buf()),
+            mirror_root: Some(tmp.path().to_path_buf()),
+            google_oauth: None,
+            mounts: vec![gmail_spec(), gdrive_spec()],
+        })
+        .expect("the workspace still assembles");
+
+        let mut prefixes: Vec<_> = mounts.iter().map(|m| m.prefix.clone()).collect();
+        prefixes.sort();
+        assert_eq!(
+            prefixes,
+            vec!["/files", "/gdrive", "/gmail"],
+            "local disk survives and the sources keep their names"
+        );
+
+        // The distinction the knowledge index depends on: reachable-but-broken, not
+        // absent. `NotFound` here would let it purge what it had already ingested.
+        for m in mounts.iter().filter(|m| m.prefix != LOCAL_MOUNT) {
+            let err = m
+                .resource
+                .readdir(&crate::vfs::path::MountPath::new("/"))
+                .await
+                .expect_err("a mount that cannot authenticate does not answer");
+            assert!(
+                matches!(err, crate::vfs::error::ResourceError::Backend(_)),
+                "{} answered {err:?}, which reads as an empty source",
+                m.prefix
+            );
+            assert!(
+                err.to_string().contains("GOOGLE_CLIENT_ID"),
+                "the error says what is missing: {err}"
+            );
+        }
+    }
+
+    /// A row that cannot be built from costs its own mount, not the workspace.
+    ///
+    /// The reachable case is an account key that does not name a directory. Validating it is
+    /// right, but propagating the failure from here would answer one bad row by taking
+    /// `/files` and every other provider down with it -- and `create_mount` accepts the row,
+    /// so that lands after the commit, leaving an operator to work out which mount to delete
+    /// while the workspace is unusable. Same trade as the missing-client branch, same answer.
+    #[tokio::test]
+    async fn an_unusable_account_key_costs_its_own_mount_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        for key in ["..", "no-at-sign", "", ".", "  ", ".hidden@x.com"] {
+            let mounts = build_mounts(FsConfig {
+                local_root: Some(tmp.path().to_path_buf()),
+                mirror_root: Some(tmp.path().to_path_buf()),
+                google_oauth: Some(GoogleClient {
+                    client_id: "cid".into(),
+                    client_secret: "cs".into(),
+                    origins: Default::default(),
+                }),
+                mounts: vec![
+                    MountSpec {
+                        prefix: "/gmail".into(),
+                        provider: ProviderConfig::Gmail(GmailConfig {
+                            refresh_token: "rt".into(),
+                            account_email: key.into(),
+                            index_cap: None,
+                        }),
+                    },
+                    gdrive_spec(),
+                ],
+            })
+            .unwrap_or_else(|e| panic!("{key:?} took the whole workspace down: {e}"));
+
+            let mut prefixes: Vec<_> = mounts.iter().map(|m| m.prefix.clone()).collect();
+            prefixes.sort();
+            assert_eq!(
+                prefixes,
+                vec!["/files", "/gdrive", "/gmail"],
+                "{key:?}: local disk and the other provider must survive"
+            );
+            // And the Gmail mount is the failing kind, not a mount serving some other tree
+            // that a rewritten key happened to land on.
+            let gmail = mounts.iter().find(|m| m.prefix == "/gmail").unwrap();
+            let err = gmail
+                .resource
+                .readdir(&MountPath::new("/"))
+                .await
+                .expect_err("{key:?} must not serve anything");
+            assert!(matches!(err, crate::vfs::error::ResourceError::Backend(_)));
+        }
+    }
+
+    /// The property the knowledge index depends on, through the layer it actually sees.
+    ///
+    /// `add_target` swallows `NotFound` (a removed ref is how a document is meant to
+    /// leave the index) and bails on anything else. So the mapping from the provider's
+    /// error to `FsError` is what decides between "retry this pass" and "purge what was
+    /// ingested from here", and it is worth pinning rather than inferring.
+    #[tokio::test]
+    async fn an_unavailable_mount_reads_as_failure_not_absence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fs = crate::WorkspaceFs::from_config(FsConfig {
+            local_root: Some(tmp.path().to_path_buf()),
+            mirror_root: Some(tmp.path().to_path_buf()),
+            google_oauth: None,
+            mounts: vec![gmail_spec()],
+        })
+        .expect("assembles");
+
+        let err = fs
+            .metadata("/gmail/INBOX")
+            .await
+            .expect_err("an unauthenticated source does not answer");
+        // Mirrors `add_target`'s own condition rather than naming a variant: it swallows
+        // `NotFound | Forbidden` and bails on everything else, so which side of that line
+        // this lands on is the whole invariant. Asserting `GeneralFailure` specifically
+        // would fail on a harmless remapping.
+        assert!(
+            !matches!(
+                err,
+                crate::fs::FsError::NotFound | crate::fs::FsError::Forbidden
+            ),
+            "got {err:?}; on that side the knowledge index purges what it ingested here"
+        );
+        // And the prefix is still listed, so nothing has to infer the source is gone.
+        assert!(fs.mount_names().iter().any(|n| n == "gmail"));
+
+        // The same distinction one layer down, where the guest sees it. `ForwardFs::stat`
+        // used to fold every error into `exists: false`, which `lookup` reports as ENOENT,
+        // so an unreachable source read as an absent one inside the sandbox.
+        use crate::vfs::ForwardFs;
+        assert!(
+            ForwardFs::stat(&fs, "/gmail/INBOX").await.is_err(),
+            "an unreachable path must not be reported to the guest as simply missing"
+        );
+        let absent = ForwardFs::stat(&fs, "/files/nope")
+            .await
+            .expect("a path that is genuinely not there is still an answer");
+        assert!(!absent.exists);
+    }
+
+    /// With one configured, the same table carries both Google sources.
+    #[tokio::test]
+    async fn a_configured_client_mounts_both_google_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mounts = build_mounts(FsConfig {
+            local_root: Some(tmp.path().to_path_buf()),
+            mirror_root: Some(tmp.path().to_path_buf()),
+            google_oauth: Some(GoogleClient {
+                client_id: "cid".into(),
+                client_secret: "cs".into(),
+                // A closed port, not production Google. Reading through a Drive mount
+                // reaches the token endpoint, and a unit test has no business making an
+                // outbound request to a third party: with the default origins this took
+                // seconds and would pay a 10s connect timeout wherever egress is blocked.
+                origins: crate::vfs::accessor::Origins::behind("http://127.0.0.1:1"),
+            }),
+            mounts: vec![gmail_spec(), gdrive_spec()],
+        })
+        .expect("assembles");
+
+        let mut prefixes: Vec<_> = mounts.iter().map(|m| m.prefix.clone()).collect();
+        prefixes.sort();
+        assert_eq!(prefixes, vec!["/files", "/gdrive", "/gmail"]);
+
+        // Reading through them, not just counting names: with only the prefixes asserted,
+        // an arm that ignored the client and mounted the unavailable stand-in anyway went
+        // unnoticed. The stand-in says what it is, and a real provider never does.
+        for m in mounts.iter().filter(|m| m.prefix != LOCAL_MOUNT) {
+            if let Err(e) = m.resource.readdir(&MountPath::new("/")).await {
+                assert!(
+                    !e.to_string().contains("GOOGLE_CLIENT_ID"),
+                    "{} was mounted unavailable despite a configured client",
+                    m.prefix
+                );
+            }
+        }
+    }
 }
