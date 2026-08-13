@@ -12,7 +12,7 @@ use crate::vfs::{
     resource::{DirEntry, FileKind, FileStat, LocalResource, Resource},
 };
 
-use super::gmail_sync::{account_mirror_dir, mirror_tree};
+use super::gmail_sync::{account_key, account_mirror_dir, mirror_tree};
 
 pub(super) const GMAIL_SUFFIX: &str = ".json";
 
@@ -45,12 +45,12 @@ impl GmailResource {
         mirror_root: Option<&std::path::Path>,
         oauth: &GoogleClient,
     ) -> anyhow::Result<Self> {
-        // A row whose account key cannot name a directory fails the mount rather than
-        // serving something: the key decides which mailbox is served, so falling back to a
-        // sanitized guess would hand over whichever tree that guess collided with.
-        let tree = mirror_root
-            .map(|r| account_mirror_dir(r, &config.account_email).map(|d| mirror_tree(&d)))
-            .transpose()?;
+        // Checked whether or not there is a mirror root to join it to: the key is what a
+        // later sync or GC would use, and a value that cannot name a directory is not
+        // something to serve around. `build_mounts` turns this into an unavailable mount, so
+        // the cost lands on the source it configures rather than the whole workspace.
+        let key = account_key(&config.account_email)?;
+        let tree = mirror_root.map(|r| mirror_tree(&r.join("gmail").join(&key)));
         if let Some(t) = &tree {
             // Pre-sync, the tree may not exist yet; an empty dir serves an
             // empty (but valid) mailbox instead of erroring.
@@ -1195,8 +1195,12 @@ mod tests {
         let config = GmailConfig {
             refresh_token: std::env::var("GOOGLE_REFRESH_TOKEN").ok()?,
             // This one *is* read: it names the mirror directory, so a live run against
-            // two accounts must not have them share a tree.
-            account_email: std::env::var("GMAIL_EMAIL").unwrap_or_else(|_| "live-test".into()),
+            // two accounts must not have them share a tree. The fallback has to be a usable
+            // key -- `account_key` refuses anything without an `@`, and a bare "live-test"
+            // made this test panic in its own setup with `GMAIL_EMAIL` unset, pointing at a
+            // line that had nothing to do with what it was testing.
+            account_email: std::env::var("GMAIL_EMAIL")
+                .unwrap_or_else(|_| "live-test@example.invalid".into()),
             index_cap: std::env::var("GMAIL_INDEX_CAP")
                 .ok()
                 .and_then(|v| v.parse().ok()),

@@ -153,9 +153,25 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
                 // Serves local mirror files — live and cheap like the local
                 // mount, so it skips the metadata cache (whose listing TTL
                 // would hide mail the sync just wrote).
+                //
+                // A row this cannot be built from costs its own mount and nothing else. The
+                // reachable case is an account key that does not name a directory, and
+                // failing here instead would take `/files` and every other provider down
+                // with it, in a workspace whose only fault is one bad row -- the outcome the
+                // missing-client branch above exists to avoid.
+                let resource: Arc<dyn Resource> =
+                    match GmailResource::new(&c, mirror_root.as_deref(), oauth) {
+                        Ok(r) => Arc::new(r),
+                        Err(e) => {
+                            tracing::warn!("Gmail mount {} cannot serve: {e}", spec.prefix);
+                            Arc::new(Unavailable(
+                                "this Gmail mount could not be built; see the server log",
+                            ))
+                        }
+                    };
                 mounts.push(Mount {
                     prefix: spec.prefix,
-                    resource: Arc::new(GmailResource::new(&c, mirror_root.as_deref(), oauth)?),
+                    resource,
                 });
                 continue;
             }
@@ -249,6 +265,58 @@ mod tests {
                 err.to_string().contains("GOOGLE_CLIENT_ID"),
                 "the error says what is missing: {err}"
             );
+        }
+    }
+
+    /// A row that cannot be built from costs its own mount, not the workspace.
+    ///
+    /// The reachable case is an account key that does not name a directory. Validating it is
+    /// right, but propagating the failure from here would answer one bad row by taking
+    /// `/files` and every other provider down with it -- and `create_mount` accepts the row,
+    /// so that lands after the commit, leaving an operator to work out which mount to delete
+    /// while the workspace is unusable. Same trade as the missing-client branch, same answer.
+    #[tokio::test]
+    async fn an_unusable_account_key_costs_its_own_mount_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        for key in ["..", "no-at-sign", "", ".", "  ", ".hidden@x.com"] {
+            let mounts = build_mounts(FsConfig {
+                local_root: Some(tmp.path().to_path_buf()),
+                mirror_root: Some(tmp.path().to_path_buf()),
+                google_oauth: Some(GoogleClient {
+                    client_id: "cid".into(),
+                    client_secret: "cs".into(),
+                    origins: Default::default(),
+                }),
+                mounts: vec![
+                    MountSpec {
+                        prefix: "/gmail".into(),
+                        provider: ProviderConfig::Gmail(GmailConfig {
+                            refresh_token: "rt".into(),
+                            account_email: key.into(),
+                            index_cap: None,
+                        }),
+                    },
+                    gdrive_spec(),
+                ],
+            })
+            .unwrap_or_else(|e| panic!("{key:?} took the whole workspace down: {e}"));
+
+            let mut prefixes: Vec<_> = mounts.iter().map(|m| m.prefix.clone()).collect();
+            prefixes.sort();
+            assert_eq!(
+                prefixes,
+                vec!["/files", "/gdrive", "/gmail"],
+                "{key:?}: local disk and the other provider must survive"
+            );
+            // And the Gmail mount is the failing kind, not a mount serving some other tree
+            // that a rewritten key happened to land on.
+            let gmail = mounts.iter().find(|m| m.prefix == "/gmail").unwrap();
+            let err = gmail
+                .resource
+                .readdir(&MountPath::new("/"))
+                .await
+                .expect_err("{key:?} must not serve anything");
+            assert!(matches!(err, crate::vfs::error::ResourceError::Backend(_)));
         }
     }
 

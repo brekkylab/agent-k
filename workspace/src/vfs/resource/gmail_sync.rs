@@ -98,7 +98,18 @@ pub fn mirror_tree(root: &Path) -> PathBuf {
 /// plain email names the directory (an identifier, not a secret — readable
 /// for ops, and stable across re-consents unlike anything token-derived).
 /// Both the sync worker and the serving resource derive paths through this.
-pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> anyhow::Result<PathBuf> {
+/// The directory name a mount's mirror lives under, validated.
+///
+/// The key has to name one leaf directory and nothing else. `.` is in the allowed set below
+/// (addresses contain it), so `..` survives the character map intact, and the destructive
+/// consumer is `remove_dir_all` on mount removal: `<root>/gmail/..` resolves to `<root>` and
+/// takes every account's mirror with it. A leading dot is that whole family, so it is
+/// refused rather than substituted -- rewriting it would silently land two accounts on one
+/// tree, and the key is what decides which mailbox gets served.
+///
+/// Separate from [`account_mirror_dir`] so a caller can check the key without having a
+/// mirror root to join it to: whether the value is usable does not depend on that.
+pub fn account_key(account_email: &str) -> anyhow::Result<String> {
     let safe: String = account_email
         .trim()
         .to_lowercase()
@@ -111,11 +122,6 @@ pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> anyhow::Re
             }
         })
         .collect();
-    // The key has to name one leaf directory and nothing else. `.` is in the allowed set
-    // above (addresses contain it), so `..` survives the map intact, and the caller of this
-    // is `remove_dir_all` on mount removal: `<root>/gmail/..` resolves to `<root>` and takes
-    // every account's mirror with it. A leading dot is the whole family, so it is refused
-    // rather than substituted -- rewriting it would silently land two accounts on one tree.
     anyhow::ensure!(
         !safe.is_empty()
             && !safe.starts_with('.')
@@ -123,7 +129,11 @@ pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> anyhow::Re
             && safe.len() <= MAX_ACCOUNT_KEY,
         "unusable gmail account key {account_email:?}"
     );
-    Ok(mirror_root.join("gmail").join(safe))
+    Ok(safe)
+}
+
+pub fn account_mirror_dir(mirror_root: &Path, account_email: &str) -> anyhow::Result<PathBuf> {
+    Ok(mirror_root.join("gmail").join(account_key(account_email)?))
 }
 
 /// The longest address RFC 5321 allows, which is also comfortably inside every filesystem's
