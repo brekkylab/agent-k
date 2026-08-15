@@ -9,10 +9,11 @@
 use std::{path::PathBuf, sync::Arc};
 
 use crate::vfs::{
-    accessor::{GdriveConfig, GmailConfig, NotionConfig, S3Config},
+    accessor::{GdriveConfig, GmailConfig, NotionConfig, S3Config, SlackConfig},
     cache::CachedResource,
     resource::{
         GdriveResource, GmailResource, LocalResource, NotionResource, Resource, S3Resource,
+        SlackResource,
     },
 };
 
@@ -27,6 +28,7 @@ pub enum ProviderConfig {
     Notion(NotionConfig),
     Gmail(GmailConfig),
     Gdrive(GdriveConfig),
+    Slack(SlackConfig),
 }
 
 /// One mount spec: a virtual top-level prefix bound to a provider config. The
@@ -81,6 +83,7 @@ pub(crate) fn build_mounts(config: FsConfig) -> anyhow::Result<Vec<Mount>> {
         let provider: Arc<dyn Resource> = match spec.provider {
             ProviderConfig::S3(c) => Arc::new(S3Resource::new(&c)?),
             ProviderConfig::Notion(c) => Arc::new(NotionResource::new(&c)?),
+            ProviderConfig::Slack(c) => Arc::new(SlackResource::new(&c)?),
             ProviderConfig::Gmail(c) => {
                 // Serves local mirror files — live and cheap like the local
                 // mount, so it skips the metadata cache (whose listing TTL

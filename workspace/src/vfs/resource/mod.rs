@@ -5,6 +5,7 @@ mod gmail_sync;
 mod local;
 mod notion;
 mod s3;
+mod slack;
 #[cfg(test)]
 mod tests;
 
@@ -18,3 +19,4 @@ pub use gmail_sync::{
 pub use local::LocalResource;
 pub use notion::NotionResource;
 pub use s3::S3Resource;
+pub use slack::SlackResource;

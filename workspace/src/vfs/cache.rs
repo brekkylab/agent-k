@@ -166,7 +166,7 @@ impl IndexCache {
             None => Vec::new(),
         };
         for v in &vanished {
-            purge_prefix(&mut inner, v);
+            purge_node(&mut inner, v);
         }
         for (e, full) in entries.iter().zip(&child_keys) {
             inner.entries.insert(
@@ -204,6 +204,13 @@ impl IndexCache {
     /// removed / resized child is re-listed).
     fn invalidate_parent(&self, path: &str) {
         self.invalidate_dir(parent_of(path));
+    }
+
+    /// Re-list `path`'s parent without disturbing `path` itself — for folding a
+    /// child the parent's listing did not name back into it.
+    fn relist_parent(&self, path: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        purge_listing(&mut inner, parent_of(path));
     }
 
     fn clear(&self) {
@@ -572,11 +579,15 @@ impl Resource for CachedResource {
         if let Some(entries) = self.cache.list_dir_entries(path.as_str()) {
             return Ok(entries);
         }
-        // Incremental discovery for incomplete-listing providers (gmail): if we
-        // just resolved a child its parent's (capped) listing didn't include,
-        // drop the parent listing so the next readdir re-runs and folds it in
-        // (the provider remembers visited entries). Checked before set_dir,
-        // which would otherwise mark this path as listed.
+        // Incremental discovery for incomplete-listing providers — slack, the only
+        // one: if we just resolved a child its parent's listing did not name,
+        // expire that listing so it stops standing as the complete answer.
+        // Checked before set_dir, which would otherwise mark this path as listed.
+        //
+        // Whether the re-run then folds the child in is the provider's business.
+        // Slack's does not: a date listing is what one bounded walk saw, and being
+        // asked for an older date does not add it. So today this buys a re-listing
+        // and no new entry — worth revisiting if it stays the only case.
         let discovered = !self.inner.listings_complete()
             && !path.is_root()
             && self.cache.is_listed(parent_of(path.as_str()))
@@ -589,7 +600,9 @@ impl Resource for CachedResource {
         // (`WorkspaceFs::read_dir`), and a `stat` resolves one file on demand.
         self.cache.set_dir(path.as_str(), &entries);
         if discovered {
-            self.cache.invalidate_dir(parent_of(path.as_str()));
+            // Only the parent's listing: this path was just listed, and keeping
+            // that is the point of having read it.
+            self.cache.relist_parent(path.as_str());
         }
         Ok(entries)
     }
@@ -638,10 +651,9 @@ impl Resource for CachedResource {
             None => {
                 // Negative cache: a fresh parent listing that lacks this path
                 // proves it does not exist — skip the network probe. Only valid
-                // when the provider's listings are complete; some return false
-                // (e.g. Gmail, whose date index is TTL-cached, so a just-arrived
-                // message may not be listed yet), so a missing child may still
-                // exist and must be probed.
+                // when the provider's listings are complete; slack's are not (a
+                // date its history walk did not reach goes unlisted and is still
+                // real), so for it a missing child has to be probed.
                 if !path.is_root()
                     && self.inner.listings_complete()
                     && self.cache.is_listed(parent_of(key))
@@ -695,12 +707,15 @@ impl Resource for CachedResource {
                 self.cache.invalidate_dir(path.as_str());
                 self.cache.invalidate_parent(path.as_str());
             } else {
-                // Incomplete-listing providers (gmail): the unlinked object can
-                // appear in listings far from `path` — the same message shows
-                // under several labels and any number of `.search` dirs — and
-                // this layer can't know which, so drop every cached listing.
-                // Cheap relative to the provider-side invalidation the mutation
-                // already triggered (gmail rebuilds its label indexes anyway).
+                // A provider whose listings are incomplete can show one object in
+                // listings far from `path` — under several labels, or in any
+                // number of `.search` dirs — and this layer cannot know which, so
+                // it drops every cached listing.
+                //
+                // Unreachable today: slack is the only incomplete-listing provider
+                // and it is read-only, so nothing gets here. Kept because the
+                // alternative is a writable one silently leaving the object alive
+                // in a listing nobody thought to invalidate.
                 self.cache.clear();
             }
             self.content_drop(path.as_str());
@@ -778,17 +793,46 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Remove `p` and everything under `p/` from every map (entries/children/expiry).
+/// Drop `p`'s listing and everything beneath it, but **not** `p`'s own entry:
+/// that entry belongs to the parent's listing, which [`IndexCache::list_dir_entries`]
+/// rebuilds out of `entries`, so removing it makes the parent read short for the
+/// rest of its TTL. Invalidating a directory says its listing is stale, not that
+/// the directory is gone.
 fn purge_prefix(inner: &mut Inner, p: &str) {
     let sub = if p == "/" {
         "/".to_string()
     } else {
         format!("{p}/")
     };
-    let stale = |k: &str| k == p || k.starts_with(sub.as_str());
-    inner.entries.retain(|k, _| !stale(k));
+    let below = |k: &str| k.starts_with(sub.as_str());
+    let stale = |k: &str| k == p || below(k);
+    inner.entries.retain(|k, _| !below(k));
     inner.children.retain(|k, _| !stale(k));
     inner.expiry.retain(|k, _| !stale(k));
+}
+
+/// [`purge_prefix`] plus `p` itself — for a child a fresh listing no longer
+/// contains, which has to stop stat'ing as present.
+fn purge_node(inner: &mut Inner, p: &str) {
+    purge_prefix(inner, p);
+    inner.entries.remove(p);
+}
+
+/// Expire `p`'s listing and nothing else — not its entry, not its child list, and
+/// nothing beneath it.
+///
+/// For folding a newly discovered child into an incomplete listing: that child
+/// was just listed, and caching it is the whole point of having read it, so the
+/// sweep must not reach it. [`purge_prefix`] would, since the child's key starts
+/// with `p/`.
+///
+/// Dropping the expiry is the whole job — [`IndexCache::list_dir_entries`] and
+/// [`IndexCache::is_listed`] both gate on it, so the next `readdir` refetches. The
+/// child list has to survive: [`IndexCache::set_dir`] diffs the fresh listing
+/// against it to find a child that disappeared upstream, and without it that
+/// child keeps stat'ing as present.
+fn purge_listing(inner: &mut Inner, p: &str) {
+    inner.expiry.remove(p);
 }
 
 #[cfg(test)]
@@ -1036,9 +1080,10 @@ mod tests {
         assert!(c.total <= 10, "within budget");
     }
 
-    // On an incomplete-listing provider (gmail), an unlink must drop EVERY
-    // cached listing — the object may be listed under paths unrelated to the
-    // unlinked one (other labels, .search dirs) — not just the parent dir.
+    // On an incomplete-listing provider, an unlink must drop EVERY cached listing
+    // — the object may be listed under paths unrelated to the unlinked one (other
+    // labels, .search dirs) — not just the parent dir. No such provider is also
+    // writable today, so this pins the rule rather than a live path.
     #[tokio::test]
     async fn unlink_on_incomplete_listings_drops_every_cached_listing() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1087,6 +1132,152 @@ mod tests {
             inner.readdirs.load(Ordering::SeqCst),
             3,
             "unrelated listing re-fetched after unlink"
+        );
+    }
+
+    // A provider with incomplete listings (slack) can serve a child its parent
+    // never listed — a date below the history walk's floor, resolved by name.
+    // Folding that discovery in re-lists the parent, and must touch nothing else:
+    // not the grandparent's listing, which still holds the parent, and not the
+    // child's own listing, which was just paid for.
+    #[tokio::test]
+    async fn discovering_an_unlisted_child_disturbs_only_its_parents_listing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Deep {
+            readdirs: AtomicUsize,
+        }
+        #[async_trait]
+        impl Resource for Deep {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                Err(ResourceError::NotFound)
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+                self.readdirs.fetch_add(1, Ordering::SeqCst);
+                Ok(match p.as_str() {
+                    "/c" => vec![de("conv", FileKind::Dir, 0)],
+                    // The walk names one day; older ones exist but go unlisted.
+                    "/c/conv" => vec![de("2026-08-03", FileKind::Dir, 0)],
+                    _ => vec![de("chat.jsonl", FileKind::File, 7)],
+                })
+            }
+            async fn stat(&self, _p: &MountPath) -> ResourceResult<FileStat> {
+                Ok(FileStat::default())
+            }
+            fn listings_complete(&self) -> bool {
+                false
+            }
+        }
+        let inner = Arc::new(Deep {
+            readdirs: AtomicUsize::new(0),
+        });
+        let cached = CachedResource::new(inner.clone());
+        let hits = || inner.readdirs.load(Ordering::SeqCst);
+        let ls = async |p: &str| cached.readdir(&MountPath::new(p)).await.unwrap();
+
+        ls("/c").await;
+        ls("/c/conv").await;
+        // A date /c/conv never named.
+        let old: Vec<String> = ls("/c/conv/2019-01-01")
+            .await
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(hits(), 3);
+
+        // The grandparent still holds the conversation, from cache.
+        let top = ls("/c").await;
+        assert_eq!(top.len(), 1, "descending into an unlisted date emptied /c");
+        assert_eq!(top[0].name, "conv");
+        assert_eq!(hits(), 3, "/c was re-listed");
+
+        // The date's own listing survived — re-reading it costs nothing.
+        let again: Vec<String> = ls("/c/conv/2019-01-01")
+            .await
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(again, old);
+        assert_eq!(hits(), 3, "the discovered date was not cached");
+
+        // The parent, and only the parent, re-lists.
+        ls("/c/conv").await;
+        assert_eq!(hits(), 4, "/c/conv should have been invalidated");
+    }
+
+    // Re-listing a parent must leave its child list in place, because that list is
+    // what `set_dir` diffs to notice a child that disappeared upstream. Dropping
+    // it defeats `relisting_a_dir_drops_vanished_children` — the same guarantee,
+    // with a discovery on the way in.
+    #[tokio::test]
+    async fn a_discovery_leaves_the_parent_able_to_notice_a_vanished_child() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Shrinking {
+            gone: AtomicBool,
+        }
+        #[async_trait]
+        impl Resource for Shrinking {
+            async fn read_bytes(
+                &self,
+                _p: &MountPath,
+                _r: Option<Range<u64>>,
+            ) -> ResourceResult<Vec<u8>> {
+                Err(ResourceError::NotFound)
+            }
+            async fn write_bytes(&self, _p: &MountPath, _d: Vec<u8>) -> ResourceResult<()> {
+                Err(ResourceError::Unsupported)
+            }
+            async fn readdir(&self, p: &MountPath) -> ResourceResult<Vec<DirEntry>> {
+                let gone = self.gone.load(Ordering::SeqCst);
+                Ok(match p.as_str() {
+                    "/c" if gone => vec![de("b", FileKind::Dir, 0)],
+                    "/c" => vec![de("a", FileKind::Dir, 0), de("b", FileKind::Dir, 0)],
+                    _ => vec![de("chat.jsonl", FileKind::File, 7)],
+                })
+            }
+            async fn stat(&self, p: &MountPath) -> ResourceResult<FileStat> {
+                if p.as_str() == "/c/a" && self.gone.load(Ordering::SeqCst) {
+                    return Err(ResourceError::NotFound);
+                }
+                Ok(FileStat {
+                    kind: FileKind::Dir,
+                    ..Default::default()
+                })
+            }
+            fn listings_complete(&self) -> bool {
+                false
+            }
+        }
+        let inner = Arc::new(Shrinking {
+            gone: AtomicBool::new(false),
+        });
+        let cached = CachedResource::new(inner.clone());
+
+        cached.readdir(&MountPath::new("/c")).await.unwrap();
+        assert!(cached.stat(&MountPath::new("/c/a")).await.is_ok());
+
+        // A child /c never listed, which folds in by re-listing /c.
+        cached
+            .readdir(&MountPath::new("/c/2019-01-01"))
+            .await
+            .unwrap();
+
+        // `a` disappears upstream; the next listing is the only place that can
+        // notice, and it has to.
+        inner.gone.store(true, Ordering::SeqCst);
+        assert_eq!(
+            cached.readdir(&MountPath::new("/c")).await.unwrap().len(),
+            1
+        );
+        assert!(
+            cached.stat(&MountPath::new("/c/a")).await.is_err(),
+            "a vanished child still stats as present"
         );
     }
 
@@ -1594,6 +1785,28 @@ mod tests {
         c.set_dir("/a/b/sub", &[de("d.txt", FileKind::File, 7)]);
         c.invalidate_dir("/a/b");
         assert!(c.get("/a/b/sub/d.txt").is_none());
+    }
+
+    // Invalidating a directory says its *listing* is stale, not that it is gone.
+    // Its own entry is part of the parent's listing — `list_dir_entries` rebuilds
+    // a directory from `entries`, so a child missing there is silently dropped
+    // and the parent reads empty for the rest of its TTL.
+    #[test]
+    fn invalidating_a_dir_keeps_it_in_its_parents_listing() {
+        let c = IndexCache::new(Duration::from_secs(600));
+        c.set_dir("/a", &[de("b", FileKind::Dir, 0)]);
+        c.set_dir("/a/b", &[de("d.txt", FileKind::File, 7)]);
+        c.invalidate_dir("/a/b");
+        // Its listing and subtree are gone,
+        assert!(!c.is_listed("/a/b"));
+        assert!(c.get("/a/b/d.txt").is_none());
+        // but the parent, whose listing never expired, still has it.
+        let listed = c
+            .list_dir_entries("/a")
+            .expect("/a's listing is still fresh");
+        assert_eq!(listed.len(), 1, "invalidating /a/b emptied /a");
+        assert_eq!(listed[0].name, "b");
+        assert!(c.get("/a/b").is_some_and(|e| e.is_dir));
     }
 
     // Validated content cache: repeat reads (incl. ranged) hit the once-fetched

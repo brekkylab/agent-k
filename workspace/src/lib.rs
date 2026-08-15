@@ -1,6 +1,6 @@
 //! Standalone workspace filesystem.
 //!
-//! A provider VFS (S3 / Notion / Gmail / GDrive) plus the unified [`WorkspaceFs`],
+//! A provider VFS (S3 / Notion / Gmail / GDrive / Slack) plus the unified [`WorkspaceFs`],
 //! which presents a workspace's local files and its provider mounts as one tree,
 //! exposed to the backend as a [`ForwardFs`] to serve to an in-guest FUSE client.
 //!
@@ -20,8 +20,8 @@ pub use vfs::{
     DirEntry as ResourceDirEntry, FileKind, FileStat, ForwardFs, FsConfig, FwdEntry, FwdStat,
     GdriveConfig, GdriveExchange, GdriveResource, GmailConfig, GmailExchange, GmailResource,
     GmailSyncDelta, GmailSyncState, LOCAL_MOUNT, LocalResource, Mount, MountPath, MountSpec,
-    NotionConfig, NotionResource, Origins, ProviderConfig, Resource, ResourceError,
-    ResourceResult, S3Config, S3Resource, TunnelServer, account_mirror_dir,
-    exchange_gdrive_code, exchange_gmail_code, mirror_tree, sync_gmail_incremental,
-    sync_gmail_mirror,
+    NotionConfig, NotionResource, Origins, ProviderConfig, Resource, ResourceError, ResourceResult,
+    S3Config, S3Resource, SlackConfig, SlackExchange, SlackResource, TunnelServer,
+    account_mirror_dir, exchange_gdrive_code, exchange_gmail_code, exchange_slack_code,
+    mirror_tree, sync_gmail_incremental, sync_gmail_mirror,
 };

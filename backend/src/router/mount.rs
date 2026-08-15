@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use ::workspace::{GdriveConfig, GmailConfig, NotionConfig, ProviderConfig, S3Config};
+use ::workspace::{GdriveConfig, GmailConfig, NotionConfig, ProviderConfig, S3Config, SlackConfig};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -27,7 +27,7 @@ use super::{
 };
 use crate::{
     auth::AuthUser,
-    state::{AppState, GoogleOAuth, WorkspaceMount},
+    state::{AppState, GoogleOAuth, SlackOAuth, WorkspaceMount},
 };
 
 /// Provider configuration as supplied when creating a mount (carries secrets).
@@ -76,6 +76,53 @@ pub enum ProviderSpec {
         #[serde(default)]
         index_cap: Option<usize>,
     },
+    /// Slack via OAuth (read-only mount).
+    ///
+    /// Request these as **user** scopes at consent, so the mount reads as the
+    /// installing user — a workspace is one person's own space, and what belongs
+    /// in it is the Slack they see in their own client:
+    ///
+    /// ```text
+    /// channels:history  channels:read    public channels
+    /// groups:history    groups:read      private channels
+    /// im:history        im:read          DMs
+    /// mpim:history      mpim:read        group DMs
+    /// users:read                         member profiles
+    /// files:read                         attachment bytes
+    /// search:read                        search (user-only; bots cannot search)
+    /// ```
+    ///
+    /// `users:read.email` is deliberately absent. A `users/*.json` serves an
+    /// allowlist of the fields that say who is speaking, so an email address
+    /// would be fetched from Slack and then dropped on the way out.
+    ///
+    /// Bot scopes are not needed. A bot-only install still mounts, but it sees
+    /// only the conversations the bot itself was invited to, has an empty `dms/`,
+    /// and cannot search — the `personal` flag in [`ProviderInfo`] reports which
+    /// of the two a mount got. A conversation whose scope is missing lists as
+    /// empty rather than failing, so a narrower install still works.
+    ///
+    /// Do **not** enable token rotation on the app: the accessor holds no refresh
+    /// loop, so a rotating token breaks the mount every 12 hours when it expires.
+    /// Slack does not let an app turn rotation back off, so this is one-way.
+    ///
+    /// Rate limits follow the app's distribution, and the gap is wide enough to
+    /// plan around: since 2025-05-29 an app distributed commercially without
+    /// Marketplace approval reads history at 1 request/minute and 15 objects per
+    /// response, while an app installed only in its own workspace keeps the
+    /// ordinary tiers (<https://docs.slack.dev/apis/web-api/rate-limits>). Since
+    /// [`SlackOAuth`] is per-deployment, self-hosting against your own Slack is the
+    /// latter — production or not.
+    ///
+    /// The frontend runs the OAuth consent and sends only the authorization
+    /// `code` (+ the `redirect_uri` used at consent). The backend exchanges it
+    /// server-side with the app's config-held client credentials
+    /// ([`SlackOAuth`]) into the workspace's tokens, so the browser never
+    /// handles the client secret.
+    Slack {
+        code: String,
+        redirect_uri: String,
+    },
     /// Google Drive via Google OAuth (read-only mount).
     ///
     /// Scope: request `https://www.googleapis.com/auth/drive.readonly` at
@@ -93,10 +140,16 @@ pub enum ProviderSpec {
 
 impl ProviderSpec {
     /// Resolve into a live [`ProviderConfig`]. S3/Notion carry their credentials
-    /// directly; Gmail exchanges its authorization `code` for a refresh token
-    /// server-side with the app's [`GoogleOAuth`] client, so the browser never
-    /// handles the client secret.
-    async fn resolve(self, oauth: &GoogleOAuth) -> Result<ProviderConfig, ApiError> {
+    /// directly; Gmail and Slack exchange their authorization `code` server-side
+    /// with the app's config-held client credentials — a refresh token and the
+    /// workspace's tokens respectively — so the browser never handles a client
+    /// secret. Each takes the config it needs rather than the whole [`AppState`],
+    /// so what a provider can reach stays visible in the signature.
+    async fn resolve(
+        self,
+        google: &GoogleOAuth,
+        slack: &SlackOAuth,
+    ) -> Result<ProviderConfig, ApiError> {
         Ok(match self {
             ProviderSpec::S3 {
                 bucket,
@@ -119,7 +172,7 @@ impl ProviderSpec {
                 redirect_uri,
                 index_cap,
             } => {
-                let (client_id, client_secret) = oauth.credentials().ok_or_else(|| {
+                let (client_id, client_secret) = google.credentials().ok_or_else(|| {
                     err(
                         StatusCode::BAD_REQUEST,
                         "Gmail is not configured on this server \
@@ -131,7 +184,7 @@ impl ProviderSpec {
                     client_secret,
                     &code,
                     &redirect_uri,
-                    &oauth.origins,
+                    &google.origins,
                 )
                 .await
                 .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gmail oauth: {e}")))?;
@@ -143,11 +196,38 @@ impl ProviderSpec {
                     index_cap,
                     // Deployment-level override (mock/gateway), inherited from
                     // backend config — never from the request.
-                    origins: oauth.origins.clone(),
+                    origins: google.origins.clone(),
+                })
+            }
+            ProviderSpec::Slack { code, redirect_uri } => {
+                let (client_id, client_secret) = slack.credentials().ok_or_else(|| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        "Slack is not configured on this server \
+                         (SLACK_CLIENT_ID / SLACK_CLIENT_SECRET)",
+                    )
+                })?;
+                let exchanged = ::workspace::exchange_slack_code(
+                    client_id,
+                    client_secret,
+                    &code,
+                    &redirect_uri,
+                    slack.base_url.as_deref(),
+                )
+                .await
+                .map_err(|e| err(StatusCode::BAD_REQUEST, format!("slack oauth: {e}")))?;
+                ProviderConfig::Slack(SlackConfig {
+                    user_token: exchanged.user_token,
+                    bot_token: exchanged.bot_token,
+                    team_id: exchanged.team_id,
+                    team_name: exchanged.team_name,
+                    // Deployment-level override (mock/gateway), inherited from
+                    // backend config — never from the request.
+                    base_url: slack.base_url.clone(),
                 })
             }
             ProviderSpec::Gdrive { code, redirect_uri } => {
-                let (client_id, client_secret) = oauth.credentials().ok_or_else(|| {
+                let (client_id, client_secret) = google.credentials().ok_or_else(|| {
                     err(
                         StatusCode::BAD_REQUEST,
                         "Google Drive is not configured on this server \
@@ -159,7 +239,7 @@ impl ProviderSpec {
                     client_secret,
                     &code,
                     &redirect_uri,
-                    &oauth.origins,
+                    &google.origins,
                 )
                 .await
                 .map_err(|e| err(StatusCode::BAD_REQUEST, format!("gdrive oauth: {e}")))?;
@@ -169,7 +249,7 @@ impl ProviderSpec {
                     refresh_token: exchanged.refresh_token,
                     // Deployment-level override (mock/gateway), inherited from
                     // backend config — never from the request.
-                    origins: oauth.origins.clone(),
+                    origins: google.origins.clone(),
                 })
             }
         })
@@ -193,6 +273,17 @@ pub enum ProviderInfo {
     /// Gmail: the OAuth pieces are secret, but the account email (resolved at
     /// mount-create) is shown so the UI can tell mounts apart.
     Gmail { email: String },
+    /// Slack: the tokens are secret, but the workspace this mount points at
+    /// (resolved at mount-create) is shown so the UI can tell mounts apart.
+    ///
+    /// `personal` is whether the mount reads as the installing user — their own
+    /// channels, DMs and search — rather than as a bot limited to its own
+    /// memberships. The UI needs it because the two produce visibly different
+    /// trees (a bot-only mount has an empty `dms/`), and a user who expected
+    /// their own Slack should be able to see which one they got. It is NOT a
+    /// scope report: whether `search:read` in particular was granted is not
+    /// visible in a token, so a search can still fail with `missing_scope`.
+    Slack { team_name: String, personal: bool },
     /// Google Drive: every field of the config is a secret, and the account the
     /// mount is bound to is a property of its refresh token rather than something
     /// stored beside it — `about.get` answers it, and a listing that called it per
@@ -212,6 +303,10 @@ impl From<&ProviderConfig> for ProviderInfo {
             ProviderConfig::Notion(_) => ProviderInfo::Notion {},
             ProviderConfig::Gmail(c) => ProviderInfo::Gmail {
                 email: c.account_email.clone(),
+            },
+            ProviderConfig::Slack(c) => ProviderInfo::Slack {
+                team_name: c.team_name.clone(),
+                personal: c.user_token.as_deref().is_some_and(|t| !t.is_empty()),
             },
             ProviderConfig::Gdrive(_) => ProviderInfo::Gdrive {},
         }
@@ -280,7 +375,10 @@ pub(super) async fn create_mount(
     Json(payload): Json<CreateMountRequest>,
 ) -> Result<(StatusCode, Json<MountResponse>), ApiError> {
     require_owned_workspace(&state, &auth, wid).await?;
-    let provider = payload.provider.resolve(&state.google_oauth).await?;
+    let provider = payload
+        .provider
+        .resolve(&state.google_oauth, &state.slack_oauth)
+        .await?;
     let mount = WorkspaceMount::new(wid, payload.prefix, provider);
     let created = state.workspaces.create_mount(mount).await?;
     if let ProviderConfig::Gmail(c) = &created.provider {

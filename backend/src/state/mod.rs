@@ -87,6 +87,32 @@ impl GoogleOAuth {
     }
 }
 
+/// The app's Slack OAuth client (one confidential client per deployment, from
+/// env). Used to exchange a Slack mount's authorization `code` for the
+/// workspace's tokens server-side, so the browser never handles the client
+/// secret. Both `None` when Slack isn't configured — a Slack mount create then
+/// 400s.
+#[derive(Clone, Default)]
+pub struct SlackOAuth {
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    /// Alternative Slack API origin for the whole deployment (a mock or gateway;
+    /// see `SlackConfig::base_url`). Deployment config only — never
+    /// user-suppliable, since the exchange endpoint receives the client secret.
+    /// `None` = production Slack.
+    pub base_url: Option<String>,
+}
+
+impl SlackOAuth {
+    /// `(client_id, client_secret)` when both are configured.
+    pub fn credentials(&self) -> Option<(&str, &str)> {
+        match (&self.client_id, &self.client_secret) {
+            (Some(id), Some(secret)) => Some((id.as_str(), secret.as_str())),
+            _ => None,
+        }
+    }
+}
+
 pub struct AppState {
     pub workspaces: WorkspacesState,
     pub agents: AgentsState,
@@ -96,6 +122,7 @@ pub struct AppState {
     pub events: EventQueue,
     pub jwt: JwtConfig,
     pub google_oauth: GoogleOAuth,
+    pub slack_oauth: SlackOAuth,
 }
 
 impl AppState {
@@ -104,6 +131,7 @@ impl AppState {
         data_root: PathBuf,
         jwt: JwtConfig,
         google_oauth: GoogleOAuth,
+        slack_oauth: SlackOAuth,
     ) -> StateResult<Self> {
         let options = db_url
             .parse::<SqliteConnectOptions>()
@@ -132,6 +160,7 @@ impl AppState {
             events,
             jwt,
             google_oauth,
+            slack_oauth,
         })
     }
 
