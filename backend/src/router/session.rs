@@ -5,7 +5,7 @@ use ailoy::agent::AgentSpec;
 use ailoy::runenv::{SandboxBuilder, SandboxNetwork};
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::AuthUser,
-    state::{AppState, Session},
+    state::{AppState, Session, SessionOrigin},
 };
 
 use super::{
@@ -30,6 +30,7 @@ pub struct SessionResponse {
     pub agent_id: Option<Uuid>,
     pub title: Option<String>,
     pub spec: AgentSpec,
+    pub origin: SessionOrigin,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -42,6 +43,7 @@ impl From<Session> for SessionResponse {
             agent_id: s.agent_id,
             title: s.title,
             spec: s.spec,
+            origin: s.origin,
             created_at: s.created_at,
             updated_at: s.updated_at,
         }
@@ -118,11 +120,22 @@ pub struct CreateSessionRequest {
     pub runenv: Option<bool>,
 }
 
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct ListSessionsParams {
+    /// Filter to one session origin (`user` or `automation`); omit for all.
+    #[serde(default)]
+    pub origin: Option<SessionOrigin>,
+}
+
 pub(super) async fn list_sessions(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthUser>,
+    Query(params): Query<ListSessionsParams>,
 ) -> Result<Json<SessionListResponse>, ApiError> {
-    let sessions = state.sessions.list_by_workspace(auth.id).await?;
+    let sessions = state
+        .sessions
+        .list_by_workspace(auth.id, params.origin)
+        .await?;
     Ok(Json(SessionListResponse {
         items: sessions.into_iter().map(SessionResponse::from).collect(),
     }))
@@ -213,7 +226,15 @@ pub(super) async fn delete_session(
     Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    require_owned_session(&state, &auth, id).await?;
+    let session = require_owned_session(&state, &auth, id).await?;
+    // Automation-run sessions are audit records, removed only with their run
+    // (DELETE /automation-runs/{id}), never directly.
+    if session.origin == SessionOrigin::Automation {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "cannot delete an automation session; delete its run instead",
+        ));
+    }
     state.delete_session(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

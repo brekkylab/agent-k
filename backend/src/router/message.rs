@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::{
     auth::AuthUser,
     event::{RunStatus, SessionEvent, message_channel},
-    state::AppState,
+    state::{AppState, SessionOrigin},
 };
 
 use super::{
@@ -89,7 +89,15 @@ pub(super) async fn start_run(
     Path(id): Path<Uuid>,
     Json(payload): Json<PostMessageRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_owned_session(&state, &auth, id).await?;
+    let session = require_owned_session(&state, &auth, id).await?;
+    // Automation-run sessions are worker-driven; reject user turns so a POST
+    // can't race the worker on the same (session_id, seq).
+    if session.origin == SessionOrigin::Automation {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "cannot post to an automation session",
+        ));
+    }
     state.sessions.run(id, payload.query).await?;
     Ok(StatusCode::ACCEPTED)
 }

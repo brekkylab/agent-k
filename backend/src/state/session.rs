@@ -16,11 +16,40 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use super::{StateError, StateResult, parse_ts, parse_uuid};
 use crate::{
     agent_stream::{AgentStreamItem, MessageAssembler},
     event::{EventQueue, RunStatus, SessionEvent, message_channel},
 };
+
+/// Whether a session was created interactively by a user or by an automation
+/// run (worker-driven). Persisted in `sessions.origin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOrigin {
+    User,
+    Automation,
+}
+
+impl SessionOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionOrigin::User => "user",
+            SessionOrigin::Automation => "automation",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "user" => Some(SessionOrigin::User),
+            "automation" => Some(SessionOrigin::Automation),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -40,6 +69,9 @@ pub struct Session {
     /// Whether this session has a backbone run environment
     pub runenv: bool,
 
+    /// User (interactive) vs automation (worker-driven). See [`SessionOrigin`].
+    pub origin: SessionOrigin,
+
     pub created_at: DateTime<Utc>,
 
     pub updated_at: DateTime<Utc>,
@@ -55,6 +87,7 @@ impl Session {
             title: None,
             spec,
             runenv: false,
+            origin: SessionOrigin::User,
             created_at: now,
             updated_at: now,
         }
@@ -93,6 +126,11 @@ impl Session {
             title: row.get("title"),
             spec,
             runenv: row.get("runenv"),
+            origin: {
+                let raw: String = row.get("origin");
+                SessionOrigin::parse(&raw)
+                    .ok_or_else(|| StateError::InvalidData(format!("sessions.origin: {raw}")))?
+            },
             created_at: parse_ts(&row.get::<String, _>("created_at"), "sessions.created_at")?,
             updated_at: parse_ts(&row.get::<String, _>("updated_at"), "sessions.updated_at")?,
         })
@@ -172,12 +210,21 @@ impl SessionsState {
     }
 
     /// Every session in `workspace_id`, oldest first.
-    pub async fn list_by_workspace(&self, workspace_id: Uuid) -> StateResult<Vec<Session>> {
+    /// List a workspace's sessions, optionally filtered to one [`SessionOrigin`]
+    /// (e.g. `User` to hide automation-run sessions).
+    pub async fn list_by_workspace(
+        &self,
+        workspace_id: Uuid,
+        origin: Option<SessionOrigin>,
+    ) -> StateResult<Vec<Session>> {
         let rows = sqlx::query(
-            "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
-             FROM sessions WHERE workspace_id = ? ORDER BY created_at ASC",
+            "SELECT id, workspace_id, agent_id, title, spec, runenv, origin, created_at, updated_at \
+             FROM sessions WHERE workspace_id = ?1 \
+               AND (?2 IS NULL OR origin = ?2) \
+             ORDER BY created_at ASC",
         )
         .bind(workspace_id.to_string())
+        .bind(origin.map(|o| o.as_str()))
         .fetch_all(&self.db)
         .await?;
         rows.iter().map(Session::from_sqlite_row).collect()
@@ -213,7 +260,7 @@ impl SessionsState {
 
     pub async fn get(&self, id: Uuid) -> StateResult<Option<Session>> {
         let row = sqlx::query(
-            "SELECT id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at \
+            "SELECT id, workspace_id, agent_id, title, spec, runenv, origin, created_at, updated_at \
              FROM sessions WHERE id = ?",
         )
         .bind(id.to_string())
@@ -231,8 +278,8 @@ impl SessionsState {
         item.runenv = runenv.is_some();
 
         sqlx::query(
-            "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, workspace_id, agent_id, title, spec, runenv, origin, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(item.id.to_string())
         .bind(item.workspace_id.to_string())
@@ -240,6 +287,7 @@ impl SessionsState {
         .bind(&item.title)
         .bind(serde_json::to_string(&item.spec)?)
         .bind(item.runenv)
+        .bind(item.origin.as_str())
         .bind(item.created_at.to_rfc3339())
         .bind(item.updated_at.to_rfc3339())
         .execute(&self.db)
@@ -831,6 +879,134 @@ impl SessionsState {
         });
 
         Ok(())
+    }
+
+    /// Persist one message at `seq` and publish it on the session channel.
+    async fn persist_message(
+        &self,
+        session_key: &str,
+        seq: i64,
+        message: &Message,
+        channel: &str,
+    ) -> StateResult<()> {
+        let stored = SessionMessage {
+            depth: 0,
+            source_agent: None,
+            message: message.clone(),
+        };
+        sqlx::query(
+            "INSERT INTO messages (session_id, seq, content, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(session_key)
+        .bind(seq)
+        .bind(serde_json::to_string(&stored)?)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.db)
+        .await?;
+        self.events.publish(
+            channel,
+            serde_json::to_string(&SessionEvent::Message {
+                seq,
+                depth: 0,
+                source_agent: None,
+                message: message.clone(),
+            })?,
+        );
+        Ok(())
+    }
+
+    /// Drive a single user turn for `id` **to completion**, persisting the user
+    /// message and each agent output, honoring `cancel`. Unlike [`Self::run`]
+    /// (fire-and-forget) this awaits and returns the result so the automation
+    /// worker can finalize the run. It registers in the runs map for the
+    /// duration, so a session teardown ([`Self::remove`] → [`Self::cancel`])
+    /// reaches the in-flight agent instead of deleting the row under it. Errors
+    /// (including cancellation) surface as [`StateError`].
+    pub async fn drive_prompt(
+        &self,
+        id: Uuid,
+        query: Vec<Part>,
+        cancel: CancellationToken,
+    ) -> StateResult<()> {
+        {
+            let mut runs = self.runs.lock().await;
+            runs.insert(
+                id,
+                ActiveRun {
+                    cancel: cancel.clone(),
+                    partial: Arc::new(StdMutex::new(String::new())),
+                },
+            );
+        }
+        // Always unregister, whatever the inner result.
+        let result = self.drive_prompt_inner(id, query, cancel).await;
+        self.runs.lock().await.remove(&id);
+        result
+    }
+
+    async fn drive_prompt_inner(
+        &self,
+        id: Uuid,
+        query: Vec<Part>,
+        cancel: CancellationToken,
+    ) -> StateResult<()> {
+        let session_key = id.to_string();
+        let channel = message_channel(id);
+
+        let row = sqlx::query("SELECT spec, runenv FROM sessions WHERE id = ?")
+            .bind(&session_key)
+            .fetch_optional(&self.db)
+            .await?
+            .ok_or(StateError::NotFound)?;
+        let spec: AgentSpec = serde_json::from_str(&row.get::<String, _>("spec"))?;
+        let has_runenv: bool = row.get("runenv");
+        // Automation runenv is intentionally unsupported for now.
+        if has_runenv {
+            return Err(StateError::Sandbox(format!(
+                "session {id}: drive_prompt does not support runenv sessions"
+            )));
+        }
+
+        // A (re-)claimed run re-runs its one prompt on a fresh session: wipe rows
+        // a prior attempt or pre-claim POST left, so history is just the prompt below.
+        sqlx::query("DELETE FROM messages WHERE session_id = ?")
+            .bind(&session_key)
+            .execute(&self.db)
+            .await?;
+
+        let mut next_seq: i64 = 0;
+        let agent_state = AgentState::new();
+        let mut agent = Agent::try_with_state(spec, agent_state)
+            .map_err(|e| StateError::InvalidData(format!("agent init: {e:#}")))?;
+
+        let user_msg = Message::new(Role::User).with_contents(query);
+        self.persist_message(&session_key, next_seq, &user_msg, &channel)
+            .await?;
+        next_seq += 1;
+
+        let drive: StateResult<()> = async {
+            let mut stream = agent.run(user_msg);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        return Err(StateError::InvalidData("cancelled".into()));
+                    }
+                    next = stream.next() => {
+                        let Some(output) = next else { break };
+                        let output = output
+                            .map_err(|e| StateError::InvalidData(format!("agent run: {e:#}")))?;
+                        self.persist_message(&session_key, next_seq, &output.message, &channel)
+                            .await?;
+                        next_seq += 1;
+                    }
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        drive
     }
 }
 

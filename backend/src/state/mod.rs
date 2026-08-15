@@ -8,12 +8,14 @@ use uuid::Uuid;
 use crate::{auth::JwtConfig, event::EventQueue};
 
 mod agent;
+mod automation;
 mod knowledge;
 mod session;
 mod user;
 mod workspace;
 
 pub use agent::*;
+pub use automation::*;
 pub use knowledge::*;
 pub use session::*;
 pub use user::*;
@@ -90,6 +92,7 @@ pub struct AppState {
     pub agents: AgentsState,
     pub sessions: SessionsState,
     pub users: UsersState,
+    pub automations: AutomationsState,
     pub events: EventQueue,
     pub jwt: JwtConfig,
     pub google_oauth: GoogleOAuth,
@@ -124,6 +127,7 @@ impl AppState {
             workspaces: WorkspacesState::new(db.clone(), data_root.clone()),
             agents: AgentsState::new(db.clone()),
             sessions: SessionsState::new(db.clone(), data_root, events.clone()),
+            automations: AutomationsState::new(db.clone()),
             users: UsersState::new(db),
             events,
             jwt,

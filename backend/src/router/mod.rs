@@ -13,6 +13,7 @@ use crate::{
 pub(crate) mod error;
 
 mod agent;
+mod automation;
 mod auth;
 mod knowledge;
 mod message;
@@ -113,12 +114,61 @@ pub fn get_router(state: Arc<AppState>) -> ApiRouter {
             "/sessions/{id}/messages/stream",
             axum::routing::get(message::stream_messages),
         )
+        .api_route(
+            "/automations",
+            get(automation::list_automations).post(automation::create_automation),
+        )
+        // Static segment — registered before `/automations/{id}` so a cron
+        // schedule preview isn't read as an automation id.
+        .api_route(
+            "/automations/occurrences",
+            get(automation::list_occurrences),
+        )
+        .api_route(
+            "/automations/{id}",
+            get(automation::get_automation)
+                .patch(automation::update_automation)
+                .delete(automation::delete_automation),
+        )
+        .api_route(
+            "/automations/{id}/triggers",
+            get(automation::list_triggers).post(automation::create_trigger),
+        )
+        .api_route(
+            "/automations/{id}/triggers/{trigger_id}",
+            delete(automation::delete_trigger).patch(automation::update_trigger),
+        )
+        // Runs are a top-level resource, independent of automations.
+        .api_route(
+            "/automation-runs",
+            get(automation::list_runs).post(automation::create_run),
+        )
+        .api_route(
+            "/automation-runs/{run_id}",
+            get(automation::get_run).delete(automation::delete_run),
+        )
+        .api_route(
+            "/automation-runs/{run_id}/cancel",
+            post(automation::cancel_run),
+        )
+        .api_route(
+            "/automation-runs/{run_id}/logs",
+            get(automation::list_run_logs),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_required,
         ))
         .api_route("/auth/signup", post(auth::signup))
         .api_route("/auth/login", post(auth::login))
+        // Public webhook receiver: gated only by the Bearer token (its hash
+        // identifies the trigger), so it sits outside `auth_required`. Cap the
+        // body (public + unauthenticated) to bound memory per request.
+        .api_route(
+            "/webhooks/automations",
+            post(automation::fire_webhook_trigger)
+                .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
+        )
         // WebDAV serves the unified workspace tree (local under `files/`, each
         // provider mount as a sibling) at `/sources`. Two routes: matchit's
         // `{*rest}` wildcard needs one-or-more segments, so the bare collection

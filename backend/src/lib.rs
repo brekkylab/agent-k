@@ -4,11 +4,13 @@
 
 pub mod agent_stream;
 pub mod auth;
+mod cron;
 pub mod event;
 pub mod model;
 pub mod router;
 pub mod sandbox_tunnel;
 pub mod state;
+mod worker;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -86,6 +88,14 @@ pub async fn run() -> std::io::Result<()> {
     );
 
     bootstrap_admin_if_needed(&app_state.users, &app_state.workspaces).await;
+
+    // Automation runtime: claim/execute workers + reaper + cron ticker + event
+    // dispatcher + external-source poller.
+    let worker_count = std::env::var("AGENT_K_AUTOMATION_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    worker::spawn_runtime(app_state.clone(), worker_count);
 
     // Optional periodic knowledge resync: picks up provider-side changes to
     // referenced external targets, which produce no local write event. Disabled
